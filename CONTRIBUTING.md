@@ -31,6 +31,16 @@ CI runs `pnpm check` on every pull request into `dev` or `main` and on every pus
 
 Use short, imperative subjects, such as `modbus: group adjacent registers into one read`. Prefix with the package name when a change is scoped to one package.
 
+## Soak testing
+
+Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run before a release:
+
+```bash
+scripts/soak.sh 24
+```
+
+It runs the gateway against the bench from `examples/gateway.json` (BACnet with change of value), stops the broker every two hours and the devices every four, and records memory, CPU, open files and buffer size. `SOAK_DISK_FAULT=1` (macOS) also fills the buffer's disk. The script header lists every setting.
+
 ## Reporting device quirks
 
 Real devices deviate from specs. If you hit one, open an issue with the device make and model, the firmware version, and a packet capture if you can. Those reports are gold.

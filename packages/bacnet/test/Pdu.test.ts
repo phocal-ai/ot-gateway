@@ -3,6 +3,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { Result } from "effect"
+import * as NetAddress from "effect/net/NetAddress"
 import {
   type Apdu,
   BvlcFunction,
@@ -102,9 +103,9 @@ describe("frames", () => {
   it("reads the original sender of a forwarded NPDU (J.2.5)", () => {
     const npdu = encodeNpdu({ expectingReply: false, priority: 0, payload: Uint8Array.of(0x10, 0x08) })
     const datagram = encodeBvlc(BvlcFunction.ForwardedNpdu, Uint8Array.of(192, 168, 1, 20, 0xba, 0xc0, ...npdu))
-    expect(decodeFrame(datagram)).toMatchObject(
-      Result.succeed({ forwardedFrom: { host: "192.168.1.20", port: 47808 } })
-    )
+    const decoded = decodeFrame(datagram)
+    const forwardedFrom = Result.isSuccess(decoded) ? decoded.success?.forwardedFrom : undefined
+    expect(forwardedFrom === undefined ? undefined : NetAddress.formatInet(forwardedFrom)).toBe("192.168.1.20:47808")
   })
 
   it("ignores BVLC results and network layer messages", () => {

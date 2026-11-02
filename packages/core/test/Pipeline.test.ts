@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Metric, Tracer } from "effect"
+import { Effect, Fiber, Layer, Metric, Queue, Stream, Tracer } from "effect"
 import { TestClock } from "effect/testing"
 import {
   DriverError,
@@ -8,6 +8,7 @@ import {
   pollCycles,
   Publisher,
   PublishError,
+  pushedReadings,
   readFailures,
   runDevice,
   valuesPublished,
@@ -232,6 +233,141 @@ describe("runDevice metrics", () => {
 
       expect(yield* countOf(pollCycles, { device, outcome: "read_failed" })).toBe(1)
       expect(yield* countOf(readFailures, { device, reason: "timeout" })).toBe(1)
+    })
+  )
+
+  it.effect("does not retry a timeout within the cycle when the driver resends requests itself", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeMemoryPublisher
+      let reads = 0
+      const scripted = scriptedDriver(["fail", 300], "self-retrying")
+      const driver: Driver = {
+        ...scripted,
+        retriesTimeouts: true,
+        readAll: Effect.suspend(() => {
+          reads++
+          return scripted.readAll
+        })
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("30 seconds")
+      yield* Fiber.interrupt(fiber)
+      // One read for the first cycle: its timeout was not retried, and the next cycle is a minute away.
+      expect(reads).toBe(1)
+    })
+  )
+})
+
+describe("runDevice with pushed values", () => {
+  it.effect("publishes pushed values between polls, through the same scaling and deadband", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      const driver: Driver = { ...scriptedDriver([200], "pushing"), changes: Stream.fromQueue(pushes) }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 second")
+      // 20.2 is inside the deadband of the polled 20.0; 21.0 and 19.0 are not.
+      for (const [value, timestamp] of [
+        [202, 2000],
+        [210, 3000],
+        [190, 4000]
+      ] as const) {
+        yield* Queue.offer(pushes, { pointId: point.id, value, timestamp })
+        yield* TestClock.adjust("1 second")
+      }
+      yield* Fiber.interrupt(fiber)
+
+      const values = messages.slice(1).map((m) => JSON.parse(m.payload))
+      expect(values).toEqual([
+        { value: 20, unit: "unit:DEG_C", ts: 0 },
+        { value: 21, unit: "unit:DEG_C", ts: 3000 },
+        { value: 19, unit: "unit:DEG_C", ts: 4000 }
+      ])
+      expect(yield* countOf(pushedReadings, { device: "pushing" })).toBe(3)
+    })
+  )
+
+  it.effect("keeps polling when a pushed value cannot be published", () =>
+    Effect.gen(function* () {
+      const { messages, layer: memory } = yield* makeMemoryPublisher
+      let brokerDown = true
+      const flaky = Layer.effect(
+        Publisher,
+        Effect.gen(function* () {
+          const inner = yield* Publisher
+          return Publisher.of({
+            ...inner,
+            publish: (topic, payload, options) =>
+              brokerDown && !topic.endsWith("$meta")
+                ? Effect.fail(new PublishError({ topic, reason: "unavailable", message: "broker down" }))
+                : inner.publish(topic, payload, options)
+          })
+        })
+      ).pipe(Layer.provide(memory))
+      const pushes = yield* Queue.unbounded<Reading>()
+      const driver: Driver = { ...scriptedDriver([200, 200, 230], "flaky-push"), changes: Stream.fromQueue(pushes) }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(flaky),
+        Effect.forkChild
+      )
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 0 })
+      yield* TestClock.adjust("500 millis")
+      brokerDown = false
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      // The pushed 25.0 was lost with the broker; polling went on and published 20.0, then 23.0.
+      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 23])
+      expect(yield* countOf(pushedReadings, { device: "flaky-push" })).toBe(1)
+    })
+  )
+
+  it.effect("drops a polled value when a push for its point arrived while the device was being read", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      // The read takes 500 ms; the push arrives 200 ms into it, so the polled 30.0 is older.
+      const slow = scriptedDriver([300], "overlap")
+      const driver: Driver = {
+        ...slow,
+        readAll: Effect.andThen(Effect.sleep("500 millis"), slow.readAll),
+        changes: Stream.fromQueue(pushes)
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("200 millis")
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 200 })
+      yield* TestClock.adjust("700 millis")
+      yield* Fiber.interrupt(fiber)
+
+      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([25])
+    })
+  )
+
+  it.effect("orders readings by when they were handled, not by their timestamps, which can step back", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      // Polled values carry timestamp 0, an hour before the push: the wall clock stepped back since.
+      const driver: Driver = { ...scriptedDriver([200, 200, 300], "stepped"), changes: Stream.fromQueue(pushes) }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("100 millis")
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 3_600_000 })
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 25, 20, 30])
     })
   )
 })

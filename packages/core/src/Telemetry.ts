@@ -69,6 +69,31 @@ export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timest
 })
 
 /**
+ * Points a cycle could not read although the device answered, e.g. an
+ * unknown object or a value that is not a number. Without a `point`
+ * attribute, to keep the series count flat; the log says which point.
+ */
+export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
+  description: "Points a device could not read in an otherwise successful cycle",
+  incremental: true
+})
+
+/** Values a device pushed between polls (BACnet change-of-value), before the deadband. */
+export const pushedReadings = Metric.counter("plenum_pushed_readings", {
+  description: "Values pushed by devices between polls",
+  incremental: true
+})
+
+/**
+ * Points a device currently pushes (a live change-of-value subscription), so
+ * the polling cycle skips them. A UCUM annotation unit, so no `_ratio` suffix.
+ */
+export const pushedPoints = Metric.gauge("plenum_pushed_points", {
+  description: "Points kept up to date by device pushes instead of polling",
+  attributes: { unit: "{point}" }
+})
+
+/**
  * Requests a driver sent to its device, by `outcome`: `ok`, `timeout`,
  * `exception` (the device refused), `invalid_response` or `connection`.
  * Drivers count requests instead of opening a span per request, which would

@@ -2,7 +2,7 @@
  * The polling pipeline for one device:
  * read → scale → deadband → publish, repeated on the device's schedule.
  */
-import { Clock, Duration, Effect, Metric, Option, Random, Schedule } from "effect"
+import { Clock, Duration, Effect, Metric, Option, Random, Schedule, Semaphore, Stream } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
 import type { HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
@@ -15,6 +15,7 @@ import {
   pollCycles,
   pollDuration,
   publishFailures,
+  pushedReadings,
   readFailures,
   valuesPublished,
   valuesSuppressed,
@@ -67,6 +68,10 @@ const countCycle = (outcome: "ok" | "read_failed" | "publish_failed") =>
  * its cycle instead of hanging under a span that never closes, and updates
  * the metrics in `Telemetry.ts` with a `device` attribute. Only
  * `traceSampleRatio` of the cycles are exported as traces.
+ *
+ * Values the driver pushes (`driver.changes`) go through the same scaling,
+ * deadband and publishing, one at a time with the cycle's own values, so the
+ * last published value per point stays consistent. They are not traced.
  */
 export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, driver: Driver) {
   const publisher = yield* Publisher
@@ -130,9 +135,18 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
   )
 
-  const handleReading = Effect.fnUntraced(function* (reading: Reading) {
+  /**
+   * When each point's last pushed value was handled, on the monotonic clock.
+   * A polled value from a cycle that started before then is older than what
+   * is out already, and is dropped. The readings' own timestamps are wall
+   * time, which can step back, so they are never compared.
+   */
+  const pushedAt = new Map<string, bigint>()
+  const handleReading = Effect.fnUntraced(function* (reading: Reading, polledSince?: bigint) {
     const point = points.get(reading.pointId)
     if (point === undefined) return
+    if (polledSince === undefined) pushedAt.set(point.id, yield* Clock.monotonicTimeNanos)
+    else if ((pushedAt.get(point.id) ?? -1n) >= polledSince) return
     yield* Metric.update(Metric.withAttributes(pointLastRead, { point: point.id }), reading.timestamp / 1000)
     const value = typeof reading.value === "number" ? applyScaling(reading.value, point.scaling) : reading.value
     if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
@@ -152,15 +166,25 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     last.set(point.id, value)
     yield* Metric.update(valuesPublished, 1)
   })
+  // Polled and pushed values for the same point must not interleave around `last`.
+  const handling = yield* Semaphore.make(1)
 
   const pollCycle = Effect.gen(function* () {
     if (unpublishedMeta.size > 0) yield* publishMeta
-    const readings = yield* driver.readAll.pipe(Effect.retry(retryPolicy))
+    const polledSince = yield* Clock.monotonicTimeNanos
+    const readings = yield* driver.readAll.pipe(
+      Effect.retry({
+        ...retryPolicy,
+        while: (error) => !(driver.retriesTimeouts === true && error.reason === "timeout")
+      })
+    )
     const readAt = yield* Clock.currentTimeMillis
     ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)
-    yield* Effect.forEach(readings, handleReading, { discard: true })
+    yield* handling.withPermit(
+      Effect.forEach(readings, (reading) => handleReading(reading, polledSince), { discard: true })
+    )
     yield* countCycle("ok")
   }).pipe(
     Effect.catchTags({
@@ -199,8 +223,45 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
   })
 
-  return yield* tracedCycle.pipe(
-    Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)),
+  const polling = tracedCycle.pipe(Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)))
+  // A broker outage fails every pushed value; it is counted each time but logged once until a push gets out.
+  let pushFailing = false
+  const pushed =
+    driver.changes === undefined
+      ? Effect.void
+      : Stream.runForEach(driver.changes, (reading) =>
+          Metric.update(pushedReadings, 1).pipe(
+            Effect.andThen(handling.withPermit(handleReading(reading))),
+            Effect.andThen(
+              Effect.sync(() => {
+                pushFailing = false
+              })
+            ),
+            // The value is lost; the next change, renewal notification or poll brings the point's value again.
+            Effect.catchTag("PublishError", (error) =>
+              Effect.all([
+                pushFailing
+                  ? Effect.void
+                  : Effect.logWarning("publish of a pushed value failed").pipe(
+                      Effect.annotateLogs({ topic: error.topic, error: error.message })
+                    ),
+                Effect.sync(() => {
+                  pushFailing = true
+                }),
+                Metric.update(publishFailures, 1)
+              ])
+            )
+          )
+        ).pipe(
+          // A bug on the push side must not stop the device: polling goes on.
+          Effect.catchDefect((defect) =>
+            Effect.logError("pushed values stopped, polling continues").pipe(
+              Effect.annotateLogs({ error: String(defect) })
+            )
+          )
+        )
+
+  return yield* Effect.all([polling, pushed], { concurrency: 2, discard: true }).pipe(
     Effect.annotateLogs({ device: driver.deviceId }),
     withMetricAttributes({ device: driver.deviceId })
   )

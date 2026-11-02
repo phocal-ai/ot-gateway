@@ -77,8 +77,11 @@ export type ModbusPoint = typeof ModbusPoint.Type
 /** A point on a BACnet/IP device. */
 export const BacnetPoint = Schema.Struct({
   ...PointFields,
+  /** Object type by its ASHRAE 135 name (`analog-input`) or number (proprietary types, 128 and up). */
   objectType: Schema.String,
-  instance: Schema.Int,
+  /** 22 bits on the wire (clause 20.2.14). */
+  instance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
+  /** Property by its ASHRAE 135 name or number (default `present-value`). */
   property: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("present-value")))
 })
 export type BacnetPoint = typeof BacnetPoint.Type

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
+import { DatagramSocketClosedError, DatagramSocketError, DatagramSocketOpenError } from "effect/socket/DatagramSocket"
 import { SocketCloseError, SocketError, SocketOpenError, SocketReadError } from "effect/socket/Socket"
-import { describeSocketError } from "../src/index.ts"
+import { describeDatagramSocketError, describeSocketError } from "../src/index.ts"
 
 /** Node's error for one refused address. */
 const refusedAt = (address: string) =>
@@ -40,5 +41,19 @@ describe("describeSocketError", () => {
       describeSocketError(new SocketError({ reason: new SocketReadError({ cause: new Error("ECONNRESET") }) }))
     ).toBe("read failed: ECONNRESET")
     expect(describeSocketError(new SocketError({ reason: new SocketReadError({ cause: "?" }) }))).toBe("read failed")
+  })
+})
+
+describe("describeDatagramSocketError", () => {
+  it("says when the port is taken, the usual reason a BACnet/IP socket does not open", () => {
+    const inUse = Object.assign(new Error("bind EADDRINUSE 0.0.0.0:47808"), { code: "EADDRINUSE" })
+    expect(
+      describeDatagramSocketError(
+        new DatagramSocketError({ reason: new DatagramSocketOpenError({ kind: "AddressInUse", cause: inUse }) })
+      )
+    ).toBe("could not open the UDP socket, the port is in use: bind EADDRINUSE 0.0.0.0:47808")
+    expect(describeDatagramSocketError(new DatagramSocketError({ reason: new DatagramSocketClosedError() }))).toBe(
+      "UDP socket closed"
+    )
   })
 })

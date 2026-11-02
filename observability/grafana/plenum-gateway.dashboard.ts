@@ -285,7 +285,7 @@ timeseries(
     w: 12,
     stack: true,
     description:
-      "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect."
+      "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect. $bacnet is the one UDP socket every BACnet device shares."
   }
 )
 y += 8
@@ -393,8 +393,57 @@ staleness(
   `time() - max by (device, point) (max_over_time(plenum_point_last_read_timestamp_seconds{${sel}}[$__range]))`,
   {
     x: 0,
-    w: 24,
+    w: 12,
     description: "Seconds since each point was last read successfully. Orange after 1 minute, red after 5."
+  }
+)
+timeseries(
+  "Points not read by device",
+  [
+    {
+      expr: `sum by (device) (increase(plenum_point_read_failures_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    description:
+      "Points a device answered for but could not deliver: unknown object or property, or a value that is not a number. The gateway log names each point once when it starts and stops failing."
+  }
+)
+y += 8
+timeseries(
+  "Values pushed by device",
+  [
+    {
+      expr: `sum by (device) (increase(plenum_pushed_readings_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    description:
+      "Values devices sent on their own between polls (BACnet change-of-value notifications), before the deadband. Each subscription also sends its current value when it is made or renewed."
+  }
+)
+timeseries(
+  "Points pushed instead of polled",
+  [
+    {
+      expr: `max by (device) (plenum_pushed_points{${sel}})`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    description:
+      "Points kept up to date by a live change-of-value subscription, which the polling cycle skips. A drop means the device refused or stopped sending notifications, and those points are polled again."
   }
 )
 y += 8

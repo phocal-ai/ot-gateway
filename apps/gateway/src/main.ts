@@ -4,11 +4,11 @@
  *
  *   node apps/gateway/src/main.ts path/to/gateway.json
  *
- * Polls simulator and Modbus TCP devices and publishes to the MQTT broker in
- * `mqtt`, with the gateway's status on its retained health topic. BACnet
- * plugs in here as it lands.
+ * Polls simulator, Modbus TCP and BACnet/IP devices and publishes to the MQTT
+ * broker in `mqtt`, with the gateway's status on its retained health topic.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import { type BacnetClient, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
 import {
   type Device,
   type GatewayConfig,
@@ -25,10 +25,54 @@ import { makeModbusDriver } from "@plenum/modbus"
 import { MqttPublisher } from "@plenum/mqtt"
 import { BufferedPublisher } from "@plenum/buffer"
 import { makeSimulatorDriver } from "@plenum/simulator"
-import { Clock, Effect, FileSystem, Layer } from "effect"
+import { Clock, Deferred, Effect, Exit, FileSystem, Layer, Schedule, Scope } from "effect"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
-const runOne = (config: GatewayConfig, device: Device, sampleRatio: number, health: HealthRegistry) => {
+/** The gateway's BACnet/IP endpoint, once its socket is open; absent without BACnet devices. */
+type BacnetNetwork = Deferred.Deferred<BacnetClient> | undefined
+
+/**
+ * Open the BACnet/IP endpoint, retrying with backoff up to every 5 minutes:
+ * the port may be held by another program for a while, or the bind address
+ * not be assigned yet at boot. Until then the BACnet devices report
+ * `connection` in the health topic. Each attempt gets its own scope, so a
+ * failed one leaves no socket behind.
+ */
+const openBacnet = Effect.fn("openBacnet")(function* (
+  config: GatewayConfig,
+  health: HealthRegistry,
+  network: Deferred.Deferred<BacnetClient>
+) {
+  const gatewayScope = yield* Effect.scope
+  const bacnetDevices = config.devices.filter((device) => device.protocol === "bacnet-ip")
+  const attempt = Effect.gen(function* () {
+    const scope = yield* Scope.fork(gatewayScope)
+    return yield* makeBacnetNetwork(config.bacnet).pipe(
+      Scope.provide(scope),
+      Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause)))
+    )
+  })
+  const client = yield* attempt.pipe(
+    Effect.tapError((error) =>
+      Effect.all([
+        Effect.sync(() => bacnetDevices.forEach((device) => health.recordFailure(device.id, "connection"))),
+        Effect.logError("could not open the BACnet/IP endpoint, trying again").pipe(
+          Effect.annotateLogs({ port: config.bacnet.port, error: error.message })
+        )
+      ])
+    ),
+    Effect.retry(Schedule.min([Schedule.exponential("5 seconds"), Schedule.spaced("5 minutes")]))
+  )
+  yield* Deferred.succeed(network, client)
+})
+
+const runOne = (
+  config: GatewayConfig,
+  device: Device,
+  sampleRatio: number,
+  health: HealthRegistry,
+  bacnet: BacnetNetwork
+) => {
   const ctx = {
     site: config.site,
     building: config.building,
@@ -42,11 +86,20 @@ const runOne = (config: GatewayConfig, device: Device, sampleRatio: number, heal
     case "modbus-tcp":
       // The device's connection lives as long as its polling loop.
       return Effect.scoped(Effect.flatMap(makeModbusDriver(device), (driver) => runDevice(ctx, driver)))
-    case "bacnet-ip":
-      health.recordFailure(device.id, "not-implemented")
-      return Effect.logWarning(`${device.protocol} driver is not implemented yet, skipping`).pipe(
-        Effect.annotateLogs({ device: device.id })
+    case "bacnet-ip": {
+      if (bacnet === undefined) return Effect.void
+      // All BACnet devices share the gateway's one UDP socket, once it is open.
+      return Deferred.await(bacnet).pipe(
+        Effect.flatMap((client) => makeBacnetDriverFromClient(device, client)),
+        Effect.flatMap((driver) => runDevice(ctx, driver)),
+        Effect.catchTag("DriverError", (error) => {
+          health.recordFailure(device.id, error.reason)
+          return Effect.logError("BACnet device not started").pipe(
+            Effect.annotateLogs({ device: device.id, error: error.message })
+          )
+        })
       )
+    }
   }
 }
 
@@ -55,10 +108,15 @@ const runGateway = Effect.fn("runGateway")(function* (config: GatewayConfig, hea
   yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
     Effect.annotateLogs({ traceSampleRatio: sampleRatio, health: health.topic })
   )
+  let bacnet: BacnetNetwork
+  if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
+    bacnet = yield* Deferred.make<BacnetClient>()
+    yield* openBacnet(config, health.registry, bacnet).pipe(Effect.forkScoped)
+  }
   yield* Effect.all(
     [
       runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online }),
-      ...config.devices.map((device) => runOne(config, device, sampleRatio, health.registry))
+      ...config.devices.map((device) => runOne(config, device, sampleRatio, health.registry, bacnet))
     ],
     { concurrency: "unbounded", discard: true }
   )
@@ -93,6 +151,8 @@ const program = Effect.gen(function* () {
   }
 
   yield* runGateway(config, health).pipe(
+    // The BACnet/IP socket closes before the broker connection does.
+    Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
     Effect.provide(northbound(config, health)),
     withMetricAttributes({ site: config.site, building: config.building }),

@@ -63,7 +63,10 @@ export const AbortReason = {
   BufferOverflow: 1,
   InvalidApduInThisState: 2,
   PreemptedByHigherPriorityTask: 3,
-  SegmentationNotSupported: 4
+  SegmentationNotSupported: 4,
+  OutOfResources: 9,
+  /** Since 135-2012: the answer is longer than the requester accepts. */
+  ApduTooLong: 11
 } as const
 
 /** Maximum APDU sizes by their 4-bit code (clause 20.1.2.5). */
