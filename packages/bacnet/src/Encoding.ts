@@ -5,12 +5,37 @@
  * Decoding goes through a `Reader` that throws `BacnetCodecError` internally;
  * every exported decoder catches it and returns a `Result`, so callers never
  * see an exception.
+ *
+ * Encoders refuse a value outside its range in the standard (a NaN instance,
+ * a process identifier above 2^32 - 1, the year 3000) by throwing
+ * `BacnetEncodeError` instead of writing bytes that mean something else.
+ * `tryEncode` turns that into a `Result`; the client does so for every
+ * request it builds.
  */
 import { Result, Schema } from "effect"
 
 export class BacnetCodecError extends Schema.TaggedError<BacnetCodecError>()("BacnetCodecError", {
   message: Schema.String
 }) {}
+
+/** A value that the encoding cannot carry (clause 20.2), refused instead of being written wrapped or truncated. */
+export class BacnetEncodeError extends Schema.TaggedError<BacnetEncodeError>()("BacnetEncodeError", {
+  message: Schema.String
+}) {}
+
+/** Run an encoder, turning a refused value into a failed `Result`. Any other exception is a bug and is rethrown. */
+export const tryEncode = <A>(encode: () => A): Result.Result<A, BacnetEncodeError> => {
+  try {
+    return Result.succeed(encode())
+  } catch (error) {
+    if (error instanceof BacnetEncodeError) return Result.fail(error)
+    throw error
+  }
+}
+
+const refuse = (message: string): never => {
+  throw new BacnetEncodeError({ message })
+}
 
 /** Application tag numbers (clause 20.2.1.4). */
 export const ApplicationTag = {
@@ -97,6 +122,8 @@ export class Writer {
 
 /** Tag octet(s), then the extended length if any (clause 20.2.1.1–20.2.1.3). */
 const writeTag = (writer: Writer, tagNumber: number, context: boolean, lengthValueType: number) => {
+  checkTagNumber(tagNumber)
+  if (lengthValueType > 0xff_ff_ff_ff) refuse(`content of ${lengthValueType} bytes is too long`)
   const classBit = context ? 0x08 : 0x00
   const tagBits = tagNumber <= 14 ? tagNumber << 4 : 0xf0
   writer.byte(tagBits | classBit | Math.min(lengthValueType, 5))
@@ -112,19 +139,26 @@ const writeTagged = (writer: Writer, tagNumber: number, context: boolean, conten
   writer.bytes(content)
 }
 
+/** Tag numbers 0 to 254; 255 is reserved (clause 20.2.1.2). */
+const checkTagNumber = (tagNumber: number) => {
+  if (!Number.isInteger(tagNumber) || tagNumber < 0 || tagNumber > 254) refuse(`not a tag number: ${tagNumber}`)
+}
+
 export const writeOpening = (writer: Writer, tagNumber: number) => {
+  checkTagNumber(tagNumber)
   writer.byte((tagNumber <= 14 ? tagNumber << 4 : 0xf0) | 0x0e)
   if (tagNumber > 14) writer.byte(tagNumber)
 }
 
 export const writeClosing = (writer: Writer, tagNumber: number) => {
+  checkTagNumber(tagNumber)
   writer.byte((tagNumber <= 14 ? tagNumber << 4 : 0xf0) | 0x0f)
   if (tagNumber > 14) writer.byte(tagNumber)
 }
 
 /** Fewest big-endian bytes for an unsigned integer (clause 20.2.4). */
-const unsignedContent = (value: number): Uint8Array => {
-  if (!Number.isSafeInteger(value) || value < 0) throw new RangeError(`not an unsigned integer: ${value}`)
+const unsignedContent = (value: number, max = Number.MAX_SAFE_INTEGER): Uint8Array => {
+  if (!Number.isSafeInteger(value) || value < 0 || value > max) refuse(`not an unsigned integer up to ${max}: ${value}`)
   const out: Array<number> = []
   let rest = value
   do {
@@ -137,7 +171,7 @@ const unsignedContent = (value: number): Uint8Array => {
 /** Fewest two's complement bytes for a signed integer (clause 20.2.5). */
 const signedContent = (value: number): Uint8Array => {
   if (!Number.isInteger(value) || value < -0x80_00_00_00 || value > 0x7f_ff_ff_ff) {
-    throw new RangeError(`not a 32-bit signed integer: ${value}`)
+    refuse(`not a 32-bit signed integer: ${value}`)
   }
   const length =
     value >= -0x80 && value <= 0x7f
@@ -156,14 +190,40 @@ const signedContent = (value: number): Uint8Array => {
   return out
 }
 
+const inRange = (value: number, max: number) => Number.isInteger(value) && value >= 0 && value <= max
+
 const objectIdContent = ({ objectType, instance }: ObjectId): Uint8Array => {
-  if (objectType < 0 || objectType > 0x3_ff || instance < 0 || instance > MAX_INSTANCE) {
-    throw new RangeError(`object identifier out of range: ${objectType}:${instance}`)
+  // 10 bits of object type and 22 of instance (clause 20.2.14).
+  if (!inRange(objectType, 0x3_ff) || !inRange(instance, MAX_INSTANCE)) {
+    refuse(`object identifier out of range: ${objectType}:${instance}`)
   }
   return new Writer().u32(objectType * 0x40_00_00 + instance).toBytes()
 }
 
 const encoder = new TextEncoder()
+
+/** An octet of a date or time: within `low`..`high`, or 255 for "unspecified" (clauses 20.2.12, 20.2.13). */
+const octetIn = (value: number, low: number, high: number) =>
+  value === 0xff || (Number.isInteger(value) && value >= low && value <= high)
+
+/** Years 1900 to 2154; months 1–12, 13 odd and 14 even; days 1–31, 32 last, 33 odd and 34 even; weekdays 1–7. */
+const checkDate = (date: Extract<BacnetValue, { type: "date" }>) => {
+  const yearOk = date.year === undefined || (Number.isInteger(date.year) && date.year >= 1900 && date.year <= 2154)
+  if (!yearOk || !octetIn(date.month, 1, 14) || !octetIn(date.day, 1, 34) || !octetIn(date.weekday, 1, 7)) {
+    refuse(`date out of range: ${date.year}-${date.month}-${date.day} (weekday ${date.weekday})`)
+  }
+}
+
+const checkTime = (time: Extract<BacnetValue, { type: "time" }>) => {
+  if (
+    !octetIn(time.hour, 0, 23) ||
+    !octetIn(time.minute, 0, 59) ||
+    !octetIn(time.second, 0, 59) ||
+    !octetIn(time.hundredths, 0, 99)
+  ) {
+    refuse(`time out of range: ${time.hour}:${time.minute}:${time.second}.${time.hundredths}`)
+  }
+}
 
 /** The content octets of an application value, and its tag number. */
 const applicationContent = (value: BacnetValue): { readonly tag: number; readonly content: Uint8Array } => {
@@ -204,6 +264,7 @@ const applicationContent = (value: BacnetValue): { readonly tag: number; readonl
     case "enumerated":
       return { tag: ApplicationTag.Enumerated, content: unsignedContent(value.value) }
     case "date":
+      checkDate(value)
       return {
         tag: ApplicationTag.Date,
         content: Uint8Array.from([
@@ -214,6 +275,7 @@ const applicationContent = (value: BacnetValue): { readonly tag: number; readonl
         ])
       }
     case "time":
+      checkTime(value)
       return {
         tag: ApplicationTag.Time,
         content: Uint8Array.from([value.hour, value.minute, value.second, value.hundredths])
@@ -222,7 +284,7 @@ const applicationContent = (value: BacnetValue): { readonly tag: number; readonl
       return { tag: ApplicationTag.ObjectIdentifier, content: objectIdContent(value.value) }
     case "context":
     case "constructed":
-      throw new RangeError(`${value.type} values are not application-tagged`)
+      return refuse(`${value.type} values are not application-tagged`)
   }
 }
 
@@ -258,8 +320,9 @@ export const writeValue = (writer: Writer, value: BacnetValue): void => {
   }
 }
 
-export const writeContextUnsigned = (writer: Writer, tagNumber: number, value: number) =>
-  writeTagged(writer, tagNumber, true, unsignedContent(value))
+/** A context-tagged Unsigned, refused above `max` (e.g. 2^32 - 1 for an Unsigned32). */
+export const writeContextUnsigned = (writer: Writer, tagNumber: number, value: number, max?: number) =>
+  writeTagged(writer, tagNumber, true, unsignedContent(value, max))
 
 export const writeContextEnumerated = writeContextUnsigned
 

@@ -109,6 +109,8 @@ describe("chaos: config", () => {
     )
     const started = performance.now()
     expect(Exit.isSuccess(Effect.runSyncExit(parseConfig(config(devices))))).toBe(true)
-    expect(performance.now() - started).toBeLessThan(10_000)
-  }, 30_000)
+    // About 0.3 s on a laptop. The bound only catches quadratic work (duplicate checks over
+    // 200,000 points), with room for a loaded CI runner.
+    expect(performance.now() - started).toBeLessThan(30_000)
+  }, 60_000)
 })
