@@ -4,7 +4,7 @@
 import { NodeSocket, NodeSocketServer } from "@effect/platform-node"
 import { describe, expect, it } from "@effect/vitest"
 import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@plenum/core"
-import { ConfigProvider, Effect, Exit, Layer, Metric, Redacted, Scope } from "effect"
+import { ConfigProvider, Context, Effect, Exit, Layer, Metric, Redacted, Scope } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { makeBrokerControl, makeMqttClient, MqttPublisher, parseBrokerUrl, Property, serveMqtt } from "../src/index.ts"
 import type { BrokerControl, MqttClient, MqttClientOptions } from "../src/index.ts"
@@ -165,19 +165,22 @@ describe("MQTT client over TCP", () => {
   )
 
   it.live(
-    "drops a broker that stops answering pings, then reconnects",
+    "drops a broker that stops answering pings (which publishes the will), then reconnects",
     () =>
       Effect.gen(function* () {
         const control = makeBrokerControl()
         control.answerPings = false
         const { port } = yield* startBroker(control)
-        const client = yield* clientOn(port, { keepAliveSeconds: 1 })
+        const will = { topic: "s/b/$gateway/main/health", payload: "offline", qos: 1, retain: true } as const
+        const client = yield* clientOn(port, { keepAliveSeconds: 1, will })
         yield* connectedClient(client)
         // Silence is noticed after 1.5 keep alives (checked every half keep alive), then the client dials again.
         yield* eventually(
           Effect.sync(() => control.connects.length >= 2),
           5000
         )
+        // The client dropped the connection without DISCONNECT, so the broker published its will.
+        expect(control.retained.get(will.topic)).toBe("offline")
       }),
     10_000
   )
@@ -212,6 +215,50 @@ describe("MqttPublisher", () => {
 
       expect(control.connects).toMatchObject([{ clientId: "layer-gw", username: "gw", hasPassword: true }])
       expect(control.messages).toMatchObject([{ topic: "s/b/d/p", payload: "1", retain: true }])
+    })
+  )
+
+  it.live("announces the gateway, replays retained messages after a broker restart and says goodbye", () =>
+    Effect.gen(function* () {
+      const healthTopic = "s/b/$gateway/main/health"
+      const firstScope = yield* Scope.make()
+      const first = yield* startBroker().pipe(Scope.provide(firstScope))
+      const layer = MqttPublisher(
+        { url: `mqtt://127.0.0.1:${first.port}`, clientId: "health-gw" },
+        {
+          reconnectDelay: fastOptions.reconnectDelay,
+          publishTimeout: "3 seconds",
+          health: { topic: healthTopic, online: Effect.succeed('{"status":"online"}') }
+        }
+      )
+      const layerScope = yield* Scope.make()
+      const publisher = Context.get(yield* Layer.buildWithScope(layer, layerScope), Publisher)
+
+      // Online on connect; offline (connection lost) registered as the will.
+      yield* eventually(Effect.sync(() => first.control.retained.get(healthTopic) === '{"status":"online"}'))
+      expect(first.control.connects[0]?.will).toEqual({
+        topic: healthTopic,
+        payload: '{"status":"offline","reason":"connection-lost"}',
+        qos: 1,
+        retain: true
+      })
+
+      yield* publisher.publish("s/b/d/p/$meta", '{"unit":"°C"}', { retain: true })
+      yield* publisher.publish("s/b/d/p", '{"value":1}')
+
+      // A broker restart loses retained state; the publisher restores it, and only it.
+      yield* Scope.close(firstScope, Exit.void)
+      const second = yield* startBroker(makeBrokerControl(), first.port)
+      yield* eventually(Effect.sync(() => second.control.retained.size === 2))
+      expect(Object.fromEntries(second.control.retained)).toEqual({
+        [healthTopic]: '{"status":"online"}',
+        "s/b/d/p/$meta": '{"unit":"°C"}'
+      })
+      expect(second.control.messages.map((m) => m.topic)).not.toContain("s/b/d/p")
+
+      yield* Scope.close(layerScope, Exit.void)
+      expect(second.control.retained.get(healthTopic)).toBe('{"status":"offline","reason":"shutdown"}')
+      yield* eventually(Effect.sync(() => second.control.cleanDisconnects === 1))
     })
   )
 

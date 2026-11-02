@@ -4,15 +4,16 @@
  * subscription routing; it exists so the client is tested over real TCP
  * (CLAUDE.md rule 8) and `pnpm gateway` has somewhere to publish.
  *
- * `BrokerControl` injects faults: refuse connections, withhold PUBACKs or
- * PINGRESPs, refuse messages.
+ * A client that goes away without DISCONNECT has its last will published, as
+ * a real broker would. `BrokerControl` injects faults: refuse connections,
+ * withhold PUBACKs or PINGRESPs, refuse messages.
  */
 import { Effect, Result } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { PacketType } from "./Codec.ts"
 import { decodeConnect, decodePublish, encodeConnack, encodePingresp, encodePuback, takePacket } from "./Packet.ts"
-import type { Connect } from "./Packet.ts"
+import type { Connect, Will } from "./Packet.ts"
 
 export interface ReceivedMessage {
   readonly clientId: string
@@ -70,6 +71,13 @@ const append = (buffer: Uint8Array, chunks: ReadonlyArray<Uint8Array | string>):
   return out
 }
 
+/** Record or hand on an accepted message, and keep it if retained. */
+const accept = (control: BrokerControl, message: ReceivedMessage) => {
+  if (control.onMessage === undefined) control.messages.push(message)
+  else control.onMessage(message)
+  if (message.retain) control.retained.set(message.topic, message.payload)
+}
+
 const serveConnection = (control: BrokerControl) =>
   Effect.fnUntraced(
     function* (socket: Socket.Socket) {
@@ -77,6 +85,15 @@ const serveConnection = (control: BrokerControl) =>
       const { pull } = yield* socket.reader
       let buffer: Uint8Array = new Uint8Array(0)
       let clientId: string | undefined
+      let will: Will | undefined
+      // A connection that ends without DISCONNECT publishes its will (§3.1.2.5),
+      // whether the client vanished, broke the protocol or the broker dropped it.
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (will === undefined || clientId === undefined) return
+          accept(control, { clientId, topic: will.topic, payload: will.payload, qos: will.qos, retain: will.retain })
+        })
+      )
       while (true) {
         buffer = append(buffer, yield* pull)
         let split = takePacket(buffer)
@@ -92,6 +109,7 @@ const serveConnection = (control: BrokerControl) =>
               // A refused client is disconnected right after its CONNACK (§3.2.2.2).
               if (control.connackReason >= 0x80) return
               clientId = connect.success.clientId
+              will = connect.success.will
               break
             }
             case PacketType.PUBLISH: {
@@ -99,12 +117,7 @@ const serveConnection = (control: BrokerControl) =>
               if (Result.isFailure(publish) || clientId === undefined) return
               const { topic, qos, retain, packetId } = publish.success
               const payload = decoder.decode(publish.success.payload)
-              if (control.pubackReason < 0x80) {
-                const message = { clientId, topic, payload, qos, retain } as const
-                if (control.onMessage === undefined) control.messages.push(message)
-                else control.onMessage(message)
-                if (retain) control.retained.set(topic, payload)
-              }
+              if (control.pubackReason < 0x80) accept(control, { clientId, topic, payload, qos, retain })
               if (qos === 1 && packetId !== undefined && control.ackPublishes) {
                 yield* writer.write(encodePuback(packetId, control.pubackReason))
               }
@@ -114,6 +127,8 @@ const serveConnection = (control: BrokerControl) =>
               if (control.answerPings) yield* writer.write(encodePingresp())
               break
             case PacketType.DISCONNECT:
+              // A normal disconnection discards the will (§3.14.4).
+              will = undefined
               control.cleanDisconnects++
               return
             default:

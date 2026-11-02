@@ -3,6 +3,7 @@ import { Effect, Fiber, Layer, Metric, Tracer } from "effect"
 import { TestClock } from "effect/testing"
 import {
   DriverError,
+  makeHealthRegistry,
   makeMemoryPublisher,
   pollCycles,
   Publisher,
@@ -12,7 +13,7 @@ import {
   valuesPublished,
   valuesSuppressed
 } from "../src/index.ts"
-import type { AnyPoint, Driver, Reading } from "../src/index.ts"
+import type { AnyPoint, Driver, HealthRegistry, Reading } from "../src/index.ts"
 
 const point: AnyPoint = {
   id: "zone-temp",
@@ -58,11 +59,24 @@ describe("runDevice", () => {
     })
   )
 
-  it.effect("keeps running when the driver fails", () =>
+  it.effect("keeps running when the driver fails, and reports it to the health registry", () =>
     Effect.gen(function* () {
       const { messages, layer } = yield* makeMemoryPublisher
+      const registry = makeHealthRegistry(["test-device"])
+      const recorded: Array<string> = []
+      const health: HealthRegistry = {
+        devices: registry.devices,
+        recordSuccess: (device, timestamp) => {
+          recorded.push("ok")
+          registry.recordSuccess(device, timestamp)
+        },
+        recordFailure: (device, reason) => {
+          recorded.push(`failing:${reason}`)
+          registry.recordFailure(device, reason)
+        }
+      }
       const driver = scriptedDriver(["fail", "fail", "fail", "fail", "fail", 300])
-      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, health }, driver).pipe(
         Effect.provide(layer),
         Effect.forkChild
       )
@@ -71,6 +85,10 @@ describe("runDevice", () => {
 
       const values = messages.slice(1).map((m) => JSON.parse(m.payload).value)
       expect(values).toEqual([30])
+      // The first cycle fails after its retries; every later cycle reads fine.
+      expect(recorded[0]).toBe("failing:timeout")
+      expect(recorded.slice(1).every((entry) => entry === "ok")).toBe(true)
+      expect(health.devices.get("test-device")?.status).toBe("ok")
     })
   )
 

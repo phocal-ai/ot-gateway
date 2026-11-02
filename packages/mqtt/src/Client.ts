@@ -71,6 +71,12 @@ export interface MqttClientOptions {
   readonly will?: Will
   /** First and largest delay between reconnect attempts (default 1 s and 60 s). */
   readonly reconnectDelay?: { readonly initial: Duration.Input; readonly max: Duration.Input }
+  /**
+   * Run after every successful connect, in the background, while the
+   * connection lasts (it is interrupted if the connection drops). Use it to
+   * announce the gateway and restore retained state the broker may have lost.
+   */
+  readonly onConnect?: (client: MqttClient) => Effect.Effect<void>
 }
 
 export interface PublishOptions {
@@ -256,6 +262,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         yield* Metric.update(mqttConnected, 1)
         yield* Latch.open(connected)
         yield* Effect.logInfo("connected to MQTT broker").pipe(Effect.annotateLogs({ keepAlive: effectiveKeepAlive }))
+        if (options.onConnect !== undefined) yield* Effect.forkScoped(options.onConnect(client))
 
         let lastReceived = yield* Clock.currentTimeMillis
         const readLoop = Effect.gen(function* () {
@@ -333,7 +340,6 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       yield* Effect.sleep(Duration.millis(base * (0.5 + (yield* Random.next) / 2)))
     }
   })
-  yield* Effect.forkScoped(connectionLoop)
 
   const publish: MqttClient["publish"] = (topic, payload, publishOptions = {}) =>
     Effect.gen(function* () {
@@ -401,5 +407,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
     )
 
   const client: MqttClient = { publish, isConnected: Effect.sync(() => session !== undefined) }
+  // Started last, so `onConnect` always receives a finished client.
+  yield* Effect.forkScoped(connectionLoop)
   return client
 })

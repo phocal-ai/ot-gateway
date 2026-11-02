@@ -1,6 +1,7 @@
 {
   "site": "demo-site",
   "building": "b1",
+  "id": "main",
   "mqtt": {
     "url": "mqtt://localhost:1883",
     "clientId": "plenum-demo"

@@ -1,6 +1,7 @@
 export * from "./Config.ts"
 export * from "./Driver.ts"
 export * from "./Errors.ts"
+export * from "./Health.ts"
 export * from "./Normalize.ts"
 export * from "./Pipeline.ts"
 export * from "./Point.ts"

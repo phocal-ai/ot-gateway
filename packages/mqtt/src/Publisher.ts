@@ -6,11 +6,11 @@
  * down at startup delays publishing but does not stop the gateway.
  */
 import { NodeSocket } from "@effect/platform-node"
-import { type MqttSettings, Publisher, PublishError } from "@plenum/core"
+import { type MqttSettings, offlinePayload, Publisher, PublishError } from "@plenum/core"
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"
 import { makeMqttClient } from "./Client.ts"
-import type { MqttClientOptions } from "./Client.ts"
+import type { MqttClient, MqttClientOptions, MqttPublishError } from "./Client.ts"
 
 /** `mqtt.url` (or another setting) cannot be used. */
 export class MqttSettingsError extends Schema.TaggedError<MqttSettingsError>()("MqttSettingsError", {
@@ -47,13 +47,33 @@ export const parseBrokerUrl = (url: string): Effect.Effect<BrokerAddress, MqttSe
 
 export interface MqttPublisherOptions extends Pick<
   MqttClientOptions,
-  "keepAliveSeconds" | "connectTimeout" | "publishTimeout" | "will" | "reconnectDelay"
-> {}
+  "keepAliveSeconds" | "connectTimeout" | "publishTimeout" | "reconnectDelay"
+> {
+  /**
+   * Announce the gateway on its health topic: `online` (rendered fresh by
+   * `online`) on every connect, `offline` as the last will and on a clean
+   * shutdown.
+   */
+  readonly health?: { readonly topic: string; readonly online: Effect.Effect<string> }
+}
+
+/** Client errors become the core `PublishError`. */
+const translate = <A>(effect: Effect.Effect<A, MqttPublishError>): Effect.Effect<A, PublishError> =>
+  effect.pipe(
+    Effect.catchTag("MqttPublishError", (error) =>
+      Effect.fail(new PublishError({ topic: error.topic, message: error.message }))
+    )
+  )
 
 /**
  * A `Publisher` from the gateway's `mqtt` settings. The password is read from
  * the environment variable named by `passwordEnv`, never from the file. The
  * client id defaults to `plenum-<hostname>`.
+ *
+ * Retained messages that reached the broker are remembered (the latest per
+ * topic) and published again after every reconnect, because a broker without
+ * persistence loses them when it restarts. Values are not retained, so they
+ * are never replayed.
  */
 export const MqttPublisher = (
   settings: MqttSettings,
@@ -68,29 +88,63 @@ export const MqttPublisher = (
       const socket = address.tls
         ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
         : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
+      const { health, ...clientOptions } = options
+      const retained = new Map<string, string>()
+
+      const publishRetained = (client: MqttClient, topic: string, payload: string) =>
+        client
+          .publish(topic, payload, { retain: true })
+          .pipe(Effect.tap(() => Effect.sync(() => retained.set(topic, payload))))
+
+      const onConnect = Effect.fnUntraced(
+        function* (client: MqttClient) {
+          if (health !== undefined) yield* publishRetained(client, health.topic, yield* health.online)
+          const replay = [...retained].filter(([topic]) => topic !== health?.topic)
+          yield* Effect.forEach(replay, ([topic, payload]) => client.publish(topic, payload, { retain: true }), {
+            discard: true
+          })
+          if (replay.length > 0)
+            yield* Effect.logInfo("replayed retained messages").pipe(Effect.annotateLogs({ count: replay.length }))
+        },
+        // The connection dropped again or the broker refused; the next connect tries again.
+        Effect.catchTag("MqttPublishError", (error) =>
+          Effect.logWarning("announcing the gateway failed").pipe(
+            Effect.annotateLogs({ topic: error.topic, error: error.message })
+          )
+        )
+      )
+
       const client = yield* makeMqttClient(socket, {
-        ...options,
+        ...clientOptions,
         clientId: settings.clientId ?? `plenum-${hostname()}`,
         ...(settings.username === undefined ? {} : { username: settings.username }),
-        ...(password === undefined ? {} : { password })
+        ...(password === undefined ? {} : { password }),
+        ...(health === undefined
+          ? {}
+          : { will: { topic: health.topic, payload: offlinePayload("connection-lost"), qos: 1, retain: true } }),
+        onConnect
       })
+      if (health !== undefined) {
+        // Runs before the client's scope closes, so the goodbye goes out ahead of DISCONNECT.
+        yield* Effect.addFinalizer(() =>
+          Effect.gen(function* () {
+            if (!(yield* client.isConnected)) return
+            yield* client.publish(health.topic, offlinePayload("shutdown"), { retain: true })
+          }).pipe(Effect.timeout("2 seconds"), Effect.ignore)
+        )
+      }
       yield* Effect.logInfo("MQTT publisher started").pipe(
         Effect.annotateLogs({ broker: `${address.host}:${address.port}`, tls: address.tls })
       )
       return Publisher.of({
-        publish: (topic, payload, publishOptions) =>
-          publishOptions?.qos === 2
-            ? Effect.fail(new PublishError({ topic, message: "QoS 2 is not supported" }))
-            : client
-                .publish(topic, payload, {
-                  ...(publishOptions?.qos === undefined ? {} : { qos: publishOptions.qos }),
-                  ...(publishOptions?.retain === undefined ? {} : { retain: publishOptions.retain })
-                })
-                .pipe(
-                  Effect.catchTag("MqttPublishError", (error) =>
-                    Effect.fail(new PublishError({ topic: error.topic, message: error.message }))
-                  )
-                )
+        publish: (topic, payload, publishOptions) => {
+          if (publishOptions?.qos === 2)
+            return Effect.fail(new PublishError({ topic, message: "QoS 2 is not supported" }))
+          const qos = publishOptions?.qos === undefined ? {} : { qos: publishOptions.qos }
+          return publishOptions?.retain === true
+            ? translate(publishRetained(client, topic, payload))
+            : translate(client.publish(topic, payload, qos))
+        }
       })
     })
   )

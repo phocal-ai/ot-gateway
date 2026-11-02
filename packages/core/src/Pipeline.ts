@@ -4,6 +4,7 @@
  */
 import { Clock, Duration, Effect, Metric, Option, Random, Schedule } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
+import type { HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
 import { Publisher } from "./Publisher.ts"
@@ -29,6 +30,8 @@ export interface DeviceContext {
    * Metrics and logs cover every cycle; this only bounds trace volume.
    */
   readonly traceSampleRatio?: number
+  /** Where the device's status is recorded for the health topic, if anywhere. */
+  readonly health?: HealthRegistry
 }
 
 /** Payload published for every value change. */
@@ -120,7 +123,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   const pollCycle = Effect.gen(function* () {
     if (unpublishedMeta.size > 0) yield* publishMeta
     const readings = yield* driver.readAll.pipe(Effect.retry(retryPolicy))
-    yield* Metric.update(deviceLastSuccess, (yield* Clock.currentTimeMillis) / 1000)
+    const readAt = yield* Clock.currentTimeMillis
+    ctx.health?.recordSuccess(driver.deviceId, readAt)
+    yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)
     yield* Effect.forEach(readings, handleReading, { discard: true })
     yield* countCycle("ok")
@@ -128,6 +133,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     Effect.catchTags({
       DriverError: (error) =>
         Effect.all([
+          Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, error.reason)),
           Effect.logWarning("device read failed").pipe(
             Effect.annotateLogs({ reason: error.reason, error: error.message })
           ),
