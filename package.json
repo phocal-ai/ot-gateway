@@ -1,0 +1,24 @@
+{
+  "name": "plenum",
+  "private": true,
+  "description": "Effect-native edge gateway for buildings: Modbus TCP and BACnet/IP to MQTT.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "check": "turbo run typecheck test",
+    "gateway": "pnpm --filter @plenum/gateway start"
+  },
+  "devDependencies": {
+    "@effect/vitest": "4.1.2",
+    "@types/node": "^22.18.0",
+    "turbo": "^2.11.10",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.5"
+  }
+}

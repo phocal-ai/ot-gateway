@@ -1,0 +1,18 @@
+{
+  "name": "@plenum/bacnet",
+  "version": "0.0.0",
+  "description": "Effect-native BACnet/IP driver for Plenum.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "effect": "4.1.2",
+    "@plenum/core": "workspace:*"
+  }
+}

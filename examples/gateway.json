@@ -1,0 +1,67 @@
+{
+  "site": "demo-site",
+  "building": "b1",
+  "mqtt": {
+    "url": "mqtt://localhost:1883",
+    "clientId": "plenum-demo"
+  },
+  "buffer": {
+    "path": "./plenum-buffer.sqlite"
+  },
+  "devices": [
+    {
+      "protocol": "simulator",
+      "id": "ahu-1",
+      "pollIntervalMs": 2000,
+      "points": [
+        {
+          "id": "supply-air-temp",
+          "name": "AHU 1 supply air temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "waveform": "sine",
+          "min": 16,
+          "max": 22,
+          "periodSeconds": 60,
+          "semantics": {
+            "brick": "Supply_Air_Temperature_Sensor",
+            "haystack": ["discharge", "air", "temp", "sensor"]
+          }
+        },
+        {
+          "id": "fan-speed",
+          "name": "AHU 1 supply fan speed",
+          "unit": "unit:PERCENT",
+          "waveform": "ramp",
+          "min": 0,
+          "max": 100,
+          "periodSeconds": 30,
+          "semantics": {
+            "brick": "Supply_Fan_Speed_Command",
+            "haystack": ["discharge", "fan", "speed", "cmd"]
+          }
+        }
+      ]
+    },
+    {
+      "protocol": "modbus-tcp",
+      "id": "main-meter",
+      "host": "192.168.1.50",
+      "unitId": 1,
+      "points": [
+        {
+          "id": "active-power",
+          "name": "Main meter active power",
+          "unit": "unit:KiloW",
+          "table": "holding",
+          "address": 100,
+          "dataType": "float32",
+          "semantics": {
+            "brick": "Active_Power_Sensor",
+            "haystack": ["elec", "power", "active", "sensor"]
+          }
+        }
+      ]
+    }
+  ]
+}
