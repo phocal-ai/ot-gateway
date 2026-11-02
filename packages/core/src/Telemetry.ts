@@ -124,7 +124,8 @@ export const bufferDrained = Metric.counter("plenum_buffer_drained", {
 
 /**
  * Messages the outbox gave up on, by `reason`: `overflow` (the oldest rows,
- * past `buffer.maxRows`) or `rejected` (the broker refused the message).
+ * past `buffer.maxRows`), `rejected` (the broker refused the message) or
+ * `unreadable` (a row that no longer decodes).
  */
 export const bufferDropped = Metric.counter("plenum_buffer_dropped", {
   description: "Messages dropped from the outbox, by reason",

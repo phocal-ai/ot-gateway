@@ -3,6 +3,7 @@
  * file in a temporary directory.
  */
 import { NodeServices } from "@effect/platform-node"
+import { SqliteClient } from "@effect/sql-sqlite-node"
 import { describe, expect, it } from "@effect/vitest"
 import {
   bufferDrained,
@@ -14,6 +15,7 @@ import {
   withMetricAttributes
 } from "@plenum/core"
 import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope } from "effect"
+import { SqlClient } from "effect/sql"
 import { BufferedPublisher } from "../src/index.ts"
 
 /** A broker stand-in: up or down, optionally refusing one topic. */
@@ -143,6 +145,31 @@ describe("BufferedPublisher", () => {
       yield* eventually(() => broker.state.delivered.length === 3)
       expect(broker.state.delivered).toEqual(["3", "4", "5"])
     }).pipe(withMetricAttributes({ test: "overflow" }))
+  )
+
+  it.live("drops a row that no longer decodes instead of stopping forwarding", () =>
+    Effect.gen(function* () {
+      const path = yield* tempDatabase
+      const first = makeBroker()
+      first.state.up = false
+      const firstScope = yield* Scope.make()
+      const before = yield* openBuffer(path, first, firstScope)
+      yield* before.publish("t", "1")
+      yield* Scope.close(firstScope, Exit.void)
+
+      // A row this version cannot read (QoS 7), between two good ones.
+      yield* Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient
+        yield* sql`INSERT INTO outbox (topic, payload, qos, created_at) VALUES ('t', 'bad', 7, 0)`
+        yield* sql`INSERT INTO outbox (topic, payload, qos, created_at) VALUES ('t', '3', 1, 0)`
+      }).pipe(Effect.provide(SqliteClient.layer({ filename: path })))
+
+      const second = makeBroker()
+      yield* openBuffer(path, second, yield* Effect.scope)
+      yield* eventually(() => second.state.delivered.length === 2)
+      expect(second.state.delivered).toEqual(["1", "3"])
+      expect(yield* counter(bufferDropped, { test: "unreadable", reason: "unreadable" })).toBe(1)
+    }).pipe(withMetricAttributes({ test: "unreadable" }))
   )
 
   it.live("keeps stored values across a restart", () =>

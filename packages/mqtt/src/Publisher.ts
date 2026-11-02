@@ -9,8 +9,8 @@ import { NodeSocket } from "@effect/platform-node"
 import { type MqttSettings, offlinePayload, Publisher, PublishError } from "@plenum/core"
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"
-import { makeMqttClient } from "./Client.ts"
-import type { MqttClient, MqttClientOptions, MqttPublishError } from "./Client.ts"
+import { makeMqttClient, MqttPublishError } from "./Client.ts"
+import type { MqttClient, MqttClientOptions } from "./Client.ts"
 
 /** `mqtt.url` (or another setting) cannot be used. */
 export class MqttSettingsError extends Schema.TaggedError<MqttSettingsError>()("MqttSettingsError", {
@@ -94,32 +94,48 @@ export const MqttPublisher = (
       let connection = 0
 
       const publishRetained = Effect.fnUntraced(function* (client: MqttClient, topic: string, payload: string) {
-        const sentOn = connection
         yield* client.publish(topic, payload, { retain: true })
-        retained.set(topic, { payload, connection: sentOn })
+        // A PUBACK arrives on the connection the message went out on, and a dropped
+        // connection fails its publishes, so the current connection is the right one.
+        retained.set(topic, { payload, connection })
       })
 
-      const onConnect = Effect.fnUntraced(
-        function* (client: MqttClient) {
-          connection++
-          if (health !== undefined) yield* publishRetained(client, health.topic, yield* health.online)
-          // Only what went out on earlier connections; anything since is already on this broker.
-          const replay = [...retained]
-            .filter(([topic, entry]) => topic !== health?.topic && entry.connection < connection)
-            .map(([topic, entry]) => [topic, entry.payload] as const)
-          yield* Effect.forEach(replay, ([topic, payload]) => client.publish(topic, payload, { retain: true }), {
-            discard: true
-          })
-          if (replay.length > 0)
-            yield* Effect.logInfo("replayed retained messages").pipe(Effect.annotateLogs({ count: replay.length }))
-        },
-        // The connection dropped again or the broker refused; the next connect tries again.
-        Effect.catchTag("MqttPublishError", (error) =>
-          Effect.logWarning("announcing the gateway failed").pipe(
-            Effect.annotateLogs({ topic: error.topic, error: error.message })
+      // Each message on its own: one the broker refuses must not keep the others off it.
+      // If the connection drops meanwhile, this is interrupted and the next connect starts over.
+      const onConnect = Effect.fnUntraced(function* (client: MqttClient) {
+        connection++
+        if (health !== undefined) {
+          yield* publishRetained(client, health.topic, yield* health.online).pipe(
+            Effect.catchTag("MqttPublishError", (error) =>
+              Effect.logWarning("announcing the gateway failed").pipe(Effect.annotateLogs({ error: error.message }))
+            )
           )
+        }
+        // Only what went out on earlier connections; anything since is already on this broker.
+        const replay = [...retained].filter(
+          ([topic, entry]) => topic !== health?.topic && entry.connection < connection
         )
-      )
+        if (replay.length === 0) return
+        // Bounded by the broker's Receive Maximum inside the client as well.
+        const outcomes = yield* Effect.forEach(
+          replay,
+          ([topic, entry]) =>
+            client.publish(topic, entry.payload, { retain: true }).pipe(
+              Effect.as(true),
+              Effect.catchTag("MqttPublishError", (error) =>
+                Effect.logWarning("replaying a retained message failed").pipe(
+                  Effect.annotateLogs({ topic: error.topic, error: error.message }),
+                  Effect.as(false)
+                )
+              )
+            ),
+          { concurrency: 16 }
+        )
+        const replayed = outcomes.filter(Boolean).length
+        yield* Effect.logInfo("replayed retained messages").pipe(
+          Effect.annotateLogs({ count: replayed, failed: outcomes.length - replayed })
+        )
+      })
 
       const client = yield* makeMqttClient(socket, {
         ...clientOptions,
@@ -137,7 +153,21 @@ export const MqttPublisher = (
           Effect.gen(function* () {
             if (!(yield* client.isConnected)) return
             yield* client.publish(health.topic, offlinePayload("shutdown"), { retain: true })
-          }).pipe(Effect.timeout("2 seconds"), Effect.ignore)
+          }).pipe(
+            Effect.timeoutOrElse({
+              duration: "2 seconds",
+              orElse: () =>
+                Effect.fail(
+                  new MqttPublishError({ topic: health.topic, reason: "unavailable", message: "no PUBACK in time" })
+                )
+            }),
+            // DISCONNECT follows and discards the will, so the retained health message keeps saying online: log why.
+            Effect.catchTag("MqttPublishError", (error) =>
+              Effect.logWarning("publishing offline at shutdown failed").pipe(
+                Effect.annotateLogs({ error: error.message })
+              )
+            )
+          )
         )
       }
       yield* Effect.logInfo("MQTT publisher started").pipe(

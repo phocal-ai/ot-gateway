@@ -163,6 +163,16 @@ describe("MQTT client over TCP", () => {
     })
   )
 
+  it.live("still waits for the first dial when told not to wait", () =>
+    Effect.gen(function* () {
+      const { port, control } = yield* startBroker()
+      const client = yield* clientOn(port, { waitForConnection: false })
+      // Published right after start: it waits for the dial instead of failing.
+      yield* client.publish("t", "first")
+      expect(control.messages.map((m) => m.payload)).toEqual(["first"])
+    })
+  )
+
   it.live("reconnects after the broker restarts", () =>
     Effect.gen(function* () {
       const firstScope = yield* Scope.make()
@@ -277,6 +287,27 @@ describe("MqttPublisher", () => {
       yield* Scope.close(layerScope, Exit.void)
       expect(second.control.retained.get(healthTopic)).toBe('{"status":"offline","reason":"shutdown"}')
       yield* eventually(Effect.sync(() => second.control.cleanDisconnects === 1))
+    })
+  )
+
+  it.live("replays every retained message the broker accepts, even when it refuses one", () =>
+    Effect.gen(function* () {
+      const firstScope = yield* Scope.make()
+      const first = yield* startBroker().pipe(Scope.provide(firstScope))
+      const layer = MqttPublisher(
+        { url: `mqtt://127.0.0.1:${first.port}`, clientId: "replay-gw" },
+        { reconnectDelay: fastOptions.reconnectDelay, publishTimeout: "3 seconds" }
+      )
+      const publisher = Context.get(yield* Layer.build(layer), Publisher)
+      const topics = ["s/b/d/a/$meta", "s/b/d/b/$meta", "s/b/d/c/$meta"]
+      yield* Effect.forEach(topics, (topic) => publisher.publish(topic, "{}", { retain: true }), { discard: true })
+
+      yield* Scope.close(firstScope, Exit.void)
+      const control = makeBrokerControl()
+      control.refusedTopics.add("s/b/d/a/$meta")
+      yield* startBroker(control, first.port)
+      yield* eventually(Effect.sync(() => control.retained.size === 2))
+      expect([...control.retained.keys()].toSorted()).toEqual(["s/b/d/b/$meta", "s/b/d/c/$meta"])
     })
   )
 

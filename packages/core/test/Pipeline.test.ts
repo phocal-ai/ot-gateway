@@ -157,6 +157,44 @@ describe("runDevice", () => {
       expect(topics).toEqual(["s/b/late-broker/zone-temp/$meta", "s/b/late-broker/zone-temp"])
     })
   )
+  it.effect("skips a point the broker refuses and still publishes the others", () =>
+    Effect.gen(function* () {
+      const second: AnyPoint = { ...point, id: "zone-humidity", name: "Zone humidity" }
+      const driver: Driver = {
+        deviceId: "acl",
+        points: [point, second],
+        readAll: Effect.succeed<ReadonlyArray<Reading>>([
+          { pointId: point.id, value: 200, timestamp: 0 },
+          { pointId: second.id, value: 400, timestamp: 0 }
+        ]),
+        write: () => Effect.void
+      }
+      const attempts: Array<string> = []
+      const delivered: Array<string> = []
+      const publisher = Layer.succeed(Publisher, {
+        publish: (topic) =>
+          Effect.suspend(() => {
+            attempts.push(topic)
+            if (topic.includes("zone-temp"))
+              return Effect.fail(new PublishError({ topic, reason: "rejected", message: "not authorized" }))
+            delivered.push(topic)
+            return Effect.void
+          })
+      })
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(publisher),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 second")
+      yield* Fiber.interrupt(fiber)
+
+      expect(delivered).toEqual(["s/b/acl/zone-humidity/$meta", "s/b/acl/zone-humidity"])
+      // Refused metadata is given up on; a refused value is tried again with the next reading.
+      expect(attempts.filter((topic) => topic === "s/b/acl/zone-temp/$meta")).toHaveLength(1)
+      expect(attempts.filter((topic) => topic === "s/b/acl/zone-temp")).toHaveLength(2)
+      expect(yield* countOf(pollCycles, { device: "acl", outcome: "ok" })).toBe(2)
+    })
+  )
 })
 
 /** Read a counter's count for one combination of attributes. */
