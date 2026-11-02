@@ -28,6 +28,10 @@ There is no build step. Node runs `.ts` files directly through type stripping (N
 - `examples/`: sample configs
 - `docs/`: vision and design notes
 
+## Branches
+
+Work happens on `dev`: branch off it and open pull requests against it. `main` is for releases only and is updated by merging `dev` (see CONTRIBUTING.md). Never commit straight to `main`.
+
 ## Non-negotiable rules
 
 1. **Effect-native.** Use Effect 4 (`effect` and `@effect/*`) for everything it offers: sockets (`effect/socket`), SQL (`@effect/sql-sqlite-node`), Schema, Schedule, CLI, HTTP, observability. Do not add non-Effect runtime dependencies. If one seems unavoidable, ask first and wrap it in a Layer.
