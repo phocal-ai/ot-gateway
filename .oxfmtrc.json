@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 120,
+  "semi": false,
+  "singleQuote": false,
+  "trailingComma": "none",
+  "arrowParens": "always",
+  "proseWrap": "preserve",
+  "ignorePatterns": ["repos/**", "pnpm-lock.yaml", "observability/grafana/dashboards/**"]
+}

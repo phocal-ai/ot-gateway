@@ -40,14 +40,14 @@ const retryPolicy = {
  * Run one device forever. Driver failures are logged and the next cycle
  * tries again; they never stop the gateway.
  */
-export const runDevice = Effect.fn("runDevice")(function*(ctx: DeviceContext, driver: Driver) {
+export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, driver: Driver) {
   const publisher = yield* Publisher
   const points = new Map(driver.points.map((p) => [p.id, p] as const))
   const last = new Map<string, PointValue>()
   const topicFor = (point: Slug) => ({
     site: ctx.site,
     building: ctx.building,
-    device: driver.deviceId as Slug,
+    device: driver.deviceId,
     point
   })
 
@@ -61,23 +61,25 @@ export const runDevice = Effect.fn("runDevice")(function*(ctx: DeviceContext, dr
   const cycle = driver.readAll.pipe(
     Effect.retry(retryPolicy),
     Effect.flatMap((readings) =>
-      Effect.forEach(readings, (reading) => {
-        const point = points.get(reading.pointId)
-        if (point === undefined) return Effect.void
-        const value = typeof reading.value === "number"
-          ? applyScaling(reading.value, point.scaling)
-          : reading.value
-        if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
-          return Effect.void
-        }
-        last.set(point.id, value)
-        const message: ValueMessage = {
-          value,
-          ts: reading.timestamp,
-          ...(point.unit === undefined ? {} : { unit: point.unit })
-        }
-        return publisher.publish(pointTopic(topicFor(point.id)), JSON.stringify(message))
-      }, { discard: true })
+      Effect.forEach(
+        readings,
+        (reading) => {
+          const point = points.get(reading.pointId)
+          if (point === undefined) return Effect.void
+          const value = typeof reading.value === "number" ? applyScaling(reading.value, point.scaling) : reading.value
+          if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
+            return Effect.void
+          }
+          last.set(point.id, value)
+          const message: ValueMessage = {
+            value,
+            ts: reading.timestamp,
+            ...(point.unit === undefined ? {} : { unit: point.unit })
+          }
+          return publisher.publish(pointTopic(topicFor(point.id)), JSON.stringify(message))
+        },
+        { discard: true }
+      )
     ),
     Effect.catchTags({
       DriverError: (error) =>
@@ -86,8 +88,7 @@ export const runDevice = Effect.fn("runDevice")(function*(ctx: DeviceContext, dr
           reason: error.reason,
           message: error.message
         }),
-      PublishError: (error) =>
-        Effect.logWarning("publish failed", { topic: error.topic, message: error.message })
+      PublishError: (error) => Effect.logWarning("publish failed", { topic: error.topic, message: error.message })
     })
   )
 

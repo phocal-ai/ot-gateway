@@ -17,27 +17,30 @@ describe("encodeReadRequest", () => {
 
 describe("decodeReadResponse", () => {
   it.effect("reads registers", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x07, 0x11, 0x03, 0x04, 0x02, 0x2b, 0x00, 0x64])
       const res = yield* decodeReadResponse(frame)
       expect(res.registers).toEqual([0x022b, 0x0064])
       expect(res.unitId).toBe(0x11)
-    }))
+    })
+  )
 
   it.effect("surfaces exceptions as typed errors", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x11, 0x83, 0x02])
       const exit = yield* Effect.exit(decodeReadResponse(frame))
       expect(Exit.isFailure(exit)).toBe(true)
       const error = yield* Effect.flip(decodeReadResponse(frame))
       expect(error._tag).toBe("ModbusException")
-    }))
+    })
+  )
 
   it.effect("rejects truncated frames", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const error = yield* Effect.flip(decodeReadResponse(Uint8Array.from([0, 1, 0, 0])))
       expect(error._tag).toBe("ModbusFrameError")
-    }))
+    })
+  )
 })
 
 describe("decodeValue", () => {

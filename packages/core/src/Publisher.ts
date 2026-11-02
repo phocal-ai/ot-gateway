@@ -10,13 +10,12 @@ export interface PublishOptions {
   readonly qos?: 0 | 1 | 2
 }
 
-export class Publisher extends Context.Service<Publisher, {
-  readonly publish: (
-    topic: string,
-    payload: string,
-    options?: PublishOptions
-  ) => Effect.Effect<void, PublishError>
-}>()("@plenum/core/Publisher") {}
+export class Publisher extends Context.Service<
+  Publisher,
+  {
+    readonly publish: (topic: string, payload: string, options?: PublishOptions) => Effect.Effect<void, PublishError>
+  }
+>()("@plenum/core/Publisher") {}
 
 /** Prints every message to stdout. */
 export const ConsolePublisher: Layer.Layer<Publisher> = Layer.succeed(Publisher, {

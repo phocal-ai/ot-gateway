@@ -6,7 +6,7 @@ Plenum runs on small Linux devices like a Raspberry Pi. It reads building protoc
 
 It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable, not hidden in callbacks or flow graphs. Plenum is both a library you compose in code and a ready-to-run gateway you configure with one JSON file.
 
-> A *plenum* is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
+> A _plenum_ is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
 
 > [!NOTE]
 > Plenum is early. The core pipeline, config schema and protocol codecs work; the Modbus, MQTT and BACnet transports are being built. See the [roadmap](#roadmap).
@@ -87,14 +87,14 @@ IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defau
 
 ## Packages
 
-| Package | What it does | Status |
-| --- | --- | --- |
-| [`@plenum/core`](packages/core) | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service | Working |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos | Working |
-| [`@plenum/modbus`](packages/modbus) | Modbus TCP: frame codec done, client next | In progress |
-| [`@plenum/mqtt`](packages/mqtt) | MQTT 5: wire codec started, client next | In progress |
-| [`@plenum/bacnet`](packages/bacnet) | BACnet/IP: BVLC codec started | Early |
-| [`@plenum/gateway`](apps/gateway) | Ready-to-run gateway | Working with simulators |
+| Package                                   | What it does                                                                             | Status                  |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------- |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service | Working                 |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                             | Working                 |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: frame codec done, client next                                                | In progress             |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: wire codec started, client next                                                  | In progress             |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                            | Early                   |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway                                                                     | Working with simulators |
 
 ## Architecture
 
@@ -130,13 +130,13 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 
 ## Roadmap
 
-| Version | Focus |
-| --- | --- |
-| v0.1 Foundation | Core, Schema config, Modbus TCP, MQTT publish |
-| v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI |
-| v0.3 BACnet/IP | Discovery, ReadProperty, COV subscriptions |
-| v0.4 Write-back | MQTT commands, range limits, BACnet priority |
-| v1.0 Production | Local status page, packaging (container, systemd), docs, first building |
+| Version          | Focus                                                                   |
+| ---------------- | ----------------------------------------------------------------------- |
+| v0.1 Foundation  | Core, Schema config, Modbus TCP, MQTT publish                           |
+| v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI              |
+| v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscriptions                              |
+| v0.4 Write-back  | MQTT commands, range limits, BACnet priority                            |
+| v1.0 Production  | Local status page, packaging (container, systemd), docs, first building |
 
 After v1.0 comes a Next.js configuration app, as a separate package.
 

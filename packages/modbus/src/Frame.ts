@@ -63,7 +63,7 @@ export interface ReadResponse {
 export const decodeReadResponse = (
   frame: Uint8Array
 ): Effect.Effect<ReadResponse, ModbusFrameError | ModbusException> =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     if (frame.length < 9) {
       return yield* new ModbusFrameError({ message: `frame too short: ${frame.length} bytes` })
     }

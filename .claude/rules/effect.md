@@ -18,7 +18,7 @@ A type records where a value came from and what has been checked about it. Keep 
 - **Never widen a known value** to `unknown`, `object` or `Record<string, unknown>` because a broad type is easier to implement against.
 - **Never erase a type and assert it back** (`x as unknown as T`, `as any as T`). An assertion parses nothing. Redesign the boundary instead: use the owning schema, a typed constructor or a brand.
 - A single `as` is allowed only where TypeScript cannot express an invariant that holds at runtime. It needs a `// SAFETY:` comment saying why the invariant holds, and a `// Verified by:` line naming the test that fails if it breaks.
-- No plain `any`, no non-null `!` (branch on the value, or use `Option` / `Array.head`).
+- No plain `any`, no non-null `!` (branch on the value, or use `Option` / `Array.head`). `pnpm lint` fails on both.
 
 ## Translate tagged errors by tag
 
@@ -27,9 +27,10 @@ When the failure channel holds tagged errors, translate with `Effect.catchTag` /
 ```ts
 readRegisters(request).pipe(
   Effect.catchTags({
-    ModbusException: (error) => Effect.fail(new PointReadFailed({ pointId, reason: "DeviceException", code: error.code })),
-    ModbusFrameError: () => Effect.fail(new PointReadFailed({ pointId, reason: "BadFrame" })),
-  }),
+    ModbusException: (error) =>
+      Effect.fail(new PointReadFailed({ pointId, reason: "DeviceException", code: error.code })),
+    ModbusFrameError: () => Effect.fail(new PointReadFailed({ pointId, reason: "BadFrame" }))
+  })
 )
 ```
 
@@ -41,12 +42,12 @@ readRegisters(request).pipe(
 
 Logic goes in a generator: yielding services, dependent steps, branches, loops, early returns. Cross-cutting policy wraps it from outside: error translation, retry, timeout, spans, log annotations, `Effect.provide`.
 
-| The code does…                                   | Use                                              |
-| ------------------------------------------------ | ------------------------------------------------ |
-| Yields services, runs dependent steps, branches  | `Effect.gen` or `Effect.fn("Name")(function* …)` |
-| Error translation, retry, timeout, tracing       | `.pipe(...)`, or trailing `Effect.fn` arguments  |
-| One pure transform of a result                   | `.pipe(Effect.map(...))`                         |
-| Two or more dependent `flatMap` / `andThen` steps | Rewrite as a generator                          |
+| The code does…                                    | Use                                              |
+| ------------------------------------------------- | ------------------------------------------------ |
+| Yields services, runs dependent steps, branches   | `Effect.gen` or `Effect.fn("Name")(function* …)` |
+| Error translation, retry, timeout, tracing        | `.pipe(...)`, or trailing `Effect.fn` arguments  |
+| One pure transform of a result                    | `.pipe(Effect.map(...))`                         |
+| Two or more dependent `flatMap` / `andThen` steps | Rewrite as a generator                           |
 
 ```ts
 const pollPoint = Effect.fn("Device.pollPoint")(
@@ -56,7 +57,7 @@ const pollPoint = Effect.fn("Device.pollPoint")(
     return normalize(point, raw)
   },
   Effect.timeout("2 seconds"),
-  Effect.retry({ schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered), times: 4 }),
+  Effect.retry({ schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered), times: 4 })
 )
 ```
 
@@ -64,18 +65,18 @@ Pass a pipeable combinator straight to `Effect.fn`; don't wrap it in `(effect) =
 
 ## Effect v4 spellings
 
-| v3                                                | v4                                                                                    |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `Context.Tag`, `Effect.Tag`, `Effect.Service`     | `class X extends Context.Service<X, Shape>()("id")`, wired with `Layer.effect`        |
-| `FiberRef` with a default                         | `Context.Reference`                                                                   |
-| `Effect.catchAll` / `catchAllCause` / `catchSome` | `Effect.catch` / `Effect.catchCause` / `Effect.catchFilter`                           |
-| `Either`, `Effect.either`                         | `Result`, `Effect.result` (`Result.isSuccess` / `isFailure`, `.success` / `.failure`) |
-| `Effect.dieMessage(m)`                            | `Effect.die(new Error(m))`                                                            |
-| `Layer.scoped`                                    | `Layer.effect` (it provides the layer `Scope`)                                        |
-| `Schema.decodeUnknown`, `Schema.decode`           | `Schema.decodeUnknownEffect`, `Schema.decodeEffect`                                   |
-| `Schema.optionalWith`                             | `Schema.optional` / `Schema.optionalKey`, plus `withDecodingDefaultKey` for defaults  |
-| `Schema.Literal("a", "b")`, `Schema.Union(a, b)`  | `Schema.Literals(["a", "b"])`, `Schema.Union([a, b])`                                 |
-| `ParseError` in the error channel                 | `SchemaError` (its issue is a `SchemaIssue`)                                          |
+| v3                                                | v4                                                                                      |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `Context.Tag`, `Effect.Tag`, `Effect.Service`     | `class X extends Context.Service<X, Shape>()("id")`, wired with `Layer.effect`          |
+| `FiberRef` with a default                         | `Context.Reference`                                                                     |
+| `Effect.catchAll` / `catchAllCause` / `catchSome` | `Effect.catch` / `Effect.catchCause` / `Effect.catchFilter`                             |
+| `Either`, `Effect.either`                         | `Result`, `Effect.result` (`Result.isSuccess` / `isFailure`, `.success` / `.failure`)   |
+| `Effect.dieMessage(m)`                            | `Effect.die(new Error(m))`                                                              |
+| `Layer.scoped`                                    | `Layer.effect` (it provides the layer `Scope`)                                          |
+| `Schema.decodeUnknown`, `Schema.decode`           | `Schema.decodeUnknownEffect`, `Schema.decodeEffect`                                     |
+| `Schema.optionalWith`                             | `Schema.optional` / `Schema.optionalKey`, plus `withDecodingDefaultKey` for defaults    |
+| `Schema.Literal("a", "b")`, `Schema.Union(a, b)`  | `Schema.Literals(["a", "b"])`, `Schema.Union([a, b])`                                   |
+| `ParseError` in the error channel                 | `SchemaError` (its issue is a `SchemaIssue`)                                            |
 | `@effect/platform`, `@effect/cli`                 | `effect/socket`, `effect/FileSystem`, `effect/cli`, …; `@effect/platform-node` for Node |
 
 ## Effect v4 traps
