@@ -9,7 +9,7 @@ It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retri
 > A _plenum_ is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
 
 > [!NOTE]
-> Plenum is early. The core pipeline, config schema and protocol codecs work; the Modbus, MQTT and BACnet transports are being built. See the [roadmap](#roadmap).
+> Plenum is early. The core pipeline, config schema and the Modbus TCP read path work; the MQTT and BACnet transports are being built. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -95,7 +95,7 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | ----------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------- |
 | [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service | Working                 |
 | [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                             | Working                 |
-| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: frame codec done, client next                                                | In progress             |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4     | Reads working           |
 | [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: wire codec started, client next                                                  | In progress             |
 | [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                            | Early                   |
 | [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway                                                                     | Working with simulators |

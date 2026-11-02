@@ -253,6 +253,43 @@ timeseries(
 )
 y += 8
 
+row("Device links")
+timeseries(
+  "Device requests by outcome",
+  [
+    {
+      expr: `sum by (device, outcome) (rate(plenum_driver_requests_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}} {{outcome}}"
+    }
+  ],
+  {
+    unit: "reqps",
+    x: 0,
+    w: 12,
+    stack: true,
+    description:
+      "Every request a driver sent. exception = the device refused (check the point address); timeout and connection = it is unreachable."
+  }
+)
+timeseries(
+  "Connections opened by device",
+  [
+    {
+      expr: `sum by (device, outcome) (increase(plenum_driver_connects_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}} {{outcome}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    stack: true,
+    description:
+      "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect."
+  }
+)
+y += 8
+
 row("Points")
 staleness(
   "Point freshness",

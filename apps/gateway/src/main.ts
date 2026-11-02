@@ -4,8 +4,8 @@
  *
  *   node apps/gateway/src/main.ts path/to/gateway.json
  *
- * Today it runs simulator devices and prints to the console. Modbus, BACnet
- * and MQTT plug in here as their drivers land.
+ * Runs simulator and Modbus TCP devices and prints to the console. BACnet
+ * and MQTT plug in here as they land.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import {
@@ -16,6 +16,7 @@ import {
   runDevice,
   withMetricAttributes
 } from "@plenum/core"
+import { makeModbusDriver } from "@plenum/modbus"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Effect, FileSystem, Layer } from "effect"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
@@ -31,6 +32,8 @@ const runOne = (config: GatewayConfig, device: Device, sampleRatio: number) => {
     case "simulator":
       return runDevice(ctx, makeSimulatorDriver(device))
     case "modbus-tcp":
+      // The device's connection lives as long as its polling loop.
+      return Effect.scoped(Effect.flatMap(makeModbusDriver(device), (driver) => runDevice(ctx, driver)))
     case "bacnet-ip":
       return Effect.logWarning(`${device.protocol} driver is not implemented yet, skipping`).pipe(
         Effect.annotateLogs({ device: device.id })

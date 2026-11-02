@@ -44,6 +44,9 @@ importers:
       '@plenum/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@plenum/modbus':
+        specifier: workspace:*
+        version: link:../../packages/modbus
       '@plenum/simulator':
         specifier: workspace:*
         version: link:../../packages/simulator
@@ -68,6 +71,9 @@ importers:
 
   packages/modbus:
     dependencies:
+      '@effect/platform-node':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)(redis@6.3.1)
       '@plenum/core':
         specifier: workspace:*
         version: link:../core

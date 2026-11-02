@@ -1,9 +1,10 @@
 /**
  * Modbus TCP framing: MBAP header + PDU.
  *
- * Pure encode/decode functions, no I/O. The client wires these to an Effect
- * socket. Reference: Modbus Application Protocol v1.1b3 and
- * Modbus Messaging on TCP/IP Implementation Guide v1.0b.
+ * Pure encode/decode functions, no I/O. The client and the simulator wire
+ * these to an Effect socket. References:
+ * - Modbus Application Protocol Specification v1.1b3 (MBAP-free PDUs, §6, §7)
+ * - Modbus Messaging on TCP/IP Implementation Guide v1.0b (MBAP header, §3.1.3)
  */
 import { Effect, Schema } from "effect"
 import type { DataType } from "@plenum/core"
@@ -17,6 +18,23 @@ export const FunctionCode = {
   WriteMultipleRegisters: 0x10
 } as const
 export type RegisterReadCode = typeof FunctionCode.ReadHoldingRegisters | typeof FunctionCode.ReadInputRegisters
+export type BitReadCode = typeof FunctionCode.ReadCoils | typeof FunctionCode.ReadDiscreteInputs
+export type ReadCode = RegisterReadCode | BitReadCode
+
+/** Exception codes a server answers with (spec §7). */
+export const ExceptionCode = {
+  IllegalFunction: 0x01,
+  IllegalDataAddress: 0x02,
+  IllegalDataValue: 0x03,
+  ServerDeviceFailure: 0x04
+} as const
+
+/** Largest quantity one read may ask for (spec §6.1–6.4). */
+export const maxReadQuantity = (functionCode: ReadCode): number =>
+  functionCode === FunctionCode.ReadCoils || functionCode === FunctionCode.ReadDiscreteInputs ? 2000 : 125
+
+/** MBAP header (7 bytes) plus the largest PDU (253 bytes). */
+const maxFrameLength = 260
 
 /** The response could not be parsed. */
 export class ModbusFrameError extends Schema.TaggedError<ModbusFrameError>()("ModbusFrameError", {
@@ -32,13 +50,13 @@ export class ModbusException extends Schema.TaggedError<ModbusException>()("Modb
 export interface ReadRequest {
   readonly transactionId: number
   readonly unitId: number
-  readonly functionCode: RegisterReadCode
+  readonly functionCode: ReadCode
   readonly address: number
-  /** Number of 16-bit registers, 1 to 125. */
+  /** Registers (1 to 125) or bits (1 to 2000). */
   readonly quantity: number
 }
 
-/** Encode a Read Holding / Input Registers request (12 bytes). */
+/** Encode a read request for any of FC 01–04; they share one layout (12 bytes). */
 export const encodeReadRequest = (req: ReadRequest): Uint8Array => {
   const buf = new Uint8Array(12)
   const view = new DataView(buf.buffer)
@@ -52,17 +70,54 @@ export const encodeReadRequest = (req: ReadRequest): Uint8Array => {
   return buf
 }
 
-export interface ReadResponse {
+const encoder = new TextEncoder()
+
+/** Append socket chunks to a receive buffer (a socket may deliver strings; Modbus is bytes). */
+export const appendChunks = (buffer: Uint8Array, chunks: ReadonlyArray<Uint8Array | string>): Uint8Array => {
+  const bytes = chunks.map((chunk) => (typeof chunk === "string" ? encoder.encode(chunk) : chunk))
+  const out = new Uint8Array(buffer.length + bytes.reduce((n, b) => n + b.length, 0))
+  out.set(buffer, 0)
+  let offset = buffer.length
+  for (const b of bytes) {
+    out.set(b, offset)
+    offset += b.length
+  }
+  return out
+}
+
+/** The result of looking for one complete frame at the start of a byte stream. */
+export type FrameSplit =
+  | { readonly _tag: "Incomplete" }
+  | { readonly _tag: "Frame"; readonly frame: Uint8Array; readonly rest: Uint8Array }
+  | { readonly _tag: "Invalid"; readonly message: string }
+
+/**
+ * Take one MBAP frame off the front of `buffer`. TCP delivers a byte stream,
+ * so a frame can arrive split or several can arrive together; the MBAP length
+ * field (bytes after itself) says where each frame ends.
+ */
+export const takeFrame = (buffer: Uint8Array): FrameSplit => {
+  if (buffer.length < 7) return { _tag: "Incomplete" }
+  const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+  const protocolId = view.getUint16(2)
+  const length = view.getUint16(4)
+  if (protocolId !== 0) return { _tag: "Invalid", message: `unexpected protocol id ${protocolId}` }
+  if (length < 2 || 6 + length > maxFrameLength) return { _tag: "Invalid", message: `invalid length field ${length}` }
+  const total = 6 + length
+  if (buffer.length < total) return { _tag: "Incomplete" }
+  return { _tag: "Frame", frame: buffer.subarray(0, total), rest: buffer.subarray(total) }
+}
+
+interface ResponseHeader {
   readonly transactionId: number
   readonly unitId: number
   readonly functionCode: number
-  readonly registers: ReadonlyArray<number>
+  /** The data bytes after the byte count. */
+  readonly data: Uint8Array
 }
 
-/** Decode a register read response, failing on malformed frames and exceptions. */
-export const decodeReadResponse = (
-  frame: Uint8Array
-): Effect.Effect<ReadResponse, ModbusFrameError | ModbusException> =>
+/** Parse the MBAP header and the byte-counted body shared by FC 01–04 responses. */
+const decodeReadBody = (frame: Uint8Array): Effect.Effect<ResponseHeader, ModbusFrameError | ModbusException> =>
   Effect.gen(function* () {
     if (frame.length < 9) {
       return yield* new ModbusFrameError({ message: `frame too short: ${frame.length} bytes` })
@@ -83,13 +138,149 @@ export const decodeReadResponse = (
       return yield* new ModbusException({ functionCode: functionCode & 0x7f, exceptionCode: view.getUint8(8) })
     }
     const byteCount = view.getUint8(8)
-    if (byteCount % 2 !== 0 || frame.length !== 9 + byteCount) {
+    if (frame.length !== 9 + byteCount) {
       return yield* new ModbusFrameError({ message: `invalid byte count ${byteCount}` })
     }
-    const registers: Array<number> = []
-    for (let i = 0; i < byteCount; i += 2) registers.push(view.getUint16(9 + i))
-    return { transactionId, unitId, functionCode, registers }
+    return { transactionId, unitId, functionCode, data: frame.subarray(9) }
   })
+
+export interface ReadResponse {
+  readonly transactionId: number
+  readonly unitId: number
+  readonly functionCode: number
+  readonly registers: ReadonlyArray<number>
+}
+
+/** Decode a register read response (FC 03/04, spec §6.3–6.4), failing on malformed frames and exceptions. */
+export const decodeReadResponse = (
+  frame: Uint8Array
+): Effect.Effect<ReadResponse, ModbusFrameError | ModbusException> =>
+  Effect.gen(function* () {
+    const { data, ...header } = yield* decodeReadBody(frame)
+    if (data.length % 2 !== 0) {
+      return yield* new ModbusFrameError({ message: `invalid byte count ${data.length}` })
+    }
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
+    const registers: Array<number> = []
+    for (let i = 0; i < data.length; i += 2) registers.push(view.getUint16(i))
+    return { ...header, registers }
+  })
+
+export interface BitResponse {
+  readonly transactionId: number
+  readonly unitId: number
+  readonly functionCode: number
+  readonly bits: ReadonlyArray<boolean>
+}
+
+/**
+ * Decode a coil or discrete input response (FC 01/02, spec §6.1–6.2). Bits are
+ * packed LSB first; `quantity` says how many of the padded bits are real.
+ */
+export const decodeBitResponse = (
+  frame: Uint8Array,
+  quantity: number
+): Effect.Effect<BitResponse, ModbusFrameError | ModbusException> =>
+  Effect.gen(function* () {
+    const { data, ...header } = yield* decodeReadBody(frame)
+    if (data.length !== Math.ceil(quantity / 8)) {
+      return yield* new ModbusFrameError({ message: `byte count ${data.length} does not fit ${quantity} bits` })
+    }
+    const bits: Array<boolean> = []
+    for (let i = 0; i < quantity; i++) bits.push((((data[i >> 3] ?? 0) >> (i & 7)) & 1) === 1)
+    return { ...header, bits }
+  })
+
+/** A request as a server sees it: a read it can answer, or a function it does not support. */
+export type DecodedRequest =
+  | { readonly _tag: "Read"; readonly request: ReadRequest }
+  | {
+      readonly _tag: "Unsupported"
+      readonly transactionId: number
+      readonly unitId: number
+      readonly functionCode: number
+    }
+
+/** Decode a request frame on the server side (used by the simulator). */
+export const decodeRequest = (frame: Uint8Array): Effect.Effect<DecodedRequest, ModbusFrameError> =>
+  Effect.gen(function* () {
+    if (frame.length < 8) {
+      return yield* new ModbusFrameError({ message: `request too short: ${frame.length} bytes` })
+    }
+    const view = new DataView(frame.buffer, frame.byteOffset, frame.byteLength)
+    const transactionId = view.getUint16(0)
+    const unitId = view.getUint8(6)
+    const functionCode = view.getUint8(7)
+    switch (functionCode) {
+      case FunctionCode.ReadCoils:
+      case FunctionCode.ReadDiscreteInputs:
+      case FunctionCode.ReadHoldingRegisters:
+      case FunctionCode.ReadInputRegisters: {
+        if (frame.length !== 12) {
+          return yield* new ModbusFrameError({ message: `read request must be 12 bytes, got ${frame.length}` })
+        }
+        const request = {
+          transactionId,
+          unitId,
+          functionCode,
+          address: view.getUint16(8),
+          quantity: view.getUint16(10)
+        }
+        return { _tag: "Read", request } as const
+      }
+      default:
+        return { _tag: "Unsupported", transactionId, unitId, functionCode } as const
+    }
+  })
+
+/** MBAP header plus function code and byte-counted data. */
+const encodeResponse = (transactionId: number, unitId: number, functionCode: number, data: Uint8Array) => {
+  const buf = new Uint8Array(9 + data.length)
+  const view = new DataView(buf.buffer)
+  view.setUint16(0, transactionId & 0xffff)
+  view.setUint16(2, 0)
+  view.setUint16(4, 3 + data.length)
+  view.setUint8(6, unitId)
+  view.setUint8(7, functionCode)
+  view.setUint8(8, data.length)
+  buf.set(data, 9)
+  return buf
+}
+
+/** Encode a register read response (FC 03/04). */
+export const encodeRegisterResponse = (req: ReadRequest, registers: ReadonlyArray<number>): Uint8Array => {
+  const data = new Uint8Array(registers.length * 2)
+  const view = new DataView(data.buffer)
+  registers.forEach((register, i) => view.setUint16(i * 2, register & 0xffff))
+  return encodeResponse(req.transactionId, req.unitId, req.functionCode, data)
+}
+
+/** Encode a coil or discrete input response (FC 01/02), packing bits LSB first. */
+export const encodeBitResponse = (req: ReadRequest, bits: ReadonlyArray<boolean>): Uint8Array => {
+  const data = new Uint8Array(Math.ceil(bits.length / 8))
+  bits.forEach((bit, i) => {
+    if (bit) data[i >> 3] = (data[i >> 3] ?? 0) | (1 << (i & 7))
+  })
+  return encodeResponse(req.transactionId, req.unitId, req.functionCode, data)
+}
+
+/** Encode an exception response (spec §7): function code with the high bit set, then the code. */
+export const encodeExceptionResponse = (
+  transactionId: number,
+  unitId: number,
+  functionCode: number,
+  exceptionCode: number
+): Uint8Array => {
+  const buf = new Uint8Array(9)
+  const view = new DataView(buf.buffer)
+  view.setUint16(0, transactionId & 0xffff)
+  view.setUint16(2, 0)
+  view.setUint16(4, 3)
+  view.setUint8(6, unitId)
+  view.setUint8(7, (functionCode | 0x80) & 0xff)
+  view.setUint8(8, exceptionCode)
+  return buf
+}
 
 /** Registers occupied by a data type. */
 export const registerCount = (dataType: DataType): number =>
@@ -116,5 +307,26 @@ export const decodeValue = (registers: ReadonlyArray<number>, dataType: DataType
       return view.getInt32(0)
     case "float32":
       return view.getFloat32(0)
+  }
+}
+
+/** The inverse of `decodeValue`: the registers holding `value` as `dataType`. Integers are truncated and wrap. */
+export const encodeValue = (value: number | boolean, dataType: DataType): ReadonlyArray<number> => {
+  const view = new DataView(new ArrayBuffer(4))
+  const numeric = typeof value === "boolean" ? Number(value) : value
+  switch (dataType) {
+    case "bool":
+      return [numeric === 0 ? 0 : 1]
+    case "uint16":
+    case "int16":
+      view.setUint16(0, Math.trunc(numeric) & 0xffff)
+      return [view.getUint16(0)]
+    case "uint32":
+    case "int32":
+      view.setUint32(0, Math.trunc(numeric) >>> 0)
+      return [view.getUint16(0), view.getUint16(2)]
+    case "float32":
+      view.setFloat32(0, numeric)
+      return [view.getUint16(0), view.getUint16(2)]
   }
 }

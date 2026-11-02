@@ -2,7 +2,22 @@
 
 Effect-native Modbus TCP, implemented in-house.
 
-- Done: MBAP/PDU codec for register reads, exception responses, value decoding (int16 to float32)
-- Next: scoped client on `effect/socket`, register grouping, reconnects, simulator server
+- **Codec** (`Frame.ts`): pure MBAP/PDU encoding and decoding.
+  - Reads: FC 01–04, coils, discrete inputs, holding and input registers.
+  - Exception responses.
+  - Stream framing: `takeFrame` splits a TCP byte stream into frames.
+  - Values: `int16` to `float32`, high word first.
+- **Planner** (`Plan.ts`): groups a device's points into as few requests as the protocol allows (125 registers or 2,000 bits per request). It only merges adjacent addresses unless `maxGap` allows more.
+- **Client** (`Client.ts`): one connection per device, opened on first use.
+  - Requests go out one at a time, with a request timeout (default 2 s).
+  - A timeout, socket error or unreadable frame drops the connection, and the next request reconnects.
+  - A stale response is skipped by its transaction ID.
+  - Takes an `effect/socket` `Socket`, so tests can supply their own.
+- **Driver** (`Driver.ts`): `makeModbusDriver(device)` turns a `modbus-tcp` config into a `Driver`. If the device refuses one block (a Modbus exception), only that block's points are lost: the refusal is logged and counted. Timeouts and connection problems fail the whole read.
+- **Simulator** (`Simulator.ts`): a real Modbus TCP server over an in-memory register bank (`serveModbus`, `setPointValue`). It answers like a strict device, and `SimulatorControl` can make it silent to test timeouts.
+
+Metrics: `plenum_driver_requests_total{outcome}` and `plenum_driver_connects_total{outcome}`. The driver adds no span per request; the cycle span carries `plenum.requests` and `plenum.refused`.
+
+Not yet: writes (v0.4, with the command guard) and word-swapped 32-bit values.
 
 Part of [Plenum](../../README.md).
