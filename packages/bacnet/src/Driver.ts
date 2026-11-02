@@ -17,15 +17,16 @@
  * booleans; every other numeric value as a number.
  */
 import { NodeDatagramSocket } from "@effect/platform-node"
-import { type BacnetDevice, type BacnetSettings, DriverError } from "@plenum/core"
+import { type BacnetDevice, type BacnetSettings, DriverError, pointReadFailures } from "@plenum/core"
 import type { BacnetPoint, Driver, PointValue, Reading } from "@plenum/core"
-import { Clock, Duration, Effect, Result } from "effect"
+import { Clock, Duration, Effect, Metric, Result } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
-import { AbortReason, RejectReason } from "./Apdu.ts"
+import { AbortReason, MAX_APDU_IP, RejectReason } from "./Apdu.ts"
 import {
   type BacnetClient,
   type BacnetDeviceError,
   BacnetSocketError,
+  BacnetTimeout,
   type DeviceAddress,
   makeBacnetClient
 } from "./Client.ts"
@@ -57,6 +58,9 @@ export const resolvePoint = (point: BacnetPoint): Result.Result<ResolvedPoint, s
   if (objectType === undefined) return Result.fail(`unknown object type "${point.objectType}"`)
   const property = propertyNumber(point.property)
   if (property === undefined) return Result.fail(`unknown property "${point.property}"`)
+  if (property === PropertyId.all || property === PropertyId.required || property === 80) {
+    return Result.fail(`"${point.property}" reads several properties; name one`)
+  }
   return Result.succeed({
     point,
     object: { objectType, instance: point.instance },
@@ -82,6 +86,10 @@ export const toPointValue = (
   switch (value.type) {
     case "real":
     case "double":
+      // An open sensor circuit reads as NaN on some devices; a non-finite number is not a measurement.
+      return Number.isFinite(value.value)
+        ? Result.succeed(value.value)
+        : Result.fail(`not a finite number (${value.value})`)
     case "unsigned":
     case "signed":
       return Result.succeed(value.value)
@@ -104,16 +112,32 @@ export const toPointValue = (
 }
 
 /**
- * Properties per ReadPropertyMultiple so the answer fits in `maxApdu` bytes:
- * the worst case per point is its object identifier (5), the list tags (2),
- * the property identifier (3), the value tags (2) and a double (9).
+ * Properties per ReadPropertyMultiple so the answer fits in `maxApdu` bytes
+ * (at most what BACnet/IP carries): the worst case per point is its object
+ * identifier (5), the list tags (2), the property identifier (3), the value
+ * tags (2) and a double or 8-byte integer with its extended length (10).
  */
-export const batchSizeFor = (maxApdu: number) => Math.max(1, Math.floor((maxApdu - 3) / 21))
+export const batchSizeFor = (maxApdu: number) => Math.max(1, Math.floor((Math.min(maxApdu, MAX_APDU_IP) - 3) / 22))
 
-/** The answer did not fit: the device would have had to segment it. */
+/** Assumed for a device at a fixed address that does not answer Who-Is: the size most IP devices accept. */
+const ASSUMED_MAX_APDU = 480
+
+/** Cycles in a row that time out before a device found by broadcast is looked for again. */
+const LOST_AFTER_CYCLES = 3
+
+/** Clean cycles after which a batch size that was halved is doubled again, up to the size the device allows. */
+const REGROW_AFTER_CYCLES = 10
+
+/** Broadcast Who-Is reaches every network of the site, so it is repeated at most this often, then less often. */
+const LOCATE_BACKOFF = { firstMs: 30_000, maxMs: 600_000 }
+
+/** The answer did not fit: the device would have had to segment it, or ran out of room. */
 const tooLarge = (error: BacnetDeviceError) =>
   (error.kind === "abort" &&
-    (error.code === AbortReason.SegmentationNotSupported || error.code === AbortReason.BufferOverflow)) ||
+    (error.code === AbortReason.SegmentationNotSupported ||
+      error.code === AbortReason.BufferOverflow ||
+      error.code === AbortReason.OutOfResources ||
+      error.code === AbortReason.ApduTooLong)) ||
   (error.kind === "reject" && error.code === RejectReason.BufferOverflow)
 
 /** The device does not implement ReadPropertyMultiple. */
@@ -139,6 +163,14 @@ type PointOutcome =
   | { readonly _tag: "Value"; readonly point: ResolvedPoint; readonly value: PointValue; readonly timestamp: number }
   | { readonly _tag: "Failed"; readonly point: ResolvedPoint; readonly reason: string }
 
+const failed = (points: ReadonlyArray<ResolvedPoint>, reason: string): ReadonlyArray<PointOutcome> =>
+  points.map((point) => ({ _tag: "Failed", point, reason }))
+
+/** Where the device is, and the largest APDU it takes. */
+interface Location extends DeviceAddress {
+  readonly maxApdu: number
+}
+
 export interface BacnetDriverOptions {
   /** Start with this many properties per ReadPropertyMultiple instead of sizing them from the device's I-Am. */
   readonly batchSize?: number
@@ -161,33 +193,91 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     if (Result.isFailure(resolved)) return yield* configurationError(`point ${point.id}: ${resolved.failure}`)
     points.push(resolved.success)
   }
-  const fixedAddress = device.address === undefined ? undefined : parseDeviceAddress(device.address)
-  if (fixedAddress !== undefined && Result.isFailure(fixedAddress))
-    return yield* configurationError(fixedAddress.failure)
+  const parsedAddress = device.address === undefined ? undefined : parseDeviceAddress(device.address)
+  if (parsedAddress !== undefined && Result.isFailure(parsedAddress)) {
+    return yield* configurationError(parsedAddress.failure)
+  }
+  const fixedAddress = parsedAddress?.success
 
-  let location: (DeviceAddress & { readonly maxApdu: number }) | undefined
-  let batchSize = options.batchSize
+  // State of this device's one polling fiber; nothing else touches it.
+  let location: Location | undefined
+  let largestBatch = 1
+  let batchSize = 1
   let multiple = true
+  let cleanCycles = 0
+  let lostCycles = 0
+  let nextBroadcastAt = 0
+  let broadcastBackoffMs = LOCATE_BACKOFF.firstMs
   /** Points that failed last time, with the reason, so each change is logged once. */
   const failing = new Map<string, string>()
 
-  const locate = Effect.suspend(() => {
-    if (location !== undefined) return Effect.succeed(location)
-    const target = fixedAddress === undefined ? {} : { target: { address: fixedAddress.success } }
-    return client.locate(device.deviceInstance, target).pipe(
-      Effect.tap((found) => {
-        location = found
-        batchSize ??= batchSizeFor(found.maxApdu)
-        return Effect.log("found BACnet device").pipe(
-          Effect.annotateLogs({
-            instance: found.instance,
-            address: NetAddress.formatInet(found.address),
-            maxApdu: found.maxApdu,
-            ...(found.network === undefined ? {} : { network: found.network.network })
-          })
-        )
-      })
+  const remember = (found: Location, how: string) =>
+    Effect.suspend(() => {
+      location = found
+      largestBatch = options.batchSize ?? batchSizeFor(found.maxApdu)
+      batchSize = largestBatch
+      multiple = true
+      cleanCycles = 0
+      lostCycles = 0
+      broadcastBackoffMs = LOCATE_BACKOFF.firstMs
+      return Effect.log(how).pipe(
+        Effect.annotateLogs({
+          instance: device.deviceInstance,
+          address: NetAddress.formatInet(found.address),
+          maxApdu: found.maxApdu,
+          ...(found.network === undefined ? {} : { network: found.network.network })
+        })
+      )
+    })
+
+  /** Who-Is to every network, at most as often as the backoff allows; `undefined` when not found (or not asked). */
+  const broadcastLocate = Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis
+    if (now < nextBroadcastAt) return undefined
+    return yield* client.locate(device.deviceInstance).pipe(
+      Effect.catchTag("BacnetTimeout", () =>
+        Effect.sync(() => {
+          nextBroadcastAt = now + broadcastBackoffMs
+          broadcastBackoffMs = Math.min(LOCATE_BACKOFF.maxMs, broadcastBackoffMs * 2)
+          return undefined
+        })
+      )
     )
+  })
+
+  /**
+   * Where to send requests. A fixed address is asked once for the device's
+   * APDU size and used whether or not it answers Who-Is (an I-Am broadcast on
+   * another subnet never arrives). Otherwise the device is found by
+   * broadcast, and looked for again only after several cycles timed out.
+   */
+  const locate: Effect.Effect<Location, BacnetTimeout | BacnetSocketError> = Effect.gen(function* () {
+    if (fixedAddress !== undefined) {
+      if (location !== undefined) return location
+      const target = { address: fixedAddress }
+      const found = yield* client
+        .locate(device.deviceInstance, { target })
+        .pipe(Effect.catchTag("BacnetTimeout", () => Effect.succeed(null)))
+      const located: Location = found ?? { ...target, maxApdu: ASSUMED_MAX_APDU }
+      yield* remember(
+        located,
+        found === null ? "BACnet device did not answer Who-Is, reading it at its address" : "found BACnet device"
+      )
+      return located
+    }
+    if (location === undefined || lostCycles >= LOST_AFTER_CYCLES) {
+      const found = yield* broadcastLocate
+      if (found !== undefined) {
+        const moved =
+          location !== undefined && NetAddress.formatInet(location.address) !== NetAddress.formatInet(found.address)
+        yield* remember(found, moved ? "BACnet device moved" : "found BACnet device")
+      }
+    }
+    if (location !== undefined) return location
+    const waitSeconds = Math.ceil(Math.max(0, nextBroadcastAt - (yield* Clock.currentTimeMillis)) / 1000)
+    return yield* new BacnetTimeout({
+      message: `device ${device.deviceInstance} did not answer Who-Is; asking again in ${waitSeconds} s`
+    })
   })
 
   const outcomeOf = (point: ResolvedPoint, result: PropertyResult | undefined, timestamp: number): PointOutcome => {
@@ -205,19 +295,18 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       : { _tag: "Failed", point, reason: value.failure }
   }
 
-  /** Read points one at a time with ReadProperty. */
-  const readEach = (target: DeviceAddress, batch: ReadonlyArray<ResolvedPoint>) =>
-    Effect.forEach(batch, (point) =>
-      client.readProperty(target, { object: point.object, property: point.property }).pipe(
-        Effect.flatMap((values) =>
-          Effect.map(Clock.currentTimeMillis, (timestamp) =>
-            outcomeOf(point, { property: point.property, _tag: "Value", values }, timestamp)
-          )
-        ),
-        Effect.catchTag("BacnetDeviceError", (error) =>
-          Effect.succeed<PointOutcome>({ _tag: "Failed", point, reason: error.message })
+  /** The outcome of reading one point with ReadProperty; only an unreachable device fails. */
+  const readOne = (target: DeviceAddress, point: ResolvedPoint) =>
+    client.readProperty(target, { object: point.object, property: point.property }).pipe(
+      Effect.flatMap((values) =>
+        Effect.map(Clock.currentTimeMillis, (timestamp) =>
+          outcomeOf(point, { property: point.property, _tag: "Value", values }, timestamp)
         )
-      )
+      ),
+      Effect.catchTags({
+        BacnetDeviceError: (error) => Effect.succeed<PointOutcome>({ _tag: "Failed", point, reason: error.message }),
+        BacnetCodecError: (error) => Effect.succeed<PointOutcome>({ _tag: "Failed", point, reason: error.message })
+      })
     )
 
   /** Read every point, in batches with ReadPropertyMultiple while the device supports it. */
@@ -225,48 +314,107 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     const outcomes: Array<PointOutcome> = []
     let requests = 0
     let index = 0
-    while (index < points.length) {
+    let shrunk = false
+    // A holder, because it is set inside callbacks, which control-flow narrowing does not see.
+    const stop: { timedOut?: BacnetTimeout } = {}
+    /** Read `batch` one point at a time, stopping at the first timeout. */
+    const readEach = Effect.fnUntraced(function* (batch: ReadonlyArray<ResolvedPoint>) {
+      for (const [position, point] of batch.entries()) {
+        requests++
+        const outcome = yield* readOne(target, point).pipe(
+          Effect.catchTag("BacnetTimeout", (error) =>
+            Effect.sync((): PointOutcome | null => {
+              stop.timedOut = error
+              return null
+            })
+          )
+        )
+        if (outcome === null) {
+          outcomes.push(...failed(batch.slice(position), "no answer"))
+          return
+        }
+        outcomes.push(outcome)
+      }
+    })
+    while (index < points.length && stop.timedOut === undefined) {
       if (!multiple) {
-        requests += points.length - index
-        outcomes.push(...(yield* readEach(target, points.slice(index))))
+        yield* readEach(points.slice(index))
         break
       }
-      const batch = points.slice(index, index + (batchSize ?? 1))
+      const batch = points.slice(index, index + batchSize)
       requests++
       const answer = yield* client.readPropertyMultiple(target, specificationsOf(batch)).pipe(
         Effect.map((results) => ({ _tag: "Results" as const, results })),
-        Effect.catchTag("BacnetDeviceError", (error) => Effect.succeed({ _tag: "Refused" as const, error }))
+        Effect.catchTags({
+          BacnetDeviceError: (error) => Effect.succeed({ _tag: "Refused" as const, error }),
+          BacnetCodecError: (error) => Effect.succeed({ _tag: "Unreadable" as const, error }),
+          BacnetTimeout: (error) => Effect.succeed({ _tag: "TimedOut" as const, error })
+        })
       )
-      if (answer._tag === "Refused") {
-        const { error } = answer
-        if (tooLarge(error) && batch.length > 1) {
-          batchSize = Math.max(1, Math.floor(batch.length / 2))
-          yield* Effect.log("answer too large for the device, reading fewer points per request").pipe(
-            Effect.annotateLogs({ batchSize })
+      switch (answer._tag) {
+        case "TimedOut":
+          stop.timedOut = answer.error
+          outcomes.push(...failed(points.slice(index), "no answer"))
+          index = points.length
+          continue
+        case "Unreadable":
+          // One value the codec cannot read must not cost the others: read them one by one.
+          if (batch.length > 1) yield* readEach(batch)
+          else outcomes.push(...failed(batch, answer.error.message))
+          index += batch.length
+          continue
+        case "Refused": {
+          const { error } = answer
+          if (unsupported(error)) {
+            multiple = false
+            yield* Effect.log("device does not support ReadPropertyMultiple, reading points one at a time")
+            continue
+          }
+          if (tooLarge(error) && batch.length === batchSize && batchSize > 1) {
+            batchSize = Math.max(1, Math.floor(batchSize / 2))
+            shrunk = true
+            yield* Effect.log("answer too large for the device, reading fewer points per request").pipe(
+              Effect.annotateLogs({ batchSize })
+            )
+            continue
+          }
+          // A short last batch that is too large, or an error for the whole request
+          // (some devices answer that way when one object is missing): find out point by point.
+          if (batch.length > 1) yield* readEach(batch)
+          else outcomes.push(...failed(batch, error.message))
+          index += batch.length
+          continue
+        }
+        case "Results": {
+          const timestamp = yield* Clock.currentTimeMillis
+          const byKey = new Map<string, PropertyResult>()
+          for (const result of answer.results) {
+            for (const item of result.results) byKey.set(keyOf(result.object, item.property, item.arrayIndex), item)
+          }
+          outcomes.push(
+            ...batch.map((point) => outcomeOf(point, byKey.get(keyOf(point.object, point.property)), timestamp))
           )
+          index += batch.length
           continue
         }
-        if (unsupported(error)) {
-          multiple = false
-          yield* Effect.log("device does not support ReadPropertyMultiple, reading points one at a time")
-          continue
-        }
-        outcomes.push(...batch.map((point): PointOutcome => ({ _tag: "Failed", point, reason: error.message })))
-        index += batch.length
-        continue
       }
-      const timestamp = yield* Clock.currentTimeMillis
-      const byKey = new Map<string, PropertyResult>()
-      for (const result of answer.results) {
-        for (const item of result.results) byKey.set(keyOf(result.object, item.property, item.arrayIndex), item)
-      }
-      outcomes.push(
-        ...batch.map((point) => outcomeOf(point, byKey.get(keyOf(point.object, point.property)), timestamp))
-      )
-      index += batch.length
     }
-    return { outcomes, requests }
+    return { outcomes, requests, shrunk, timedOut: stop.timedOut }
   })
+
+  /** After enough clean cycles, try a batch twice as large again, up to what the device allows. */
+  const regrow = (shrunk: boolean) =>
+    Effect.suspend(() => {
+      if (shrunk || !multiple || batchSize >= largestBatch) {
+        cleanCycles = 0
+        return Effect.void
+      }
+      cleanCycles++
+      if (cleanCycles < REGROW_AFTER_CYCLES) return Effect.void
+      cleanCycles = 0
+      batchSize = Math.min(largestBatch, batchSize * 2)
+      return Effect.log("trying more points per request again").pipe(Effect.annotateLogs({ batchSize }))
+    })
 
   /** Log a point that starts failing, fails differently, or recovers. */
   const report = (outcomes: ReadonlyArray<PointOutcome>) =>
@@ -299,16 +447,17 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
 
   const readAll = Effect.gen(function* () {
     const target = yield* locate
-    const { outcomes, requests } = yield* readPoints(target)
+    const { outcomes, requests, shrunk, timedOut } = yield* readPoints(target)
     yield* report(outcomes)
     const readings = outcomes.flatMap((outcome): ReadonlyArray<Reading> =>
       outcome._tag === "Value"
         ? [{ pointId: outcome.point.point.id, value: outcome.value, timestamp: outcome.timestamp }]
         : []
     )
-    const refused = outcomes.length - readings.length
-    yield* Effect.annotateCurrentSpan({ "plenum.requests": requests, "plenum.refused": refused })
+    const failedPoints = outcomes.length - readings.length
+    yield* Effect.annotateCurrentSpan({ "plenum.requests": requests, "plenum.failed_points": failedPoints })
     if (points.length > 0 && readings.length === 0) {
+      if (timedOut !== undefined) return yield* timedOut
       const reasons = [...new Set(outcomes.flatMap((outcome) => (outcome._tag === "Failed" ? [outcome.reason] : [])))]
       return yield* new DriverError({
         device: device.id,
@@ -316,15 +465,18 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
         message: `no point could be read (${reasons.join(", ")})`
       })
     }
+    lostCycles = 0
+    if (failedPoints > 0) yield* Metric.update(pointReadFailures, failedPoints)
+    yield* regrow(shrunk)
     return readings
   }).pipe(
     Effect.catchTags({
       BacnetTimeout: (error) =>
         Effect.sync(() => {
-          location = undefined
+          lostCycles++
         }).pipe(Effect.andThen(fail("timeout", error.message))),
-      BacnetSocketError: (error) => fail("connection", error.message),
-      BacnetCodecError: (error) => fail("invalid-response", error.message)
+      // An unreadable answer is contained per batch in `readPoints`, so it never gets here.
+      BacnetSocketError: (error) => fail("connection", error.message)
     })
   )
 
@@ -332,6 +484,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     deviceId: device.id,
     points: device.points,
     readAll,
+    retriesTimeouts: true,
     // Write-back is v0.4 (docs/VISION.md): it lands with the command guard, not before.
     write: (pointId) => fail("not-implemented", `writing ${pointId} is not supported yet`)
   }
@@ -343,9 +496,9 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
  * broadcast enabled, shared by every `bacnet-ip` device. Closed with the scope.
  */
 export const makeBacnetNetwork = Effect.fn("makeBacnetNetwork")(function* (settings: BacnetSettings) {
-  const broadcastAddress = yield* Effect.fromResult(
-    NetAddress.inetAddressFromIpString(settings.broadcastAddress, settings.port)
-  ).pipe(Effect.mapError((error) => new BacnetSocketError({ message: error.message })))
+  const broadcastAddress = yield* Effect.fromResult(parseDeviceAddress(settings.broadcastAddress)).pipe(
+    Effect.mapError((message) => new BacnetSocketError({ message }))
+  )
   const socket = yield* NodeDatagramSocket.make({
     bind: { address: settings.bindAddress, port: settings.port },
     broadcast: true

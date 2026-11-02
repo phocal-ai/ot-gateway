@@ -13,6 +13,9 @@ import {
   batchSizeFor,
   ConfirmedService,
   decodeFrame,
+  encodeErrorBody,
+  ErrorClass,
+  ErrorCode,
   encodeFrame,
   makeBacnetClient,
   makeBacnetDriverFromClient,
@@ -24,7 +27,8 @@ import {
   setPresentValue,
   setProperty,
   simulatedDeviceFor,
-  toPointValue
+  toPointValue,
+  UnconfirmedService
 } from "../src/index.ts"
 
 const loopback = { address: "127.0.0.1", port: 0 }
@@ -109,6 +113,10 @@ describe("point values", () => {
     expect(resolvePoint(point("typo", "analog-input", 1, "presentvalue"))).toEqual(
       Result.fail('unknown property "presentvalue"')
     )
+    expect(resolvePoint(point("all", "analog-input", 1, "all"))).toEqual(
+      Result.fail('"all" reads several properties; name one')
+    )
+    expect(resolvePoint(point("proto", "constructor", 1))).toEqual(Result.fail('unknown object type "constructor"'))
   })
 
   it("turns numbers, enumerations and booleans into point values", () => {
@@ -121,6 +129,12 @@ describe("point values", () => {
       Result.fail("a character-string is not a number or boolean")
     )
     expect(toPointValue({ binary: false }, [])).toEqual(Result.fail("expected one value, got 0"))
+    expect(toPointValue({ binary: false }, [{ type: "real", value: Number.NaN }])).toEqual(
+      Result.fail("not a finite number (NaN)")
+    )
+    expect(toPointValue({ binary: false }, [{ type: "double", value: Number.POSITIVE_INFINITY }])).toEqual(
+      Result.fail("not a finite number (Infinity)")
+    )
   })
 
   it("parses device addresses with the BACnet port as default", () => {
@@ -130,7 +144,9 @@ describe("point values", () => {
   })
 
   it("sizes batches so the answer fits the device's largest APDU", () => {
-    expect([50, 128, 206, 480, 1476].map(batchSizeFor)).toEqual([2, 5, 9, 22, 70])
+    expect([50, 128, 206, 480, 1476].map(batchSizeFor)).toEqual([2, 5, 9, 21, 66])
+    // A device claiming more than BACnet/IP carries gets what fits in one datagram.
+    expect(batchSizeFor(65_535)).toBe(66)
   })
 })
 
@@ -176,16 +192,86 @@ describe("BACnet driver over UDP", () => {
     })
   )
 
-  it.live("halves the batch when the device aborts an answer as too large", () =>
+  it.live("halves the batch when the device aborts an answer as too large, and keeps the smaller size", () =>
     Effect.gen(function* () {
       const points = Array.from({ length: 12 }, (_, index) => point(`temp-${index}`, "analog-input", index + 1))
-      const simulated = simulatedDeviceFor(deviceConfig(points))
-      const small = { ...simulated, maxApdu: 128 }
-      const { client, config } = yield* setUp(points, { simulated: small })
+      const simulated = { ...simulatedDeviceFor(deviceConfig(points)), maxApdu: 128 }
+      let requests = 0
+      let aborts = 0
+      const { client, config } = yield* setUp(points, {
+        simulated,
+        respond: (device, request) => {
+          const response = answer(device, request)
+          if (request._tag === "ConfirmedRequest") requests++
+          if (response?._tag === "Abort") aborts++
+          return response
+        }
+      })
       // Start too big on purpose: 12 points do not fit in 128 bytes.
       const driver = yield* makeBacnetDriverFromClient(config, client, { batchSize: 12 })
       expect(yield* driver.readAll).toHaveLength(12)
+      expect(aborts).toBeGreaterThan(0)
+      const [abortsBefore, requestsBefore] = [aborts, requests]
       expect(yield* driver.readAll).toHaveLength(12)
+      // The second cycle starts at the size that worked: no more aborts, and no more requests than batches of 3.
+      expect(aborts).toBe(abortsBefore)
+      expect(requests - requestsBefore).toBeLessThanOrEqual(4)
+    })
+  )
+
+  it.live("reads point by point when the device refuses the whole batch", () =>
+    Effect.gen(function* () {
+      const missing = point("missing", "analog-input", 99)
+      const simulated = simulatedDeviceFor(deviceConfig([supplyTemp, setpoint]))
+      const { client, config } = yield* setUp([supplyTemp, missing, setpoint], {
+        simulated,
+        // Like some older devices: one unknown object fails the whole ReadPropertyMultiple.
+        respond: (device, request) =>
+          request._tag === "ConfirmedRequest" && request.service === ConfirmedService.ReadPropertyMultiple
+            ? {
+                _tag: "Error",
+                invokeId: request.invokeId,
+                service: request.service,
+                body: encodeErrorBody({ errorClass: ErrorClass.object, errorCode: ErrorCode["unknown-object"] })
+              }
+            : answer(device, request)
+      })
+      const driver = yield* makeBacnetDriverFromClient(config, client)
+      expect((yield* driver.readAll).map((reading) => reading.pointId)).toEqual(["supply-temp", "setpoint"])
+    })
+  )
+
+  it.live("keeps what it read before a request timed out", () =>
+    Effect.gen(function* () {
+      let multipleRequests = 0
+      const { client, config } = yield* setUp([supplyTemp, setpoint], {
+        requestTimeout: "150 millis",
+        respond: (device, request) => {
+          if (request._tag === "ConfirmedRequest" && request.service === ConfirmedService.ReadPropertyMultiple) {
+            multipleRequests++
+            // The second batch (and its resend) goes unanswered.
+            if (multipleRequests > 1) return undefined
+          }
+          return answer(device, request)
+        }
+      })
+      const driver = yield* makeBacnetDriverFromClient(config, client, { batchSize: 1 })
+      expect((yield* driver.readAll).map((reading) => reading.pointId)).toEqual(["supply-temp"])
+    })
+  )
+
+  it.live("reads a device at a fixed address that never answers Who-Is", () =>
+    Effect.gen(function* () {
+      const { client, simulated, config } = yield* setUp([supplyTemp], {
+        requestTimeout: "150 millis",
+        respond: (device, request) =>
+          request._tag === "UnconfirmedRequest" && request.service === UnconfirmedService.WhoIs
+            ? undefined
+            : answer(device, request)
+      })
+      setPresentValue(simulated, { objectType: "analog-input", instance: 1 }, { type: "real", value: 4.5 })
+      const driver = yield* makeBacnetDriverFromClient(config, client)
+      expect((yield* driver.readAll).map((reading) => reading.value)).toEqual([4.5])
     })
   )
 
@@ -216,8 +302,32 @@ describe("BACnet driver over UDP", () => {
       expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
         _tag: "DriverError",
         reason: "timeout",
-        message: "device 2001 did not answer Who-Is within 150ms"
+        message: expect.stringMatching(/^no answer from 127\.0\.0\.1:\d+ within 150ms$/)
       })
+    })
+  )
+
+  it.live("broadcasts Who-Is for a device without an address at most once per backoff", () =>
+    Effect.gen(function* () {
+      let whoIs = 0
+      const { client, config } = yield* setUp([supplyTemp], {
+        requestTimeout: "150 millis",
+        respond: (_device, request) => {
+          if (request._tag === "UnconfirmedRequest" && request.service === UnconfirmedService.WhoIs) whoIs++
+          return undefined
+        }
+      })
+      const { address: _address, ...broadcastOnly } = config
+      const driver = yield* makeBacnetDriverFromClient(broadcastOnly, client)
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
+        reason: "timeout",
+        message: "device 2001 did not answer Who-Is; asking again in 30 s"
+      })
+      const sent = whoIs
+      // The first attempt and its resend reached the device.
+      expect(sent).toBe(2)
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({ reason: "timeout" })
+      expect(whoIs).toBe(sent)
     })
   )
 

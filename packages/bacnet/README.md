@@ -48,10 +48,13 @@ Requests are counted in `plenum_driver_requests` by `outcome`, once per request 
 
 `makeBacnetDriverFromClient(device, client)` turns a `bacnet-ip` device from the config into a pipeline `Driver`; `makeBacnetNetwork(settings)` opens the one client every BACnet device of the gateway shares, from the config's `bacnet` block.
 
-- **Finding the device:** Who-Is for its `deviceInstance`, sent to its `address` if one is set, broadcast otherwise. The answer is remembered until a request times out, so a device that moved is found again.
-- **Reading:** ReadPropertyMultiple in batches sized from the largest APDU the device accepts. A device that aborts or rejects an answer as too large gets half the batch from then on. A device that does not know ReadPropertyMultiple is read with ReadProperty, one point at a time.
-- **Values:** numbers stay numbers; binary objects' `active`/`inactive` become `true`/`false`. A point whose object or property does not exist, or whose value is not a number or boolean, is skipped and logged when it starts and stops failing. The cycle fails only when no point could be read.
-- **Errors:** a timeout is reported as `timeout`, a socket problem as `connection`, an unreadable answer as `invalid-response`, a point that does not resolve to an object type and property as `configuration`.
+- **Finding the device:** with an `address`, Who-Is goes there once to learn the device's largest APDU; a device that does not answer (an I-Am broadcast on another subnet never arrives) is read there anyway, assuming 480 bytes. Only an I-Am from that address counts, so a device elsewhere with the same instance is not taken for it. Without an `address` the device is found by global broadcast, and looked for again only after 3 cycles in a row timed out. Broadcasts that find nothing wait 30 s, then twice as long each time, up to 10 minutes, because they reach every network on site.
+- **Reading:** ReadPropertyMultiple in batches sized from the largest APDU the device accepts (capped at what one BACnet/IP datagram carries). A full batch whose answer is too large (an abort or reject for size, or a segmented answer) halves the batch size; after 10 clean cycles the size doubles again, up to the device's. A device that does not know ReadPropertyMultiple is read with ReadProperty, one point at a time.
+- **Containing failures:** a batch the device refuses as a whole, a short batch that is too large, or an answer the codec cannot read is read again point by point, so one bad point costs only itself. A timeout keeps what was read before it. The cycle fails only when no point could be read. The client already resends after a timeout, so the pipeline does not retry a timed-out cycle.
+- **Values:** numbers stay numbers; binary objects' `active`/`inactive` become `true`/`false`. A point whose object or property does not exist, or whose value is null, not finite (NaN) or not a number or boolean, is skipped, counted in `plenum_point_read_failures`, and logged when it starts and stops failing.
+- **Errors:** a timeout is reported as `timeout`, a socket problem as `connection`, a point that does not resolve to one object type and property as `configuration`.
+
+The gateway opens the shared socket in the background and keeps trying, from every 5 s up to every 5 minutes, if the port is taken or the bind address is not assigned yet; until then its BACnet devices report `connection`.
 
 ## Next
 

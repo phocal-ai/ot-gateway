@@ -130,7 +130,8 @@ export const objectTypeNumber = (name: string): number | undefined => lookup(Obj
 export const propertyNumber = (name: string): number | undefined => lookup(PropertyId, name, 4_194_303)
 
 const lookup = (table: Readonly<Record<string, number>>, name: string, max: number): number | undefined => {
-  const known = table[name]
+  // Own keys only, so "constructor" or "toString" are not taken for names.
+  const known = Object.hasOwn(table, name) ? table[name] : undefined
   if (known !== undefined) return known
   if (!/^\d+$/.test(name)) return undefined
   const number = Number(name)

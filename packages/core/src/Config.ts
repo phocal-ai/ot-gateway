@@ -34,8 +34,11 @@ const ipv4 = `${octet}(\\.${octet}){3}`
 /** A dotted IPv4 address. BACnet/IP is IPv4 only (Annex J). */
 const Ipv4Address = Schema.String.pipe(Schema.check(Schema.isPattern(new RegExp(`^${ipv4}$`))))
 
+/** A UDP or TCP port, 1 to 65535. */
+const port = "(6553[0-5]|655[0-2]\\d|65[0-4]\\d\\d|6[0-4]\\d{3}|[1-5]\\d{4}|[1-9]\\d{0,3})"
+
 /** An IPv4 address, optionally with a port: `192.168.1.20` or `192.168.1.20:47809`. */
-const Ipv4Endpoint = Schema.String.pipe(Schema.check(Schema.isPattern(new RegExp(`^${ipv4}(:\\d{1,5})?$`))))
+const Ipv4Endpoint = Schema.String.pipe(Schema.check(Schema.isPattern(new RegExp(`^${ipv4}(:${port})?$`))))
 
 export const BacnetDevice = Schema.Struct({
   protocol: Schema.Literal("bacnet-ip"),
@@ -88,15 +91,28 @@ export type BufferSettings = typeof BufferSettings.Type
 
 /** The gateway's own BACnet/IP endpoint, shared by every `bacnet-ip` device. */
 export const BacnetSettings = Schema.Struct({
-  /** Local IPv4 address to bind (default `0.0.0.0`, every interface). */
+  /**
+   * Local IPv4 address to bind (default `0.0.0.0`, every interface). On
+   * Linux a socket bound to one address does not receive broadcasts, so
+   * devices that answer Who-Is with a broadcast I-Am are only found with
+   * the default.
+   */
   bindAddress: Ipv4Address.pipe(Schema.withDecodingDefaultKey(Effect.succeed("0.0.0.0"))),
-  /** UDP port, for this gateway and for broadcasts (default 47808, `0xBAC0`). */
+  /**
+   * This gateway's UDP port (default 47808, `0xBAC0`). Devices broadcast
+   * I-Am to 47808, so on another port (to share the host with other BACnet
+   * software) the gateway only hears devices that answer it directly.
+   */
   port: Schema.Int.pipe(
     Schema.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
     Schema.withDecodingDefaultKey(Effect.succeed(47_808))
   ),
-  /** Where Who-Is goes: the subnet's broadcast address, e.g. `192.168.1.255` (default `255.255.255.255`). */
-  broadcastAddress: Ipv4Address.pipe(Schema.withDecodingDefaultKey(Effect.succeed("255.255.255.255"))),
+  /**
+   * Where Who-Is goes: the subnet's broadcast address, e.g. `192.168.1.255`,
+   * port 47808 unless given (default `255.255.255.255`, which leaves through
+   * the default route's interface only).
+   */
+  broadcastAddress: Ipv4Endpoint.pipe(Schema.withDecodingDefaultKey(Effect.succeed("255.255.255.255"))),
   /** How long to wait for an answer before resending (default 3 s). */
   requestTimeoutMs: Schema.Int.pipe(
     Schema.check(Schema.isBetween({ minimum: 100, maximum: 60_000 })),

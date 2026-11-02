@@ -116,7 +116,11 @@ export interface BacnetClient {
   ) => Effect.Effect<ReadonlyArray<ReadAccessResult>, BacnetRequestError>
   /** Broadcast Who-Is and collect the devices that answer, one entry per instance. */
   readonly discover: (options?: DiscoverOptions) => Effect.Effect<ReadonlyArray<DiscoveredDevice>, BacnetSocketError>
-  /** Find one device by instance: Who-Is for exactly that instance, resent like a request. */
+  /**
+   * Find one device by instance: Who-Is for exactly that instance, resent
+   * like a request. With a `target`, only an I-Am from that address counts,
+   * so a device elsewhere with the same instance is not taken for it.
+   */
   readonly locate: (
     instance: number,
     options?: Omit<DiscoverOptions, "range" | "within">
@@ -210,10 +214,17 @@ export const interpretAnswer = (
       return answer.service === service ? Result.succeed(new Uint8Array(0)) : wrongService(answer.service, service)
     case "ComplexAck":
       if (answer.service !== service) return wrongService(answer.service, service)
-      // Asked for unsegmented answers; a segment alone is not the whole result.
+      // Asked for unsegmented answers; a segment alone is not the whole result. The answer did not fit,
+      // just as if the device had aborted it, so the caller can ask for less.
       return answer.segment === undefined
         ? Result.succeed(answer.body)
-        : Result.fail(new BacnetCodecError({ message: "device sent a segmented answer, which was not requested" }))
+        : Result.fail(
+            new BacnetDeviceError({
+              kind: "abort",
+              code: AbortReason.SegmentationNotSupported,
+              message: "device segmented its answer, which was not requested"
+            })
+          )
     case "Error": {
       if (answer.service !== service) return wrongService(answer.service, service)
       const body = decodeErrorBody(answer.body)
@@ -552,7 +563,11 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         )
         return listening(
           (device) => {
-            if (device.instance === instance) Deferred.doneUnsafe(found, Effect.succeed(device))
+            const target = locateOptions.target
+            const fromTarget =
+              target === undefined ||
+              (keyOf(device.address) === keyOf(target.address) && sameNetwork(device.network, target.network))
+            if (device.instance === instance && fromTarget) Deferred.doneUnsafe(found, Effect.succeed(device))
           },
           attempt.pipe(Effect.retry({ times: retries, while: (error) => error._tag === "BacnetTimeout" }))
         )

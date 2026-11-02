@@ -90,11 +90,13 @@ describe("parseConfig", () => {
       })
       const device = config.devices[0]
       expect(device?.protocol === "bacnet-ip" && device.points[0]?.property).toBe("present-value")
-      for (const address of ["ahu-2.local", "192.168.1.256", "10.0.0.1:", "::1"]) {
+      for (const address of ["ahu-2.local", "192.168.1.256", "10.0.0.1:", "::1", "10.0.0.1:0", "10.0.0.1:65536"]) {
         const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, devices: [bacnetDevice(address)] })))
         expect(Exit.isFailure(exit)).toBe(true)
       }
-      const badBroadcast = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:47808" } }
+      const withPort = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:47809" } }
+      expect((yield* parseConfig(JSON.stringify(withPort))).bacnet.broadcastAddress).toBe("192.168.1.255:47809")
+      const badBroadcast = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:99999" } }
       expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(badBroadcast))))).toBe(true)
     })
   )
