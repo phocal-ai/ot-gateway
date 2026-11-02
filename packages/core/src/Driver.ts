@@ -4,7 +4,7 @@
  * A driver owns its connection (socket, UDP binding) inside a Scope, so it is
  * always released, even when a fiber is interrupted.
  */
-import type { Effect } from "effect"
+import type { Effect, Stream } from "effect"
 import type { DriverError } from "./Errors.ts"
 import type { AnyPoint } from "./Point.ts"
 
@@ -29,6 +29,14 @@ export interface Driver {
    * the wait for a device that is offline.
    */
   readonly retriesTimeouts?: boolean
+  /**
+   * Values the device pushes between polls (BACnet change-of-value). The
+   * pipeline handles them like polled readings, one at a time with the
+   * polling cycle, for as long as the device runs. The driver deals with its
+   * own failures here: a subscription that cannot be made means its points
+   * stay polled.
+   */
+  readonly changes?: Stream.Stream<Reading>
   /** Write a value to a writable point. The core enforces safety before calling this. */
   readonly write: (pointId: string, value: PointValue) => Effect.Effect<void, DriverError>
 }

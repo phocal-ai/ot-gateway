@@ -396,6 +396,39 @@ timeseries(
   }
 )
 y += 8
+timeseries(
+  "Values pushed by device",
+  [
+    {
+      expr: `sum by (device) (increase(plenum_pushed_readings_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    description:
+      "Values devices sent on their own between polls (BACnet change-of-value notifications), before the deadband. Each subscription also sends its current value when it is made or renewed."
+  }
+)
+timeseries(
+  "Points pushed instead of polled",
+  [
+    {
+      expr: `max by (device) (plenum_pushed_points{${sel}})`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    description:
+      "Points kept up to date by a live change-of-value subscription, which the polling cycle skips. A drop means the device refused or stopped sending notifications, and those points are polled again."
+  }
+)
+y += 8
 
 row("Logs and traces")
 panels.push({

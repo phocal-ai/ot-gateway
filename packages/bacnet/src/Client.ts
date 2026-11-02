@@ -14,13 +14,17 @@
  *   (clause 16.10).
  * - The client asks for unsegmented answers. A device whose answer does not
  *   fit aborts it, and the caller reads less at a time.
+ * - COV subscriptions (clause 13.14) are made with `subscribeCov`. The
+ *   UnconfirmedCOVNotifications that follow go to whoever registered for
+ *   their process identifier. The client asks for unconfirmed notifications
+ *   only, so it never acknowledges any.
  *
  * If the socket fails while running, it is reopened every 5 s; requests in
  * the meantime time out. A datagram that cannot be handled is logged and
  * dropped, and never stops the receive loop.
  */
-import { describeDatagramSocketError, driverConnects, driverRequests } from "@plenum/core"
-import { Clock, Deferred, Duration, Effect, Exit, Metric, Result, Schema, Scope, Semaphore } from "effect"
+import { describeDatagramSocketError, driverConnects, driverRequests, monotonicMillis } from "@plenum/core"
+import { Deferred, Duration, Effect, Exit, Metric, Result, Schema, Scope, Semaphore } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import { AbortReason, type Apdu, ConfirmedService, MAX_APDU_IP, RejectReason, UnconfirmedService } from "./Apdu.ts"
@@ -29,12 +33,15 @@ import { ErrorClass, ErrorCode, nameOf, ObjectType, PropertyId } from "./Enums.t
 import { decodeFrame, encodeFrame } from "./Frame.ts"
 import type { NetworkAddress } from "./Npdu.ts"
 import {
+  type CovNotification,
+  decodeCovNotification,
   decodeErrorBody,
   decodeIAm,
   decodeReadPropertyAck,
   decodeReadPropertyMultipleAck,
   encodeReadProperty,
   encodeReadPropertyMultiple,
+  encodeSubscribeCov,
   encodeWhoIs,
   type IAm,
   type PropertyReference,
@@ -42,6 +49,7 @@ import {
   type ReadAccessSpecification,
   type ReadPropertyAck,
   type ReadPropertyRequest,
+  type SubscribeCovRequest,
   type WhoIs,
   whoIsMatches
 } from "./Services.ts"
@@ -125,6 +133,18 @@ export interface BacnetClient {
     instance: number,
     options?: Omit<DiscoverOptions, "range" | "within">
   ) => Effect.Effect<DiscoveredDevice, BacnetTimeout | BacnetSocketError>
+  /** Subscribe to an object's changes, or cancel that with neither `confirmed` nor `lifetime`. */
+  readonly subscribeCov: (
+    target: DeviceAddress,
+    request: SubscribeCovRequest
+  ) => Effect.Effect<void, BacnetRequestError>
+  /** A subscriber process identifier that no other caller of this client gets. */
+  readonly newProcessId: Effect.Effect<number>
+  /** Hand every COV notification for `processId` to `listener`, until the scope closes. */
+  readonly onCovNotification: (
+    processId: number,
+    listener: (notification: CovNotification, from: DeviceAddress) => void
+  ) => Effect.Effect<void, never, Scope.Scope>
 }
 
 const keyOf = (address: NetAddress.InetAddress) => NetAddress.formatInet(address)
@@ -302,6 +322,9 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   const pending = new Map<number, Pending>()
   const quarantined = new Map<number, number>()
   const iAmListeners = new Set<(device: DiscoveredDevice) => void>()
+  const covListeners = new Map<number, (notification: CovNotification, from: DeviceAddress) => void>()
+  // Unsigned32 (clause 13.14.1.1); 0 is left out so that a missing value never matches.
+  let nextProcessId = 1
   // Invoke IDs are one byte (clause 20.1.2.3): at most 256 requests in flight.
   const invokeIds = yield* Semaphore.make(256)
   let nextInvokeId = 0
@@ -322,6 +345,20 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
     const apdu = frame.apdu
     switch (apdu._tag) {
       case "UnconfirmedRequest": {
+        if (apdu.service === UnconfirmedService.UnconfirmedCovNotification) {
+          const notification = decodeCovNotification(apdu.body)
+          if (Result.isFailure(notification)) {
+            return Effect.logDebug("ignored an unreadable COV notification").pipe(
+              Effect.annotateLogs({ from: keyOf(from), error: notification.failure.message })
+            )
+          }
+          const listener = covListeners.get(notification.success.processId)
+          listener?.(notification.success, {
+            address: from,
+            ...(frame.source === undefined ? {} : { network: frame.source })
+          })
+          return Effect.void
+        }
         if (apdu.service !== UnconfirmedService.IAm) return Effect.void
         const iAm = decodeIAm(apdu.body)
         if (Result.isFailure(iAm) || iAm.success.device.objectType !== ObjectType.device) {
@@ -344,7 +381,8 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
       }
       case "ConfirmedRequest":
       case "SegmentAck":
-        // The gateway serves no objects of its own, and never sends segments.
+        // The gateway serves no objects of its own, never sends segments and
+        // asks for unconfirmed notifications only, so it answers no requests.
         return Effect.void
       case "SimpleAck":
       case "ComplexAck":
@@ -435,7 +473,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   const exchange = (target: DeviceAddress, service: number, body: Uint8Array) =>
     Effect.acquireUseRelease(
       // Registered uninterruptibly, so an interrupted request never leaves its invoke ID behind.
-      Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Effect.flatMap(monotonicMillis, (now) =>
         Effect.sync(() => {
           const invokeId = allocateInvokeId(now)
           const answer = Deferred.makeUnsafe<Apdu>()
@@ -475,7 +513,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         )
       },
       ({ invokeId, answer }) =>
-        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        Effect.flatMap(monotonicMillis, (now) =>
           Effect.sync(() => {
             pending.delete(invokeId)
             if (!Deferred.isDoneUnsafe(answer)) quarantined.set(invokeId, now + quarantineMillis)
@@ -548,6 +586,25 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
           )
         ).pipe(Effect.map(() => [...found.values()]))
       }),
+    subscribeCov: (target, subscription) =>
+      // Suspended, so a value the encoder refuses is a defect of this effect, not a throw at the call.
+      Effect.suspend(() =>
+        request(target, ConfirmedService.SubscribeCov, encodeSubscribeCov(subscription), (body) =>
+          body.length === 0
+            ? Result.succeed(undefined)
+            : Result.fail(new BacnetCodecError({ message: "SubscribeCOV was answered with data, not a simple ack" }))
+        )
+      ),
+    newProcessId: Effect.sync(() => {
+      const processId = nextProcessId
+      nextProcessId = nextProcessId >= 0xff_ff_ff_ff ? 1 : nextProcessId + 1
+      return processId
+    }),
+    onCovNotification: (processId, listener) =>
+      Effect.acquireRelease(
+        Effect.sync(() => covListeners.set(processId, listener)),
+        () => Effect.sync(() => covListeners.delete(processId))
+      ).pipe(Effect.asVoid),
     locate: (instance, locateOptions = {}) =>
       Effect.suspend(() => {
         const found = Deferred.makeUnsafe<DiscoveredDevice>()
