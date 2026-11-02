@@ -12,6 +12,7 @@ import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
   pointLastRead,
+  pointReadFailures,
   pollCycles,
   pollDuration,
   publishFailures,
@@ -142,13 +143,35 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
    * time, which can step back, so they are never compared.
    */
   const pushedAt = new Map<string, bigint>()
+
+  /**
+   * Points whose last value was not a finite number. Each one is a point read
+   * failure, counted every time and logged once until the point reads a
+   * number again; nothing is published and the deadband reference is kept.
+   */
+  const nonFinitePoints = new Set<string>()
+  const nonFinite = Effect.fnUntraced(function* (pointId: string, raw: PointValue) {
+    yield* Metric.update(pointReadFailures, 1)
+    if (nonFinitePoints.has(pointId)) return
+    nonFinitePoints.add(pointId)
+    yield* Effect.logWarning("point value is not a finite number, not publishing it").pipe(
+      Effect.annotateLogs({ point: pointId, raw: String(raw) })
+    )
+  })
+
   const handleReading = Effect.fnUntraced(function* (reading: Reading, polledSince?: bigint) {
     const point = points.get(reading.pointId)
     if (point === undefined) return
     if (polledSince === undefined) pushedAt.set(point.id, yield* Clock.monotonicTimeNanos)
     else if ((pushedAt.get(point.id) ?? -1n) >= polledSince) return
-    yield* Metric.update(Metric.withAttributes(pointLastRead, { point: point.id }), reading.timestamp / 1000)
     const value = typeof reading.value === "number" ? applyScaling(reading.value, point.scaling) : reading.value
+    // NaN or ±Infinity (a float register holding NaN, or scaling that overflows) is not a reading:
+    // JSON has no such number, and NaN as the deadband reference would never compare as changed again.
+    if (typeof value === "number" && !Number.isFinite(value)) return yield* nonFinite(point.id, reading.value)
+    if (nonFinitePoints.delete(point.id)) {
+      yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
+    }
+    yield* Metric.update(Metric.withAttributes(pointLastRead, { point: point.id }), reading.timestamp / 1000)
     if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
       return yield* Metric.update(valuesSuppressed, 1)
     }

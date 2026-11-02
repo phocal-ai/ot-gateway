@@ -392,7 +392,7 @@ timeseries(
     x: 12,
     w: 12,
     description:
-      "Points a device answered for but could not deliver: unknown object or property, or a value that is not a number. The gateway log names each point once when it starts and stops failing."
+      "Points a device answered for but could not deliver: unknown object or property, a value that is not a number, or NaN/Infinity (never published). The gateway log names each point once when it starts and stops failing."
   }
 )
 y += 8

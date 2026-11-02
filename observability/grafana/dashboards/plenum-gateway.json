@@ -1249,7 +1249,7 @@
       "id": 25,
       "type": "timeseries",
       "title": "Points not read by device",
-      "description": "Points a device answered for but could not deliver: unknown object or property, or a value that is not a number. The gateway log names each point once when it starts and stops failing.",
+      "description": "Points a device answered for but could not deliver: unknown object or property, a value that is not a number, or NaN/Infinity (never published). The gateway log names each point once when it starts and stops failing.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
