@@ -87,6 +87,8 @@ jobs:
           GRAFANA_MCP_READ_TOKEN: ${{ secrets.GRAFANA_MCP_READ_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Without pipefail, tee hides a Claude failure (bad token, CLI error) and the job passes.
+          set -o pipefail
           allowed=(
             Read Grep Glob
             mcp__grafana__query_prometheus mcp__grafana__query_loki_logs mcp__grafana__query_loki_stats
@@ -102,6 +104,10 @@ jobs:
             --allowedTools "${allowed[@]}" \
             --output-format text < /dev/null | tee "$RUNNER_TEMP/report.md"
           cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          if ! grep -q '^OUTCOME: ' "$RUNNER_TEMP/report.md"; then
+            echo "::error::Health check ended without an OUTCOME line; see the report."
+            exit 1
+          fi
           if grep -q '^OUTCOME: infra-gap' "$RUNNER_TEMP/report.md"; then
             echo "::error::Health check could not reach Grafana or GitHub; see the report."
             exit 1
