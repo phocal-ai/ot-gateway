@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit } from "effect"
-import { parseConfig } from "../src/index.ts"
+import { cycleTimeoutMs, parseConfig } from "../src/index.ts"
 
 const minimal = {
   site: "vienna-hq",
@@ -15,6 +15,15 @@ const minimal = {
     }
   ]
 }
+
+/** A BACnet device as written in a config file, at `address` if given. */
+const bacnetDevice = (address?: string) => ({
+  protocol: "bacnet-ip",
+  id: "ahu-2",
+  deviceInstance: 1001,
+  ...(address === undefined ? {} : { address }),
+  points: [{ id: "supply-temp", name: "Supply temperature", objectType: "analog-input", instance: 1 }]
+})
 
 describe("parseConfig", () => {
   it.effect("applies defaults", () =>
@@ -51,6 +60,21 @@ describe("parseConfig", () => {
     })
   )
 
+  it.effect("rejects a 32-bit register point that would run past address 65535", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const at = (address: number, table = "holding") => ({
+        ...minimal,
+        devices: [{ ...device, points: device?.points.map((point) => ({ ...point, table, address })) }]
+      })
+      // The minimal point is a float32: two registers.
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(at(65535)))))).toBe(true)
+      expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(at(65534)))))).toBe(true)
+      // A bit occupies one address whatever its data type.
+      expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(at(65535, "coil")))))).toBe(true)
+    })
+  )
+
   it.effect("rejects values that would wrap on the wire or disable the buffer", () =>
     Effect.gen(function* () {
       const [device] = minimal.devices
@@ -66,6 +90,48 @@ describe("parseConfig", () => {
       expect(
         Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, buffer: { path: "b" } }))))
       ).toBe(true)
+    })
+  )
+
+  it.effect("defaults the BACnet endpoint and checks device addresses", () =>
+    Effect.gen(function* () {
+      const config = yield* parseConfig(JSON.stringify({ ...minimal, devices: [bacnetDevice("192.168.1.20:47809")] }))
+      expect(config.bacnet).toEqual({
+        bindAddress: "0.0.0.0",
+        port: 47_808,
+        broadcastAddress: "255.255.255.255",
+        requestTimeoutMs: 3_000,
+        retries: 2
+      })
+      const device = config.devices[0]
+      expect(device?.protocol === "bacnet-ip" && device.points[0]?.property).toBe("present-value")
+      for (const address of ["ahu-2.local", "192.168.1.256", "10.0.0.1:", "::1", "10.0.0.1:0", "10.0.0.1:65536"]) {
+        const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, devices: [bacnetDevice(address)] })))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }
+      const withPort = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:47809" } }
+      expect((yield* parseConfig(JSON.stringify(withPort))).bacnet.broadcastAddress).toBe("192.168.1.255:47809")
+      const badBroadcast = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:99999" } }
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(badBroadcast))))).toBe(true)
+    })
+  )
+
+  it.effect("defaults the cycle deadline from the poll interval unless it is set", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const config = yield* parseConfig(
+        JSON.stringify({
+          ...minimal,
+          devices: [
+            { ...device, id: "fast", pollIntervalMs: 1_000 },
+            { ...device, id: "slow", pollIntervalMs: 60_000 },
+            { ...device, id: "set", cycleTimeoutMs: 120_000 }
+          ]
+        })
+      )
+      expect(config.devices.map(cycleTimeoutMs)).toEqual([31_000, 120_000, 120_000])
+      const tooShort = { ...minimal, devices: [{ ...device, cycleTimeoutMs: 10 }] }
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(tooShort))))).toBe(true)
     })
   )
 })

@@ -44,8 +44,8 @@ Fixes, cheapest first:
 
 1. Export interval of 60s (`OTEL_METRIC_EXPORT_INTERVAL`).
 2. Trace sampling (`OTEL_TRACES_SAMPLER=traceidratio`, `OTEL_TRACES_SAMPLER_ARG`).
-3. Drop a high-cardinality attribute or the histogram buckets.
-4. Fewer warning logs for a device that stays down.
+3. Drop a high-cardinality attribute or histogram buckets (the per-point gauge is already gone and the cycle histogram has 5 buckets).
+4. Find what logs on every cycle instead of on a transition (`.claude/rules/edge.md`, "Log transitions, not states") and fix it.
 
 ## 2. Gateway health
 

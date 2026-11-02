@@ -16,21 +16,8 @@
  * has its wall clock stepped by NTP), two publishes in a row get no PUBACK,
  * or the broker breaks the protocol.
  */
-import { describeSocketError, mqttConnected, mqttConnects } from "@plenum/core"
-import {
-  Clock,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Latch,
-  Metric,
-  Random,
-  Redacted,
-  Result,
-  Schema,
-  Semaphore
-} from "effect"
+import { describeSocketError, monotonicMillis, mqttConnected, mqttConnects } from "@plenum/core"
+import { Deferred, Duration, Effect, Exit, Latch, Metric, Random, Redacted, Result, Schema, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import { PacketType } from "./Codec.ts"
 import {
@@ -81,9 +68,6 @@ const maxPubackTimeouts = 2
 
 /** Default Maximum Packet Size announced in CONNECT: Plenum only receives small control packets. */
 const defaultMaximumPacketSize = 1024 * 1024
-
-/** Monotonic milliseconds, for durations: unlike wall time, it does not jump when NTP steps the clock. */
-const monotonicMillis = Effect.map(Clock.monotonicTimeNanos, (nanos) => Number(nanos / 1_000_000n))
 
 export interface MqttClientOptions {
   readonly clientId: string

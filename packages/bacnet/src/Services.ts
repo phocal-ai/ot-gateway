@@ -5,6 +5,7 @@
  * - Who-Is and I-Am (clause 16.10)
  * - ReadProperty (clause 15.5)
  * - ReadPropertyMultiple (clause 15.7)
+ * - SubscribeCOV and the COV notifications (clauses 13.14, 13.6 and 13.7)
  * - the Error PDU's error class and code (clause 18)
  *
  * Each pair works on the bytes after the service choice in the APDU.
@@ -17,6 +18,7 @@ import {
   type ObjectId,
   type Reader,
   writeClosing,
+  writeContextBoolean,
   writeContextObjectId,
   writeContextUnsigned,
   writeOpening,
@@ -253,6 +255,94 @@ export const decodeReadPropertyMultipleAck = (
       results.push({ object, results: items })
     }
     return results
+  })
+
+// --- SubscribeCOV and COV notifications -------------------------------------------
+
+/**
+ * SubscribeCOV (clause 13.14). Without `confirmed` and `lifetime` it cancels
+ * the subscription; `lifetime` 0 means indefinite.
+ */
+export interface SubscribeCovRequest {
+  readonly processId: number
+  readonly object: ObjectId
+  readonly confirmed?: boolean
+  /** Seconds. */
+  readonly lifetime?: number
+}
+
+export const encodeSubscribeCov = (request: SubscribeCovRequest): Uint8Array => {
+  const writer = new Writer()
+  writeContextUnsigned(writer, 0, request.processId)
+  writeContextObjectId(writer, 1, request.object)
+  if (request.confirmed !== undefined) writeContextBoolean(writer, 2, request.confirmed)
+  if (request.lifetime !== undefined) writeContextUnsigned(writer, 3, request.lifetime)
+  return writer.toBytes()
+}
+
+export const decodeSubscribeCov = (body: Uint8Array): Result.Result<SubscribeCovRequest, BacnetCodecError> =>
+  decodeWith(body, (reader) => {
+    const processId = reader.contextUnsigned(0)
+    const object = reader.contextObjectId(1)
+    const confirmed = reader.peekContext(2) ? reader.contextBoolean(2) : undefined
+    const lifetime = reader.peekContext(3) ? reader.contextUnsigned(3) : undefined
+    return {
+      processId,
+      object,
+      ...(confirmed === undefined ? {} : { confirmed }),
+      ...(lifetime === undefined ? {} : { lifetime })
+    }
+  })
+
+/** BACnetPropertyValue (clause 21): a property's new value, as a COV notification carries it. */
+export interface PropertyValue extends PropertyReference {
+  readonly values: ReadonlyArray<BacnetValue>
+  readonly priority?: number
+}
+
+/** The parameters of ConfirmedCOVNotification and UnconfirmedCOVNotification, which are the same (13.6, 13.7). */
+export interface CovNotification {
+  readonly processId: number
+  readonly initiatingDevice: ObjectId
+  readonly object: ObjectId
+  /** Seconds left on the subscription; 0 for an indefinite one. */
+  readonly timeRemaining: number
+  readonly values: ReadonlyArray<PropertyValue>
+}
+
+export const encodeCovNotification = (notification: CovNotification): Uint8Array => {
+  const writer = new Writer()
+  writeContextUnsigned(writer, 0, notification.processId)
+  writeContextObjectId(writer, 1, notification.initiatingDevice)
+  writeContextObjectId(writer, 2, notification.object)
+  writeContextUnsigned(writer, 3, notification.timeRemaining)
+  writeOpening(writer, 4)
+  for (const value of notification.values) {
+    writeReference(writer, value, 0)
+    writeValuesIn(writer, 2, value.values)
+    if (value.priority !== undefined) writeContextUnsigned(writer, 3, value.priority)
+  }
+  writeClosing(writer, 4)
+  return writer.toBytes()
+}
+
+export const decodeCovNotification = (body: Uint8Array): Result.Result<CovNotification, BacnetCodecError> =>
+  decodeWith(body, (reader) => {
+    const processId = reader.contextUnsigned(0)
+    const initiatingDevice = reader.contextObjectId(1)
+    const object = reader.contextObjectId(2)
+    const timeRemaining = reader.contextUnsigned(3)
+    reader.opening(4)
+    const values: Array<PropertyValue> = []
+    while (!reader.peekContext(4, "closing")) {
+      if (reader.remaining === 0) reader.fail("list of values is never closed")
+      const reference = readReference(reader, 0)
+      const propertyValues = readValuesIn(reader, 2)
+      const priority = reader.peekContext(3) ? reader.contextUnsigned(3) : undefined
+      values.push({ ...reference, values: propertyValues, ...(priority === undefined ? {} : { priority }) })
+    }
+    reader.closing(4)
+    return { processId, initiatingDevice, object, timeRemaining, values }
   })
 
 // --- Error PDU ---------------------------------------------------------------------

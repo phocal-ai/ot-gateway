@@ -14,6 +14,7 @@ Effect's source is vendored read-only under `repos/effect/` at the version in ou
 - **The v4 traps** in `.claude/rules/effect.md`: empty env strings, `Queue.takeAll` in a shutdown path, a per-device layer without `Layer.fresh`, a static `_tag` read, a test reading `exit.cause.error`, `Schema.NumberFromString` on a wire value.
 - **Resources.** Sockets and files acquired with `acquireRelease` or a scoped layer; release runs on every exit path, including interruption mid-reconnect.
 - **Plenum's rules (CLAUDE.md).** Codecs stay pure; one scoped transport per protocol; config fields only in `Config.ts` / `Point.ts`; writes only through the command guard and always logged; every driver has a simulator-backed test.
+- **The Raspberry Pi checklist** in `.claude/rules/edge.md`: monotonic time, deadlines on every wait, misbehaving peers, retries that multiply across layers, per-device isolation, poison messages, SQLite on a full or locked SD card, and logging transitions instead of states.
 - **No raw Promises** mixed into Effect code, and no non-Effect runtime dependency.
 - Right combinator for the job; `Effect.gen` where it reads clearer.
 

@@ -1,6 +1,8 @@
+import { createServer, type Server, type Socket } from "node:net"
 import { describe, expect, it } from "@effect/vitest"
 import { Config, ConfigProvider, Effect } from "effect"
-import { traceSampleRatio, withBudgetDefaults } from "../src/Telemetry.ts"
+import { HttpClient } from "effect/http"
+import { otlpHttpClient, traceSampleRatio, withBudgetDefaults } from "../src/Telemetry.ts"
 
 const withEnv = (env: Record<string, string>) => Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env)))
 
@@ -50,5 +52,60 @@ describe("withBudgetDefaults", () => {
       )
       expect(value).toBe(30_000)
     })
+  )
+})
+
+/**
+ * A TCP server that accepts connections and never answers, like a hung
+ * collector. `pending` counts open connections a request was sent on (fetch
+ * also opens spare connections, which close on their own).
+ */
+const silentServer = Effect.acquireRelease(
+  Effect.callback<{
+    readonly port: number
+    readonly pending: () => number
+    readonly sockets: Set<Socket>
+    readonly server: Server
+  }>((resume) => {
+    const sockets = new Set<Socket>()
+    const requested = new Set<Socket>()
+    const server = createServer((socket) => {
+      sockets.add(socket)
+      socket.on("data", () => requested.add(socket))
+      socket.on("close", () => {
+        sockets.delete(socket)
+        requested.delete(socket)
+      })
+      socket.on("error", () => {})
+    })
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address()
+      const port = typeof address === "object" && address !== null ? address.port : 0
+      resume(Effect.succeed({ port, pending: () => requested.size, sockets, server }))
+    })
+  }),
+  ({ server, sockets }) =>
+    Effect.sync(() => {
+      for (const socket of sockets) socket.destroy()
+      server.close()
+    })
+)
+
+describe("otlpHttpClient", () => {
+  it.live("gives up on a collector that never answers, and closes the socket", () =>
+    Effect.gen(function* () {
+      const collector = yield* silentServer
+      const client = yield* HttpClient.HttpClient.pipe(
+        Effect.provide(otlpHttpClient),
+        withEnv({ OTEL_EXPORTER_OTLP_TIMEOUT: "200" })
+      )
+      for (let request = 0; request < 3; request++) {
+        const error = yield* Effect.flip(client.post(`http://127.0.0.1:${collector.port}/v1/metrics`))
+        expect(error.message).toContain("timed out")
+      }
+      // Every abandoned request released its socket; none piles up.
+      yield* Effect.sleep("300 millis")
+      expect(collector.pending()).toBe(0)
+    }).pipe(Effect.scoped)
   )
 })

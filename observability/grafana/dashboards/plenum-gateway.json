@@ -502,7 +502,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Cycles by outcome",
-      "description": "",
+      "description": "timed_out: a cycle hung past the device's cycleTimeoutMs (a device or the broker side that never answers) and was abandoned.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
@@ -800,7 +800,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 8,
         "x": 0,
         "y": 23
       },
@@ -845,15 +845,15 @@
       "id": 16,
       "type": "timeseries",
       "title": "Connections opened by device",
-      "description": "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect.",
+      "description": "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect. $bacnet is the one UDP socket every BACnet device shares.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
-        "x": 12,
+        "w": 8,
+        "x": 8,
         "y": 23
       },
       "targets": [
@@ -895,6 +895,110 @@
     },
     {
       "id": 17,
+      "type": "timeseries",
+      "title": "Pipeline restarts by device",
+      "description": "A device's pipeline died on a bug (a defect, not a device or broker failure) and was restarted with backoff, up to every 5 minutes. Any restart is a bug to report; the gateway log has the cause. Other devices keep running.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 23
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (device) (increase(plenum_device_restarts_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "{{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Device refusals by exception",
+      "description": "Reads a device refused, after retries. illegal_data_address on every cycle means a point address is wrong; busy and gateway exceptions come and go. The log has one warning when a refusal starts, not one per cycle.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 31
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (device, exception) (increase(plenum_driver_refusals_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "{{device}} {{exception}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 19,
       "type": "row",
       "title": "Broker",
       "collapsed": false,
@@ -902,12 +1006,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 31
+        "y": 39
       },
       "panels": []
     },
     {
-      "id": 18,
+      "id": 20,
       "type": "timeseries",
       "title": "Connected to the MQTT broker",
       "description": "1 while the gateway holds a broker connection. While it is 0, values go to the store-and-forward buffer if one is configured, and are lost otherwise.",
@@ -919,7 +1023,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 32
+        "y": 40
       },
       "targets": [
         {
@@ -959,7 +1063,7 @@
       }
     },
     {
-      "id": 19,
+      "id": 21,
       "type": "timeseries",
       "title": "Broker connection attempts by outcome",
       "description": "A healthy gateway connects once. Repeated ok means the connection keeps dropping; failed means the broker is unreachable; rejected means it refused (check credentials).",
@@ -971,7 +1075,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 32
+        "y": 40
       },
       "targets": [
         {
@@ -1011,7 +1115,7 @@
       }
     },
     {
-      "id": 20,
+      "id": 22,
       "type": "row",
       "title": "Buffer",
       "collapsed": false,
@@ -1019,12 +1123,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "panels": []
     },
     {
-      "id": 21,
+      "id": 23,
       "type": "timeseries",
       "title": "Messages waiting in the buffer",
       "description": "Rows in the SQLite outbox. It grows during a broker outage and falls back to 0 once the gateway has delivered them. A line that stays above 0 while the broker is connected means draining is stuck.",
@@ -1036,7 +1140,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "targets": [
         {
@@ -1076,7 +1180,7 @@
       }
     },
     {
-      "id": 22,
+      "id": 24,
       "type": "timeseries",
       "title": "Buffer traffic",
       "description": "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message, unreadable when a stored row no longer decoded, undeliverable when a row broke the connection three times in a row, lost when the buffer file was corrupt or replaced.",
@@ -1088,7 +1192,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 41
+        "y": 49
       },
       "targets": [
         {
@@ -1146,7 +1250,7 @@
       }
     },
     {
-      "id": 23,
+      "id": 25,
       "type": "timeseries",
       "title": "Buffer store failures",
       "description": "Failed SQLite operations on the outbox (a full disk, a busy or broken file). While inserts fail, live values go straight to the broker instead (published past the buffer); while deletes fail, delivered rows are remembered in memory and not sent again.",
@@ -1158,7 +1262,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 57
       },
       "targets": [
         {
@@ -1207,7 +1311,7 @@
       }
     },
     {
-      "id": 24,
+      "id": 26,
       "type": "timeseries",
       "title": "Running without a buffer",
       "description": "1 while the buffer file cannot be opened, so values published during a broker outage are lost. The gateway retries every 30 seconds; the error log says why.",
@@ -1219,7 +1323,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 49
+        "y": 57
       },
       "targets": [
         {
@@ -1259,32 +1363,32 @@
       }
     },
     {
-      "id": 25,
+      "id": 27,
       "type": "row",
-      "title": "Points",
+      "title": "Freshness",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 65
       },
       "panels": []
     },
     {
-      "id": 26,
+      "id": 28,
       "type": "table",
-      "title": "Point freshness",
-      "description": "Seconds since each point was last read successfully. Orange after 1 minute, red after 5.",
+      "title": "Device freshness",
+      "description": "Seconds since each device last completed a successful cycle. Orange after 1 minute, red after 5. There is no per-point age (one series per point would not fit the free plan); a point that stops reading inside a working device shows in Points not read and in the log.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
       },
       "gridPos": {
         "h": 8,
-        "w": 24,
+        "w": 12,
         "x": 0,
-        "y": 58
+        "y": 66
       },
       "targets": [
         {
@@ -1293,7 +1397,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "time() - max by (device, point) (max_over_time(plenum_point_last_read_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "time() - max by (device) (max_over_time(plenum_device_last_success_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
           "instant": true,
           "format": "table"
         }
@@ -1359,7 +1463,163 @@
       }
     },
     {
-      "id": 27,
+      "id": 29,
+      "type": "timeseries",
+      "title": "Points not read by device",
+      "description": "Points a device answered for but could not deliver: unknown object or property, a value that is not a number, or NaN/Infinity (never published). The gateway log names each point once when it starts and stops failing.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 66
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (device) (increase(plenum_point_read_failures_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "{{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "Values pushed by device",
+      "description": "Values devices sent on their own between polls (BACnet change-of-value notifications), before the deadband. Each subscription also sends its current value when it is made or renewed.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 74
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (device) (increase(plenum_pushed_readings_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "{{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Points pushed instead of polled",
+      "description": "Points kept up to date by a live change-of-value subscription, which the polling cycle skips. A drop means the device refused or stopped sending notifications, and those points are polled again.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 74
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "max by (device) (plenum_pushed_points{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "legendFormat": "{{device}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 32,
       "type": "row",
       "title": "Logs and traces",
       "collapsed": false,
@@ -1367,12 +1627,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 66
+        "y": 82
       },
       "panels": []
     },
     {
-      "id": 28,
+      "id": 33,
       "type": "logs",
       "title": "Warnings and errors",
       "datasource": {
@@ -1383,7 +1643,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 67
+        "y": 83
       },
       "targets": [
         {
@@ -1403,7 +1663,7 @@
       }
     },
     {
-      "id": 29,
+      "id": 34,
       "type": "table",
       "title": "Failed polling cycles (traces)",
       "description": "Device.pollCycle spans annotated with plenum.outcome. Click a trace ID for the span and its logs.",
@@ -1415,7 +1675,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 75
+        "y": 91
       },
       "targets": [
         {

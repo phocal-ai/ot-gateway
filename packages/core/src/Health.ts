@@ -10,20 +10,27 @@ import type { Slug } from "./Point.ts"
 import { Publisher } from "./Publisher.ts"
 import { publishFailures } from "./Telemetry.ts"
 
+/**
+ * Why a device is `failing`: the driver's reason for a failed read,
+ * `cycle-timeout` when a polling cycle hung past the device's deadline, or
+ * `crashed` when its pipeline died on a bug and is waiting to be restarted.
+ */
+export type HealthReason = DriverError["reason"] | "cycle-timeout" | "crashed"
+
 export interface DeviceHealth {
   /** `starting` until the first cycle finishes; then whether the last read worked. */
   readonly status: "starting" | "ok" | "failing"
   /** Unix ms of the last successful read. */
   readonly lastSuccess?: number
-  /** Why the last read failed, while `failing`. */
-  readonly reason?: DriverError["reason"]
+  /** Why the device is failing, while `failing`. */
+  readonly reason?: HealthReason
 }
 
 /** Per-device status, written by the polling pipeline and read by the health publisher. */
 export interface HealthRegistry {
   readonly devices: ReadonlyMap<Slug, DeviceHealth>
   readonly recordSuccess: (device: Slug, timestamp: number) => void
-  readonly recordFailure: (device: Slug, reason: DriverError["reason"]) => void
+  readonly recordFailure: (device: Slug, reason: HealthReason) => void
 }
 
 export const makeHealthRegistry = (deviceIds: ReadonlyArray<Slug>): HealthRegistry => {

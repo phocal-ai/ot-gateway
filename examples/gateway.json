@@ -87,6 +87,49 @@
         }
       ],
       "port": 5020
+    },
+    {
+      "protocol": "bacnet-ip",
+      "id": "ahu-2",
+      "deviceInstance": 2001,
+      "address": "127.0.0.1:47809",
+      "pollIntervalMs": 5000,
+      "points": [
+        {
+          "id": "supply-air-temp",
+          "name": "AHU 2 supply air temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "objectType": "analog-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Supply_Air_Temperature_Sensor",
+            "haystack": ["discharge", "air", "temp", "sensor"]
+          }
+        },
+        {
+          "id": "cooling-valve",
+          "name": "AHU 2 cooling valve position",
+          "unit": "unit:PERCENT",
+          "deadband": 1,
+          "objectType": "analog-output",
+          "instance": 1,
+          "semantics": {
+            "brick": "Chilled_Water_Valve_Command",
+            "haystack": ["cool", "valve", "cmd"]
+          }
+        },
+        {
+          "id": "fan-running",
+          "name": "AHU 2 supply fan running",
+          "objectType": "binary-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Fan_Status",
+            "haystack": ["discharge", "fan", "run", "sensor"]
+          }
+        }
+      ]
     }
   ]
 }

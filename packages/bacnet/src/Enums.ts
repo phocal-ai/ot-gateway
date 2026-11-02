@@ -48,6 +48,7 @@ export const PropertyId = {
   "object-list": 76,
   "object-name": 77,
   "object-type": 79,
+  optional: 80,
   "out-of-service": 81,
   "present-value": 85,
   "priority-array": 87,
@@ -91,7 +92,7 @@ export const ErrorClass = {
   communication: 7
 } as const
 
-/** The error codes a read can produce (clause 18). */
+/** The error codes a read or a COV subscription can produce (clause 18). */
 export const ErrorCode = {
   other: 0,
   "configuration-in-progress": 2,
@@ -111,6 +112,7 @@ export const ErrorCode = {
   "invalid-array-index": 42,
   "cov-subscription-failed": 43,
   "not-cov-property": 44,
+  "optional-functionality-not-supported": 45,
   "property-is-not-an-array": 50,
   "abort-segmentation-not-supported": 128
 } as const
@@ -129,7 +131,8 @@ export const objectTypeNumber = (name: string): number | undefined => lookup(Obj
 export const propertyNumber = (name: string): number | undefined => lookup(PropertyId, name, 4_194_303)
 
 const lookup = (table: Readonly<Record<string, number>>, name: string, max: number): number | undefined => {
-  const known = table[name]
+  // Own keys only, so "constructor" or "toString" are not taken for names.
+  const known = Object.hasOwn(table, name) ? table[name] : undefined
   if (known !== undefined) return known
   if (!/^\d+$/.test(name)) return undefined
   const number = Number(name)

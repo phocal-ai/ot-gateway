@@ -2,7 +2,7 @@
  * Gateway configuration. One JSON document describes the whole gateway, so it
  * can live in a file, in a database, or be edited by a web app.
  */
-import { Effect, Schema } from "effect"
+import { Effect, Schema, SchemaIssue, SchemaTransformation } from "effect"
 import { BacnetPoint, ModbusPoint, SimulatedPoint, Slug } from "./Point.ts"
 
 const pollIntervalMs = Schema.Int.pipe(
@@ -10,10 +10,47 @@ const pollIntervalMs = Schema.Int.pipe(
   Schema.withDecodingDefaultKey(Effect.succeed(5_000))
 )
 
+/**
+ * Ids are topic segments, so two devices (or two points of one device) with
+ * the same id would publish to the same topic. Each duplicate is reported at
+ * its own path, naming the id.
+ */
+const uniqueIds = (what: "device" | "point") =>
+  Schema.makeFilter<ReadonlyArray<{ readonly id: string }>>((items) => {
+    const seen = new Set<string>()
+    const duplicates: Array<Schema.FilterIssue> = []
+    items.forEach((item, index) => {
+      if (seen.has(item.id)) duplicates.push({ path: [index, "id"], issue: `duplicate ${what} id "${item.id}"` })
+      seen.add(item.id)
+    })
+    return duplicates
+  })
+
+/** A device's points: at least one, with unique ids. */
+const pointsOf = <S extends Schema.Top & { readonly Type: { readonly id: string } }>(point: S) =>
+  Schema.Array(point).pipe(Schema.check(Schema.isMinLength(1), uniqueIds("point")))
+
+/**
+ * How long one polling cycle (reading the device, retries included, and
+ * publishing its values) may take before it is abandoned as hung. Optional:
+ * the default depends on `pollIntervalMs` (see `cycleTimeoutMs`), so it
+ * cannot be a decoding default.
+ */
+const cycleTimeoutMsField = Schema.optionalKey(
+  Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1_000, maximum: 86_400_000 })))
+)
+
+/** The default cycle deadline: twice the poll interval, and at least the interval plus 30 s. */
+export const defaultCycleTimeoutMs = (intervalMs: number): number => Math.max(2 * intervalMs, intervalMs + 30_000)
+
+/** A device's cycle deadline: its `cycleTimeoutMs`, or the default for its poll interval. */
+export const cycleTimeoutMs = (device: { readonly pollIntervalMs: number; readonly cycleTimeoutMs?: number }) =>
+  device.cycleTimeoutMs ?? defaultCycleTimeoutMs(device.pollIntervalMs)
+
 export const ModbusDevice = Schema.Struct({
   protocol: Schema.Literal("modbus-tcp"),
   id: Slug,
-  host: Schema.String,
+  host: Schema.NonEmptyString,
   port: Schema.Int.pipe(
     Schema.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
     Schema.withDecodingDefaultKey(Effect.succeed(502))
@@ -24,21 +61,39 @@ export const ModbusDevice = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed(1))
   ),
   pollIntervalMs,
-  points: Schema.Array(ModbusPoint)
+  cycleTimeoutMs: cycleTimeoutMsField,
+  points: pointsOf(ModbusPoint)
 })
 export type ModbusDevice = typeof ModbusDevice.Type
+
+const octet = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)"
+const ipv4 = `${octet}(\\.${octet}){3}`
+
+/** A dotted IPv4 address. BACnet/IP is IPv4 only (Annex J). */
+const Ipv4Address = Schema.String.pipe(Schema.check(Schema.isPattern(new RegExp(`^${ipv4}$`))))
+
+/** A UDP or TCP port, 1 to 65535. */
+const port = "(6553[0-5]|655[0-2]\\d|65[0-4]\\d\\d|6[0-4]\\d{3}|[1-5]\\d{4}|[1-9]\\d{0,3})"
+
+/** An IPv4 address, optionally with a port: `192.168.1.20` or `192.168.1.20:47809`. */
+const Ipv4Endpoint = Schema.String.pipe(Schema.check(Schema.isPattern(new RegExp(`^${ipv4}(:${port})?$`))))
 
 export const BacnetDevice = Schema.Struct({
   protocol: Schema.Literal("bacnet-ip"),
   id: Slug,
   /** 22 bits on the wire (ASHRAE 135, clause 12.11.1); 4,194,303 means "any device". */
   deviceInstance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
-  /** Optional fixed address; otherwise discovered with Who-Is. */
-  address: Schema.optionalKey(Schema.String),
+  /**
+   * Fixed IPv4 address, with the port if it is not 47808. Without it the
+   * device is found by broadcasting Who-Is; with it, Who-Is goes to that
+   * address only (to learn the largest request the device accepts).
+   */
+  address: Schema.optionalKey(Ipv4Endpoint),
   /** Use change-of-value subscriptions where the device supports them. */
   cov: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
   pollIntervalMs,
-  points: Schema.Array(BacnetPoint)
+  cycleTimeoutMs: cycleTimeoutMsField,
+  points: pointsOf(BacnetPoint)
 })
 export type BacnetDevice = typeof BacnetDevice.Type
 
@@ -46,17 +101,21 @@ export const SimulatorDevice = Schema.Struct({
   protocol: Schema.Literal("simulator"),
   id: Slug,
   pollIntervalMs,
-  points: Schema.Array(SimulatedPoint)
+  cycleTimeoutMs: cycleTimeoutMsField,
+  points: pointsOf(SimulatedPoint)
 })
 export type SimulatorDevice = typeof SimulatorDevice.Type
 
 export const Device = Schema.Union([ModbusDevice, BacnetDevice, SimulatorDevice])
 export type Device = typeof Device.Type
 
+/** Strings in the MQTT CONNECT packet are length-prefixed: keep them well inside the 65,535-byte limit. */
+const ConnectString = Schema.NonEmptyString.pipe(Schema.check(Schema.isMaxLength(1_024)))
+
 export const MqttSettings = Schema.Struct({
-  url: Schema.String,
-  clientId: Schema.optionalKey(Schema.String),
-  username: Schema.optionalKey(Schema.String),
+  url: Schema.NonEmptyString,
+  clientId: Schema.optionalKey(ConnectString),
+  username: Schema.optionalKey(ConnectString),
   /** Name of the environment variable holding the password. Never inline secrets. */
   passwordEnv: Schema.optionalKey(Schema.String)
 })
@@ -73,6 +132,43 @@ export const BufferSettings = Schema.Struct({
 })
 export type BufferSettings = typeof BufferSettings.Type
 
+/** The gateway's own BACnet/IP endpoint, shared by every `bacnet-ip` device. */
+export const BacnetSettings = Schema.Struct({
+  /**
+   * Local IPv4 address to bind (default `0.0.0.0`, every interface). On
+   * Linux a socket bound to one address does not receive broadcasts, so
+   * devices that answer Who-Is with a broadcast I-Am are only found with
+   * the default.
+   */
+  bindAddress: Ipv4Address.pipe(Schema.withDecodingDefaultKey(Effect.succeed("0.0.0.0"))),
+  /**
+   * This gateway's UDP port (default 47808, `0xBAC0`). Devices broadcast
+   * I-Am to 47808, so on another port (to share the host with other BACnet
+   * software) the gateway only hears devices that answer it directly.
+   */
+  port: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(47_808))
+  ),
+  /**
+   * Where Who-Is goes: the subnet's broadcast address, e.g. `192.168.1.255`,
+   * port 47808 unless given (default `255.255.255.255`, which leaves through
+   * the default route's interface only).
+   */
+  broadcastAddress: Ipv4Endpoint.pipe(Schema.withDecodingDefaultKey(Effect.succeed("255.255.255.255"))),
+  /** How long to wait for an answer before resending (default 3 s). */
+  requestTimeoutMs: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 100, maximum: 60_000 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(3_000))
+  ),
+  /** How often a request is resent after a timeout (default 2). */
+  retries: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 0, maximum: 10 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(2))
+  )
+})
+export type BacnetSettings = typeof BacnetSettings.Type
+
 export const GatewayConfig = Schema.Struct({
   site: Slug,
   building: Slug,
@@ -85,9 +181,37 @@ export const GatewayConfig = Schema.Struct({
   ),
   mqtt: MqttSettings,
   buffer: Schema.optionalKey(BufferSettings),
-  devices: Schema.Array(Device)
+  bacnet: BacnetSettings.pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
+  devices: Schema.Array(Device).pipe(Schema.check(uniqueIds("device")))
 })
 export type GatewayConfig = typeof GatewayConfig.Type
 
-/** Decode and validate a config from a JSON string. */
-export const parseConfig = Schema.decodeUnknownEffect(Schema.fromJsonString(GatewayConfig))
+/**
+ * JSON text to a value. Unlike `Schema.fromJsonString`, a syntax error keeps
+ * `JSON.parse`'s message, which says where it is (position, line and column).
+ */
+const JsonText = Schema.String.pipe(
+  Schema.decodeTo(
+    Schema.Unknown,
+    SchemaTransformation.transformEffect({
+      decode: (text: string) =>
+        Effect.try({
+          try: (): unknown => JSON.parse(text),
+          catch: (error) =>
+            new SchemaIssue.InvalidValue({
+              message: `invalid JSON: ${error instanceof Error ? error.message : String(error)}`
+            })
+        }),
+      encode: (value: unknown) => Effect.succeed(JSON.stringify(value))
+    })
+  )
+)
+
+/**
+ * Decode and validate a config from a JSON string. A key the schema does not
+ * know fails decoding, so a typo (`intervall`) is reported instead of
+ * silently falling back to the default.
+ */
+export const parseConfig = Schema.decodeUnknownEffect(JsonText.pipe(Schema.decodeTo(GatewayConfig)), {
+  onExcessProperty: "error"
+})

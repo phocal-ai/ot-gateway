@@ -1,10 +1,18 @@
 import { Schema } from "effect"
+import type { DatagramSocketError } from "effect/socket/DatagramSocket"
 import type { SocketError } from "effect/socket/Socket"
 
 /** An expected failure while talking to a field device. */
 export class DriverError extends Schema.TaggedError<DriverError>()("DriverError", {
   device: Schema.String,
-  reason: Schema.Literals(["timeout", "connection", "protocol", "invalid-response", "not-implemented"]),
+  reason: Schema.Literals([
+    "timeout",
+    "connection",
+    "protocol",
+    "invalid-response",
+    "configuration",
+    "not-implemented"
+  ]),
   message: Schema.String
 }) {}
 
@@ -24,6 +32,19 @@ export class PublishError extends Schema.TaggedError<PublishError>()("PublishErr
   reason: Schema.Literals(["unavailable", "rejected"]),
   message: Schema.String,
   inFlight: Schema.optionalKey(Schema.Boolean)
+}) {}
+
+/**
+ * A step of a device's pipeline that did not finish within the device's
+ * cycle deadline: a polling cycle (`poll-cycle`: reading the device and
+ * publishing its values), or handling one value the device pushed
+ * (`pushed-value`). Something below it hangs, a device or the broker side.
+ */
+export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("PipelineTimeout", {
+  device: Schema.String,
+  stage: Schema.Literals(["poll-cycle", "pushed-value"]),
+  timeoutMs: Schema.Number,
+  message: Schema.String
 }) {}
 
 /**
@@ -66,6 +87,25 @@ export const describeSocketError = (error: SocketError): string => {
     case "SocketWriteError":
       return withCause("write failed", reason.cause)
     case "SocketUpgradeError":
+      return reason.message
+  }
+}
+
+/** A log-friendly description of a UDP socket failure, for the BACnet/IP client. */
+export const describeDatagramSocketError = (error: DatagramSocketError): string => {
+  const reason = error.reason
+  switch (reason._tag) {
+    case "DatagramSocketOpenError":
+      return reason.kind === "AddressInUse"
+        ? withCause("could not open the UDP socket, the port is in use", reason.cause)
+        : withCause("could not open the UDP socket", reason.cause)
+    case "DatagramSocketReadError":
+      return withCause("UDP read failed", reason.cause)
+    case "DatagramSocketWriteError":
+      return withCause("UDP write failed", reason.cause)
+    case "DatagramSocketClosedError":
+      return "UDP socket closed"
+    case "DatagramSocketUnsupportedError":
       return reason.message
   }
 }

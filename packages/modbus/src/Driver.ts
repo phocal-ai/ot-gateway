@@ -3,18 +3,23 @@
  *
  * Client failures become `DriverError`s by tag. A device that refuses one
  * block (a Modbus exception, usually a misconfigured address) costs only that
- * block's points: the refusal is logged and counted, and the other blocks
- * still publish. The read fails when every block is refused, or on any
- * timeout or connection problem, since the device is unreachable then.
+ * block's points, and the other blocks still publish. A refusal is counted
+ * every time but logged only when a block starts being refused and when it
+ * reads again, since a misconfigured address is refused on every cycle. A
+ * transient refusal (busy, gateway) is retried a couple of times within the
+ * read; a permanent one (illegal function, address or value) is not. The read
+ * fails when every block is refused, or on any timeout or connection
+ * problem, since the device is unreachable then.
  */
 import { NodeSocket } from "@effect/platform-node"
-import { DriverError } from "@plenum/core"
+import { DriverError, driverRefusals } from "@plenum/core"
 import type { Driver, ModbusDevice, Reading } from "@plenum/core"
-import { Clock, Effect } from "effect"
+import { Clock, Effect, Metric, Schedule } from "effect"
 import type { Duration } from "effect"
 import { makeModbusClient } from "./Client.ts"
-import type { ModbusClient } from "./Client.ts"
-import { FunctionCode } from "./Frame.ts"
+import type { ModbusClient, ModbusClientError } from "./Client.ts"
+import { exceptionName, FunctionCode, isTransientException } from "./Frame.ts"
+import type { ModbusException } from "./Frame.ts"
 import { planReads, valueFromBits, valueFromRegisters } from "./Plan.ts"
 import type { PlanOptions, ReadBlock } from "./Plan.ts"
 
@@ -25,17 +30,15 @@ export interface ModbusDriverOptions extends PlanOptions {
   readonly requestTimeout?: Duration.Input
 }
 
-const exceptionNames: Record<number, string> = {
-  1: "illegal function",
-  2: "illegal data address",
-  3: "illegal data value",
-  4: "server device failure",
-  6: "server device busy",
-  10: "gateway path unavailable",
-  11: "gateway target failed to respond"
+/**
+ * Retry a block the device is busy with, or that a gateway could not reach,
+ * within the same read. Other failures are left to the pipeline's retry.
+ */
+const transientRetry = {
+  schedule: Schedule.exponential("100 millis").pipe(Schedule.jittered),
+  times: 2,
+  while: (error: ModbusClientError) => error._tag === "ModbusException" && isTransientException(error.exceptionCode)
 }
-
-const exceptionName = (code: number) => exceptionNames[code] ?? `exception ${code}`
 
 /** Read one block and pick its points' values out of the result. */
 const readBlock = Effect.fnUntraced(function* (client: ModbusClient, block: ReadBlock) {
@@ -64,6 +67,14 @@ const readBlock = Effect.fnUntraced(function* (client: ModbusClient, block: Read
   }
 })
 
+/** Log annotations naming a block and its points. */
+const blockAnnotations = (block: ReadBlock) => ({
+  table: block.table,
+  address: block.address,
+  quantity: block.quantity,
+  points: block.points.map((point) => point.id).join(",")
+})
+
 /** A driver over an existing client. `makeModbusDriver` builds the client; tests can pass their own. */
 export const makeModbusDriverFromClient = (
   device: ModbusDevice,
@@ -74,25 +85,40 @@ export const makeModbusDriverFromClient = (
   const fail = (reason: DriverError["reason"], message: string) =>
     Effect.fail(new DriverError({ device: device.id, reason, message }))
 
+  /** The blocks the device refuses right now, with the exception it gave. */
+  const refusedBlocks = new Map<ReadBlock, string>()
+
+  const recordRefusal = Effect.fnUntraced(function* (block: ReadBlock, error: ModbusException) {
+    const reason = exceptionName(error.exceptionCode)
+    yield* Metric.update(Metric.withAttributes(driverRefusals, { exception: reason }), 1)
+    if (refusedBlocks.get(block) === reason) return reason
+    refusedBlocks.set(block, reason)
+    yield* Effect.logWarning("device refused a read; counting further refusals without logging them").pipe(
+      Effect.annotateLogs({ reason, ...blockAnnotations(block) })
+    )
+    return reason
+  })
+
+  const recordAnswer = (block: ReadBlock) =>
+    refusedBlocks.delete(block)
+      ? Effect.logInfo("device answers a block it refused before").pipe(Effect.annotateLogs(blockAnnotations(block)))
+      : Effect.void
+
   const readAll = Effect.gen(function* () {
     const readings: Array<Reading> = []
     const refusals: Array<string> = []
     for (const block of blocks) {
       const blockReadings = yield* readBlock(client, block).pipe(
-        Effect.catchTag("ModbusException", (error) => {
-          const reason = exceptionName(error.exceptionCode)
-          refusals.push(reason)
-          return Effect.logWarning("device refused a read").pipe(
-            Effect.annotateLogs({
-              reason,
-              table: block.table,
-              address: block.address,
-              quantity: block.quantity,
-              points: block.points.map((point) => point.id).join(",")
-            }),
-            Effect.as<ReadonlyArray<Reading>>([])
+        Effect.retry(transientRetry),
+        Effect.tap(() => recordAnswer(block)),
+        Effect.catchTag("ModbusException", (error) =>
+          recordRefusal(block, error).pipe(
+            Effect.map((reason) => {
+              refusals.push(reason)
+              return []
+            })
           )
-        })
+        )
       )
       readings.push(...blockReadings)
     }
