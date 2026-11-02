@@ -197,6 +197,19 @@ describe("chaos: Modbus TCP connection handling", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.live("accepts a response from unit 0 or 255, which some devices send whatever was asked", () =>
+    Effect.gen(function* () {
+      for (const unitId of [0, 255]) {
+        const { port } = yield* startRawDevice({
+          onRequest: (socket, request) => socket.write(answer({ ...request, unitId }))
+        })
+        const results = yield* readRepeatedly(port, twoBlocks, { times: 1 })
+
+        expect(outcomes(results)).toEqual(["ok"])
+      }
+    }).pipe(Effect.scoped)
+  )
+
   it.live("refuses an exception that answers another function", () =>
     Effect.gen(function* () {
       const { port } = yield* startRawDevice({

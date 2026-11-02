@@ -187,7 +187,9 @@ const decodeReadBody = (
     if (frame.length !== 6 + length) {
       return yield* new ModbusFrameError({ message: `length field ${length} does not match frame` })
     }
-    if (unitId !== expected.unitId) {
+    // Some TCP devices answer with unit 0 or 255 whatever was asked; the
+    // transaction id already pairs the response, so only another real unit is refused.
+    if (unitId !== expected.unitId && unitId !== 0 && unitId !== 0xff) {
       return yield* new ModbusFrameError({
         message: `response from unit ${unitId} does not answer a request to unit ${expected.unitId}`
       })
