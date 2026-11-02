@@ -10,6 +10,24 @@ const pollIntervalMs = Schema.Int.pipe(
   Schema.withDecodingDefaultKey(Effect.succeed(5_000))
 )
 
+/**
+ * How long one polling cycle (reading the device, retries included, and
+ * publishing its values) may take before it is abandoned as hung. Optional:
+ * the default depends on `pollIntervalMs` (see `cycleTimeoutMs`), so it
+ * cannot be a decoding default.
+ */
+const cycleTimeoutMsField = Schema.optionalKey(
+  Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1_000, maximum: 86_400_000 })))
+)
+
+/** The default cycle deadline: twice the poll interval, and at least the interval plus 30 s. */
+export const defaultCycleTimeoutMs = (intervalMs: number): number =>
+  Math.max(2 * intervalMs, intervalMs + 30_000)
+
+/** A device's cycle deadline: its `cycleTimeoutMs`, or the default for its poll interval. */
+export const cycleTimeoutMs = (device: { readonly pollIntervalMs: number; readonly cycleTimeoutMs?: number }) =>
+  device.cycleTimeoutMs ?? defaultCycleTimeoutMs(device.pollIntervalMs)
+
 export const ModbusDevice = Schema.Struct({
   protocol: Schema.Literal("modbus-tcp"),
   id: Slug,
@@ -24,6 +42,7 @@ export const ModbusDevice = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed(1))
   ),
   pollIntervalMs,
+  cycleTimeoutMs: cycleTimeoutMsField,
   points: Schema.Array(ModbusPoint)
 })
 export type ModbusDevice = typeof ModbusDevice.Type
@@ -54,6 +73,7 @@ export const BacnetDevice = Schema.Struct({
   /** Use change-of-value subscriptions where the device supports them. */
   cov: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
   pollIntervalMs,
+  cycleTimeoutMs: cycleTimeoutMsField,
   points: Schema.Array(BacnetPoint)
 })
 export type BacnetDevice = typeof BacnetDevice.Type
@@ -62,6 +82,7 @@ export const SimulatorDevice = Schema.Struct({
   protocol: Schema.Literal("simulator"),
   id: Slug,
   pollIntervalMs,
+  cycleTimeoutMs: cycleTimeoutMsField,
   points: Schema.Array(SimulatedPoint)
 })
 export type SimulatorDevice = typeof SimulatorDevice.Type

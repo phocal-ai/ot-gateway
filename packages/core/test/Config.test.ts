@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit } from "effect"
-import { parseConfig } from "../src/index.ts"
+import { cycleTimeoutMs, parseConfig } from "../src/index.ts"
 
 const minimal = {
   site: "vienna-hq",
@@ -98,6 +98,25 @@ describe("parseConfig", () => {
       expect((yield* parseConfig(JSON.stringify(withPort))).bacnet.broadcastAddress).toBe("192.168.1.255:47809")
       const badBroadcast = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:99999" } }
       expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(badBroadcast))))).toBe(true)
+    })
+  )
+
+  it.effect("defaults the cycle deadline from the poll interval unless it is set", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const config = yield* parseConfig(
+        JSON.stringify({
+          ...minimal,
+          devices: [
+            { ...device, id: "fast", pollIntervalMs: 1_000 },
+            { ...device, id: "slow", pollIntervalMs: 60_000 },
+            { ...device, id: "set", cycleTimeoutMs: 120_000 }
+          ]
+        })
+      )
+      expect(config.devices.map(cycleTimeoutMs)).toEqual([31_000, 120_000, 120_000])
+      const tooShort = { ...minimal, devices: [{ ...device, cycleTimeoutMs: 10 }] }
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(tooShort))))).toBe(true)
     })
   )
 })

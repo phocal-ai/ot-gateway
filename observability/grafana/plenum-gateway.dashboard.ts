@@ -199,7 +199,14 @@ timeseries(
   [
     { expr: `sum by (outcome) (rate(plenum_poll_cycles_total{${sel}}[$__rate_interval]))`, legendFormat: "{{outcome}}" }
   ],
-  { unit: "ops", x: 0, w: 8, stack: true }
+  {
+    unit: "ops",
+    x: 0,
+    w: 8,
+    stack: true,
+    description:
+      "timed_out: a cycle hung past the device's cycleTimeoutMs (a device or the broker side that never answers) and was abandoned."
+  }
 )
 timeseries(
   "Read failures by device and reason",

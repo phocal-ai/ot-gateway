@@ -502,7 +502,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Cycles by outcome",
-      "description": "",
+      "description": "timed_out: a cycle hung past the device's cycleTimeoutMs (a device or the broker side that never answers) and was abandoned.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"

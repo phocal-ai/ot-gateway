@@ -10,6 +10,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { type BacnetClient, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
 import {
+  cycleTimeoutMs,
   type Device,
   type GatewayConfig,
   type HealthRegistry,
@@ -77,6 +78,7 @@ const runOne = (
     site: config.site,
     building: config.building,
     pollIntervalMs: device.pollIntervalMs,
+    cycleTimeoutMs: cycleTimeoutMs(device),
     traceSampleRatio: sampleRatio,
     health
   }

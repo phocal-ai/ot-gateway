@@ -16,7 +16,10 @@ import { Effect, Metric } from "effect"
  */
 const seconds = { unit: "seconds" } as const
 
-/** Polling cycles finished, by `outcome`: `ok`, `read_failed` or `publish_failed`. */
+/**
+ * Polling cycles finished, by `outcome`: `ok`, `read_failed`, `publish_failed`
+ * or `timed_out` (the cycle hung past the device's `cycleTimeoutMs` and was abandoned).
+ */
 export const pollCycles = Metric.counter("plenum_poll_cycles", {
   description: "Polling cycles finished, by outcome",
   incremental: true

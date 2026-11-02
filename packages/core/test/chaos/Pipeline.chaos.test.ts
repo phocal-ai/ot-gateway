@@ -3,9 +3,17 @@
  * Each test asserts the fixed behaviour.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { Clock, Effect, Fiber, Metric } from "effect"
+import { Clock, Effect, Fiber, Layer, Metric, Queue, Stream } from "effect"
 import { TestClock } from "effect/testing"
-import { makeMemoryPublisher, pointReadFailures, runDevice } from "../../src/index.ts"
+import {
+  makeHealthRegistry,
+  makeMemoryPublisher,
+  pointReadFailures,
+  pollCycles,
+  Publisher,
+  publishFailures,
+  runDevice
+} from "../../src/index.ts"
 import type { AnyPoint, Driver, PointValue, Reading } from "../../src/index.ts"
 
 const pointNamed = (id: string, extra: Partial<AnyPoint> = {}): AnyPoint => ({
@@ -116,6 +124,97 @@ describe("chaos: values that are not finite numbers", () => {
 
       // 20.5 is inside the deadband of 20, not "changed" because NaN came in between.
       expect(valuesOn(messages, "s/b/nan-between/temp")).toEqual([20, 22])
+    })
+  )
+})
+
+describe("chaos: hangs", () => {
+  it.effect("a readAll that hangs fails the cycle at its deadline and marks the device failing", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeMemoryPublisher
+      const health = makeHealthRegistry(["hang-read"])
+      let reads = 0
+      let hanging = true
+      const driver: Driver = {
+        deviceId: "hang-read",
+        points: [pointNamed("temp")],
+        readAll: Effect.suspend(() => {
+          reads++
+          if (reads > 1 && hanging) return Effect.never
+          return Effect.map(Clock.currentTimeMillis, (now): ReadonlyArray<Reading> => [
+            { pointId: "temp", value: reads, timestamp: now }
+          ])
+        }),
+        write: () => Effect.void
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, health }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      // Default deadline at a 1 s interval: 31 s. Cycles: ok at 0, hung from 1 s to 32 s, then from 33 s to 64 s.
+      yield* TestClock.adjust("64500 millis")
+      expect(health.devices.get("hang-read")).toMatchObject({ status: "failing", reason: "cycle-timeout" })
+      expect(yield* countOf(pollCycles, { device: "hang-read", outcome: "timed_out" })).toBe(2)
+      expect(reads).toBe(3)
+
+      hanging = false
+      yield* TestClock.adjust("40 seconds")
+      yield* Fiber.interrupt(fiber)
+      expect(health.devices.get("hang-read")?.status).toBe("ok")
+    })
+  )
+
+  it.effect("a publish that hangs fails the cycle at a configured deadline", () =>
+    Effect.gen(function* () {
+      const health = makeHealthRegistry(["hang-publish"])
+      const hangingPublisher = Layer.succeed(Publisher, {
+        publish: (topic) => (topic.endsWith("$meta") ? Effect.void : Effect.never)
+      })
+      const driver = scripted("hang-publish", [pointNamed("temp")], [[["temp", 1]], [["temp", 2]]])
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 1000, cycleTimeoutMs: 5000, health },
+        driver
+      ).pipe(Effect.provide(hangingPublisher), Effect.forkChild)
+      yield* TestClock.adjust("1 minute")
+      yield* Fiber.interrupt(fiber)
+
+      expect(health.devices.get("hang-publish")).toMatchObject({ status: "failing", reason: "cycle-timeout" })
+      // One cycle every 6 s: 5 s until the deadline, then the 1 s interval.
+      expect(yield* countOf(pollCycles, { device: "hang-publish", outcome: "timed_out" })).toBe(10)
+    })
+  )
+
+  it.effect("a pushed value whose publish hangs is dropped at the deadline, so polling goes on", () =>
+    Effect.gen(function* () {
+      const { messages, layer: memory } = yield* makeMemoryPublisher
+      const publisher = Layer.effect(
+        Publisher,
+        Effect.gen(function* () {
+          const inner = yield* Publisher
+          return Publisher.of({
+            publish: (topic, payload, options) =>
+              Effect.suspend(() => {
+                if (JSON.parse(payload).value === 99) return Effect.never
+                return inner.publish(topic, payload, options)
+              })
+          })
+        })
+      ).pipe(Layer.provide(memory))
+      const pushes = yield* Queue.unbounded<Reading>()
+      const polled = scripted("hang-push", [pointNamed("temp")], [[["temp", 1]], [["temp", 2]], [["temp", 3]]])
+      const driver: Driver = { ...polled, changes: Stream.fromQueue(pushes) }
+      yield* Queue.offer(pushes, { pointId: "temp", value: 99, timestamp: 0 })
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 1000, cycleTimeoutMs: 5000 },
+        driver
+      ).pipe(Effect.provide(publisher), Effect.forkChild)
+      yield* TestClock.adjust("20 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      // The pushed 99 hung and was dropped; the polled values that waited for it went out after.
+      expect(valuesOn(messages, "s/b/hang-push/temp")).toContain(3)
+      expect(valuesOn(messages, "s/b/hang-push/temp")).not.toContain(99)
+      expect(yield* countOf(publishFailures, { device: "hang-push" })).toBeGreaterThanOrEqual(1)
     })
   )
 })

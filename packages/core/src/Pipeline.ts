@@ -2,12 +2,13 @@
  * The polling pipeline for one device:
  * read → scale → deadband → publish, repeated on the device's schedule.
  */
-import { Clock, Duration, Effect, Metric, Option, Random, Schedule, Semaphore, Stream } from "effect"
+import { Clock, Duration, Effect, Metric, Option, Random, Result, Schedule, Semaphore, Stream } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
 import type { HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
-import type { DriverError, PublishError } from "./Errors.ts"
+import { defaultCycleTimeoutMs } from "./Config.ts"
+import { type DriverError, PipelineTimeout, type PublishError } from "./Errors.ts"
 import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
@@ -35,6 +36,11 @@ export interface DeviceContext {
   readonly traceSampleRatio?: number
   /** Where the device's status is recorded for the health topic, if anywhere. */
   readonly health?: HealthRegistry
+  /**
+   * How long one cycle, or handling one pushed value, may take before it is
+   * abandoned as hung (default `defaultCycleTimeoutMs(pollIntervalMs)`).
+   */
+  readonly cycleTimeoutMs?: number
 }
 
 /** Payload published for every value change. */
@@ -81,7 +87,7 @@ const isRetryable = (driver: Driver, error: DriverError): boolean => {
   }
 }
 
-const countCycle = (outcome: "ok" | "read_failed" | "publish_failed") =>
+const countCycle = (outcome: "ok" | "read_failed" | "publish_failed" | "timed_out") =>
   Metric.update(Metric.withAttributes(pollCycles, { outcome }), 1)
 
 /**
@@ -215,6 +221,22 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   // Polled and pushed values for the same point must not interleave around `last`.
   const handling = yield* Semaphore.make(1)
 
+  // A hung driver or publisher must not hold the device forever with its health still `ok`.
+  const deadlineMs = ctx.cycleTimeoutMs ?? defaultCycleTimeoutMs(ctx.pollIntervalMs)
+  const deadline = (stage: PipelineTimeout["stage"]) =>
+    Effect.timeoutOrElse({
+      duration: deadlineMs,
+      orElse: () =>
+        Effect.fail(
+          new PipelineTimeout({
+            device: driver.deviceId,
+            stage,
+            timeoutMs: deadlineMs,
+            message: `${stage === "poll-cycle" ? "polling cycle" : "pushed value"} did not finish within ${deadlineMs} ms`
+          })
+        )
+    })
+
   const pollCycle = Effect.gen(function* () {
     if (unpublishedMeta.size > 0) yield* publishMeta
     const polledSince = yield* Clock.monotonicTimeNanos
@@ -225,14 +247,18 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       })
     )
     const readAt = yield* Clock.currentTimeMillis
-    ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)
-    yield* handling.withPermit(
-      Effect.forEach(readings, (reading) => handleReading(reading, polledSince), { discard: true })
-    )
+    const published = yield* handling
+      .withPermit(Effect.forEach(readings, (reading) => handleReading(reading, polledSince), { discard: true }))
+      .pipe(Effect.result)
+    // The device is `ok` once its values were handled: a broker that refuses or is down does not make the device
+    // failing, but a cycle that hangs in publishing (and hits the deadline) never gets here.
+    ctx.health?.recordSuccess(driver.deviceId, readAt)
+    if (Result.isFailure(published)) return yield* published.failure
     yield* countCycle("ok")
   }).pipe(
+    deadline("poll-cycle"),
     Effect.catchTags({
       DriverError: (error) =>
         Effect.all([
@@ -250,6 +276,15 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
           Effect.annotateCurrentSpan({ "plenum.outcome": "publish_failed" }),
           Metric.update(publishFailures, 1),
           countCycle("publish_failed")
+        ]),
+      PipelineTimeout: (error) =>
+        Effect.all([
+          Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, "cycle-timeout")),
+          Effect.logWarning("polling cycle hung, abandoned it").pipe(
+            Effect.annotateLogs({ timeoutMs: error.timeoutMs, error: error.message })
+          ),
+          Effect.annotateCurrentSpan({ "plenum.outcome": "timed_out" }),
+          countCycle("timed_out")
         ])
     }),
     Effect.timed,
@@ -272,31 +307,37 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   const polling = tracedCycle.pipe(Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)))
   // A broker outage fails every pushed value; it is counted each time but logged once until a push gets out.
   let pushFailing = false
+  const pushLost = (message: string, annotations: Record<string, unknown>) =>
+    Effect.all([
+      pushFailing ? Effect.void : Effect.logWarning(message).pipe(Effect.annotateLogs(annotations)),
+      Effect.sync(() => {
+        pushFailing = true
+      }),
+      Metric.update(publishFailures, 1)
+    ])
   const pushed =
     driver.changes === undefined
       ? Effect.void
       : Stream.runForEach(driver.changes, (reading) =>
           Metric.update(pushedReadings, 1).pipe(
-            Effect.andThen(handling.withPermit(handleReading(reading))),
+            // Under the deadline, so a hung publish cannot keep the permit from the polling cycle forever.
+            Effect.andThen(handling.withPermit(handleReading(reading)).pipe(deadline("pushed-value"))),
             Effect.andThen(
               Effect.sync(() => {
                 pushFailing = false
               })
             ),
             // The value is lost; the next change, renewal notification or poll brings the point's value again.
-            Effect.catchTag("PublishError", (error) =>
-              Effect.all([
-                pushFailing
-                  ? Effect.void
-                  : Effect.logWarning("publish of a pushed value failed").pipe(
-                      Effect.annotateLogs({ topic: error.topic, error: error.message })
-                    ),
-                Effect.sync(() => {
-                  pushFailing = true
-                }),
-                Metric.update(publishFailures, 1)
-              ])
-            )
+            Effect.catchTags({
+              PublishError: (error) =>
+                pushLost("publish of a pushed value failed", { topic: error.topic, error: error.message }),
+              // Publishing is the only step of handling a value that can block, so it counts as a publish failure.
+              PipelineTimeout: (error) =>
+                pushLost("handling a pushed value hung, dropped it", {
+                  point: reading.pointId,
+                  error: error.message
+                })
+            })
           )
         ).pipe(
           // A bug on the push side must not stop the device: polling goes on.
