@@ -27,6 +27,7 @@ There is no build step. Node runs `.ts` files directly through type stripping (N
 - `apps/gateway`: the runnable gateway
 - `examples/`: sample configs
 - `docs/`: vision and design notes
+- `observability/`: Grafana dashboards as code and the telemetry setup (see `observability/README.md`)
 
 ## Branches
 

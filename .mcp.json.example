@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "${HOME}/.local/opt/mcp-grafana/2.0.2/mcp-grafana",
+      "args": [
+        "--disable-write",
+        "--enabled-tools=search,dashboard,datasource,prometheus,loki,tempo",
+        "--usage-stats=disabled"
+      ],
+      "env": {
+        "GRAFANA_URL": "${GRAFANA_MCP_URL}",
+        "GRAFANA_SERVICE_ACCOUNT_TOKEN": "${GRAFANA_MCP_READ_TOKEN}"
+      }
+    }
+  }
+}
