@@ -1,4 +1,7 @@
 {
+  "files.exclude": {
+    "repos/**": true
+  },
   "search.exclude": {
     "repos/**": true
   },
@@ -11,5 +14,6 @@
   "oxc.configPath": ".oxlintrc.json",
   "oxc.disableNestedConfig": true,
   "oxc.fmt.configPath": ".oxfmtrc.json",
-  "oxc.fmt.disableNestedConfig": true
+  "oxc.fmt.disableNestedConfig": true,
+  "javascript.preferences.autoImportFileExcludePatterns": ["**/repos/**"]
 }
