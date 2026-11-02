@@ -23,8 +23,8 @@
  * the meantime time out. A datagram that cannot be handled is logged and
  * dropped, and never stops the receive loop.
  */
-import { describeDatagramSocketError, driverConnects, driverRequests } from "@plenum/core"
-import { Clock, Deferred, Duration, Effect, Exit, Metric, Result, Schema, Scope, Semaphore } from "effect"
+import { describeDatagramSocketError, driverConnects, driverRequests, monotonicMillis } from "@plenum/core"
+import { Deferred, Duration, Effect, Exit, Metric, Result, Schema, Scope, Semaphore } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import { AbortReason, type Apdu, ConfirmedService, MAX_APDU_IP, RejectReason, UnconfirmedService } from "./Apdu.ts"
@@ -473,7 +473,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   const exchange = (target: DeviceAddress, service: number, body: Uint8Array) =>
     Effect.acquireUseRelease(
       // Registered uninterruptibly, so an interrupted request never leaves its invoke ID behind.
-      Effect.flatMap(Clock.currentTimeMillis, (now) =>
+      Effect.flatMap(monotonicMillis, (now) =>
         Effect.sync(() => {
           const invokeId = allocateInvokeId(now)
           const answer = Deferred.makeUnsafe<Apdu>()
@@ -513,7 +513,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         )
       },
       ({ invokeId, answer }) =>
-        Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        Effect.flatMap(monotonicMillis, (now) =>
           Effect.sync(() => {
             pending.delete(invokeId)
             if (!Deferred.isDoneUnsafe(answer)) quarantined.set(invokeId, now + quarantineMillis)

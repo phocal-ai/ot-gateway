@@ -328,21 +328,46 @@ describe("runDevice with pushed values", () => {
     })
   )
 
-  it.effect("drops a polled value read before the latest pushed one", () =>
+  it.effect("drops a polled value when a push for its point arrived while the device was being read", () =>
     Effect.gen(function* () {
       const { messages, layer } = yield* makeMemoryPublisher
       const pushes = yield* Queue.unbounded<Reading>()
-      // Polled values carry timestamp 0: a poll that overlapped a push.
-      const driver: Driver = { ...scriptedDriver([200, 300], "overlap"), changes: Stream.fromQueue(pushes) }
+      // The read takes 500 ms; the push arrives 200 ms into it, so the polled 30.0 is older.
+      const slow = scriptedDriver([300], "overlap")
+      const driver: Driver = {
+        ...slow,
+        readAll: Effect.andThen(Effect.sleep("500 millis"), slow.readAll),
+        changes: Stream.fromQueue(pushes)
+      }
       const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
         Effect.provide(layer),
         Effect.forkChild
       )
-      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 500 })
-      yield* TestClock.adjust("1500 millis")
+      yield* TestClock.adjust("200 millis")
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 200 })
+      yield* TestClock.adjust("700 millis")
       yield* Fiber.interrupt(fiber)
 
-      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 25])
+      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([25])
+    })
+  )
+
+  it.effect("orders readings by when they were handled, not by their timestamps, which can step back", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      // Polled values carry timestamp 0, an hour before the push: the wall clock stepped back since.
+      const driver: Driver = { ...scriptedDriver([200, 200, 300], "stepped"), changes: Stream.fromQueue(pushes) }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("100 millis")
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 3_600_000 })
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 25, 20, 30])
     })
   )
 })

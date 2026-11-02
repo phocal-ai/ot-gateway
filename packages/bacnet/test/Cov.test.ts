@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetPoint, Reading } from "@plenum/core"
-import { Effect, Result, Stream } from "effect"
+import { Clock, Effect, Result, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { TestClock } from "effect/testing"
 import {
@@ -254,4 +254,52 @@ describe("change of value, over time", () => {
       expect(subscribed()).toHaveLength(1)
     })
   )
+
+  it.effect("keeps renewing and falls back to polling when the wall clock steps back", () =>
+    Effect.gen(function* () {
+      const { clock, skew } = yield* skewedClock
+      yield* Effect.gen(function* () {
+        const { notify, pushed, poll, subscribed } = yield* start([supplyTemp, objectType], "10.0.0.5")
+        notify(21)
+        yield* settle
+        expect(pushed).toEqual([21])
+        const before = subscribed().length
+        // NTP steps the wall clock back an hour; ten minutes pass on the monotonic clock.
+        skew.ms -= 3_600_000
+        const polls: Array<ReadonlyArray<string>> = []
+        for (let minute = 0; minute < 10; minute++) {
+          yield* TestClock.adjust("60 seconds")
+          polls.push(yield* poll)
+        }
+        // Renewed every 150 s regardless, and polled again once the device stayed quiet for a lifetime.
+        expect(subscribed().length - before).toBe(4)
+        // Still pushed within the lifetime, polled again after it.
+        expect(polls[0]).toEqual(["ai-type"])
+        expect(polls.at(-1)).toEqual(["supply-temp", "ai-type"])
+      }).pipe(Effect.provideService(Clock.Clock, clock))
+    }).pipe(Effect.scoped)
+  )
+})
+
+/**
+ * A clock whose wall time is the test clock's plus `skew`, while sleeps and
+ * monotonic time stay the test clock's: how `Date.now()` and timers behave
+ * when NTP steps the time.
+ */
+const skewedClock = Effect.gen(function* () {
+  const test = yield* TestClock.testClockWith(Effect.succeed)
+  const skew = { ms: 1_700_000_000_000 }
+  const wallNanos = () => test.currentTimeNanosUnsafe() + BigInt(skew.ms) * 1_000_000n
+  // TestClock.adjust calls `adjust` on the current clock, so this one passes it on.
+  const clock: Clock.Clock & Pick<TestClock.TestClock, "adjust"> = {
+    currentTimeMillisUnsafe: () => test.currentTimeMillisUnsafe() + skew.ms,
+    currentTimeMillis: Effect.sync(() => test.currentTimeMillisUnsafe() + skew.ms),
+    currentTimeNanosUnsafe: wallNanos,
+    currentTimeNanos: Effect.sync(wallNanos),
+    monotonicTimeNanosUnsafe: () => test.monotonicTimeNanosUnsafe(),
+    monotonicTimeNanos: Effect.sync(() => test.monotonicTimeNanosUnsafe()),
+    sleep: (duration) => test.sleep(duration),
+    adjust: (duration) => test.adjust(duration)
+  }
+  return { clock, skew }
 })

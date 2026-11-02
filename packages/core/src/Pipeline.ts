@@ -135,13 +135,18 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
   )
 
-  /** When each point's newest reading was taken, so an older one (a poll that overlapped a push) is dropped. */
-  const takenAt = new Map<string, number>()
-  const handleReading = Effect.fnUntraced(function* (reading: Reading) {
+  /**
+   * When each point's last pushed value was handled, on the monotonic clock.
+   * A polled value from a cycle that started before then is older than what
+   * is out already, and is dropped. The readings' own timestamps are wall
+   * time, which can step back, so they are never compared.
+   */
+  const pushedAt = new Map<string, bigint>()
+  const handleReading = Effect.fnUntraced(function* (reading: Reading, polledSince?: bigint) {
     const point = points.get(reading.pointId)
     if (point === undefined) return
-    if (reading.timestamp < (takenAt.get(point.id) ?? Number.NEGATIVE_INFINITY)) return
-    takenAt.set(point.id, reading.timestamp)
+    if (polledSince === undefined) pushedAt.set(point.id, yield* Clock.monotonicTimeNanos)
+    else if ((pushedAt.get(point.id) ?? -1n) >= polledSince) return
     yield* Metric.update(Metric.withAttributes(pointLastRead, { point: point.id }), reading.timestamp / 1000)
     const value = typeof reading.value === "number" ? applyScaling(reading.value, point.scaling) : reading.value
     if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
@@ -166,6 +171,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
 
   const pollCycle = Effect.gen(function* () {
     if (unpublishedMeta.size > 0) yield* publishMeta
+    const polledSince = yield* Clock.monotonicTimeNanos
     const readings = yield* driver.readAll.pipe(
       Effect.retry({
         ...retryPolicy,
@@ -176,7 +182,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)
-    yield* handling.withPermit(Effect.forEach(readings, handleReading, { discard: true }))
+    yield* handling.withPermit(
+      Effect.forEach(readings, (reading) => handleReading(reading, polledSince), { discard: true })
+    )
     yield* countCycle("ok")
   }).pipe(
     Effect.catchTags({

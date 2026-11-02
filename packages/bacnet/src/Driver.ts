@@ -22,7 +22,14 @@
  * booleans; every other numeric value as a number.
  */
 import { NodeDatagramSocket } from "@effect/platform-node"
-import { type BacnetDevice, type BacnetSettings, DriverError, pointReadFailures, pushedPoints } from "@plenum/core"
+import {
+  type BacnetDevice,
+  type BacnetSettings,
+  DriverError,
+  monotonicMillis,
+  pointReadFailures,
+  pushedPoints
+} from "@plenum/core"
 import type { BacnetPoint, Driver, PointValue, Reading } from "@plenum/core"
 import { Clock, Duration, Effect, Metric, Queue, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
@@ -283,7 +290,7 @@ const makeCovSubscriptions = (deps: {
       const location = deps.location()
       if (location === undefined) return
       for (const entry of objects) {
-        const now = yield* Clock.currentTimeMillis
+        const now = yield* monotonicMillis
         const moved = entry.subscribedAt !== undefined && !sameAddress(entry.subscribedAt, location)
         if (now < entry.nextAttemptAt && !moved) continue
         const result = yield* client
@@ -326,7 +333,8 @@ const makeCovSubscriptions = (deps: {
     })
 
   /** The readings a notification carries, or why it does not count. */
-  const readingsOf = (notification: CovNotification, from: DeviceAddress, now: number) => {
+  /** `now` is monotonic, for the subscription's bookkeeping; `timestamp` is wall time, for the readings. */
+  const readingsOf = (notification: CovNotification, from: DeviceAddress, now: number, timestamp: number) => {
     const location = deps.location()
     if (location === undefined || !sameAddress(from, location)) return "from another address"
     const initiating = notification.initiatingDevice
@@ -347,7 +355,7 @@ const makeCovSubscriptions = (deps: {
         entry.heardAt = undefined
         return `unusable value (${value.failure})`
       }
-      readings.push({ pointId: point.point.id, value: value.success, timestamp: now })
+      readings.push({ pointId: point.point.id, value: value.success, timestamp })
     }
     entry.heardAt = now
     return readings
@@ -371,7 +379,7 @@ const makeCovSubscriptions = (deps: {
         return yield* Effect.forever(
           Effect.gen(function* () {
             const { notification, from } = yield* Queue.take(arrived)
-            const outcome = readingsOf(notification, from, yield* Clock.currentTimeMillis)
+            const outcome = readingsOf(notification, from, yield* monotonicMillis, yield* Clock.currentTimeMillis)
             if (typeof outcome === "string") {
               return yield* Effect.logDebug("ignored a COV notification").pipe(
                 Effect.annotateLogs({ object: describeObject(notification.object), reason: outcome })
@@ -492,7 +500,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
 
   /** Who-Is to every network, at most as often as the backoff allows; `undefined` when not found (or not asked). */
   const broadcastLocate = Effect.gen(function* () {
-    const now = yield* Clock.currentTimeMillis
+    const now = yield* monotonicMillis
     if (now < nextBroadcastAt) return undefined
     return yield* client.locate(device.deviceInstance).pipe(
       Effect.catchTag("BacnetTimeout", () =>
@@ -534,7 +542,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       }
     }
     if (location !== undefined) return location
-    const waitSeconds = Math.ceil(Math.max(0, nextBroadcastAt - (yield* Clock.currentTimeMillis)) / 1000)
+    const waitSeconds = Math.ceil(Math.max(0, nextBroadcastAt - (yield* monotonicMillis)) / 1000)
     return yield* new BacnetTimeout({
       message: `device ${device.deviceInstance} did not answer Who-Is; asking again in ${waitSeconds} s`
     })
@@ -723,7 +731,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
   const toPoll = Effect.gen(function* () {
     // After a timeout the device may have restarted, so what was pushed may be stale: read it all once.
     if (cov === undefined || lostCycles > 0) return { polled: points, pushed: 0 }
-    const pushed = cov.pushedPointIds(yield* Clock.currentTimeMillis)
+    const pushed = cov.pushedPointIds(yield* monotonicMillis)
     const polled = points.filter((point) => !pushed.has(point.point.id))
     return { polled: polled.length === 0 ? points.slice(0, 1) : polled, pushed: pushed.size }
   })
