@@ -38,11 +38,11 @@ Claude Code ignores telemetry variables in a repo's `.claude/settings*.json`, so
 
 ### Where the data lands
 
-| Signal | Datasource | Query |
-| --- | --- | --- |
-| Metrics (`claude_code_*`: cost, tokens, sessions, active time, commits, PRs, lines changed) | `grafanacloud-prom` | `claude_code_cost_usage_USD_total{service_namespace="phocal"}` |
-| Traces (`claude_code.interaction` and child spans) | `grafanacloud-traces` | `{resource.service.name="claude-code" && name="claude_code.interaction"}` |
-| Events (`api_request`, `api_error`, `tool_result`, `tool_decision`, `user_prompt`, hooks, MCP connections) | `grafanacloud-logs` | `{service_name="claude-code"} \| event_name="api_request"` |
+| Signal                                                                                                     | Datasource            | Query                                                                     |
+| ---------------------------------------------------------------------------------------------------------- | --------------------- | ------------------------------------------------------------------------- |
+| Metrics (`claude_code_*`: cost, tokens, sessions, active time, commits, PRs, lines changed)                | `grafanacloud-prom`   | `claude_code_cost_usage_USD_total{service_namespace="phocal"}`            |
+| Traces (`claude_code.interaction` and child spans)                                                         | `grafanacloud-traces` | `{resource.service.name="claude-code" && name="claude_code.interaction"}` |
+| Events (`api_request`, `api_error`, `tool_result`, `tool_decision`, `user_prompt`, hooks, MCP connections) | `grafanacloud-logs`   | `{service_name="claude-code"} \| event_name="api_request"`                |
 
 Per-request `api_request` events carry `cost_usd`, token counts, `duration_ms` and `ttft_ms`; they are the exact source for cost over time. Metric counters are better for per-session totals (`max_over_time`), since `increase()` misses a short session's first and only sample.
 

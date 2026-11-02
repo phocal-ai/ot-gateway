@@ -29,7 +29,8 @@ export const makeSimulatorDriver = (device: SimulatorDevice): Driver => ({
       pointId: point.id,
       value: waveformValue(point, now),
       timestamp: now
-    }))),
+    }))
+  ),
   write: (pointId) =>
     Effect.fail(
       new DriverError({

@@ -31,7 +31,7 @@ const scriptedDriver = (values: ReadonlyArray<number | "fail">): Driver => {
 
 describe("runDevice", () => {
   it.effect("publishes metadata, then scaled values outside the deadband", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const { messages, layer } = yield* makeMemoryPublisher
       const driver = scriptedDriver([200, 202, 210])
       const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
@@ -45,10 +45,11 @@ describe("runDevice", () => {
       const values = messages.slice(1).map((m) => JSON.parse(m.payload).value)
       // 20.0 publishes, 20.2 is inside the 0.5 deadband, 21.0 publishes.
       expect(values).toEqual([20, 21])
-    }))
+    })
+  )
 
   it.effect("keeps running when the driver fails", () =>
-    Effect.gen(function*() {
+    Effect.gen(function* () {
       const { messages, layer } = yield* makeMemoryPublisher
       const driver = scriptedDriver(["fail", "fail", "fail", "fail", "fail", 300])
       const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
@@ -60,5 +61,6 @@ describe("runDevice", () => {
 
       const values = messages.slice(1).map((m) => JSON.parse(m.payload).value)
       expect(values).toEqual([30])
-    }))
+    })
+  )
 })

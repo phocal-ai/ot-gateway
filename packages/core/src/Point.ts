@@ -11,9 +11,7 @@ import { Effect, Schema } from "effect"
  * Identifier used in MQTT topics: lowercase letters, digits, `-` and `_`.
  * MQTT wildcards and separators (`+`, `#`, `/`) can never appear.
  */
-export const Slug = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/))
-)
+export const Slug = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/)))
 export type Slug = typeof Slug.Type
 
 /** Optional semantic tagging. Brick is primary, Haystack tags are for integrators. */

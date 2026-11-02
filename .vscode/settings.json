@@ -1,5 +1,13 @@
 {
-  "search.exclude": { "repos/**": true },
-  "files.watcherExclude": { "repos/**": true },
-  "typescript.preferences.autoImportFileExcludePatterns": ["**/repos/**"]
+  "search.exclude": {
+    "repos/**": true
+  },
+  "files.watcherExclude": {
+    "repos/**": true
+  },
+  "typescript.preferences.autoImportFileExcludePatterns": [
+    "**/repos/**"
+  ],
+  "editor.defaultFormatter": "oxc.oxc-vscode",
+  "editor.formatOnSave": true
 }

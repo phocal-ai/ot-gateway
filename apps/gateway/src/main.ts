@@ -23,7 +23,7 @@ const runOne = (config: { site: string; building: string }, device: Device) => {
   }
 }
 
-const program = Effect.gen(function*() {
+const program = Effect.gen(function* () {
   const path = process.argv[2] ?? "plenum.json"
   const fs = yield* FileSystem.FileSystem
   const config = yield* parseConfig(yield* fs.readFileString(path))
@@ -35,7 +35,4 @@ const program = Effect.gen(function*() {
   })
 })
 
-program.pipe(
-  Effect.provide(Layer.mergeAll(NodeServices.layer, ConsolePublisher)),
-  NodeRuntime.runMain
-)
+program.pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, ConsolePublisher)), NodeRuntime.runMain)

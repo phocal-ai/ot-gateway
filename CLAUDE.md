@@ -10,7 +10,9 @@ An Effect-native edge gateway for buildings: Modbus TCP and BACnet/IP in, MQTT 5
 
 ```bash
 pnpm install
-pnpm check            # turbo: typecheck + test in every package
+pnpm check            # format:check + lint, then turbo: typecheck + test in every package
+pnpm format           # oxfmt --write .
+pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
 pnpm test
 pnpm gateway          # run apps/gateway with examples/gateway.json
@@ -20,6 +22,8 @@ pnpm --filter @plenum/core test   # one package
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
 
 `tsc` is TypeScript 7 (the Go-native compiler), patched by `@effect/tsgo` on `pnpm install` (the root `prepare` script) so that `pnpm typecheck` also reports Effect language-service diagnostics. Their severities are set in `tsconfig.base.json`; the ones set to `error` fail the build. If typecheck stops reporting Effect diagnostics, run `pnpm exec effect-tsgo patch`.
+
+Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and formatting is oxfmt (`.oxfmtrc.json`: no semicolons, double quotes, 120 columns, no trailing commas). There is no ESLint or Prettier; don't add them. Both skip `repos/`, and oxlint needs `--disable-nested-config` so it does not load `repos/effect/.oxlintrc.json`.
 
 ## Repo layout
 
@@ -51,8 +55,8 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 
 External sources live under `repos/` as squashed git subtrees, so they are always available without extra clones. They are read-only: never edit them and never import from `repos/` in our code.
 
-| Ref | Path | Pinned to |
-| --- | --- | --- |
+| Ref    | Path            | Pinned to                                                                                    |
+| ------ | --------------- | -------------------------------------------------------------------------------------------- |
 | Effect | `repos/effect/` | tag `effect@4.1.2` of `https://github.com/Effect-TS/effect.git`, the version in our lockfile |
 
 Keep the subtree on the same version as the installed `effect` package. After bumping it in the lockfile:
