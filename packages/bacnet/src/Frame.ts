@@ -14,6 +14,8 @@ export interface Frame {
   readonly apdu: Apdu
   /** Set when the datagram came through a router from another BACnet network. */
   readonly source?: NetworkAddress
+  /** Set when it is addressed to a device on another BACnet network (or 0xFFFF, all of them). */
+  readonly destination?: NetworkAddress
   /** Set when a BBMD forwarded it: the IP address and port of the original sender (Annex J.2.5). */
   readonly forwardedFrom?: { readonly host: string; readonly port: number }
 }
@@ -22,6 +24,8 @@ export interface EncodeOptions {
   readonly broadcast?: boolean
   /** A device on another BACnet network, reached through a router. */
   readonly destination?: NetworkAddress
+  /** Where the message comes from on another network; set by a router, or a simulated device behind one. */
+  readonly source?: NetworkAddress
 }
 
 /** Encode an APDU as a BACnet/IP datagram. */
@@ -32,6 +36,7 @@ export const encodeFrame = (apdu: Apdu, options: EncodeOptions = {}): Uint8Array
       expectingReply: apdu._tag === "ConfirmedRequest",
       priority: 0,
       ...(options.destination === undefined ? {} : { destination: { ...options.destination, hopCount: 255 } }),
+      ...(options.source === undefined ? {} : { source: options.source }),
       payload: encodeApdu(apdu)
     })
   )
@@ -71,6 +76,9 @@ export const decodeFrame = (datagram: Uint8Array): Result.Result<Frame | undefin
   return Result.succeed({
     apdu: apdu.success,
     ...(npdu.success.source === undefined ? {} : { source: npdu.success.source }),
+    ...(npdu.success.destination === undefined
+      ? {}
+      : { destination: { network: npdu.success.destination.network, address: npdu.success.destination.address } }),
     ...(forwardedFrom === undefined ? {} : { forwardedFrom })
   })
 }

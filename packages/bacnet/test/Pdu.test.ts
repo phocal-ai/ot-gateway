@@ -117,4 +117,15 @@ describe("frames", () => {
     })
     expect(decodeFrame(encodeBvlc(BvlcFunction.OriginalBroadcastNpdu, whoIsRouter))).toEqual(Result.succeed(undefined))
   })
+
+  it("carries routing addresses both ways", () => {
+    const device = { network: 5, address: Uint8Array.of(7) }
+    const request: Apdu = { _tag: "UnconfirmedRequest", service: 8, body: new Uint8Array(0) }
+    expect(decodeFrame(encodeFrame(request, { destination: device }))).toEqual(
+      Result.succeed({ apdu: request, destination: device })
+    )
+    expect(decodeFrame(encodeFrame(request, { source: device }))).toEqual(
+      Result.succeed({ apdu: request, source: device })
+    )
+  })
 })

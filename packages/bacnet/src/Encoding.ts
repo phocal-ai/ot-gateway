@@ -285,7 +285,58 @@ export interface Tag {
   readonly lengthValueType: number
 }
 
-const decoder = new TextDecoder("utf-8", { fatal: true })
+/** Constructed values nest at most this deep; deeper input is refused instead of exhausting the stack. */
+export const MAX_NESTING = 32
+
+/** Invalid UTF-8 becomes U+FFFD rather than failing the whole answer. */
+const utf8 = new TextDecoder("utf-8")
+
+const fromCodeUnits = (units: ReadonlyArray<number>) => units.map((unit) => String.fromCharCode(unit)).join("")
+
+/**
+ * A character string's text by its character set (clause 20.2.9). Decoding
+ * is lenient: a description in an old character set must not cost the
+ * present value read in the same request. DBCS (1) and JIS X 0208 (2) are
+ * read byte by byte, which garbles them but keeps the rest of the answer.
+ */
+const decodeCharacterString = (charset: number, bytes: Uint8Array): string => {
+  switch (charset) {
+    case 0:
+      return utf8.decode(bytes)
+    case 3: {
+      const points: Array<number> = []
+      for (let i = 0; i + 3 < bytes.length; i += 4) {
+        const point =
+          (((bytes[i] ?? 0) << 24) | ((bytes[i + 1] ?? 0) << 16) | ((bytes[i + 2] ?? 0) << 8) | (bytes[i + 3] ?? 0)) >>>
+          0
+        points.push(point <= 0x10_ff_ff ? point : 0xff_fd)
+      }
+      return points.map((point) => String.fromCodePoint(point)).join("")
+    }
+    case 4: {
+      const units: Array<number> = []
+      for (let i = 0; i + 1 < bytes.length; i += 2) units.push(((bytes[i] ?? 0) << 8) | (bytes[i + 1] ?? 0))
+      return fromCodeUnits(units)
+    }
+    default:
+      // 5 is ISO 8859-1, whose bytes are the first 256 code points.
+      return fromCodeUnits([...bytes])
+  }
+}
+
+/**
+ * The shortest decimal that is the same single-precision number, so a real
+ * 72.4 reads as 72.4 rather than 72.40000152587891. Encoding it again gives
+ * the same four bytes.
+ */
+export const shortestFloat32 = (value: number): number => {
+  if (!Number.isFinite(value)) return value
+  for (let precision = 1; precision < 10; precision++) {
+    const candidate = Number(value.toPrecision(precision))
+    if (Math.fround(candidate) === value) return candidate
+  }
+  return value
+}
 
 /** Reads tags and values from a byte array; throws `BacnetCodecError`, caught by `decodeWith`. */
 export class Reader {
@@ -329,6 +380,7 @@ export class Reader {
     const lvt = first & 0x07
     if (context && lvt === 6) return { tagNumber, context, kind: "opening", lengthValueType: 0 }
     if (context && lvt === 7) return { tagNumber, context, kind: "closing", lengthValueType: 0 }
+    if (!context && lvt > 5) this.fail(`application tag ${tagNumber} with length/value/type ${lvt}`)
     if (lvt < 5) return { tagNumber, context, kind: "value", lengthValueType: lvt }
     const extended = this.byte()
     const length = extended === 254 ? this.u16() : extended === 255 ? this.u32() : extended
@@ -372,8 +424,9 @@ export class Reader {
     }
   }
 
+  /** Up to 8 bytes; values above 2^53 lose precision, as JavaScript numbers do. */
   unsignedOf(length: number) {
-    if (length < 1 || length > 6) this.fail(`unsigned of ${length} bytes is not supported`)
+    if (length < 1 || length > 8) this.fail(`unsigned of ${length} bytes is not supported`)
     let value = 0
     for (const byte of this.bytes(length)) value = value * 256 + byte
     return value
@@ -398,8 +451,8 @@ export class Reader {
   contextReal(tagNumber: number) {
     const tag = this.expectContext(tagNumber)
     if (tag.lengthValueType !== 4) this.fail(`real of ${tag.lengthValueType} bytes`)
-    return new DataView(this.data.buffer, this.data.byteOffset).getFloat32(
-      this.bytes(4).byteOffset - this.data.byteOffset
+    return shortestFloat32(
+      new DataView(this.data.buffer, this.data.byteOffset).getFloat32(this.bytes(4).byteOffset - this.data.byteOffset)
     )
   }
 
@@ -422,14 +475,15 @@ export class Reader {
   }
 
   /** One value as it appears inside a property value (application-tagged or context/constructed). */
-  value(): BacnetValue {
+  value(depth = 0): BacnetValue {
     const tag = this.tag()
     if (tag.kind === "closing") this.fail(`unexpected closing tag ${tag.tagNumber}`)
     if (tag.kind === "opening") {
+      if (depth >= MAX_NESTING) this.fail(`constructed values nested deeper than ${MAX_NESTING}`)
       const values: Array<BacnetValue> = []
       while (!this.peekContext(tag.tagNumber, "closing")) {
         if (this.remaining === 0) this.fail(`opening tag ${tag.tagNumber} is never closed`)
-        values.push(this.value())
+        values.push(this.value(depth + 1))
       }
       this.closing(tag.tagNumber)
       return { type: "constructed", tagNumber: tag.tagNumber, values }
@@ -449,16 +503,18 @@ export class Reader {
       case ApplicationTag.Unsigned:
         return { type: "unsigned", value: this.unsignedOf(length) }
       case ApplicationTag.Signed: {
-        if (length < 1 || length > 4) this.fail(`signed of ${length} bytes is not supported`)
-        let value = 0
-        for (const byte of this.bytes(length)) value = value * 256 + byte
-        const range = 2 ** (8 * length)
-        return { type: "signed", value: value >= range / 2 ? value - range : value }
+        if (length < 1 || length > 8) this.fail(`signed of ${length} bytes is not supported`)
+        const bytes = this.bytes(length)
+        // A negative number is the inverted magnitude minus one, so small negatives stay exact at 8 bytes.
+        const negative = (bytes[0] ?? 0) >= 0x80
+        let magnitude = 0
+        for (const byte of bytes) magnitude = magnitude * 256 + (negative ? 0xff - byte : byte)
+        return { type: "signed", value: negative ? -magnitude - 1 : magnitude }
       }
       case ApplicationTag.Real: {
         if (length !== 4) this.fail(`real of ${length} bytes`)
         const bytes = this.bytes(4)
-        return { type: "real", value: new DataView(bytes.buffer, bytes.byteOffset, 4).getFloat32(0) }
+        return { type: "real", value: shortestFloat32(new DataView(bytes.buffer, bytes.byteOffset, 4).getFloat32(0)) }
       }
       case ApplicationTag.Double: {
         if (length !== 8) this.fail(`double of ${length} bytes`)
@@ -469,13 +525,8 @@ export class Reader {
         return { type: "octet-string", value: Uint8Array.from(this.bytes(length)) }
       case ApplicationTag.CharacterString: {
         if (length < 1) this.fail("character string without a character set")
-        const [charset, ...text] = this.bytes(length)
-        if (charset !== 0) this.fail(`character set ${charset} is not supported (only UTF-8)`)
-        try {
-          return { type: "character-string", value: decoder.decode(Uint8Array.from(text)) }
-        } catch {
-          return this.fail("character string is not valid UTF-8")
-        }
+        const bytes = this.bytes(length)
+        return { type: "character-string", value: decodeCharacterString(bytes[0] ?? 0, bytes.subarray(1)) }
       }
       case ApplicationTag.BitString: {
         if (length < 1) this.fail("bit string without its unused-bits octet")

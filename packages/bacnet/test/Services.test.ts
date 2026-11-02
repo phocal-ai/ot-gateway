@@ -85,9 +85,7 @@ describe("ReadProperty", () => {
       values: [{ type: "real", value: 72.4 }]
     }
     expect(hex(encodeReadPropertyAck(ack))).toBe("0c 00 00 00 05 19 55 3e 44 42 90 cc cd 3f")
-    expect(decodeReadPropertyAck(bytesOf("0c 00 00 00 05 19 55 3e 44 42 90 cc cd 3f"))).toEqual(
-      Result.succeed({ ...ack, values: [{ type: "real", value: Math.fround(72.4) }] })
-    )
+    expect(decodeReadPropertyAck(bytesOf("0c 00 00 00 05 19 55 3e 44 42 90 cc cd 3f"))).toEqual(Result.succeed(ack))
   })
 
   it("round-trips an array index and an array of values", () => {

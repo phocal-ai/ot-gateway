@@ -15,11 +15,11 @@ Effect-native BACnet/IP, implemented in-house against ASHRAE 135. The codecs are
 | `Enums.ts`     | object types, property identifiers, error classes and codes, by their hyphenated spec names (`analog-input`, `present-value`) | 21                    |
 | `Simulator.ts` | a simulated device as pure request → response logic                                                                           |                       |
 
-Character strings are read and written as UTF-8 only (character set 0), which is what current devices send.
+Character strings are written as UTF-8 (character set 0). They are read leniently: UTF-8 with invalid bytes replaced, UCS-2, UCS-4 and ISO 8859-1, and the older DBCS and JIS sets byte by byte. A garbled description must not cost the present value read in the same request. Integers are read up to 8 bytes (above 2^53 they lose precision), and reals as the shortest decimal for the same single-precision number (72.4, not 72.40000152587891). Constructed values nest at most 32 deep.
 
 ## Simulator
 
-`makeSimulatedDevice` builds a device object plus any number of objects, each with the standard required properties. `answer(device, apdu)` returns the device's response:
+`makeSimulatedDevice` builds a device object plus any number of objects, each with the standard required properties; outputs also get a priority array and relinquish default. Device instance 4,194,303 in a request reads the device itself, as on a real device. `answer(device, apdu)` returns the device's response:
 
 - **Who-Is** in range: I-Am.
 - **ReadProperty / ReadPropertyMultiple:** the values. `all` and `required` are expanded, and the array properties (`object-list`, `priority-array`, `state-text`) can be read by index.
