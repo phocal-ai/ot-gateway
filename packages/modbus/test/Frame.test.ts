@@ -31,7 +31,7 @@ describe("decodeReadResponse", () => {
   it.effect("reads registers", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x07, 0x11, 0x03, 0x04, 0x02, 0x2b, 0x00, 0x64])
-      const res = yield* decodeReadResponse(frame)
+      const res = yield* decodeReadResponse(frame, { functionCode: 3, quantity: 2 })
       expect(res.registers).toEqual([0x022b, 0x0064])
       expect(res.unitId).toBe(0x11)
     })
@@ -40,17 +40,40 @@ describe("decodeReadResponse", () => {
   it.effect("surfaces exceptions as typed errors", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x11, 0x83, 0x02])
-      const exit = yield* Effect.exit(decodeReadResponse(frame))
+      const exit = yield* Effect.exit(decodeReadResponse(frame, { functionCode: 3, quantity: 1 }))
       expect(Exit.isFailure(exit)).toBe(true)
-      const error = yield* Effect.flip(decodeReadResponse(frame))
+      const error = yield* Effect.flip(decodeReadResponse(frame, { functionCode: 3, quantity: 1 }))
       expect(error._tag).toBe("ModbusException")
     })
   )
 
   it.effect("rejects truncated frames", () =>
     Effect.gen(function* () {
-      const error = yield* Effect.flip(decodeReadResponse(Uint8Array.from([0, 1, 0, 0])))
+      const error = yield* Effect.flip(
+        decodeReadResponse(Uint8Array.from([0, 1, 0, 0]), { functionCode: 3, quantity: 1 })
+      )
       expect(error._tag).toBe("ModbusFrameError")
+    })
+  )
+
+  it.effect("rejects fewer registers than requested instead of filling in zeros", () =>
+    Effect.gen(function* () {
+      const request = { transactionId: 1, unitId: 1, functionCode: FunctionCode.ReadHoldingRegisters, address: 100 }
+      const short = encodeRegisterResponse({ ...request, quantity: 1 }, [1234])
+      const error = yield* Effect.flip(decodeReadResponse(short, { functionCode: 3, quantity: 4 }))
+      expect(error).toMatchObject({ _tag: "ModbusFrameError", message: "byte count 2 does not fit 4 registers" })
+    })
+  )
+
+  it.effect("rejects a response to a different function code", () =>
+    Effect.gen(function* () {
+      const request = { transactionId: 1, unitId: 1, functionCode: FunctionCode.ReadInputRegisters, address: 0 }
+      const input = encodeRegisterResponse({ ...request, quantity: 2 }, [1, 2])
+      const error = yield* Effect.flip(decodeReadResponse(input, { functionCode: 3, quantity: 2 }))
+      expect(error).toMatchObject({
+        _tag: "ModbusFrameError",
+        message: "response function code 4 does not answer request 3"
+      })
     })
   )
 })
@@ -92,7 +115,7 @@ describe("decodeBitResponse", () => {
   it.effect("unpacks coils LSB first (spec §6.1 example: coils 20–38)", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01, 0x01, 0x03, 0xcd, 0x6b, 0x05])
-      const { bits } = yield* decodeBitResponse(frame, 19)
+      const { bits } = yield* decodeBitResponse(frame, { functionCode: 1, quantity: 19 })
       const asBits = bits.map((b) => (b ? 1 : 0))
       // 0xCD → coils 27..20 = 1100 1101, 0x6B → 35..28 = 0110 1011, 0x05 → 38..36 = 101
       expect(asBits).toEqual([1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1])
@@ -102,7 +125,7 @@ describe("decodeBitResponse", () => {
   it.effect("rejects a byte count that does not fit the quantity", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x01, 0x01, 0x01, 0xff])
-      const error = yield* Effect.flip(decodeBitResponse(frame, 19))
+      const error = yield* Effect.flip(decodeBitResponse(frame, { functionCode: 1, quantity: 19 }))
       expect(error._tag).toBe("ModbusFrameError")
     })
   )
@@ -120,7 +143,7 @@ describe("server side", () => {
       }
       const decoded = yield* decodeRequest(encodeReadRequest(request))
       expect(decoded).toEqual({ _tag: "Read", request })
-      const response = yield* decodeReadResponse(encodeRegisterResponse(request, [1, 0xffff]))
+      const response = yield* decodeReadResponse(encodeRegisterResponse(request, [1, 0xffff]), request)
       expect(response).toEqual({ transactionId: 7, unitId: 1, functionCode: 4, registers: [1, 0xffff] })
     })
   )
@@ -129,7 +152,7 @@ describe("server side", () => {
     Effect.gen(function* () {
       const request = { transactionId: 1, unitId: 1, functionCode: FunctionCode.ReadCoils, address: 0, quantity: 10 }
       const bits = [true, false, false, true, true, false, true, false, true, true]
-      const response = yield* decodeBitResponse(encodeBitResponse(request, bits), 10)
+      const response = yield* decodeBitResponse(encodeBitResponse(request, bits), request)
       expect(response.bits).toEqual(bits)
     })
   )
@@ -143,7 +166,9 @@ describe("server side", () => {
         unitId: 1,
         functionCode: 0x2b
       })
-      const error = yield* Effect.flip(decodeReadResponse(encodeExceptionResponse(3, 1, 0x03, 0x02)))
+      const error = yield* Effect.flip(
+        decodeReadResponse(encodeExceptionResponse(3, 1, 0x03, 0x02), { functionCode: 3, quantity: 1 })
+      )
       expect(error).toMatchObject({ _tag: "ModbusException", functionCode: 3, exceptionCode: 2 })
     })
   )

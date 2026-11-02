@@ -3,8 +3,9 @@
  * with jittered exponential backoff for as long as the client's scope lives.
  *
  * Publishing never queues across outages: while disconnected, a publish
- * waits up to `publishTimeout` for the connection and then fails (or fails
- * at once with `waitForConnection: false`), so the caller decides what to
+ * waits up to `publishTimeout` for the connection and then fails (or, with
+ * `waitForConnection: false`, fails as soon as the first dial is over), so
+ * the caller decides what to
  * retry: the pipeline retries `$meta` on the next cycle, and `@plenum/buffer`
  * stores values for later. QoS 1 publishes complete on
  * PUBACK. The session is clean (no session state survives a reconnect), so
@@ -63,6 +64,9 @@ export class MqttPublishError extends Schema.TaggedError<MqttPublishError>()("Mq
   message: Schema.String
 }) {}
 
+/** A connection that lasted this long resets the reconnect backoff. */
+const stableConnectionMs = 30_000
+
 export interface MqttClientOptions {
   readonly clientId: string
   readonly username?: string
@@ -77,6 +81,8 @@ export interface MqttClientOptions {
    * Whether a publish made while disconnected waits for the connection
    * (default true). Turn it off when the caller stores what fails: waiting
    * would stall the caller, and every reading it skips meanwhile is lost.
+   * Even then a publish waits for the first dial to finish, so a gateway
+   * that has just started does not fail its first messages for nothing.
    */
   readonly waitForConnection?: boolean
   /** Published by the broker if the gateway disappears without a clean DISCONNECT. */
@@ -158,10 +164,12 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   const initialDelay = Duration.toMillis(Duration.fromInputUnsafe(options.reconnectDelay?.initial ?? "1 second"))
   const maxDelay = Duration.toMillis(Duration.fromInputUnsafe(options.reconnectDelay?.max ?? "60 seconds"))
   const connected = yield* Latch.make(false)
+  // Opens once the first dial has connected or failed.
+  const firstDialDone = yield* Latch.make(false)
   let session: Session | undefined
 
   /** One connection, from dialing until it fails. Never succeeds. */
-  const runSession = (onConnected: () => void) =>
+  const runSession = (onConnected: (at: number) => void) =>
     Effect.scoped(
       Effect.gen(function* () {
         const { pull } = yield* socket.reader
@@ -264,15 +272,23 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             // DISCONNECT tells the broker not to publish the will. A broken connection
             // cannot carry it, and the writer would wait for the next one.
             if (Exit.hasInterrupts(exit)) {
-              yield* writer.write(encodeDisconnect()).pipe(Effect.timeout("1 second"), Effect.ignore)
+              yield* writer.write(encodeDisconnect()).pipe(
+                Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.logDebug("DISCONNECT timed out") }),
+                Effect.catchTag("SocketError", (error) =>
+                  Effect.logDebug("DISCONNECT not sent").pipe(
+                    Effect.annotateLogs({ error: describeSocketError(error) })
+                  )
+                )
+              )
             }
           })
         )
         session = current
-        onConnected()
+        onConnected(yield* Clock.currentTimeMillis)
         yield* countConnect("ok")
         yield* Metric.update(mqttConnected, 1)
         yield* Latch.open(connected)
+        yield* Latch.open(firstDialDone)
         yield* Effect.logInfo("connected to MQTT broker").pipe(Effect.annotateLogs({ keepAlive: effectiveKeepAlive }))
         if (options.onConnect !== undefined) yield* Effect.forkScoped(options.onConnect(client))
 
@@ -313,7 +329,13 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             if (silentFor > effectiveKeepAlive * 1500) {
               return yield* new MqttConnectionError({ message: `broker silent for ${Math.round(silentFor / 1000)} s` })
             }
-            yield* write(encodePingreq())
+            // A write stuck on a half-open connection would keep the silence check from ever running.
+            yield* write(encodePingreq()).pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.seconds(effectiveKeepAlive / 2),
+                orElse: () => Effect.fail(new MqttConnectionError({ message: "could not send PINGREQ" }))
+              })
+            )
           }
         })
         return yield* Effect.raceFirst(readLoop, pingLoop)
@@ -327,9 +349,9 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   const connectionLoop = Effect.gen(function* () {
     let failures = 0
     while (true) {
-      let wasConnected = false
-      yield* runSession(() => {
-        wasConnected = true
+      let connectedAt: number | undefined
+      yield* runSession((at) => {
+        connectedAt = at
       }).pipe(
         Effect.catchTags({
           MqttRejected: (error) =>
@@ -338,7 +360,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
               Effect.annotateLogs({ reason: error.message, reasonCode: error.reasonCode })
             ),
           MqttConnectionError: (error) =>
-            wasConnected
+            connectedAt !== undefined
               ? Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: error.message }))
               : countConnect("failed").pipe(
                   Effect.andThen(Effect.logWarning("MQTT connect failed")),
@@ -346,7 +368,12 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 )
         })
       )
-      failures = wasConnected ? 0 : failures + 1
+      yield* Latch.open(firstDialDone)
+      // Back off unless the connection held for a while: a broker that accepts and then
+      // drops the client at once (a session taken over by a twin with the same client
+      // id, a quota) must not be redialed every second.
+      const heldFor = connectedAt === undefined ? 0 : (yield* Clock.currentTimeMillis) - connectedAt
+      failures = heldFor >= stableConnectionMs ? 0 : failures + 1
       const base = Math.min(maxDelay, initialDelay * 2 ** Math.max(0, failures - 1))
       // Full jitter between half and all of the delay, so many gateways do not reconnect in step.
       yield* Effect.sleep(Duration.millis(base * (0.5 + (yield* Random.next) / 2)))
@@ -358,14 +385,12 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
       const problem = topicProblem(topic)
       if (problem !== undefined) return yield* rejected(problem)
-      if (options.waitForConnection !== false) {
-        yield* connected.await.pipe(
-          Effect.timeoutOrElse({
-            duration: publishTimeout,
-            orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
-          })
-        )
-      }
+      yield* (options.waitForConnection === false ? firstDialDone : connected).await.pipe(
+        Effect.timeoutOrElse({
+          duration: publishTimeout,
+          orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
+        })
+      )
       const current = session
       if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
       const retain = publishOptions.retain === true

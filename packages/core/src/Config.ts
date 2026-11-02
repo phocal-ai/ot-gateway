@@ -14,8 +14,15 @@ export const ModbusDevice = Schema.Struct({
   protocol: Schema.Literal("modbus-tcp"),
   id: Slug,
   host: Schema.String,
-  port: Schema.Int.pipe(Schema.withDecodingDefaultKey(Effect.succeed(502))),
-  unitId: Schema.Int.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1))),
+  port: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(502))
+  ),
+  /** One byte on the wire (MBAP unit identifier); 255 or 1 for a plain TCP device, the slave id behind a bridge. */
+  unitId: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 0, maximum: 255 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(1))
+  ),
   pollIntervalMs,
   points: Schema.Array(ModbusPoint)
 })
@@ -24,7 +31,8 @@ export type ModbusDevice = typeof ModbusDevice.Type
 export const BacnetDevice = Schema.Struct({
   protocol: Schema.Literal("bacnet-ip"),
   id: Slug,
-  deviceInstance: Schema.Int,
+  /** 22 bits on the wire (ASHRAE 135, clause 12.11.1); 4,194,303 means "any device". */
+  deviceInstance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
   /** Optional fixed address; otherwise discovered with Who-Is. */
   address: Schema.optionalKey(Schema.String),
   /** Use change-of-value subscriptions where the device supports them. */
@@ -57,7 +65,11 @@ export type MqttSettings = typeof MqttSettings.Type
 export const BufferSettings = Schema.Struct({
   /** SQLite file used for store-and-forward. */
   path: Schema.String,
-  maxRows: Schema.Int.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1_000_000)))
+  /** Rows kept before the oldest are dropped (default 1,000,000). */
+  maxRows: Schema.Int.pipe(
+    Schema.check(Schema.isGreaterThanOrEqualTo(1)),
+    Schema.withDecodingDefaultKey(Effect.succeed(1_000_000))
+  )
 })
 export type BufferSettings = typeof BufferSettings.Type
 

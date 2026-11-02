@@ -116,8 +116,20 @@ interface ResponseHeader {
   readonly data: Uint8Array
 }
 
-/** Parse the MBAP header and the byte-counted body shared by FC 01–04 responses. */
-const decodeReadBody = (frame: Uint8Array): Effect.Effect<ResponseHeader, ModbusFrameError | ModbusException> =>
+/** What a response must answer: the request's function code and quantity. */
+export interface ExpectedResponse {
+  readonly functionCode: number
+  readonly quantity: number
+}
+
+/**
+ * Parse the MBAP header and the byte-counted body shared by FC 01–04
+ * responses. A normal response repeats the request's function code (§4.1).
+ */
+const decodeReadBody = (
+  frame: Uint8Array,
+  expected: ExpectedResponse
+): Effect.Effect<ResponseHeader, ModbusFrameError | ModbusException> =>
   Effect.gen(function* () {
     if (frame.length < 9) {
       return yield* new ModbusFrameError({ message: `frame too short: ${frame.length} bytes` })
@@ -137,6 +149,11 @@ const decodeReadBody = (frame: Uint8Array): Effect.Effect<ResponseHeader, Modbus
     if ((functionCode & 0x80) !== 0) {
       return yield* new ModbusException({ functionCode: functionCode & 0x7f, exceptionCode: view.getUint8(8) })
     }
+    if (functionCode !== expected.functionCode) {
+      return yield* new ModbusFrameError({
+        message: `response function code ${functionCode} does not answer request ${expected.functionCode}`
+      })
+    }
     const byteCount = view.getUint8(8)
     if (frame.length !== 9 + byteCount) {
       return yield* new ModbusFrameError({ message: `invalid byte count ${byteCount}` })
@@ -151,14 +168,21 @@ export interface ReadResponse {
   readonly registers: ReadonlyArray<number>
 }
 
-/** Decode a register read response (FC 03/04, spec §6.3–6.4), failing on malformed frames and exceptions. */
+/**
+ * Decode a register read response (FC 03/04, spec §6.3–6.4), failing on
+ * malformed frames, exceptions, and a register count other than requested
+ * (a short answer must never turn into made-up zeros).
+ */
 export const decodeReadResponse = (
-  frame: Uint8Array
+  frame: Uint8Array,
+  expected: ExpectedResponse
 ): Effect.Effect<ReadResponse, ModbusFrameError | ModbusException> =>
   Effect.gen(function* () {
-    const { data, ...header } = yield* decodeReadBody(frame)
-    if (data.length % 2 !== 0) {
-      return yield* new ModbusFrameError({ message: `invalid byte count ${data.length}` })
+    const { data, ...header } = yield* decodeReadBody(frame, expected)
+    if (data.length !== 2 * expected.quantity) {
+      return yield* new ModbusFrameError({
+        message: `byte count ${data.length} does not fit ${expected.quantity} registers`
+      })
     }
     const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
     const registers: Array<number> = []
@@ -179,10 +203,11 @@ export interface BitResponse {
  */
 export const decodeBitResponse = (
   frame: Uint8Array,
-  quantity: number
+  expected: ExpectedResponse
 ): Effect.Effect<BitResponse, ModbusFrameError | ModbusException> =>
   Effect.gen(function* () {
-    const { data, ...header } = yield* decodeReadBody(frame)
+    const { quantity } = expected
+    const { data, ...header } = yield* decodeReadBody(frame, expected)
     if (data.length !== Math.ceil(quantity / 8)) {
       return yield* new ModbusFrameError({ message: `byte count ${data.length} does not fit ${quantity} bits` })
     }

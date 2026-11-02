@@ -7,6 +7,7 @@ import type { Driver, PointValue, Reading } from "./Driver.ts"
 import type { HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
+import type { PublishError } from "./Errors.ts"
 import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
@@ -78,16 +79,44 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     point
   })
 
+  /**
+   * A message the broker refused (not authorized, too large) fails again on
+   * every retry, so it must not hold up the device's other points. It is
+   * counted every time and logged once per topic until that topic works again.
+   */
+  const refusedTopics = new Set<string>()
+  const skipRefused = (error: PublishError) =>
+    error.reason !== "rejected"
+      ? Effect.fail(error)
+      : Effect.gen(function* () {
+          yield* Metric.update(publishFailures, 1)
+          if (refusedTopics.has(error.topic)) return
+          refusedTopics.add(error.topic)
+          yield* Effect.logWarning("broker refused a message, skipping it").pipe(
+            Effect.annotateLogs({ topic: error.topic, error: error.message })
+          )
+        })
+  const publishPoint = Effect.fnUntraced(function* (
+    topic: string,
+    payload: string,
+    options?: { readonly retain: boolean }
+  ) {
+    yield* publisher.publish(topic, payload, options)
+    refusedTopics.delete(topic)
+  })
+
   // Metadata goes out once per point, retained. It is retried at the start of
   // every cycle until the broker took it, so a broker that is down when the
-  // gateway starts delays metadata instead of stopping the device.
+  // gateway starts delays metadata instead of stopping the device. Metadata the
+  // broker refuses is given up on: retrying cannot help.
   const unpublishedMeta = new Set(driver.points)
   const publishMeta = Effect.forEach(
-    unpublishedMeta,
-    Effect.fnUntraced(function* (point) {
-      yield* publisher.publish(metaTopic(topicFor(point.id)), metaPayload(point), { retain: true })
-      unpublishedMeta.delete(point)
-    }),
+    [...unpublishedMeta],
+    (point) =>
+      publishPoint(metaTopic(topicFor(point.id)), metaPayload(point), { retain: true }).pipe(
+        Effect.catchTag("PublishError", skipRefused),
+        Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
+      ),
     { discard: true }
   ).pipe(
     // The device is still read: its health is independent of the broker's.
@@ -114,7 +143,11 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       ts: reading.timestamp,
       ...(point.unit === undefined ? {} : { unit: point.unit })
     }
-    yield* publisher.publish(pointTopic(topicFor(point.id)), JSON.stringify(message))
+    const sent = yield* publishPoint(pointTopic(topicFor(point.id)), JSON.stringify(message)).pipe(
+      Effect.as(true),
+      Effect.catchTag("PublishError", (error) => Effect.as(skipRefused(error), false))
+    )
+    if (!sent) return
     // Only remember the value once it is out, so a failed publish is retried next cycle.
     last.set(point.id, value)
     yield* Metric.update(valuesPublished, 1)

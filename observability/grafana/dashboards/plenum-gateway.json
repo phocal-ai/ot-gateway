@@ -1079,7 +1079,7 @@
       "id": 22,
       "type": "timeseries",
       "title": "Buffer traffic",
-      "description": "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message.",
+      "description": "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message, unreadable when a stored row no longer decoded.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"

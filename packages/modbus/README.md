@@ -2,7 +2,7 @@
 
 Effect-native Modbus TCP, implemented in-house.
 
-- **Codec** (`Frame.ts`): pure MBAP/PDU encoding and decoding.
+- **Codec** (`Frame.ts`): pure MBAP/PDU encoding and decoding. A response must repeat the request's function code and carry exactly the requested number of registers or bits; anything else is a `ModbusFrameError`, never padded values.
   - Reads: FC 01–04, coils, discrete inputs, holding and input registers.
   - Exception responses.
   - Stream framing: `takeFrame` splits a TCP byte stream into frames.

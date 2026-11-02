@@ -32,6 +32,8 @@ export interface BrokerControl {
   ackPublishes: boolean
   /** PUBACK reason code; 0x80 and above refuses the message. */
   pubackReason: number
+  /** Topics refused with 0x87 (not authorized), whatever `pubackReason` says. */
+  readonly refusedTopics: Set<string>
   /** Answer PINGREQ. With pings unanswered and nothing else sent, the client sees a dead broker. */
   answerPings: boolean
   readonly connects: Array<Omit<Connect, "password"> & { readonly hasPassword: boolean }>
@@ -49,6 +51,7 @@ export const makeBrokerControl = (): BrokerControl => ({
   connackProperties: new Map(),
   ackPublishes: true,
   pubackReason: 0,
+  refusedTopics: new Set(),
   answerPings: true,
   connects: [],
   messages: [],
@@ -117,9 +120,10 @@ const serveConnection = (control: BrokerControl) =>
               if (Result.isFailure(publish) || clientId === undefined) return
               const { topic, qos, retain, packetId } = publish.success
               const payload = decoder.decode(publish.success.payload)
-              if (control.pubackReason < 0x80) accept(control, { clientId, topic, payload, qos, retain })
+              const reasonCode = control.refusedTopics.has(topic) ? 0x87 : control.pubackReason
+              if (reasonCode < 0x80) accept(control, { clientId, topic, payload, qos, retain })
               if (qos === 1 && packetId !== undefined && control.ackPublishes) {
-                yield* writer.write(encodePuback(packetId, control.pubackReason))
+                yield* writer.write(encodePuback(packetId, reasonCode))
               }
               break
             }

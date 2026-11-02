@@ -364,7 +364,7 @@ timeseries(
     x: 12,
     w: 12,
     description:
-      "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message."
+      "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message, unreadable when a stored row no longer decoded."
   }
 )
 y += 8

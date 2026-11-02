@@ -50,4 +50,22 @@ describe("parseConfig", () => {
       expect(Exit.isFailure(exit)).toBe(true)
     })
   )
+
+  it.effect("rejects values that would wrap on the wire or disable the buffer", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const invalid = [
+        { ...minimal, devices: [{ ...device, unitId: 257 }] },
+        { ...minimal, devices: [{ ...device, port: 0 }] },
+        { ...minimal, buffer: { path: "b.sqlite", maxRows: 0 } }
+      ]
+      for (const config of invalid) {
+        const exit = yield* Effect.exit(parseConfig(JSON.stringify(config)))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }
+      expect(
+        Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, buffer: { path: "b" } }))))
+      ).toBe(true)
+    })
+  )
 })

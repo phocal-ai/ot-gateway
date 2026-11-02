@@ -88,10 +88,13 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
     return current === undefined ? Effect.void : Scope.close(current.scope, Exit.void)
   })
   yield* Effect.addFinalizer(() => disconnect)
+  // Each connection's scope is a child of the client's, so a socket opened by an
+  // interrupted connect is still closed when the client goes away.
+  const clientScope = yield* Effect.scope
 
   const connect = Effect.gen(function* () {
     if (connection !== undefined) return connection
-    const scope = yield* Scope.make()
+    const scope = yield* Scope.fork(clientScope)
     const [reader, writer] = yield* Effect.all([socket.reader, socket.writer]).pipe(
       Scope.provide(scope),
       Effect.onError(() => Scope.close(scope, Exit.void)),
@@ -171,13 +174,13 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       request(
         quantity,
         (id) => encodeReadRequest({ transactionId: id, unitId: options.unitId, functionCode, address, quantity }),
-        (frame) => Effect.map(decodeReadResponse(frame), (response) => response.registers)
+        (frame) => Effect.map(decodeReadResponse(frame, { functionCode, quantity }), (response) => response.registers)
       ),
     readBits: (functionCode, address, quantity) =>
       request(
         quantity,
         (id) => encodeReadRequest({ transactionId: id, unitId: options.unitId, functionCode, address, quantity }),
-        (frame) => Effect.map(decodeBitResponse(frame, quantity), (response) => response.bits)
+        (frame) => Effect.map(decodeBitResponse(frame, { functionCode, quantity }), (response) => response.bits)
       )
   }
   return client
