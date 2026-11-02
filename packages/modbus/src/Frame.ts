@@ -108,6 +108,13 @@ export const takeFrame = (buffer: Uint8Array): FrameSplit => {
   return { _tag: "Frame", frame: buffer.subarray(0, total), rest: buffer.subarray(total) }
 }
 
+/**
+ * The transaction identifier of a frame from `takeFrame`: the first MBAP
+ * field, which a server copies from the request so the client can pair them
+ * (Implementation Guide §3.1.3).
+ */
+export const frameTransactionId = (frame: Uint8Array): number => ((frame[0] ?? 0) << 8) | (frame[1] ?? 0)
+
 interface ResponseHeader {
   readonly transactionId: number
   readonly unitId: number
