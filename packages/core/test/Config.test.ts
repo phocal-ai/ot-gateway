@@ -51,6 +51,21 @@ describe("parseConfig", () => {
     })
   )
 
+  it.effect("rejects a 32-bit register point that would run past address 65535", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const at = (address: number, table = "holding") => ({
+        ...minimal,
+        devices: [{ ...device, points: device?.points.map((point) => ({ ...point, table, address })) }]
+      })
+      // The minimal point is a float32: two registers.
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(at(65535)))))).toBe(true)
+      expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(at(65534)))))).toBe(true)
+      // A bit occupies one address whatever its data type.
+      expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(at(65535, "coil")))))).toBe(true)
+    })
+  )
+
   it.effect("rejects values that would wrap on the wire or disable the buffer", () =>
     Effect.gen(function* () {
       const [device] = minimal.devices
