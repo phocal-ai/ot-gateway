@@ -47,7 +47,7 @@ export const parseBrokerUrl = (url: string): Effect.Effect<BrokerAddress, MqttSe
 
 export interface MqttPublisherOptions extends Pick<
   MqttClientOptions,
-  "keepAliveSeconds" | "connectTimeout" | "publishTimeout" | "reconnectDelay"
+  "keepAliveSeconds" | "connectTimeout" | "publishTimeout" | "waitForConnection" | "reconnectDelay"
 > {
   /**
    * Announce the gateway on its health topic: `online` (rendered fresh by
@@ -61,7 +61,7 @@ export interface MqttPublisherOptions extends Pick<
 const translate = <A>(effect: Effect.Effect<A, MqttPublishError>): Effect.Effect<A, PublishError> =>
   effect.pipe(
     Effect.catchTag("MqttPublishError", (error) =>
-      Effect.fail(new PublishError({ topic: error.topic, message: error.message }))
+      Effect.fail(new PublishError({ topic: error.topic, reason: error.reason, message: error.message }))
     )
   )
 
@@ -89,17 +89,24 @@ export const MqttPublisher = (
         ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
         : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
       const { health, ...clientOptions } = options
-      const retained = new Map<string, string>()
+      // The latest retained payload per topic, tagged with the connection it went out on.
+      const retained = new Map<string, { readonly payload: string; readonly connection: number }>()
+      let connection = 0
 
-      const publishRetained = (client: MqttClient, topic: string, payload: string) =>
-        client
-          .publish(topic, payload, { retain: true })
-          .pipe(Effect.tap(() => Effect.sync(() => retained.set(topic, payload))))
+      const publishRetained = Effect.fnUntraced(function* (client: MqttClient, topic: string, payload: string) {
+        const sentOn = connection
+        yield* client.publish(topic, payload, { retain: true })
+        retained.set(topic, { payload, connection: sentOn })
+      })
 
       const onConnect = Effect.fnUntraced(
         function* (client: MqttClient) {
+          connection++
           if (health !== undefined) yield* publishRetained(client, health.topic, yield* health.online)
-          const replay = [...retained].filter(([topic]) => topic !== health?.topic)
+          // Only what went out on earlier connections; anything since is already on this broker.
+          const replay = [...retained]
+            .filter(([topic, entry]) => topic !== health?.topic && entry.connection < connection)
+            .map(([topic, entry]) => [topic, entry.payload] as const)
           yield* Effect.forEach(replay, ([topic, payload]) => client.publish(topic, payload, { retain: true }), {
             discard: true
           })
@@ -139,7 +146,7 @@ export const MqttPublisher = (
       return Publisher.of({
         publish: (topic, payload, publishOptions) => {
           if (publishOptions?.qos === 2)
-            return Effect.fail(new PublishError({ topic, message: "QoS 2 is not supported" }))
+            return Effect.fail(new PublishError({ topic, reason: "rejected", message: "QoS 2 is not supported" }))
           const qos = publishOptions?.qos === undefined ? {} : { qos: publishOptions.qos }
           return publishOptions?.retain === true
             ? translate(publishRetained(client, topic, payload))

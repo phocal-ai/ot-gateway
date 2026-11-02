@@ -30,6 +30,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/core`: point model, `GatewayConfig` schema, `Driver` interface, `Publisher` service, normalization, topics, `runDevice` pipeline
 - `packages/simulator`: simulated devices
 - `packages/modbus`, `packages/mqtt`, `packages/bacnet`: in-house protocol stacks
+- `packages/buffer`: SQLite store-and-forward, a `Publisher` that wraps the MQTT one
 - `apps/gateway`: the runnable gateway
 - `examples/`: sample configs
 - `docs/`: vision and design notes

@@ -9,7 +9,7 @@ It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retri
 > A _plenum_ is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
 
 > [!NOTE]
-> Plenum is early. The core pipeline, config schema, Modbus TCP reads and MQTT 5 publishing work (v0.1); store-and-forward and BACnet are next. See the [roadmap](#roadmap).
+> Plenum is early. The core pipeline, config schema, Modbus TCP reads, MQTT 5 publishing, health topics and store-and-forward work; BACnet is next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -24,7 +24,7 @@ Plenum treats field reality as normal: devices time out, brokers go offline, reg
 - **Clean topics.** Values go to `site/building/device/point`, and metadata is retained on `.../point/$meta`.
 - **Normalization.** Scaling, deadband and units (QUDT) are set per point.
 - **Semantic tagging.** Each point can carry an optional Brick class and Haystack tags.
-- **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite (planned).
+- **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite.
 - **Safe writes.** Writing is opt-in per point, allowlisted and range-checked (planned).
 - **Testable without hardware.** Every driver gets a simulator, and CI runs end to end.
 
@@ -50,7 +50,7 @@ demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"u
 demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 ```
 
-Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own.
+Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
 
 Plenum runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
 
@@ -88,6 +88,8 @@ A gateway is described by one JSON document:
 }
 ```
 
+With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@plenum/buffer`](packages/buffer).
+
 IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
 
 ## Topics
@@ -106,14 +108,15 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 
 ## Packages
 
-| Package                                   | What it does                                                                                     | Status             |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------ |
-| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service | Working            |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                     | Working            |
-| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4             | Reads working      |
-| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker  | Publishing working |
-| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                                    | Early              |
-| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker and Modbus simulator)                      | Working            |
+| Package                                   | What it does                                                                                        | Status             |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------ |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service    | Working            |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                        | Working            |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4                | Reads working      |
+| [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order | Working            |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker     | Publishing working |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                                       | Early              |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker and Modbus simulator)                         | Working            |
 
 ## Architecture
 
