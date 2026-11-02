@@ -3,7 +3,7 @@
 Two things are observed here, and they share one Grafana Cloud stack (`wimluk.grafana.net`, region `prod-eu-west-2`):
 
 1. **Plenum itself**: the gateway exports traces, metrics and logs over OTLP (see `docs/VISION.md`, principle 5). MQTT health topics come with the MQTT transport.
-2. **How we build Plenum**: Claude Code sessions export OpenTelemetry metrics and events, so cost, API health, tool failures and agent behaviour can be watched and improved.
+2. **How we build Plenum**: Claude Code sessions export OpenTelemetry metrics and events, so usage, API health, tool failures and agent behaviour can be watched and improved.
 
 ## Gateway telemetry
 
@@ -103,7 +103,7 @@ Claude Code ignores telemetry variables in a repo's `.claude/settings*.json`, so
 | Traces (`claude_code.interaction` and child spans)                                                         | `grafanacloud-traces` | `{resource.service.name="claude-code" && name="claude_code.interaction"}` |
 | Events (`api_request`, `api_error`, `tool_result`, `tool_decision`, `user_prompt`, hooks, MCP connections) | `grafanacloud-logs`   | `{service_name="claude-code"} \| event_name="api_request"`                |
 
-Per-request `api_request` events carry `cost_usd`, token counts, `duration_ms` and `ttft_ms`; they are the exact source for cost over time. Metric counters are better for per-session totals (`max_over_time`), since `increase()` misses a short session's first and only sample.
+Per-request `api_request` events carry `cost_usd`, token counts, `duration_ms` and `ttft_ms`; they are the exact source for usage over time. On an Anthropic subscription (our setup) nothing is billed per token: `cost_usd` and `claude_code_cost_usage_USD_total` are Claude Code's estimate at pay-as-you-go API prices. Read them as relative weight, not spend; the subscription's limit is usage per time window. Metric counters are better for per-session totals (`max_over_time`), since `increase()` misses a short session's first and only sample.
 
 ### Dashboard
 
@@ -113,6 +113,6 @@ Per-request `api_request` events carry `cost_usd`, token counts, `duration_ms` a
 
 `.mcp.json.example` configures the read-only Grafana MCP server (`mcp-grafana --disable-write`). Copy it to `.mcp.json` (gitignored); it reads `GRAFANA_MCP_URL` and `GRAFANA_MCP_READ_TOKEN` from your shell (`~/.config/grafana-mcp/env`).
 
-The `/health` skill (`.claude/skills/health/SKILL.md`) runs the standard checks through it. It covers stale devices and failing cycles, failing tools and hooks, and cost in this repo's Claude Code sessions. It also projects month-end Grafana usage against the free-plan quotas, with the thresholds for when to optimize.
+The `/health` skill (`.claude/skills/health/SKILL.md`) runs the standard checks through it. It covers stale devices and failing cycles, failing tools and hooks, and token usage in this repo's Claude Code sessions. It also projects month-end Grafana usage against the free-plan quotas, with the thresholds for when to optimize.
 
 The `Health` GitHub workflow runs the budget and gateway checks every day at 06:17 UTC (and on demand from the Actions tab), using Claude Code in print mode with Sonnet. It opens one `health` issue per finding, comments when the numbers change and closes the issue once the finding is gone. The Claude Code section is left out because the repository is public. The workflow needs three repository secrets: `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `GRAFANA_MCP_URL`, and `GRAFANA_MCP_READ_TOKEN` (a Viewer service-account token used only by this job). Without them it skips with a warning. Cost: Actions minutes are free on a public repository, a run takes about 30 s of Claude time, and its Grafana reads are a few MB a day against the Loki query allowance (100× ingest).
