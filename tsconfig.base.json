@@ -1,10 +1,14 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "types": ["node"],
+    "types": [
+      "node"
+    ],
     "strict": true,
     "exactOptionalPropertyTypes": true,
     "noUncheckedIndexedAccess": true,
@@ -15,6 +19,34 @@
     "allowImportingTsExtensions": true,
     "rewriteRelativeImportExtensions": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "includeSuggestionsInTsc": false,
+        "ignoreEffectWarningsInTscExitCode": true,
+        "diagnosticSeverity": {
+          "effectInFailure": "error",
+          "globalErrorInEffectCatch": "error",
+          "globalErrorInEffectFailure": "error",
+          "unnecessaryFailYieldableError": "error",
+          "unnecessaryTypeofType": "error",
+          "effectMapVoid": "error",
+          "unnecessaryPipeChain": "error",
+          "effectSucceedWithVoid": "error",
+          "catchToOrElseSucceed": "error",
+          "unnecessaryEffectGen": "error",
+          "catchUnfailableEffect": "error",
+          "schemaStructWithTag": "error",
+          "multipleCatchTag": "error",
+          "tryCatchInEffectGen": "error",
+          "runEffectInsideEffect": "error",
+          "catchAllToMapError": "error",
+          "unknownInEffectCatch": "error",
+          "schemaSyncInEffect": "error",
+          "unstableApiUsage": "off"
+        }
+      }
+    ]
   }
 }

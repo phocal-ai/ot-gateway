@@ -19,6 +19,8 @@ pnpm --filter @plenum/core test   # one package
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
 
+`tsc` is TypeScript 7 (the Go-native compiler), patched by `@effect/tsgo` on `pnpm install` (the root `prepare` script) so that `pnpm typecheck` also reports Effect language-service diagnostics. Their severities are set in `tsconfig.base.json`; the ones set to `error` fail the build. If typecheck stops reporting Effect diagnostics, run `pnpm exec effect-tsgo patch`.
+
 ## Repo layout
 
 - `packages/core`: point model, `GatewayConfig` schema, `Driver` interface, `Publisher` service, normalization, topics, `runDevice` pipeline
@@ -28,6 +30,7 @@ There is no build step. Node runs `.ts` files directly through type stripping (N
 - `examples/`: sample configs
 - `docs/`: vision and design notes
 - `observability/`: Grafana dashboards as code and the telemetry setup (see `observability/README.md`)
+- `repos/`: read-only reference subtrees (see below)
 
 ## Branches
 
@@ -44,6 +47,27 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 7. **Writes are guarded.** Only points with `writable: true`, only through the command guard, always logged.
 8. **Every driver has a simulator**, and tests run without hardware.
 
+## Reference repos
+
+External sources live under `repos/` as squashed git subtrees, so they are always available without extra clones. They are read-only: never edit them and never import from `repos/` in our code.
+
+| Ref | Path | Pinned to |
+| --- | --- | --- |
+| Effect | `repos/effect/` | tag `effect@4.1.2` of `https://github.com/Effect-TS/effect.git`, the version in our lockfile |
+
+Keep the subtree on the same version as the installed `effect` package. After bumping it in the lockfile:
+
+```bash
+git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git effect@<version> --squash
+```
+
+**Before writing Effect code**, read the reference in this order:
+
+1. `repos/effect/LLMS.md`: how to write Effect code (generators, `Effect.fn`, services and layers, errors, Schema).
+2. `repos/effect/ai-docs/src/`: worked examples by topic (streams, observability, testing, SQL, HTTP, CLI).
+3. `repos/effect/MIGRATION.md` and `repos/effect/migration/`: v3 → v4 guides; `migration/v3-to-v4.md` maps every import and API rename.
+4. `repos/effect/packages/*/src`: the implementation, when the docs are not enough. `effect/socket` and `effect/sql` live under `packages/effect/src/`.
+
 ## Effect 4 conventions
 
 - Services: `class X extends Context.Service<X, Shape>()("@plenum/pkg/X") {}`; provide them with `Layer.succeed` or `Layer.effect`.
@@ -51,7 +75,8 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 - Named, traced functions: `Effect.fn("name")(function*(...) { ... })`.
 - Retries: `Effect.retry({ schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered), times: 4 })`.
 - Tests: `@effect/vitest` with `it.effect`; control time with `TestClock` from `effect/testing`.
-- Modules that used to live in `effect/unstable/*` in the betas are now top-level subpaths such as `effect/socket/Socket` and `effect/sql/SqlClient`. Check the installed `.d.ts` files when unsure; Effect 3 examples online are often wrong for 4.
+- Modules that used to live in `effect/unstable/*` in the betas are now top-level subpaths such as `effect/socket/Socket` and `effect/sql/SqlClient`. When unsure, check `repos/effect/` (above) rather than examples online, which are often Effect 3 and wrong for 4.
+- `.claude/rules/effect.md` (loaded when you touch `packages/` or `apps/`) covers type evidence, tagged-error translation, `gen` vs `pipe`, v4 spellings and the v4 traps. `/review-effect` reviews a change against it.
 
 ## TypeScript style
 

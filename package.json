@@ -9,16 +9,18 @@
     "node": ">=22.18"
   },
   "scripts": {
+    "prepare": "effect-tsgo patch",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "check": "turbo run typecheck test",
     "gateway": "pnpm --filter @plenum/gateway start"
   },
   "devDependencies": {
+    "@effect/tsgo": "~0.63.0",
     "@effect/vitest": "4.1.2",
     "@types/node": "^22.18.0",
     "turbo": "^2.11.10",
-    "typescript": "^5.9.0",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }
 }
