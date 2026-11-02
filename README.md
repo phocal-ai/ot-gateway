@@ -85,6 +85,10 @@ A gateway is described by one JSON document:
 
 IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
 
+## Observability
+
+The gateway exports traces, metrics and logs over OTLP when the standard OpenTelemetry environment variables are set (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_<SIGNAL>_EXPORTER=otlp`). Every polling cycle is a trace; metrics cover cycle outcomes and duration, read and publish failures, and how long ago each device and point was last read. Without the variables nothing is exported. See [`observability/README.md`](observability/README.md).
+
 ## Packages
 
 | Package                                   | What it does                                                                             | Status                  |
