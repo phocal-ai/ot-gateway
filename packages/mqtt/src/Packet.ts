@@ -257,6 +257,103 @@ export const takePacket = (buffer: Uint8Array): PacketSplit => {
   }
 }
 
+export type Frame =
+  | { readonly _tag: "Incomplete" }
+  | { readonly _tag: "Packet"; readonly type: number; readonly flags: number; readonly body: Uint8Array }
+  | { readonly _tag: "Invalid"; readonly message: string }
+  /** The fixed header announces a packet of `size` bytes, above the limit; its body is not waited for. */
+  | { readonly _tag: "TooLarge"; readonly size: number }
+
+/**
+ * Reassembles control packets from the chunks a socket delivers. Chunks are
+ * kept as they arrive and each packet is copied out once, so reading a large
+ * packet costs its size, not its size times the number of chunks. A packet
+ * whose fixed header (§2.1.1) says it is longer than `maximumPacketSize`
+ * bytes (header included, §3.1.2.11.4) is reported as soon as the header is
+ * in, before any of its body is buffered.
+ */
+export interface FrameReader {
+  /** Append bytes read from the stream. */
+  readonly push: (chunk: Uint8Array) => void
+  /** Take the next complete packet, if all of it has arrived. */
+  readonly next: () => Frame
+}
+
+export const makeFrameReader = (maximumPacketSize = Number.POSITIVE_INFINITY): FrameReader => {
+  const chunks: Array<Uint8Array> = []
+  // Bytes of chunks[0] already consumed, and bytes held in total.
+  let head = 0
+  let buffered = 0
+
+  /** Copy up to `n` bytes from the front without consuming them. */
+  const peek = (n: number): Uint8Array => {
+    const out = new Uint8Array(Math.min(n, buffered))
+    let filled = 0
+    let skip = head
+    for (const chunk of chunks) {
+      if (filled === out.length) break
+      const part = chunk.subarray(skip, skip + out.length - filled)
+      out.set(part, filled)
+      filled += part.length
+      skip = 0
+    }
+    return out
+  }
+
+  /** Consume `n` bytes from the front; a view when they sit in one chunk, else one copy. */
+  const take = (n: number): Uint8Array => {
+    buffered -= n
+    const first = chunks[0]
+    if (first !== undefined && first.length - head >= n) {
+      const out = first.subarray(head, head + n)
+      head += n
+      if (head === first.length) {
+        chunks.shift()
+        head = 0
+      }
+      return out
+    }
+    const out = new Uint8Array(n)
+    let filled = 0
+    while (filled < n) {
+      const chunk = chunks[0]
+      if (chunk === undefined) break
+      const part = chunk.subarray(head, head + n - filled)
+      out.set(part, filled)
+      filled += part.length
+      head += part.length
+      if (head === chunk.length) {
+        chunks.shift()
+        head = 0
+      }
+    }
+    return out
+  }
+
+  return {
+    push: (chunk) => {
+      if (chunk.length === 0) return
+      chunks.push(chunk)
+      buffered += chunk.length
+    },
+    next: () => {
+      // A fixed header is at most 5 bytes: the type byte and a 4-byte remaining length.
+      const header = peek(5)
+      const first = header[0]
+      if (first === undefined) return { _tag: "Incomplete" }
+      const length = decodeVariableByteInteger(header, 1)
+      if (length === undefined) return { _tag: "Incomplete" }
+      if (length instanceof MqttCodecError) return { _tag: "Invalid", message: length.message }
+      const headerLength = 1 + length.length
+      const size = headerLength + length.value
+      if (size > maximumPacketSize) return { _tag: "TooLarge", size }
+      if (buffered < size) return { _tag: "Incomplete" }
+      take(headerLength)
+      return { _tag: "Packet", type: first >> 4, flags: first & 0x0f, body: take(length.value) }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // CONNECT (§3.1)
 
@@ -273,6 +370,8 @@ export interface Connect {
   readonly cleanStart: boolean
   /** Seconds the broker keeps the session after a disconnect (0 = none). */
   readonly sessionExpirySeconds: number
+  /** Largest packet the client accepts (§3.1.2.11.4); absent means no limit. */
+  readonly maximumPacketSize?: number
   readonly username?: string
   readonly password?: string
   readonly will?: Will
@@ -291,7 +390,12 @@ export const encodeConnect = (connect: Connect): Uint8Array => {
     .byte(5)
     .byte(flags)
     .u16(connect.keepAliveSeconds)
-    .bytes(encodeProperties((w) => w.byte(Property.SessionExpiryInterval).u32(connect.sessionExpirySeconds)))
+    .bytes(
+      encodeProperties((w) => {
+        w.byte(Property.SessionExpiryInterval).u32(connect.sessionExpirySeconds)
+        if (connect.maximumPacketSize !== undefined) w.byte(Property.MaximumPacketSize).u32(connect.maximumPacketSize)
+      })
+    )
     .string(connect.clientId)
   if (connect.will !== undefined) {
     body
@@ -326,11 +430,13 @@ export const decodeConnect = (body: Uint8Array): Result.Result<Connect, MqttCode
     const username = (flags & 0x80) !== 0 ? r.string() : undefined
     const password = (flags & 0x40) !== 0 ? decoder.decode(r.binary()) : undefined
     const expiry = properties.get(Property.SessionExpiryInterval)
+    const maximumPacketSize = properties.get(Property.MaximumPacketSize)
     return {
       clientId,
       keepAliveSeconds,
       cleanStart: (flags & 0x02) !== 0,
       sessionExpirySeconds: typeof expiry === "number" ? expiry : 0,
+      ...(typeof maximumPacketSize === "number" ? { maximumPacketSize } : {}),
       ...(username === undefined ? {} : { username }),
       ...(password === undefined ? {} : { password }),
       ...(will === undefined ? {} : { will })
@@ -440,6 +546,17 @@ export interface Puback {
   /** 0x00 success, 0x10 no matching subscribers (also success); 0x80 and above failed. */
   readonly reasonCode: number
 }
+
+/**
+ * PUBACK reason codes that refuse this message for good (§3.4.2.1): not
+ * authorized (0x87), topic name invalid (0x90), payload format invalid
+ * (0x99), and packet too large (0x95), which some brokers send although the
+ * table lists it for DISCONNECT only. Every other code of 0x80 and above
+ * (unspecified 0x80, implementation specific 0x83, packet identifier in use
+ * 0x91, quota exceeded 0x97, …) may pass, so the message is worth retrying.
+ */
+export const pubackRefusesMessage = (reasonCode: number): boolean =>
+  reasonCode === 0x87 || reasonCode === 0x90 || reasonCode === 0x95 || reasonCode === 0x99
 
 /** A PUBACK may stop after the packet id (reason 0x00) or after the reason code (§3.4.2.1). */
 export const decodePuback = (body: Uint8Array): Result.Result<Puback, MqttCodecError> =>

@@ -56,7 +56,7 @@ describe("MQTT client over TCP", () => {
       yield* client.publish("s/b/d/p/$meta", '{"unit":"°C"}', { retain: true })
 
       expect(control.connects).toMatchObject([
-        { clientId: "test-gw", username: "gw", hasPassword: true, cleanStart: true }
+        { clientId: "test-gw", username: "gw", hasPassword: true, cleanStart: true, maximumPacketSize: 1024 * 1024 }
       ])
       expect(control.messages).toEqual([
         { clientId: "test-gw", topic: "s/b/d/p", payload: '{"value":1}', qos: 0, retain: false },
@@ -107,6 +107,8 @@ describe("MQTT client over TCP", () => {
         reason: "unavailable",
         message: "no PUBACK in time"
       })
+      // A slow broker says nothing about the message, so it is not blamed for it.
+      expect(timedOut.inFlight).toBeUndefined()
 
       control.ackPublishes = true
       control.pubackReason = 0x87

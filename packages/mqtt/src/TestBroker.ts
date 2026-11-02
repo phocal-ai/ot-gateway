@@ -6,13 +6,23 @@
  *
  * A client that goes away without DISCONNECT has its last will published, as
  * a real broker would. `BrokerControl` injects faults: refuse connections,
- * withhold PUBACKs or PINGRESPs, refuse messages.
+ * withhold PUBACKs or PINGRESPs, refuse messages, or drop the client on a
+ * message above a size limit it never announced.
  */
 import { Effect, Result } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { PacketType } from "./Codec.ts"
-import { decodeConnect, decodePublish, encodeConnack, encodePingresp, encodePuback, takePacket } from "./Packet.ts"
+import {
+  decodeConnect,
+  decodeDisconnect,
+  decodePublish,
+  encodeConnack,
+  encodeDisconnect,
+  encodePingresp,
+  encodePuback,
+  makeFrameReader
+} from "./Packet.ts"
 import type { Connect, Will } from "./Packet.ts"
 
 export interface ReceivedMessage {
@@ -40,8 +50,16 @@ export interface BrokerControl {
   readonly messages: Array<ReceivedMessage>
   /** Last retained payload per topic. */
   readonly retained: Map<string, string>
-  /** Clients that closed with DISCONNECT. */
+  /**
+   * Packets larger than this many bytes get DISCONNECT 0x95 (packet too large)
+   * and the connection is closed. Not announced in CONNACK, as with brokers
+   * that only enforce their limit.
+   */
+  dropPacketsOver?: number
+  /** Clients that closed with DISCONNECT 0x00. */
   cleanDisconnects: number
+  /** Reason codes of every DISCONNECT a client sent. */
+  readonly disconnectReasons: Array<number>
   /** Called for every accepted message. When set, messages are passed here instead of kept in `messages`. */
   onMessage?: (message: ReceivedMessage) => void
 }
@@ -56,23 +74,12 @@ export const makeBrokerControl = (): BrokerControl => ({
   connects: [],
   messages: [],
   retained: new Map(),
-  cleanDisconnects: 0
+  cleanDisconnects: 0,
+  disconnectReasons: []
 })
 
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
-
-const append = (buffer: Uint8Array, chunks: ReadonlyArray<Uint8Array | string>): Uint8Array => {
-  const bytes = chunks.map((chunk) => (typeof chunk === "string" ? encoder.encode(chunk) : chunk))
-  const out = new Uint8Array(buffer.length + bytes.reduce((n, b) => n + b.length, 0))
-  out.set(buffer, 0)
-  let offset = buffer.length
-  for (const b of bytes) {
-    out.set(b, offset)
-    offset += b.length
-  }
-  return out
-}
 
 /** Record or hand on an accepted message, and keep it if retained. */
 const accept = (control: BrokerControl, message: ReceivedMessage) => {
@@ -86,7 +93,7 @@ const serveConnection = (control: BrokerControl) =>
     function* (socket: Socket.Socket) {
       const writer = yield* socket.writer
       const { pull } = yield* socket.reader
-      let buffer: Uint8Array = new Uint8Array(0)
+      const frames = makeFrameReader(control.dropPacketsOver)
       let clientId: string | undefined
       let will: Will | undefined
       // A connection that ends without DISCONNECT publishes its will (§3.1.2.5),
@@ -98,10 +105,9 @@ const serveConnection = (control: BrokerControl) =>
         })
       )
       while (true) {
-        buffer = append(buffer, yield* pull)
-        let split = takePacket(buffer)
+        for (const chunk of yield* pull) frames.push(typeof chunk === "string" ? encoder.encode(chunk) : chunk)
+        let split = frames.next()
         while (split._tag === "Packet") {
-          buffer = split.rest
           switch (split.type) {
             case PacketType.CONNECT: {
               const connect = decodeConnect(split.body)
@@ -130,16 +136,25 @@ const serveConnection = (control: BrokerControl) =>
             case PacketType.PINGREQ:
               if (control.answerPings) yield* writer.write(encodePingresp())
               break
-            case PacketType.DISCONNECT:
-              // A normal disconnection discards the will (§3.14.4).
+            case PacketType.DISCONNECT: {
+              const disconnect = decodeDisconnect(split.body)
+              const reasonCode = Result.isSuccess(disconnect) ? disconnect.success.reasonCode : 0x81
+              control.disconnectReasons.push(reasonCode)
+              // A normal disconnection discards the will (§3.14.4); any other reason publishes it.
+              if (reasonCode !== 0) return
               will = undefined
               control.cleanDisconnects++
               return
+            }
             default:
               // Anything else (SUBSCRIBE, QoS 2 flows) is out of scope: drop the client.
               return
           }
-          split = takePacket(buffer)
+          split = frames.next()
+        }
+        if (split._tag === "TooLarge") {
+          yield* writer.write(encodeDisconnect(0x95))
+          return
         }
         if (split._tag === "Invalid") return
       }

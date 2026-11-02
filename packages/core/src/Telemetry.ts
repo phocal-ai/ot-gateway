@@ -169,12 +169,39 @@ export const bufferDrained = Metric.counter("plenum_buffer_drained", {
 
 /**
  * Messages the outbox gave up on, by `reason`: `overflow` (the oldest rows,
- * past `buffer.maxRows`), `rejected` (the broker refused the message) or
- * `unreadable` (a row that no longer decodes).
+ * past `buffer.maxRows`), `rejected` (the broker refused the message),
+ * `unreadable` (a row that no longer decodes), `undeliverable` (a row that
+ * was in flight each time the connection broke, three times in a row: a
+ * poison message) or `lost` (rows in a file that was replaced or corrupted
+ * while the gateway ran).
  */
 export const bufferDropped = Metric.counter("plenum_buffer_dropped", {
   description: "Messages dropped from the outbox, by reason",
   incremental: true
+})
+
+/**
+ * Outbox operations that failed, by `operation`: `insert`, `delete`, `read`
+ * or `open`. A full or locked disk shows up here first.
+ */
+export const bufferFailures = Metric.counter("plenum_buffer_failures", {
+  description: "Outbox operations that failed, by operation",
+  incremental: true
+})
+
+/** Messages sent straight to the broker because the outbox could not store them (disk full, say). */
+export const bufferBypassed = Metric.counter("plenum_buffer_bypassed", {
+  description: "Messages published past the outbox because it could not store them",
+  incremental: true
+})
+
+/**
+ * 1 while the gateway runs without its outbox because the file could not be
+ * opened, else 0. Values published during an outage are lost meanwhile.
+ */
+export const bufferDisabled = Metric.gauge("plenum_buffer_disabled", {
+  description: "Whether the gateway runs without its store-and-forward outbox",
+  attributes: { unit: "{state}" }
 })
 
 /** Add attributes to every metric updated inside `effect`, keeping the ones already set. */

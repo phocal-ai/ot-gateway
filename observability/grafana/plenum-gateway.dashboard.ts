@@ -405,7 +405,45 @@ timeseries(
     x: 12,
     w: 12,
     description:
-      "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message, unreadable when a stored row no longer decoded."
+      "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message, unreadable when a stored row no longer decoded, undeliverable when a row broke the connection three times in a row, lost when the buffer file was corrupt or replaced."
+  }
+)
+y += 8
+timeseries(
+  "Buffer store failures",
+  [
+    {
+      expr: `sum by (operation) (increase(plenum_buffer_failures_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{operation}}"
+    },
+    {
+      expr: `sum(increase(plenum_buffer_bypassed_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "published past the buffer"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    stack: true,
+    description:
+      "Failed SQLite operations on the outbox (a full disk, a busy or broken file). While inserts fail, live values go straight to the broker instead (published past the buffer); while deletes fail, delivered rows are remembered in memory and not sent again."
+  }
+)
+timeseries(
+  "Running without a buffer",
+  [
+    {
+      expr: `max by (service_instance_id) (plenum_buffer_disabled{${sel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "bool_yes_no",
+    x: 12,
+    w: 12,
+    description:
+      "1 while the buffer file cannot be opened, so values published during a broker outage are lost. The gateway retries every 30 seconds; the error log says why."
   }
 )
 y += 8

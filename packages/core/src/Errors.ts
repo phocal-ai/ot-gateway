@@ -21,11 +21,18 @@ export class DriverError extends Schema.TaggedError<DriverError>()("DriverError"
  * reached right now, so the message may be retried (or buffered).
  * `rejected`: this message is refused (too large, not authorized, invalid
  * topic), so retrying it will not help.
+ *
+ * `inFlight` marks an `unavailable` failure after the message went out: the
+ * connection broke while it waited for its acknowledgement. The broker may
+ * have it, or the message itself may be what broke the connection, so a
+ * store-and-forward buffer counts these per message. A missing acknowledgement
+ * on a connection that stays up is a slow broker and is not `inFlight`.
  */
 export class PublishError extends Schema.TaggedError<PublishError>()("PublishError", {
   topic: Schema.String,
   reason: Schema.Literals(["unavailable", "rejected"]),
-  message: Schema.String
+  message: Schema.String,
+  inFlight: Schema.optionalKey(Schema.Boolean)
 }) {}
 
 /**
