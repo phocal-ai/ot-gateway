@@ -35,13 +35,13 @@ Character strings are written as UTF-8 (character set 0). They are read lenientl
 
 `makeBacnetClient(socket, options)` owns one UDP socket for every BACnet device of the gateway. Bind it to port 47808 with broadcast enabled, because devices broadcast I-Am to that port.
 
-- **`readProperty`, `readPropertyMultiple`, `confirmed`:** each request gets an invoke ID. After a timeout (`requestTimeout`, default 3 s) it is resent with the same ID, up to `retries` times (default 2). Only an answer from the address the request went to counts.
-- **`discover`** broadcasts Who-Is (or sends it to one address) and collects the I-Am answers. **`locate`** finds one device by instance and resends Who-Is like a request.
-- **Errors:** `BacnetTimeout`, `BacnetDeviceError` (`kind` `error`, `reject` or `abort`, with the class and code), `BacnetCodecError` for an answer that cannot be read, and `BacnetSocketError`.
-- **Segmentation:** the client asks for unsegmented answers. An answer too large for one datagram comes back as an abort with reason `segmentation-not-supported`, and the caller reads fewer properties per request.
-- **Socket failures:** a socket that fails while running is reopened every 5 s. A port that is already in use fails `makeBacnetClient` itself.
+- **`readProperty`, `readPropertyMultiple`, `confirmed`:** each request gets an invoke ID. After a timeout (`requestTimeout`, default 3 s) it is resent with the same ID, up to `retries` times (default 2). Only an answer from the address the request went to counts, and for a device behind a router (`network` set) only one that names it as the source. An answer about another object or property than was asked is refused as invalid. An invoke ID whose request was given up on rests for at least 10 s (twice the timeout if that is longer), so a late answer cannot be taken for a new request.
+- **`discover`** broadcasts Who-Is to every BACnet network (or sends it to one address) and collects the I-Am answers. **`locate`** finds one device by instance and resends Who-Is like a request.
+- **Errors:** `BacnetTimeout`, `BacnetDeviceError` (`kind` `error`, `reject` or `abort`, with the class and code), `BacnetCodecError` for an answer that cannot be read, and `BacnetSocketError`, also when a datagram cannot be sent within the timeout.
+- **Segmentation:** the client asks for unsegmented answers. An answer too large for one datagram comes back as an abort with reason `segmentation-not-supported`, and the caller reads fewer properties per request. A device that segments anyway gets an Abort back.
+- **Socket failures:** a socket that fails while running is reopened every 5 s. A port that is already in use fails `makeBacnetClient` itself. A datagram that cannot be handled is logged and dropped; it never stops the receive loop.
 
-Requests are counted in `plenum_driver_requests` by `outcome` (`ok`, `timeout` per attempt, `exception` for an answer from the device, `invalid_response`, `connection`), like the Modbus client's.
+Requests are counted in `plenum_driver_requests` by `outcome`, once per request however often it was resent: `ok`, `timeout`, `exception` for an answer from the device, `invalid_response`, `connection`. Opening the socket is counted in `plenum_driver_connects` under the device name `$bacnet`, because one socket serves every BACnet device.
 
 ## Next
 

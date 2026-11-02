@@ -845,7 +845,7 @@
       "id": 16,
       "type": "timeseries",
       "title": "Connections opened by device",
-      "description": "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect.",
+      "description": "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect. $bacnet is the one UDP socket every BACnet device shares.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"

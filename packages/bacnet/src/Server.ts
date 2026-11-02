@@ -6,6 +6,10 @@
  * I-Am goes back to whoever asked, not to the broadcast address. A real device
  * usually broadcasts it, which the client also handles; answering directly
  * lets several simulators share one host on different ports.
+ *
+ * A request addressed to a device on another network (an NPDU destination
+ * with a MAC address) is answered as that device behind a router would: with
+ * the destination as the answer's source.
  */
 import { describeDatagramSocketError } from "@plenum/core"
 import { Effect, Result } from "effect"
@@ -30,10 +34,14 @@ export const serveSimulatedDevice = Effect.fn("serveSimulatedDevice")(function* 
     if (Result.isFailure(frame) || frame.success === undefined) return Effect.void
     const response = answer(device, frame.success.apdu)
     if (response === undefined) return Effect.void
-    const source = frame.success.source
+    const { source, destination } = frame.success
+    const behindRouter = destination !== undefined && destination.address.length > 0
     return writer
       .write({
-        payload: encodeFrame(response, source === undefined ? {} : { destination: source }),
+        payload: encodeFrame(response, {
+          ...(source === undefined ? {} : { destination: source }),
+          ...(behindRouter ? { source: destination } : {})
+        }),
         address: datagram
       })
       .pipe(

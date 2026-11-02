@@ -285,7 +285,7 @@ timeseries(
     w: 12,
     stack: true,
     description:
-      "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect."
+      "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect. $bacnet is the one UDP socket every BACnet device shares."
   }
 )
 y += 8
