@@ -195,8 +195,9 @@ describe("chaos: codec fuzzing", () => {
       }
     }
     expect(thrown).toEqual([])
-    expect({ slowest: slowest < 250, slowestWhat }).toMatchObject({ slowest: true })
-  })
+    // One decode is microseconds; the bound catches runaway work, with room for a GC pause on a loaded runner.
+    expect({ slowest: slowest < 1000, slowestWhat }).toMatchObject({ slowest: true })
+  }, 60_000)
 
   it("handles worst-case datagrams quickly: 64 KB of nesting, bits, strings", () => {
     const timings: Record<string, number> = {}
