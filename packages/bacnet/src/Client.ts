@@ -354,6 +354,8 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   const iAmListeners = new Set<(device: DiscoveredDevice) => void>()
   const covListeners = new Map<number, (notification: CovNotification, from: DeviceAddress) => void>()
   const issuedProcessIds = new Set<number>()
+  // Senders of refused Forwarded-NPDUs already warned about (bounded, so a spoofing host cannot grow it).
+  const untrustedForwarders = new Set<string>()
   // Invoke IDs are one byte (clause 20.1.2.3): at most 256 requests in flight.
   const invokeIds = yield* Semaphore.make(256)
   const covRequests = yield* Semaphore.make(COV_REQUESTS)
@@ -375,8 +377,14 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
       // Anyone can claim to forward for anyone (Annex J.2.5 has no authentication): only the BBMD, or the device itself.
       const sender = keyOf(datagram.address)
       if (sender !== bbmd && sender !== keyOf(frame.forwardedFrom)) {
-        return Effect.logDebug("ignored a Forwarded-NPDU that did not come from the BBMD").pipe(
-          Effect.annotateLogs({ from: sender, claimed: keyOf(frame.forwardedFrom) })
+        // Once per sender as a warning: a site with a BBMD but no `bacnet.bbmdAddress` loses its remote devices here.
+        const firstTime = !untrustedForwarders.has(sender) && untrustedForwarders.size < 64
+        if (firstTime) untrustedForwarders.add(sender)
+        const log = firstTime
+          ? Effect.logWarning("ignored a Forwarded-NPDU from an address that is not the configured BBMD")
+          : Effect.logDebug("ignored a Forwarded-NPDU that did not come from the BBMD")
+        return log.pipe(
+          Effect.annotateLogs({ from: sender, claimed: keyOf(frame.forwardedFrom), bbmdAddress: bbmd ?? "not set" })
         )
       }
     }

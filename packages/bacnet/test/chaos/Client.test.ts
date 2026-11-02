@@ -8,6 +8,7 @@ import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetSettings } from "@plenum/core"
 import { Effect, Fiber, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
+import { captureLogs } from "./scripted.ts"
 import {
   type Apdu,
   type BacnetClientOptions,
@@ -96,6 +97,15 @@ describe("chaos: client over UDP", () => {
       expect(result).toMatchObject({ _tag: "Failure", failure: { _tag: "BacnetTimeout" } })
     }).pipe(Effect.scoped)
   )
+
+  it.live("warns once about a host forwarding without being the BBMD, however often it sends", () => {
+    const logs = captureLogs()
+    return Effect.gen(function* () {
+      yield* readWhileForging({}, "third")
+      const warnings = logs.lines.filter((line) => line.level === "Warn" && line.message.includes("Forwarded-NPDU"))
+      expect(warnings).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(logs.layer))
+  })
 
   it.live("takes an answer the configured BBMD forwards", () =>
     Effect.gen(function* () {
