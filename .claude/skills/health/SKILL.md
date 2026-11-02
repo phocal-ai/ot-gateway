@@ -18,7 +18,7 @@ Instant query on `grafanacloud-usage`:
 
 ```promql
 label_replace(max_over_time(grafanacloud_instance_active_series[1d]) / on() group_left grafanacloud_org_metrics_included_series, "q", "series_peak_ratio", "", "")
-or label_replace(sum(grafanacloud_instance_samples_per_second) * 60 / sum(grafanacloud_instance_active_series), "q", "dpm_per_series", "", "")
+or label_replace(avg_over_time(sum(grafanacloud_instance_samples_per_second)[1d:5m]) * 60 / avg_over_time(sum(grafanacloud_instance_active_series)[1d:5m]), "q", "dpm_per_series_1d_avg", "", "")
 or label_replace(grafanacloud_org_metrics_billable_series, "q", "billable_series", "", "")
 or label_replace(grafanacloud_org_logs_usage / scalar((day_of_month() - 1) + hour() / 24 + minute() / 1440) * scalar(days_in_month()), "q", "logs_gb_month_projection", "", "")
 or label_replace(clamp_min(delta(grafanacloud_org_logs_usage[1d]), 0) * scalar(days_in_month()), "q", "logs_gb_month_at_24h_rate", "", "")
@@ -35,7 +35,7 @@ Limits: 10,000 series, 1 DPM per series, 50 GB logs, 50 GB traces. **Project wit
 | 70–90%                | **Warn.** Name the top consumer and the cheapest fix                                                            |
 | ≥ 90%, or overage > 0 | **Act now.** Propose the fix as a change; the user's rule is to optimize _before_ the quota runs out, not after |
 
-`dpm_per_series` above 1 means some job exports faster than once a minute and is billed multiple times. Find the top consumers on `grafanacloud-prom`:
+`billable_series` is what Grafana bills; it already folds DPM in, so compare it against 10,000 too. `dpm_per_series_1d_avg` is a 1-day average because the instant sample rate is bursty (peaks above 1 are normal). An average above 1 means some job exports faster than once a minute and is billed multiple times. Find the top consumers on `grafanacloud-prom`:
 
 - Series: `topk(10, count by (job) ({__name__=~".+"}))`
 - Per-metric for one job: `topk(10, count by (__name__) ({job="<job>"}))`
