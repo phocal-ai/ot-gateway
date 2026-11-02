@@ -135,9 +135,13 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
   )
 
+  /** When each point's newest reading was taken, so an older one (a poll that overlapped a push) is dropped. */
+  const takenAt = new Map<string, number>()
   const handleReading = Effect.fnUntraced(function* (reading: Reading) {
     const point = points.get(reading.pointId)
     if (point === undefined) return
+    if (reading.timestamp < (takenAt.get(point.id) ?? Number.NEGATIVE_INFINITY)) return
+    takenAt.set(point.id, reading.timestamp)
     yield* Metric.update(Metric.withAttributes(pointLastRead, { point: point.id }), reading.timestamp / 1000)
     const value = typeof reading.value === "number" ? applyScaling(reading.value, point.scaling) : reading.value
     if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
@@ -212,20 +216,39 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   })
 
   const polling = tracedCycle.pipe(Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)))
+  // A broker outage fails every pushed value; it is counted each time but logged once until a push gets out.
+  let pushFailing = false
   const pushed =
     driver.changes === undefined
       ? Effect.void
       : Stream.runForEach(driver.changes, (reading) =>
           Metric.update(pushedReadings, 1).pipe(
             Effect.andThen(handling.withPermit(handleReading(reading))),
-            // A broker that is down now gets the value with the next change or poll.
+            Effect.andThen(
+              Effect.sync(() => {
+                pushFailing = false
+              })
+            ),
+            // The value is lost; the next change, renewal notification or poll brings the point's value again.
             Effect.catchTag("PublishError", (error) =>
               Effect.all([
-                Effect.logWarning("publish failed").pipe(
-                  Effect.annotateLogs({ topic: error.topic, error: error.message })
-                ),
+                pushFailing
+                  ? Effect.void
+                  : Effect.logWarning("publish of a pushed value failed").pipe(
+                      Effect.annotateLogs({ topic: error.topic, error: error.message })
+                    ),
+                Effect.sync(() => {
+                  pushFailing = true
+                }),
                 Metric.update(publishFailures, 1)
               ])
+            )
+          )
+        ).pipe(
+          // A bug on the push side must not stop the device: polling goes on.
+          Effect.catchDefect((defect) =>
+            Effect.logError("pushed values stopped, polling continues").pipe(
+              Effect.annotateLogs({ error: String(defect) })
             )
           )
         )

@@ -587,10 +587,13 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         ).pipe(Effect.map(() => [...found.values()]))
       }),
     subscribeCov: (target, subscription) =>
-      request(target, ConfirmedService.SubscribeCov, encodeSubscribeCov(subscription), (body) =>
-        body.length === 0
-          ? Result.succeed(undefined)
-          : Result.fail(new BacnetCodecError({ message: "SubscribeCOV was answered with data, not a simple ack" }))
+      // Suspended, so a value the encoder refuses is a defect of this effect, not a throw at the call.
+      Effect.suspend(() =>
+        request(target, ConfirmedService.SubscribeCov, encodeSubscribeCov(subscription), (body) =>
+          body.length === 0
+            ? Result.succeed(undefined)
+            : Result.fail(new BacnetCodecError({ message: "SubscribeCOV was answered with data, not a simple ack" }))
+        )
       ),
     newProcessId: Effect.sync(() => {
       const processId = nextProcessId

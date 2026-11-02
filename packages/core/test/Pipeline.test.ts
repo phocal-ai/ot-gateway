@@ -311,12 +311,12 @@ describe("runDevice with pushed values", () => {
         })
       ).pipe(Layer.provide(memory))
       const pushes = yield* Queue.unbounded<Reading>()
-      const driver: Driver = { ...scriptedDriver([200, 200, 230]), changes: Stream.fromQueue(pushes) }
+      const driver: Driver = { ...scriptedDriver([200, 200, 230], "flaky-push"), changes: Stream.fromQueue(pushes) }
       const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
         Effect.provide(flaky),
         Effect.forkChild
       )
-      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 1 })
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 0 })
       yield* TestClock.adjust("500 millis")
       brokerDown = false
       yield* TestClock.adjust("2 seconds")
@@ -324,6 +324,25 @@ describe("runDevice with pushed values", () => {
 
       // The pushed 25.0 was lost with the broker; polling went on and published 20.0, then 23.0.
       expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 23])
+      expect(yield* countOf(pushedReadings, { device: "flaky-push" })).toBe(1)
+    })
+  )
+
+  it.effect("drops a polled value read before the latest pushed one", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      // Polled values carry timestamp 0: a poll that overlapped a push.
+      const driver: Driver = { ...scriptedDriver([200, 300], "overlap"), changes: Stream.fromQueue(pushes) }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* Queue.offer(pushes, { pointId: point.id, value: 250, timestamp: 500 })
+      yield* TestClock.adjust("1500 millis")
+      yield* Fiber.interrupt(fiber)
+
+      expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 25])
     })
   )
 })

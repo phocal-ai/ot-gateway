@@ -198,6 +198,12 @@ const defaultCovTiming: CovTiming = {
   refusedRetryMs: 3_600_000
 }
 
+const logDefect = (message: string) => (defect: unknown) =>
+  Effect.logError(message).pipe(Effect.annotateLogs({ error: String(defect) }))
+
+/** Notifications and readings waiting at most; the oldest are dropped beyond this. */
+const BACKLOG = 1024
+
 const sameAddress = (left: DeviceAddress, right: DeviceAddress) =>
   NetAddress.formatInet(left.address) === NetAddress.formatInet(right.address) &&
   left.network?.network === right.network?.network &&
@@ -213,8 +219,8 @@ interface CovObject {
   subscribedAt: DeviceAddress | undefined
   /** When to subscribe again (renew, or retry). */
   nextAttemptAt: number
-  /** When the last usable notification arrived; 0 since the last (re)subscription to a new address. */
-  heardAt: number
+  /** When the last usable notification arrived; none since subscribing at a new address or a restart. */
+  heardAt: number | undefined
   /** Why the device refused, while it does; logged when it starts and when it ends. */
   refused: string | undefined
 }
@@ -247,7 +253,7 @@ const makeCovSubscriptions = (deps: {
         points: [point],
         subscribedAt: undefined,
         nextAttemptAt: 0,
-        heardAt: 0,
+        heardAt: undefined,
         refused: undefined
       })
     } else byObject.set(key, { ...known, points: [...known.points, point] })
@@ -262,7 +268,7 @@ const makeCovSubscriptions = (deps: {
       location !== undefined &&
       entry.subscribedAt !== undefined &&
       sameAddress(entry.subscribedAt, location) &&
-      entry.heardAt > 0 &&
+      entry.heardAt !== undefined &&
       now - entry.heardAt < lifetimeMs
     )
   }
@@ -289,7 +295,7 @@ const makeCovSubscriptions = (deps: {
           })
           .pipe(Effect.result)
         if (Result.isSuccess(result)) {
-          if (moved || entry.subscribedAt === undefined) entry.heardAt = 0
+          if (moved || entry.subscribedAt === undefined) entry.heardAt = undefined
           entry.subscribedAt = location
           entry.nextAttemptAt = now + timing.renewMs
           if (entry.refused !== undefined) {
@@ -313,6 +319,8 @@ const makeCovSubscriptions = (deps: {
           continue
         }
         // No answer: the subscription may still be live; it lapses on its own if the device stays silent.
+        // One made at an address the device has left is gone, so it is not retried at every check.
+        if (moved) entry.subscribedAt = undefined
         entry.nextAttemptAt = now + timing.retryMs
       }
     })
@@ -336,7 +344,7 @@ const makeCovSubscriptions = (deps: {
       const value = toPointValue(point, presentValue.values)
       // A value the gateway cannot publish: let the polling cycle read the object, and report it.
       if (Result.isFailure(value)) {
-        entry.heardAt = 0
+        entry.heardAt = undefined
         return `unusable value (${value.failure})`
       }
       readings.push({ pointId: point.point.id, value: value.success, timestamp: now })
@@ -345,38 +353,56 @@ const makeCovSubscriptions = (deps: {
     return readings
   }
 
-  const changes: Stream.Stream<Reading> = Stream.callback<Reading>((output) =>
-    Effect.gen(function* () {
-      const processId = yield* client.newProcessId
-      const arrived = yield* Queue.unbounded<{ notification: CovNotification; from: DeviceAddress }>()
-      yield* client.onCovNotification(processId, (notification, from) => {
-        Queue.offerUnsafe(arrived, { notification, from })
-      })
-      yield* Effect.addFinalizer(() => cancelAll(processId))
-      yield* maintain(processId).pipe(Effect.repeat(Schedule.spaced(timing.checkMs)), Effect.forkScoped)
-      return yield* Effect.forever(
-        Effect.gen(function* () {
-          const { notification, from } = yield* Queue.take(arrived)
-          const outcome = readingsOf(notification, from, yield* Clock.currentTimeMillis)
-          if (typeof outcome === "string") {
-            return yield* Effect.logDebug("ignored a COV notification").pipe(
-              Effect.annotateLogs({ object: describeObject(notification.object), reason: outcome })
-            )
-          }
-          yield* Queue.offerAll(output, outcome)
+  // Bounded, dropping the oldest: while the broker is slow, renewals bring the current values again.
+  const changes: Stream.Stream<Reading> = Stream.callback<Reading>(
+    (output) =>
+      Effect.gen(function* () {
+        const processId = yield* client.newProcessId
+        const arrived = yield* Queue.sliding<{ notification: CovNotification; from: DeviceAddress }>(BACKLOG)
+        yield* client.onCovNotification(processId, (notification, from) => {
+          Queue.offerUnsafe(arrived, { notification, from })
         })
-      )
-    })
+        yield* Effect.addFinalizer(() => stop(processId))
+        yield* maintain(processId).pipe(
+          Effect.catchDefect(logDefect("COV subscription check failed")),
+          Effect.repeat(Schedule.spaced(timing.checkMs)),
+          Effect.forkScoped
+        )
+        return yield* Effect.forever(
+          Effect.gen(function* () {
+            const { notification, from } = yield* Queue.take(arrived)
+            const outcome = readingsOf(notification, from, yield* Clock.currentTimeMillis)
+            if (typeof outcome === "string") {
+              return yield* Effect.logDebug("ignored a COV notification").pipe(
+                Effect.annotateLogs({ object: describeObject(notification.object), reason: outcome })
+              )
+            }
+            yield* Queue.offerAll(output, outcome)
+          }).pipe(Effect.catchDefect(logDefect("COV notification could not be handled")))
+        )
+      }),
+    { bufferSize: BACKLOG, strategy: "sliding" }
   )
 
-  /** Cancel the live subscriptions when the device stops, without holding up shutdown for a silent device. */
-  const cancelAll = (processId: number): Effect.Effect<void> =>
+  /**
+   * Nothing is pushed any more: poll every point again, and cancel the live
+   * subscriptions where they were made, without holding up shutdown for a
+   * silent device. A few at a time, so a small device behind a router is not
+   * flooded.
+   */
+  const stop = (processId: number): Effect.Effect<void> =>
     Effect.suspend(() => {
-      const location = deps.location()
-      const active = objects.filter((entry) => entry.subscribedAt !== undefined)
-      if (location === undefined || active.length === 0) return Effect.void
-      return Effect.forEach(active, (entry) => client.subscribeCov(location, { processId, object: entry.object }), {
-        concurrency: "unbounded",
+      const active = objects.flatMap((entry) =>
+        entry.subscribedAt === undefined ? [] : [{ object: entry.object, at: entry.subscribedAt }]
+      )
+      for (const entry of objects) {
+        entry.subscribedAt = undefined
+        entry.heardAt = undefined
+        entry.nextAttemptAt = 0
+      }
+      if (active.length === 0) return Effect.void
+      return Effect.forEach(active, ({ object, at }) => client.subscribeCov(at, { processId, object }), {
+        concurrency: 4,
         discard: true
       }).pipe(
         Effect.timeout("2 seconds"),
@@ -388,7 +414,19 @@ const makeCovSubscriptions = (deps: {
       )
     })
 
-  return { objects: objects.length, changes, pushedPointIds }
+  /**
+   * The device was unreachable and answers again; it may have restarted and
+   * lost its subscriptions. Subscribe again now, and poll until the first
+   * notifications arrive.
+   */
+  const resync = () => {
+    for (const entry of objects) {
+      entry.heardAt = undefined
+      entry.nextAttemptAt = 0
+    }
+  }
+
+  return { objects: objects.length, changes, pushedPointIds, resync }
 }
 
 export interface BacnetDriverOptions {
@@ -683,16 +721,18 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
    * answering is noticed within a cycle, not when its subscriptions lapse.
    */
   const toPoll = Effect.gen(function* () {
-    if (cov === undefined) return points
+    // After a timeout the device may have restarted, so what was pushed may be stale: read it all once.
+    if (cov === undefined || lostCycles > 0) return { polled: points, pushed: 0 }
     const pushed = cov.pushedPointIds(yield* Clock.currentTimeMillis)
-    yield* Metric.update(pushedPoints, pushed.size)
     const polled = points.filter((point) => !pushed.has(point.point.id))
-    return polled.length === 0 ? points.slice(0, 1) : polled
+    return { polled: polled.length === 0 ? points.slice(0, 1) : polled, pushed: pushed.size }
   })
 
   const readAll = Effect.gen(function* () {
+    const { polled, pushed } = yield* toPoll
+    // Before the device is looked for, so the gauge falls to 0 as subscriptions lapse while it is unreachable.
+    if (cov !== undefined) yield* Metric.update(pushedPoints, pushed)
     const target = yield* locate
-    const polled = yield* toPoll
     const { outcomes, requests, shrunk, timedOut } = yield* readPoints(target, polled)
     yield* report(outcomes)
     const readings = outcomes.flatMap((outcome): ReadonlyArray<Reading> =>
@@ -704,6 +744,9 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     yield* Effect.annotateCurrentSpan({ "plenum.requests": requests, "plenum.failed_points": failedPoints })
     if (polled.length > 0 && readings.length === 0) {
       if (timedOut !== undefined) return yield* timedOut
+    }
+    // A device that answered, even with errors, is alive; with points pushed, its polled ones failing is not the device failing.
+    if (polled.length > 0 && readings.length === 0 && pushed === 0) {
       const reasons = [...new Set(outcomes.flatMap((outcome) => (outcome._tag === "Failed" ? [outcome.reason] : [])))]
       return yield* new DriverError({
         device: device.id,
@@ -711,6 +754,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
         message: `no point could be read (${reasons.join(", ")})`
       })
     }
+    if (lostCycles > 0) cov?.resync()
     lostCycles = 0
     if (failedPoints > 0) yield* Metric.update(pointReadFailures, failedPoints)
     yield* regrow(shrunk)
