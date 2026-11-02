@@ -90,6 +90,18 @@ const eventually = (condition: () => boolean, timeoutMs = 5000) =>
     }
   })
 
+/** Wait until a metric (or anything else read through an effect) reaches the expected value. */
+const eventuallyEquals = <A>(read: Effect.Effect<A>, expected: A, timeoutMs = 5000) =>
+  Effect.gen(function* () {
+    const deadline = Date.now() + timeoutMs
+    let actual = yield* read
+    while (actual !== expected && Date.now() <= deadline) {
+      yield* Effect.sleep("10 millis")
+      actual = yield* read
+    }
+    expect(actual).toBe(expected)
+  })
+
 const counter = (metric: Metric.Counter<number>, attributes: Record<string, string>) =>
   Effect.map(Metric.value(Metric.withAttributes(metric, attributes)), (state) => state.count)
 const gauge = (metric: Metric.Gauge<number>, attributes: Record<string, string>) =>
@@ -147,7 +159,8 @@ describe("chaos: buffer", () => {
       yield* eventually(() => control.messages.length === 11)
       expect(control.messages.map((message) => message.payload)).toEqual(range(11))
       expect(yield* counter(bufferDropped, { test: "poison", reason: "undeliverable" })).toBe(1)
-      expect(yield* gauge(bufferRows, { test: "poison" })).toBe(0)
+      // The broker has a message before its PUBACK reaches the buffer and the row is removed.
+      yield* eventuallyEquals(gauge(bufferRows, { test: "poison" }), 0)
       // Three attempts broke three connections, then the storm stopped.
       expect(control.connects.length - refusedConnects).toBeLessThanOrEqual(5)
     }).pipe(withMetricAttributes({ test: "poison" }))
