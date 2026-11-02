@@ -27,6 +27,8 @@ describe("parseConfig", () => {
       expect(device.unitId).toBe(1)
       expect(device.pollIntervalMs).toBe(5000)
       expect(device.points[0]?.writable).toBe(false)
+      expect(config.id).toBe("main")
+      expect(config.healthIntervalMs).toBe(60_000)
     })
   )
 

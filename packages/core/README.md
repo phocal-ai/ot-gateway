@@ -6,7 +6,9 @@ The protocol-neutral heart of Plenum.
 - `Driver` interface every protocol implements
 - `Publisher` service, with `ConsolePublisher` and an in-memory publisher for tests
 - `applyScaling` and `exceedsDeadband` normalization
-- Topic helpers for `site/building/device/point` and `$meta`
-- `runDevice`: the read → scale → deadband → publish loop, with retries
+- Topic helpers for `site/building/device/point`, `$meta` and the gateway health topic
+- `runDevice`: the read → scale → deadband → publish loop, with retries; `$meta` is retried each cycle until published
+- Health (`Health.ts`): `HealthRegistry` (per-device status, written by `runDevice`), online/offline payloads, and `runHealthReporter`, which refreshes the retained health message
+- `describeSocketError` for readable socket failures in protocol clients
 
 Part of [Plenum](../../README.md).

@@ -62,6 +62,7 @@ A gateway is described by one JSON document:
 {
   "site": "vienna-hq",
   "building": "b1",
+  "id": "main",
   "mqtt": { "url": "mqtt://broker.local:1883", "passwordEnv": "PLENUM_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/plenum/buffer.sqlite" },
   "devices": [
@@ -87,7 +88,17 @@ A gateway is described by one JSON document:
 }
 ```
 
-IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
+IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
+
+## Topics
+
+| Topic                                | Retained | Payload                                                                                          |
+| ------------------------------------ | -------- | ------------------------------------------------------------------------------------------------ |
+| `site/building/device/point`         | no       | `{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}` when the value moves beyond the deadband |
+| `site/building/device/point/$meta`   | yes      | name, unit, writability and Brick/Haystack semantics                                             |
+| `site/building/$gateway/<id>/health` | yes      | `online` with per-device status, or `offline` (see below)                                        |
+
+The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back.
 
 ## Observability
 
@@ -95,14 +106,14 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 
 ## Packages
 
-| Package                                   | What it does                                                                                    | Status             |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------ |
-| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service        | Working            |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                    | Working            |
-| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4            | Reads working      |
-| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker | Publishing working |
-| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                                   | Early              |
-| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker and Modbus simulator)                     | Working            |
+| Package                                   | What it does                                                                                     | Status             |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------ | ------------------ |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service | Working            |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                     | Working            |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4             | Reads working      |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker  | Publishing working |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                                    | Early              |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker and Modbus simulator)                      | Working            |
 
 ## Architecture
 

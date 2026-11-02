@@ -64,6 +64,13 @@ export type BufferSettings = typeof BufferSettings.Type
 export const GatewayConfig = Schema.Struct({
   site: Slug,
   building: Slug,
+  /** This gateway within the building (default `main`). Its health topic is `site/building/$gateway/<id>/health`. */
+  id: Slug.pipe(Schema.withDecodingDefaultKey(Effect.succeed("main"))),
+  /** How often the retained health message is refreshed (default 60 s). */
+  healthIntervalMs: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1_000, maximum: 3_600_000 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(60_000))
+  ),
   mqtt: MqttSettings,
   buffer: Schema.optionalKey(BufferSettings),
   devices: Schema.Array(Device)
