@@ -45,7 +45,7 @@
   },
   "overrides": [
     {
-      "files": ["**/test/**", "apps/**", "scripts/**"],
+      "files": ["**/test/**", "apps/**", "scripts/**", "observability/**"],
       "rules": {
         "eslint/no-console": "off"
       }

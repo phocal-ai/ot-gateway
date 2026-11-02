@@ -9,7 +9,7 @@
   },
   "type": "module",
   "scripts": {
-    "start": "node src/main.ts ../../examples/gateway.json",
+    "start": "node --env-file-if-exists=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env} src/main.ts ../../examples/gateway.json",
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {

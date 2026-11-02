@@ -2,8 +2,43 @@
 
 Two things are observed here, and they share one Grafana Cloud stack (`wimluk.grafana.net`, region `prod-eu-west-2`):
 
-1. **Plenum itself**: health topics, point freshness, error counts and traces (see `docs/VISION.md`, principle 5). Not wired yet.
+1. **Plenum itself**: the gateway exports traces, metrics and logs over OTLP (see `docs/VISION.md`, principle 5). MQTT health topics come with the MQTT transport.
 2. **How we build Plenum**: Claude Code sessions export OpenTelemetry metrics and events, so cost, API health, tool failures and agent behaviour can be watched and improved.
+
+## Gateway telemetry
+
+The gateway uses Effect's own OTLP exporter (`effect/observability`), so there is no OpenTelemetry SDK dependency. Metrics are defined in `packages/core/src/Telemetry.ts`; `apps/gateway/src/Telemetry.ts` wires the exporter.
+
+**Configuration is only the standard OpenTelemetry environment variables**, so nothing secret goes in the gateway JSON. Without `OTEL_EXPORTER_OTLP_ENDPOINT` nothing is exported and the gateway runs as before. Each signal also needs its exporter set to `otlp` (Effect does not default it).
+
+```bash
+# ~/.config/phocal/plenum-gateway.env (mode 600), loaded by `pnpm gateway`
+# (node --env-file-if-exists; override the path with PLENUM_ENV_FILE). On a Pi, use it as a systemd EnvironmentFile.
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp-gateway-prod-eu-west-2.grafana.net/otlp
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64(instanceId:token)>
+OTEL_TRACES_EXPORTER=otlp
+OTEL_METRICS_EXPORTER=otlp
+OTEL_LOGS_EXPORTER=otlp
+OTEL_METRIC_EXPORT_INTERVAL=15000
+OTEL_RESOURCE_ATTRIBUTES=service.namespace=plenum,deployment.environment=dev
+```
+
+- **Credential:** a token of the access policy `phocal-plenum-gateway-write` (`logs:write`, `metrics:write`, `traces:write`, realm: the `wimluk` stack only). It is separate from the Claude Code policy, so a gateway token on a device in a plant room can be revoked on its own. Use one token per device. The header value is URL-encoded (`%20` for the space).
+- **Resource:** `service.name=plenum-gateway`, `service.version` from `apps/gateway/package.json`, `plenum.site` and `plenum.building` from the config, and `service.instance.id` = the hostname unless `OTEL_RESOURCE_ATTRIBUTES` sets one. Grafana maps these to `job="plenum/plenum-gateway"` and `instance`.
+- **Metric attributes:** every series carries `site`, `building` and `device`, so gateways and devices never share a cumulative series.
+- **Units:** Effect exports a metric with no `unit` attribute as unit `1`, which Grafana turns into a `_ratio` suffix on gauges. Metrics measured in seconds set `unit: "seconds"`.
+
+| Signal  | What                                                                                                                                                                                                                                                                                                             | Query                                                                    |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Metrics | `plenum_poll_cycles_total{outcome}`, `plenum_poll_duration_seconds`, `plenum_read_failures_total{reason}`, `plenum_publish_failures_total`, `plenum_values_published_total`, `plenum_values_suppressed_total`, `plenum_device_last_success_timestamp_seconds`, `plenum_point_last_read_timestamp_seconds{point}` | `sum by (device, outcome) (rate(plenum_poll_cycles_total[5m]))`          |
+| Traces  | One root `Device.pollCycle` span per cycle, with `plenum.site/building/device`; failed cycles add `plenum.outcome` and `plenum.reason`                                                                                                                                                                           | `{resource.service.name="plenum-gateway" && span.plenum.outcome != nil}` |
+| Logs    | Effect logs with annotations as structured metadata (`device`, `reason`, …) and the trace and span IDs                                                                                                                                                                                                           | `{service_name="plenum-gateway"} \| detected_level="warn"`               |
+
+Staleness is `time() - plenum_point_last_read_timestamp_seconds`. Query it with `max_over_time(...[range])`: a stopped gateway stops sending the gauge, and an instant query would show nothing instead of a growing age.
+
+### Dashboard
+
+`grafana/plenum-gateway.dashboard.ts` generates `grafana/dashboards/plenum-gateway.json`, the **phocal / Plenum gateway** dashboard (`/d/phocal-plenum-gateway`, folder `phocal`). Edit the script, run `node observability/grafana/plenum-gateway.dashboard.ts`, then re-import the JSON with `overwrite: true`.
 
 ## Claude Code telemetry
 

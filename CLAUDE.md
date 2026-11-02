@@ -33,7 +33,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `apps/gateway`: the runnable gateway
 - `examples/`: sample configs
 - `docs/`: vision and design notes
-- `observability/`: Grafana dashboards as code and the telemetry setup (see `observability/README.md`)
+- `observability/`: Grafana dashboards as code and the telemetry setup for the gateway and for Claude Code (see `observability/README.md`)
 - `repos/`: read-only reference subtrees (see below)
 
 ## Branches
@@ -50,6 +50,7 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 6. **Topics:** `site/building/device/point`, metadata on the retained `.../$meta` topic, health on `site/building/$gateway/<id>/health`.
 7. **Writes are guarded.** Only points with `writable: true`, only through the command guard, always logged.
 8. **Every driver has a simulator**, and tests run without hardware.
+9. **Observable by default.** New behaviour that can fail or stall gets a metric in `packages/core/src/Telemetry.ts` (with a `unit` attribute when it is not a count) or a span, and the dashboard script is updated. Telemetry config is the standard `OTEL_*` env vars only.
 
 ## Reference repos
 
