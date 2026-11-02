@@ -174,13 +174,21 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       request(
         quantity,
         (id) => encodeReadRequest({ transactionId: id, unitId: options.unitId, functionCode, address, quantity }),
-        (frame) => Effect.map(decodeReadResponse(frame, { functionCode, quantity }), (response) => response.registers)
+        (frame) =>
+          Effect.map(
+            decodeReadResponse(frame, { unitId: options.unitId, functionCode, quantity }),
+            (response) => response.registers
+          )
       ),
     readBits: (functionCode, address, quantity) =>
       request(
         quantity,
         (id) => encodeReadRequest({ transactionId: id, unitId: options.unitId, functionCode, address, quantity }),
-        (frame) => Effect.map(decodeBitResponse(frame, { functionCode, quantity }), (response) => response.bits)
+        (frame) =>
+          Effect.map(
+            decodeBitResponse(frame, { unitId: options.unitId, functionCode, quantity }),
+            (response) => response.bits
+          )
       )
   }
   return client

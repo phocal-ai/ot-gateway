@@ -116,15 +116,19 @@ interface ResponseHeader {
   readonly data: Uint8Array
 }
 
-/** What a response must answer: the request's function code and quantity. */
+/** What a response must answer: the request's unit, function code and quantity. */
 export interface ExpectedResponse {
+  readonly unitId: number
   readonly functionCode: number
   readonly quantity: number
 }
 
 /**
  * Parse the MBAP header and the byte-counted body shared by FC 01–04
- * responses. A normal response repeats the request's function code (§4.1).
+ * responses. The server echoes the request's unit identifier (Implementation
+ * Guide §3.1.3, MBAP header). A normal response repeats the request's function
+ * code (spec §4.1); an exception response carries it with the high bit set
+ * (spec §7). Anything else answers some other request.
  */
 const decodeReadBody = (
   frame: Uint8Array,
@@ -146,8 +150,16 @@ const decodeReadBody = (
     if (frame.length !== 6 + length) {
       return yield* new ModbusFrameError({ message: `length field ${length} does not match frame` })
     }
-    if ((functionCode & 0x80) !== 0) {
-      return yield* new ModbusException({ functionCode: functionCode & 0x7f, exceptionCode: view.getUint8(8) })
+    if (unitId !== expected.unitId) {
+      return yield* new ModbusFrameError({
+        message: `response from unit ${unitId} does not answer a request to unit ${expected.unitId}`
+      })
+    }
+    if (functionCode === (expected.functionCode | 0x80)) {
+      if (frame.length !== 9) {
+        return yield* new ModbusFrameError({ message: `exception response must be 9 bytes, got ${frame.length}` })
+      }
+      return yield* new ModbusException({ functionCode: expected.functionCode, exceptionCode: view.getUint8(8) })
     }
     if (functionCode !== expected.functionCode) {
       return yield* new ModbusFrameError({
