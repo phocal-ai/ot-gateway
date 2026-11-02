@@ -17,6 +17,8 @@ Claude Code ignores telemetry variables in a repo's `.claude/settings*.json`, so
     "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
     "OTEL_METRICS_EXPORTER": "otlp",
     "OTEL_LOGS_EXPORTER": "otlp",
+    "OTEL_TRACES_EXPORTER": "otlp",
+    "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
     "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
     "OTEL_EXPORTER_OTLP_ENDPOINT": "https://otlp-gateway-prod-eu-west-2.grafana.net/otlp",
     "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "cumulative",
@@ -28,17 +30,18 @@ Claude Code ignores telemetry variables in a repo's `.claude/settings*.json`, so
 }
 ```
 
-- **Credential:** `~/.config/phocal/devloop-otlp.env` (mode 600) holds `DEVLOOP_OTLP_ENDPOINT`, `DEVLOOP_OTLP_INSTANCE_ID` and `DEVLOOP_OTLP_TOKEN`, a write-only Grafana Cloud access policy token (`logs:write`, `metrics:write`). `~/.claude/otel-headers.sh` turns it into the `Authorization: Basic base64(instanceId:token)` header at session start, so the token never sits in a settings file.
+- **Credential:** `~/.config/phocal/claude-code-otlp.env` (mode 600) holds `CLAUDE_OTLP_ENDPOINT`, `CLAUDE_OTLP_INSTANCE_ID` and `CLAUDE_OTLP_TOKEN`: a token of the Grafana Cloud access policy `phocal-claude-code-write` (`logs:write`, `metrics:write`, `traces:write`, realm: the `wimluk` stack only). It is separate from the phocal repo's dev-loop token, which ADR-0130 there keeps to logs and metrics. Each developer adds their own token to that policy (grafana.com → Access Policies → Add token). `~/.claude/otel-headers.sh` turns it into the `Authorization: Basic base64(instanceId:token)` header at session start, so the token never sits in a settings file.
 - **Cumulative temporality is required.** Claude Code's default delta temporality is dropped by Grafana Cloud's Mimir: only `target_info` arrives.
 - **Keep `session_id` on metrics** (the default). Counters restart with each session; without the label, concurrent sessions write to the same series and corrupt each other.
 - **Content stays local.** Prompts, responses and tool inputs are redacted by default (`<REDACTED>`; only lengths are sent). Do not set `OTEL_LOG_USER_PROMPTS`, `OTEL_LOG_ASSISTANT_RESPONSES` or `OTEL_LOG_TOOL_CONTENT`. Identity attributes (`user_email`, account ids) are still attached by Claude Code.
-- **Traces are not enabled.** They need `CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`, `OTEL_TRACES_EXPORTER=otlp` and a token with `traces:write`; the current token answers `401` on `/v1/traces`.
+- **Traces are beta** (`CLAUDE_CODE_ENHANCED_TELEMETRY_BETA=1`). Each prompt is one `claude_code.interaction` trace with `claude_code.llm_request`, `claude_code.tool`, `claude_code.tool.execution` and `claude_code.tool.blocked_on_user` spans; the last one shows where a session waited on a human.
 
 ### Where the data lands
 
 | Signal | Datasource | Query |
 | --- | --- | --- |
 | Metrics (`claude_code_*`: cost, tokens, sessions, active time, commits, PRs, lines changed) | `grafanacloud-prom` | `claude_code_cost_usage_USD_total{service_namespace="phocal"}` |
+| Traces (`claude_code.interaction` and child spans) | `grafanacloud-traces` | `{resource.service.name="claude-code" && name="claude_code.interaction"}` |
 | Events (`api_request`, `api_error`, `tool_result`, `tool_decision`, `user_prompt`, hooks, MCP connections) | `grafanacloud-logs` | `{service_name="claude-code"} \| event_name="api_request"` |
 
 Per-request `api_request` events carry `cost_usd`, token counts, `duration_ms` and `ttft_ms`; they are the exact source for cost over time. Metric counters are better for per-session totals (`max_over_time`), since `increase()` misses a short session's first and only sample.
