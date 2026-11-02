@@ -28,6 +28,7 @@ import { MqttPublisher } from "@plenum/mqtt"
 import { BufferedPublisher } from "@plenum/buffer"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, FileSystem, Layer, Schedule, Scope } from "effect"
+import { gatewayTeardown } from "./Shutdown.ts"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
 /** The gateway's BACnet/IP endpoint, once its socket is open; absent without BACnet devices. */
@@ -169,4 +170,4 @@ const program = Effect.gen(function* () {
   )
 })
 
-program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain)
+program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain({ teardown: gatewayTeardown }))
