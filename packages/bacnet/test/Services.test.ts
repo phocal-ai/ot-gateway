@@ -5,19 +5,24 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Result } from "effect"
 import {
+  type CovNotification,
+  decodeCovNotification,
   decodeErrorBody,
   decodeIAm,
   decodeReadProperty,
   decodeReadPropertyAck,
   decodeReadPropertyMultiple,
   decodeReadPropertyMultipleAck,
+  decodeSubscribeCov,
   decodeWhoIs,
+  encodeCovNotification,
   encodeErrorBody,
   encodeIAm,
   encodeReadProperty,
   encodeReadPropertyAck,
   encodeReadPropertyMultiple,
   encodeReadPropertyMultipleAck,
+  encodeSubscribeCov,
   encodeWhoIs,
   ErrorClass,
   ErrorCode,
@@ -141,6 +146,54 @@ describe("ReadPropertyMultiple", () => {
       }
     ]
     expect(decodeReadPropertyMultipleAck(encodeReadPropertyMultipleAck(ack))).toEqual(Result.succeed(ack))
+  })
+})
+
+describe("SubscribeCOV", () => {
+  const analogInput10 = { objectType: ObjectType["analog-input"], instance: 10 }
+
+  it("encodes the request from the Annex F example", () => {
+    const request = { processId: 18, object: analogInput10, confirmed: true, lifetime: 0 }
+    expect(hex(encodeSubscribeCov(request))).toBe("09 12 1c 00 00 00 0a 29 01 39 00")
+    expect(decodeSubscribeCov(encodeSubscribeCov(request))).toEqual(Result.succeed(request))
+  })
+
+  it("encodes a cancellation as process and object only", () => {
+    const cancel = { processId: 18, object: analogInput10 }
+    expect(hex(encodeSubscribeCov(cancel))).toBe("09 12 1c 00 00 00 0a")
+    expect(decodeSubscribeCov(encodeSubscribeCov(cancel))).toEqual(Result.succeed(cancel))
+  })
+})
+
+describe("COV notification", () => {
+  const notification: CovNotification = {
+    processId: 18,
+    initiatingDevice: { objectType: ObjectType.device, instance: 4 },
+    object: { objectType: ObjectType["analog-input"], instance: 10 },
+    timeRemaining: 0,
+    values: [
+      { property: PropertyId["present-value"], values: [{ type: "real", value: 65 }] },
+      { property: PropertyId["status-flags"], values: [{ type: "bit-string", value: [false, false, false, false] }] }
+    ]
+  }
+  const annexF = "09 12 1c 02 00 00 04 2c 00 00 00 0a 39 00 4e 09 55 2e 44 42 82 00 00 2f 09 6f 2e 82 04 00 2f 4f"
+
+  it("encodes the notification from the Annex F example", () => {
+    expect(hex(encodeCovNotification(notification))).toBe(annexF)
+    expect(decodeCovNotification(bytesOf(annexF))).toEqual(Result.succeed(notification))
+  })
+
+  it("round-trips an array index and a priority", () => {
+    const withPriority: CovNotification = {
+      ...notification,
+      timeRemaining: 120,
+      values: [{ property: PropertyId["priority-array"], arrayIndex: 8, values: [{ type: "null" }], priority: 8 }]
+    }
+    expect(decodeCovNotification(encodeCovNotification(withPriority))).toEqual(Result.succeed(withPriority))
+  })
+
+  it("rejects a list of values that is never closed", () => {
+    expect(Result.isFailure(decodeCovNotification(bytesOf(annexF).subarray(0, -1)))).toBe(true)
   })
 })
 

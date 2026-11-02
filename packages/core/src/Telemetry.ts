@@ -78,6 +78,21 @@ export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
   incremental: true
 })
 
+/** Values a device pushed between polls (BACnet change-of-value), before the deadband. */
+export const pushedReadings = Metric.counter("plenum_pushed_readings", {
+  description: "Values pushed by devices between polls",
+  incremental: true
+})
+
+/**
+ * Points a device currently pushes (a live change-of-value subscription), so
+ * the polling cycle skips them. A UCUM annotation unit, so no `_ratio` suffix.
+ */
+export const pushedPoints = Metric.gauge("plenum_pushed_points", {
+  description: "Points kept up to date by device pushes instead of polling",
+  attributes: { unit: "{point}" }
+})
+
 /**
  * Requests a driver sent to its device, by `outcome`: `ok`, `timeout`,
  * `exception` (the device refused), `invalid_response` or `connection`.

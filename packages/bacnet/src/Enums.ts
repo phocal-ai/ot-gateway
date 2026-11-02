@@ -92,7 +92,7 @@ export const ErrorClass = {
   communication: 7
 } as const
 
-/** The error codes a read can produce (clause 18). */
+/** The error codes a read or a COV subscription can produce (clause 18). */
 export const ErrorCode = {
   other: 0,
   "configuration-in-progress": 2,
@@ -112,6 +112,7 @@ export const ErrorCode = {
   "invalid-array-index": 42,
   "cov-subscription-failed": 43,
   "not-cov-property": 44,
+  "optional-functionality-not-supported": 45,
   "property-is-not-an-array": 50,
   "abort-segmentation-not-supported": 128
 } as const

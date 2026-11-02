@@ -5,6 +5,11 @@
  * rejected, other services are rejected as unrecognized, and an answer
  * larger than the requester accepts is aborted (it never segments).
  *
+ * SubscribeCOV is supported for objects with a present value, with
+ * unconfirmed notifications only. The device keeps the subscriptions;
+ * `covNotifications` says who to notify when an object changed, and
+ * `onChange` listeners hear about every change.
+ *
  * The UDP server that puts it on the network lives with the transport.
  */
 import type { BacnetDevice } from "@plenum/core"
@@ -13,9 +18,12 @@ import { AbortReason, type Apdu, ConfirmedService, encodeApdu, RejectReason, Unc
 import type { BacnetValue, ObjectId } from "./Encoding.ts"
 import { ErrorClass, ErrorCode, ObjectType, type ObjectTypeName, PropertyId, Segmentation } from "./Enums.ts"
 import {
+  type CovNotification,
   decodeReadProperty,
   decodeReadPropertyMultiple,
+  decodeSubscribeCov,
   decodeWhoIs,
+  encodeCovNotification,
   encodeErrorBody,
   encodeIAm,
   encodeReadPropertyAck,
@@ -45,15 +53,42 @@ export interface SimulatedDeviceConfig {
   readonly objects: ReadonlyArray<SimulatedObjectConfig>
 }
 
+/** A COV subscription a simulated device holds (clause 13.14). */
+export interface CovSubscription {
+  /** Who subscribed, as the server identifies requesters (e.g. their address). */
+  readonly subscriber: string
+  readonly processId: number
+  readonly object: ObjectId
+  /** When it ends, in epoch milliseconds; absent for an indefinite one. */
+  readonly expiresAt?: number
+}
+
 export interface SimulatedDevice {
   readonly instance: number
   readonly vendorId: number
   readonly maxApdu: number
   /** Property values by object (`type:instance`) and property number. */
   readonly objects: Map<string, Map<number, ReadonlyArray<BacnetValue>>>
+  /** By subscriber, process and object: a new subscription for the same three replaces the old one. */
+  readonly subscriptions: Map<string, CovSubscription>
+  /** Called with the object whenever its present value or status flags change. */
+  readonly onChange: Set<(object: ObjectId) => void>
+}
+
+/** Who sent a request, and when, for the services that remember the requester. */
+export interface Requester {
+  readonly subscriber: string
+  /** Epoch milliseconds. */
+  readonly now: number
 }
 
 const keyOf = (id: ObjectId) => `${id.objectType}:${id.instance}`
+
+const subscriptionKey = (subscriber: string, processId: number, object: ObjectId) =>
+  `${subscriber}|${processId}|${keyOf(object)}`
+
+/** Properties whose change is reported to COV subscribers (clause 13.1, Table 13-1). */
+const covProperties = [PropertyId["present-value"], PropertyId["status-flags"]] as const
 
 /** Device instance 4,194,303 in a request means "this device", whatever its instance (clause 15.5.1.1.1). */
 const WILDCARD_INSTANCE = 4_194_303
@@ -122,7 +157,7 @@ export const makeSimulatedDevice = (config: SimulatedDeviceConfig): SimulatedDev
     }
     objects.set(keyOf(id), properties)
   })
-  return { instance: config.instance, vendorId, maxApdu, objects }
+  return { instance: config.instance, vendorId, maxApdu, objects, subscriptions: new Map(), onChange: new Set() }
 }
 
 /** Change a property, as a sensor or an operator would. Returns false if the object does not exist. */
@@ -133,10 +168,60 @@ export const setProperty = (
   value: BacnetValue
 ): boolean => {
   const objectType = typeof object.objectType === "number" ? object.objectType : ObjectType[object.objectType]
-  const properties = device.objects.get(keyOf({ objectType, instance: object.instance }))
+  const id = { objectType, instance: object.instance }
+  const properties = device.objects.get(keyOf(id))
   if (properties === undefined) return false
+  const before = properties.get(property)
   properties.set(property, [value])
+  const changed = before === undefined || before.length !== 1 || !sameValue(before[0], value)
+  if (changed && covProperties.some((covProperty) => covProperty === property)) {
+    for (const listener of device.onChange) listener(id)
+  }
   return true
+}
+
+const sameValue = (left: BacnetValue | undefined, right: BacnetValue) =>
+  left !== undefined && JSON.stringify(left) === JSON.stringify(right)
+
+/**
+ * The notifications `object` causes now: one UnconfirmedCOVNotification per
+ * live subscription to it (only `subscriber`'s, if given), with its present
+ * value and status flags. Expired subscriptions are dropped on the way.
+ */
+export const covNotifications = (
+  device: SimulatedDevice,
+  object: ObjectId,
+  now: number,
+  subscriber?: string
+): ReadonlyArray<{ readonly subscriber: string; readonly apdu: Apdu }> => {
+  const properties = device.objects.get(keyOf(object))
+  if (properties === undefined) return []
+  const notifications: Array<{ readonly subscriber: string; readonly apdu: Apdu }> = []
+  for (const [key, subscription] of device.subscriptions) {
+    if (subscription.expiresAt !== undefined && subscription.expiresAt <= now) {
+      device.subscriptions.delete(key)
+      continue
+    }
+    if (keyOf(subscription.object) !== keyOf(object)) continue
+    if (subscriber !== undefined && subscription.subscriber !== subscriber) continue
+    const notification: CovNotification = {
+      processId: subscription.processId,
+      initiatingDevice: { objectType: ObjectType.device, instance: device.instance },
+      object,
+      timeRemaining:
+        subscription.expiresAt === undefined ? 0 : Math.max(1, Math.ceil((subscription.expiresAt - now) / 1000)),
+      values: covProperties.map((property) => ({ property, values: properties.get(property) ?? [] }))
+    }
+    notifications.push({
+      subscriber: subscription.subscriber,
+      apdu: {
+        _tag: "UnconfirmedRequest",
+        service: UnconfirmedService.UnconfirmedCovNotification,
+        body: encodeCovNotification(notification)
+      }
+    })
+  }
+  return notifications
 }
 
 /** Change an object's present value. */
@@ -191,7 +276,11 @@ const resolveWildcard = (device: SimulatedDevice, object: ObjectId): ObjectId =>
     ? { objectType: ObjectType.device, instance: device.instance }
     : object
 
-export const answer = (device: SimulatedDevice, request: Apdu): Apdu | undefined => {
+export const answer = (
+  device: SimulatedDevice,
+  request: Apdu,
+  requester: Requester = { subscriber: "", now: 0 }
+): Apdu | undefined => {
   if (request._tag === "UnconfirmedRequest") {
     if (request.service !== UnconfirmedService.WhoIs) return undefined
     const whoIs = decodeWhoIs(request.body)
@@ -248,6 +337,38 @@ export const answer = (device: SimulatedDevice, request: Apdu): Apdu | undefined
         }
       })
       return ack(encodeReadPropertyMultipleAck(results))
+    }
+    case ConfirmedService.SubscribeCov: {
+      const decoded = decodeSubscribeCov(request.body)
+      if (Result.isFailure(decoded)) return reject(RejectReason.InvalidTag)
+      const subscription = decoded.success
+      const error = (errorClass: number, errorCode: number): Apdu => ({
+        _tag: "Error",
+        invokeId,
+        service,
+        body: encodeErrorBody({ errorClass, errorCode })
+      })
+      const properties = device.objects.get(keyOf(subscription.object))
+      if (properties === undefined) return error(ErrorClass.object, ErrorCode["unknown-object"])
+      if (!properties.has(PropertyId["present-value"])) {
+        return error(ErrorClass.object, ErrorCode["optional-functionality-not-supported"])
+      }
+      const key = subscriptionKey(requester.subscriber, subscription.processId, subscription.object)
+      if (subscription.confirmed === undefined && subscription.lifetime === undefined) {
+        // A cancellation; one for a subscription that does not exist succeeds too (clause 13.14.2).
+        device.subscriptions.delete(key)
+      } else if (subscription.confirmed === true) {
+        return error(ErrorClass.services, ErrorCode["optional-functionality-not-supported"])
+      } else {
+        const lifetime = subscription.lifetime ?? 0
+        device.subscriptions.set(key, {
+          subscriber: requester.subscriber,
+          processId: subscription.processId,
+          object: subscription.object,
+          ...(lifetime === 0 ? {} : { expiresAt: requester.now + lifetime * 1000 })
+        })
+      }
+      return { _tag: "SimpleAck", invokeId, service }
     }
     default:
       return reject(RejectReason.UnrecognizedService)

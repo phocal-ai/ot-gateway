@@ -12,14 +12,19 @@
  *   when no point could be read.
  * - **A timeout** forgets where the device is, so the next read looks it up
  *   again, in case it moved to another address.
+ * - **Change of value** (`cov`, on by default): every object with a
+ *   present-value point gets an unconfirmed COV subscription (clause 13.14),
+ *   renewed before it runs out. While its notifications arrive, the polling
+ *   cycle skips the object's present-value points; an object the device
+ *   refuses, or that goes quiet, is polled again.
  *
  * Binary objects' present values (`inactive`/`active`) are published as
  * booleans; every other numeric value as a number.
  */
 import { NodeDatagramSocket } from "@effect/platform-node"
-import { type BacnetDevice, type BacnetSettings, DriverError, pointReadFailures } from "@plenum/core"
+import { type BacnetDevice, type BacnetSettings, DriverError, pointReadFailures, pushedPoints } from "@plenum/core"
 import type { BacnetPoint, Driver, PointValue, Reading } from "@plenum/core"
-import { Clock, Duration, Effect, Metric, Result } from "effect"
+import { Clock, Duration, Effect, Metric, Queue, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { AbortReason, MAX_APDU_IP, RejectReason } from "./Apdu.ts"
 import {
@@ -32,7 +37,7 @@ import {
 } from "./Client.ts"
 import type { BacnetValue, ObjectId } from "./Encoding.ts"
 import { ErrorClass, ErrorCode, nameOf, ObjectType, objectTypeNumber, PropertyId, propertyNumber } from "./Enums.ts"
-import type { PropertyResult, ReadAccessSpecification } from "./Services.ts"
+import type { CovNotification, PropertyResult, ReadAccessSpecification } from "./Services.ts"
 
 /** The BACnet/IP port, `0xBAC0` (Annex J.1). */
 export const BACNET_PORT = 47_808
@@ -171,9 +176,226 @@ interface Location extends DeviceAddress {
   readonly maxApdu: number
 }
 
+/** Timing of COV subscriptions; the defaults suit production, tests shorten them. */
+export interface CovTiming {
+  /** Requested lifetime of a subscription. Default 300 s. */
+  readonly lifetimeSeconds: number
+  /** Renew this long after subscribing: half the lifetime, so one lost renewal does not end it. */
+  readonly renewMs: number
+  /** How often subscriptions are checked, made or retried. Default 5 s. */
+  readonly checkMs: number
+  /** A subscription that timed out is tried again after this. Default 30 s. */
+  readonly retryMs: number
+  /** An object the device refused a subscription for is tried again after this. Default 1 hour. */
+  readonly refusedRetryMs: number
+}
+
+const defaultCovTiming: CovTiming = {
+  lifetimeSeconds: 300,
+  renewMs: 150_000,
+  checkMs: 5_000,
+  retryMs: 30_000,
+  refusedRetryMs: 3_600_000
+}
+
+const sameAddress = (left: DeviceAddress, right: DeviceAddress) =>
+  NetAddress.formatInet(left.address) === NetAddress.formatInet(right.address) &&
+  left.network?.network === right.network?.network &&
+  (left.network?.address ?? []).join(".") === (right.network?.address ?? []).join(".")
+
+const describeObject = (object: ObjectId) => `${nameOf(ObjectType, object.objectType)}:${object.instance}`
+
+/** One subscribed object and the present-value points it feeds. */
+interface CovObject {
+  readonly object: ObjectId
+  readonly points: ReadonlyArray<ResolvedPoint>
+  /** The address the live subscription was made at; `undefined` when there is none. */
+  subscribedAt: DeviceAddress | undefined
+  /** When to subscribe again (renew, or retry). */
+  nextAttemptAt: number
+  /** When the last usable notification arrived; 0 since the last (re)subscription to a new address. */
+  heardAt: number
+  /** Why the device refused, while it does; logged when it starts and when it ends. */
+  refused: string | undefined
+}
+
+/**
+ * The COV side of one device: subscriptions for every object with a
+ * present-value point, the notifications they bring as readings, and which
+ * points they currently keep up to date.
+ *
+ * It only reads `location`, which the polling cycle owns: nothing is
+ * subscribed before the device has been found, and a device that moved is
+ * subscribed again at its new address.
+ */
+const makeCovSubscriptions = (deps: {
+  readonly client: BacnetClient
+  readonly deviceInstance: number
+  readonly points: ReadonlyArray<ResolvedPoint>
+  readonly location: () => DeviceAddress | undefined
+  readonly timing: CovTiming
+}) => {
+  const { client, timing } = deps
+  const byObject = new Map<string, CovObject>()
+  for (const point of deps.points) {
+    if (point.property !== PropertyId["present-value"]) continue
+    const key = keyOf(point.object, point.property)
+    const known = byObject.get(key)
+    if (known === undefined) {
+      byObject.set(key, {
+        object: point.object,
+        points: [point],
+        subscribedAt: undefined,
+        nextAttemptAt: 0,
+        heardAt: 0,
+        refused: undefined
+      })
+    } else byObject.set(key, { ...known, points: [...known.points, point] })
+  }
+  const objects = [...byObject.values()]
+  const lifetimeMs = timing.lifetimeSeconds * 1000
+
+  /** The object is pushing: subscribed where the device is now, and heard from within the lifetime. */
+  const live = (entry: CovObject, now: number) => {
+    const location = deps.location()
+    return (
+      location !== undefined &&
+      entry.subscribedAt !== undefined &&
+      sameAddress(entry.subscribedAt, location) &&
+      entry.heardAt > 0 &&
+      now - entry.heardAt < lifetimeMs
+    )
+  }
+
+  /** Ids of the points the polling cycle can skip. */
+  const pushedPointIds = (now: number) =>
+    new Set(objects.flatMap((entry) => (live(entry, now) ? entry.points.map((point) => point.point.id) : [])))
+
+  /** Subscribe (or renew) every object that is due, one request at a time. */
+  const maintain = (processId: number) =>
+    Effect.gen(function* () {
+      const location = deps.location()
+      if (location === undefined) return
+      for (const entry of objects) {
+        const now = yield* Clock.currentTimeMillis
+        const moved = entry.subscribedAt !== undefined && !sameAddress(entry.subscribedAt, location)
+        if (now < entry.nextAttemptAt && !moved) continue
+        const result = yield* client
+          .subscribeCov(location, {
+            processId,
+            object: entry.object,
+            confirmed: false,
+            lifetime: timing.lifetimeSeconds
+          })
+          .pipe(Effect.result)
+        if (Result.isSuccess(result)) {
+          if (moved || entry.subscribedAt === undefined) entry.heardAt = 0
+          entry.subscribedAt = location
+          entry.nextAttemptAt = now + timing.renewMs
+          if (entry.refused !== undefined) {
+            entry.refused = undefined
+            yield* Effect.log("COV subscription accepted").pipe(
+              Effect.annotateLogs({ object: describeObject(entry.object) })
+            )
+          }
+          continue
+        }
+        const error = result.failure
+        if (error._tag === "BacnetDeviceError" || error._tag === "BacnetCodecError") {
+          entry.subscribedAt = undefined
+          entry.nextAttemptAt = now + timing.refusedRetryMs
+          if (entry.refused !== error.message) {
+            entry.refused = error.message
+            yield* Effect.logWarning("device refused a COV subscription, polling the object instead").pipe(
+              Effect.annotateLogs({ object: describeObject(entry.object), reason: error.message })
+            )
+          }
+          continue
+        }
+        // No answer: the subscription may still be live; it lapses on its own if the device stays silent.
+        entry.nextAttemptAt = now + timing.retryMs
+      }
+    })
+
+  /** The readings a notification carries, or why it does not count. */
+  const readingsOf = (notification: CovNotification, from: DeviceAddress, now: number) => {
+    const location = deps.location()
+    if (location === undefined || !sameAddress(from, location)) return "from another address"
+    const initiating = notification.initiatingDevice
+    if (initiating.objectType !== ObjectType.device || initiating.instance !== deps.deviceInstance) {
+      return "for another device"
+    }
+    const entry = byObject.get(keyOf(notification.object, PropertyId["present-value"]))
+    if (entry === undefined) return "for an object without points"
+    const presentValue = notification.values.find(
+      (value) => value.property === PropertyId["present-value"] && value.arrayIndex === undefined
+    )
+    if (presentValue === undefined) return "without a present value"
+    const readings: Array<Reading> = []
+    for (const point of entry.points) {
+      const value = toPointValue(point, presentValue.values)
+      // A value the gateway cannot publish: let the polling cycle read the object, and report it.
+      if (Result.isFailure(value)) {
+        entry.heardAt = 0
+        return `unusable value (${value.failure})`
+      }
+      readings.push({ pointId: point.point.id, value: value.success, timestamp: now })
+    }
+    entry.heardAt = now
+    return readings
+  }
+
+  const changes: Stream.Stream<Reading> = Stream.callback<Reading>((output) =>
+    Effect.gen(function* () {
+      const processId = yield* client.newProcessId
+      const arrived = yield* Queue.unbounded<{ notification: CovNotification; from: DeviceAddress }>()
+      yield* client.onCovNotification(processId, (notification, from) => {
+        Queue.offerUnsafe(arrived, { notification, from })
+      })
+      yield* Effect.addFinalizer(() => cancelAll(processId))
+      yield* maintain(processId).pipe(Effect.repeat(Schedule.spaced(timing.checkMs)), Effect.forkScoped)
+      return yield* Effect.forever(
+        Effect.gen(function* () {
+          const { notification, from } = yield* Queue.take(arrived)
+          const outcome = readingsOf(notification, from, yield* Clock.currentTimeMillis)
+          if (typeof outcome === "string") {
+            return yield* Effect.logDebug("ignored a COV notification").pipe(
+              Effect.annotateLogs({ object: describeObject(notification.object), reason: outcome })
+            )
+          }
+          yield* Queue.offerAll(output, outcome)
+        })
+      )
+    })
+  )
+
+  /** Cancel the live subscriptions when the device stops, without holding up shutdown for a silent device. */
+  const cancelAll = (processId: number): Effect.Effect<void> =>
+    Effect.suspend(() => {
+      const location = deps.location()
+      const active = objects.filter((entry) => entry.subscribedAt !== undefined)
+      if (location === undefined || active.length === 0) return Effect.void
+      return Effect.forEach(active, (entry) => client.subscribeCov(location, { processId, object: entry.object }), {
+        concurrency: "unbounded",
+        discard: true
+      }).pipe(
+        Effect.timeout("2 seconds"),
+        Effect.catchCause((cause) =>
+          Effect.logDebug("could not cancel COV subscriptions; they run out on their own").pipe(
+            Effect.annotateLogs({ cause: String(cause) })
+          )
+        )
+      )
+    })
+
+  return { objects: objects.length, changes, pushedPointIds }
+}
+
 export interface BacnetDriverOptions {
   /** Start with this many properties per ReadPropertyMultiple instead of sizing them from the device's I-Am. */
   readonly batchSize?: number
+  /** Override COV timing (tests). */
+  readonly cov?: Partial<CovTiming>
 }
 
 /**
@@ -309,8 +531,8 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       })
     )
 
-  /** Read every point, in batches with ReadPropertyMultiple while the device supports it. */
-  const readPoints = Effect.fnUntraced(function* (target: DeviceAddress) {
+  /** Read `points`, in batches with ReadPropertyMultiple while the device supports it. */
+  const readPoints = Effect.fnUntraced(function* (target: DeviceAddress, toRead: ReadonlyArray<ResolvedPoint>) {
     const outcomes: Array<PointOutcome> = []
     let requests = 0
     let index = 0
@@ -336,12 +558,12 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
         outcomes.push(outcome)
       }
     })
-    while (index < points.length && stop.timedOut === undefined) {
+    while (index < toRead.length && stop.timedOut === undefined) {
       if (!multiple) {
-        yield* readEach(points.slice(index))
+        yield* readEach(toRead.slice(index))
         break
       }
-      const batch = points.slice(index, index + batchSize)
+      const batch = toRead.slice(index, index + batchSize)
       requests++
       const answer = yield* client.readPropertyMultiple(target, specificationsOf(batch)).pipe(
         Effect.map((results) => ({ _tag: "Results" as const, results })),
@@ -354,8 +576,8 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       switch (answer._tag) {
         case "TimedOut":
           stop.timedOut = answer.error
-          outcomes.push(...failed(points.slice(index), "no answer"))
-          index = points.length
+          outcomes.push(...failed(toRead.slice(index), "no answer"))
+          index = toRead.length
           continue
         case "Unreadable":
           // One value the codec cannot read must not cost the others: read them one by one.
@@ -445,9 +667,33 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
   const fail = (reason: DriverError["reason"], message: string) =>
     Effect.fail(new DriverError({ device: device.id, reason, message }))
 
+  const cov = device.cov
+    ? makeCovSubscriptions({
+        client,
+        deviceInstance: device.deviceInstance,
+        points,
+        location: () => location,
+        timing: { ...defaultCovTiming, ...options.cov }
+      })
+    : undefined
+
+  /**
+   * The points to poll: those no COV subscription keeps up to date. When
+   * every point is pushed, the first is still read, so a device that stopped
+   * answering is noticed within a cycle, not when its subscriptions lapse.
+   */
+  const toPoll = Effect.gen(function* () {
+    if (cov === undefined) return points
+    const pushed = cov.pushedPointIds(yield* Clock.currentTimeMillis)
+    yield* Metric.update(pushedPoints, pushed.size)
+    const polled = points.filter((point) => !pushed.has(point.point.id))
+    return polled.length === 0 ? points.slice(0, 1) : polled
+  })
+
   const readAll = Effect.gen(function* () {
     const target = yield* locate
-    const { outcomes, requests, shrunk, timedOut } = yield* readPoints(target)
+    const polled = yield* toPoll
+    const { outcomes, requests, shrunk, timedOut } = yield* readPoints(target, polled)
     yield* report(outcomes)
     const readings = outcomes.flatMap((outcome): ReadonlyArray<Reading> =>
       outcome._tag === "Value"
@@ -456,7 +702,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     )
     const failedPoints = outcomes.length - readings.length
     yield* Effect.annotateCurrentSpan({ "plenum.requests": requests, "plenum.failed_points": failedPoints })
-    if (points.length > 0 && readings.length === 0) {
+    if (polled.length > 0 && readings.length === 0) {
       if (timedOut !== undefined) return yield* timedOut
       const reasons = [...new Set(outcomes.flatMap((outcome) => (outcome._tag === "Failed" ? [outcome.reason] : [])))]
       return yield* new DriverError({
@@ -485,6 +731,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     points: device.points,
     readAll,
     retriesTimeouts: true,
+    ...(cov === undefined || cov.objects === 0 ? {} : { changes: cov.changes }),
     // Write-back is v0.4 (docs/VISION.md): it lands with the command guard, not before.
     write: (pointId) => fail("not-implemented", `writing ${pointId} is not supported yet`)
   }

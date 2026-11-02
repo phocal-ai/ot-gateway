@@ -100,7 +100,7 @@ A gateway is described by one JSON document:
 
 With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@plenum/buffer`](packages/buffer).
 
-BACnet devices are found by `deviceInstance` with Who-Is, or reached directly at `address` (`ip` or `ip:port`). A point reads `present-value` of its object unless it names another `property`. Every BACnet device shares one UDP socket, set in the optional `bacnet` block: `bindAddress` (default `0.0.0.0`; on Linux, binding one address stops broadcasts from arriving), `port` (47808; devices broadcast I-Am there), `broadcastAddress` (`255.255.255.255`, port 47808 unless given; set your subnet's, since the default leaves through one interface only), `requestTimeoutMs` (3000) and `retries` (2). See [`@plenum/bacnet`](packages/bacnet).
+BACnet devices are found by `deviceInstance` with Who-Is, or reached directly at `address` (`ip` or `ip:port`). A point reads `present-value` of its object unless it names another `property`. With `cov` (default `true`) the gateway subscribes to change-of-value notifications for present values and polls only what they do not cover. Every BACnet device shares one UDP socket, set in the optional `bacnet` block: `bindAddress` (default `0.0.0.0`; on Linux, binding one address stops broadcasts from arriving), `port` (47808; devices broadcast I-Am there), `broadcastAddress` (`255.255.255.255`, port 47808 unless given; set your subnet's, since the default leaves through one interface only), `requestTimeoutMs` (3000) and `retries` (2). See [`@plenum/bacnet`](packages/bacnet).
 
 IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
 
@@ -120,15 +120,15 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 
 ## Packages
 
-| Package                                   | What it does                                                                                        | Status             |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------- | ------------------ |
-| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service    | Working            |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                        | Working            |
-| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4                | Reads working      |
-| [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order | Working            |
-| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker     | Publishing working |
-| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, client with Who-Is discovery, ReadProperty(Multiple) driver, simulator server    | Reads working      |
-| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                | Working            |
+| Package                                   | What it does                                                                                             | Status                |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------- |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service         | Working               |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                             | Working               |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4                     | Reads working         |
+| [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order      | Working               |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker          | Publishing working    |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, client with Who-Is discovery, ReadProperty(Multiple) and COV driver, simulator server | Reads and COV working |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                     | Working               |
 
 ## Architecture
 

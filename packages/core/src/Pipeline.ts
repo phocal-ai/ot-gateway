@@ -2,7 +2,7 @@
  * The polling pipeline for one device:
  * read → scale → deadband → publish, repeated on the device's schedule.
  */
-import { Clock, Duration, Effect, Metric, Option, Random, Schedule } from "effect"
+import { Clock, Duration, Effect, Metric, Option, Random, Schedule, Semaphore, Stream } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
 import type { HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
@@ -15,6 +15,7 @@ import {
   pollCycles,
   pollDuration,
   publishFailures,
+  pushedReadings,
   readFailures,
   valuesPublished,
   valuesSuppressed,
@@ -67,6 +68,10 @@ const countCycle = (outcome: "ok" | "read_failed" | "publish_failed") =>
  * its cycle instead of hanging under a span that never closes, and updates
  * the metrics in `Telemetry.ts` with a `device` attribute. Only
  * `traceSampleRatio` of the cycles are exported as traces.
+ *
+ * Values the driver pushes (`driver.changes`) go through the same scaling,
+ * deadband and publishing, one at a time with the cycle's own values, so the
+ * last published value per point stays consistent. They are not traced.
  */
 export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, driver: Driver) {
   const publisher = yield* Publisher
@@ -152,6 +157,8 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     last.set(point.id, value)
     yield* Metric.update(valuesPublished, 1)
   })
+  // Polled and pushed values for the same point must not interleave around `last`.
+  const handling = yield* Semaphore.make(1)
 
   const pollCycle = Effect.gen(function* () {
     if (unpublishedMeta.size > 0) yield* publishMeta
@@ -165,7 +172,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)
-    yield* Effect.forEach(readings, handleReading, { discard: true })
+    yield* handling.withPermit(Effect.forEach(readings, handleReading, { discard: true }))
     yield* countCycle("ok")
   }).pipe(
     Effect.catchTags({
@@ -204,8 +211,26 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
   })
 
-  return yield* tracedCycle.pipe(
-    Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)),
+  const polling = tracedCycle.pipe(Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)))
+  const pushed =
+    driver.changes === undefined
+      ? Effect.void
+      : Stream.runForEach(driver.changes, (reading) =>
+          Metric.update(pushedReadings, 1).pipe(
+            Effect.andThen(handling.withPermit(handleReading(reading))),
+            // A broker that is down now gets the value with the next change or poll.
+            Effect.catchTag("PublishError", (error) =>
+              Effect.all([
+                Effect.logWarning("publish failed").pipe(
+                  Effect.annotateLogs({ topic: error.topic, error: error.message })
+                ),
+                Metric.update(publishFailures, 1)
+              ])
+            )
+          )
+        )
+
+  return yield* Effect.all([polling, pushed], { concurrency: 2, discard: true }).pipe(
     Effect.annotateLogs({ device: driver.deviceId }),
     withMetricAttributes({ device: driver.deviceId })
   )

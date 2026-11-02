@@ -3,8 +3,8 @@
  */
 import { NodeDatagramSocket } from "@effect/platform-node"
 import { describe, expect, it } from "@effect/vitest"
-import type { BacnetDevice, BacnetPoint } from "@plenum/core"
-import { type Duration, Effect, Result } from "effect"
+import type { BacnetDevice, BacnetPoint, Reading } from "@plenum/core"
+import { type Duration, Effect, Fiber, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import {
@@ -342,6 +342,114 @@ describe("BACnet driver over UDP", () => {
         reason: "configuration",
         message: 'point typo: unknown object type "analog-inptu"'
       })
+    })
+  )
+})
+
+const eventually = (condition: () => boolean) =>
+  Effect.sync(condition).pipe(
+    Effect.repeat({ until: (met) => met, schedule: Schedule.spaced("10 millis") }),
+    Effect.timeout("2 seconds")
+  )
+
+/** Short COV timing, so subscriptions are made within a test. */
+const quickCov = { checkMs: 20, retryMs: 100, renewMs: 10_000, lifetimeSeconds: 60 }
+
+/** Collect what the driver pushes, until the returned fiber is interrupted. */
+const collectPushes = (changes: Stream.Stream<Reading> | undefined) =>
+  Effect.gen(function* () {
+    const pushed: Array<readonly [string, Reading["value"]]> = []
+    if (changes === undefined) return { pushed, fiber: undefined }
+    const fiber = yield* Stream.runForEach(changes, (reading) =>
+      Effect.sync(() => {
+        pushed.push([reading.pointId, reading.value])
+      })
+    ).pipe(Effect.forkChild)
+    return { pushed, fiber }
+  })
+
+const objectType = point("ai-type", "analog-input", 1, "object-type")
+
+describe("BACnet change of value", () => {
+  it.live("subscribes present values, pushes their changes and stops polling them", () =>
+    Effect.gen(function* () {
+      const { client, simulated, config } = yield* setUp([supplyTemp, fanRunning, objectType])
+      const driver = yield* makeBacnetDriverFromClient({ ...config, cov: true }, client, { cov: quickCov })
+      // The first cycle finds the device and reads everything; nothing is subscribed yet.
+      expect(yield* driver.readAll).toHaveLength(3)
+      const { pushed, fiber } = yield* collectPushes(driver.changes)
+      // Each subscription starts with a notification of the current value (clause 13.1).
+      yield* eventually(() => pushed.length === 2)
+      expect(pushed).toEqual([
+        ["supply-temp", 0],
+        ["fan-running", false]
+      ])
+      expect(simulated.subscriptions.size).toBe(2)
+
+      setPresentValue(simulated, { objectType: "analog-input", instance: 1 }, { type: "real", value: 30.5 })
+      setPresentValue(simulated, { objectType: "binary-output", instance: 2 }, { type: "enumerated", value: 1 })
+      yield* eventually(() => pushed.length === 4)
+      expect(pushed.slice(2)).toEqual([
+        ["supply-temp", 30.5],
+        ["fan-running", true]
+      ])
+      // Only the point no subscription covers is polled now.
+      expect((yield* driver.readAll).map((reading) => reading.pointId)).toEqual(["ai-type"])
+
+      // Stopping cancels the subscriptions on the device.
+      if (fiber !== undefined) yield* Fiber.interrupt(fiber)
+      yield* eventually(() => simulated.subscriptions.size === 0)
+    })
+  )
+
+  it.live("still reads one point per cycle when every point is pushed", () =>
+    Effect.gen(function* () {
+      const { client, config } = yield* setUp([supplyTemp])
+      const driver = yield* makeBacnetDriverFromClient({ ...config, cov: true }, client, { cov: quickCov })
+      yield* driver.readAll
+      const { pushed } = yield* collectPushes(driver.changes)
+      yield* eventually(() => pushed.length === 1)
+      expect((yield* driver.readAll).map((reading) => reading.pointId)).toEqual(["supply-temp"])
+    })
+  )
+
+  it.live("polls an object the device refuses a subscription for", () =>
+    Effect.gen(function* () {
+      let subscribes = 0
+      const { client, config } = yield* setUp([supplyTemp, fanRunning], {
+        respond: (device, request) => {
+          if (request._tag === "ConfirmedRequest" && request.service === ConfirmedService.SubscribeCov) {
+            subscribes++
+            return {
+              _tag: "Error",
+              invokeId: request.invokeId,
+              service: request.service,
+              body: encodeErrorBody({
+                errorClass: ErrorClass.services,
+                errorCode: ErrorCode["optional-functionality-not-supported"]
+              })
+            }
+          }
+          return answer(device, request)
+        }
+      })
+      const driver = yield* makeBacnetDriverFromClient({ ...config, cov: true }, client, { cov: quickCov })
+      yield* driver.readAll
+      const { pushed } = yield* collectPushes(driver.changes)
+      yield* eventually(() => subscribes === 2)
+      // Several checks later the refusals were not repeated: they are retried after an hour.
+      yield* Effect.sleep("100 millis")
+      expect(subscribes).toBe(2)
+      expect(pushed).toEqual([])
+      expect(yield* driver.readAll).toHaveLength(2)
+    })
+  )
+
+  it.live("leaves a device alone when change of value is off", () =>
+    Effect.gen(function* () {
+      const { client, config } = yield* setUp([supplyTemp])
+      const driver = yield* makeBacnetDriverFromClient(config, client, { cov: quickCov })
+      expect(driver.changes).toBeUndefined()
     })
   )
 })

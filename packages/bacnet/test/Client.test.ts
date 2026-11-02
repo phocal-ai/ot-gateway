@@ -5,13 +5,14 @@
 import { NodeDatagramSocket } from "@effect/platform-node"
 import { describe, expect, it } from "@effect/vitest"
 import { driverRequests, withMetricAttributes } from "@plenum/core"
-import { Effect, Exit, Metric, Result, Schedule } from "effect"
+import { Effect, Exit, Metric, Queue, Result, Schedule } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import {
   type Apdu,
   type BacnetClientOptions,
   checkReadPropertyMultipleAck,
+  type CovNotification,
   decodeFrame,
   encodeIAm,
   encodeFrame,
@@ -418,6 +419,60 @@ describe("BACnet/IP client", () => {
 
 /** A property result with no values, for checking answers against requests. */
 const emptyValue = (property: number) => ({ property, _tag: "Value" as const, values: [] })
+
+describe("COV subscriptions", () => {
+  it.live("gets a notification on subscribing and on every change, until cancelled", () =>
+    Effect.gen(function* () {
+      const { device, target } = yield* startDevice()
+      const client = yield* startClient(target.address)
+      const processId = yield* client.newProcessId
+      const received = yield* Queue.unbounded<CovNotification>()
+      yield* client.onCovNotification(processId, (notification) => {
+        Queue.offerUnsafe(received, notification)
+      })
+      yield* client.subscribeCov(target, { processId, object: supplyTemp, confirmed: false, lifetime: 60 })
+      const first = yield* Queue.take(received).pipe(Effect.timeout("1 second"))
+      expect(first).toMatchObject({
+        processId,
+        initiatingDevice: { objectType: ObjectType.device, instance: 1001 },
+        object: supplyTemp,
+        values: [{ property: presentValue, values: [{ type: "real", value: 18.5 }] }, { property: 111 }]
+      })
+      expect(first.timeRemaining).toBeGreaterThan(55)
+      setPresentValue(device, { objectType: "analog-input", instance: 1 }, { type: "real", value: 19 })
+      expect(yield* Queue.take(received).pipe(Effect.timeout("1 second"))).toMatchObject({
+        values: [{ property: presentValue, values: [{ type: "real", value: 19 }] }, { property: 111 }]
+      })
+      yield* client.subscribeCov(target, { processId, object: supplyTemp })
+      setPresentValue(device, { objectType: "analog-input", instance: 1 }, { type: "real", value: 20 })
+      expect(yield* Queue.take(received).pipe(Effect.timeout("200 millis"), Effect.option)).toEqual(
+        expect.objectContaining({ _tag: "None" })
+      )
+    })
+  )
+
+  it.live("hands out distinct process identifiers and refuses objects without a present value", () =>
+    Effect.gen(function* () {
+      const { target } = yield* startDevice()
+      const client = yield* startClient(target.address)
+      const ids = yield* Effect.all([client.newProcessId, client.newProcessId])
+      expect(new Set(ids).size).toBe(2)
+      const error = yield* client
+        .subscribeCov(target, {
+          processId: 1,
+          object: { objectType: ObjectType.device, instance: 1001 },
+          confirmed: false,
+          lifetime: 60
+        })
+        .pipe(Effect.flip)
+      expect(error).toMatchObject({
+        _tag: "BacnetDeviceError",
+        kind: "error",
+        message: "object: optional-functionality-not-supported"
+      })
+    })
+  )
+})
 
 describe("ReadPropertyMultiple answers", () => {
   const asked = [{ object: supplyTemp, properties: [{ property: presentValue }] }]
