@@ -10,7 +10,8 @@
   "type": "module",
   "scripts": {
     "start": "node --env-file-if-exists=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env} src/main.ts ../../examples/gateway.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@effect/platform-node": "4.1.2",

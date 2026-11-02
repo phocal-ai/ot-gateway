@@ -19,7 +19,6 @@ OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<base64(instanceId:token)>
 OTEL_TRACES_EXPORTER=otlp
 OTEL_METRICS_EXPORTER=otlp
 OTEL_LOGS_EXPORTER=otlp
-OTEL_METRIC_EXPORT_INTERVAL=15000
 OTEL_RESOURCE_ATTRIBUTES=service.namespace=plenum,deployment.environment=dev
 ```
 
@@ -36,9 +35,34 @@ OTEL_RESOURCE_ATTRIBUTES=service.namespace=plenum,deployment.environment=dev
 
 Staleness is `time() - plenum_point_last_read_timestamp_seconds`. Query it with `max_over_time(...[range])`: a stopped gateway stops sending the gauge, and an instant query would show nothing instead of a growing age.
 
+### Sampling
+
+`OTEL_TRACES_SAMPLER=traceidratio` with `OTEL_TRACES_SAMPLER_ARG=0.1` exports a tenth of the polling cycles as traces (`always_off` exports none; the default exports all). Metrics and logs still cover every cycle, so failure counts stay exact.
+
 ### Dashboard
 
 `grafana/plenum-gateway.dashboard.ts` generates `grafana/dashboards/plenum-gateway.json`, the **phocal / Plenum gateway** dashboard (`/d/phocal-plenum-gateway`, folder `phocal`). Edit the script, run `node observability/grafana/plenum-gateway.dashboard.ts`, then re-import the JSON with `overwrite: true`.
+
+## Free-plan budget
+
+The stack is on the Grafana Cloud **free plan**. Anything is fine inside its limits; when a projection gets close to one, optimize before shipping more.
+
+| Quota (per month)      | Included                                   | In use on 2026-11-02                                    |
+| ---------------------- | ------------------------------------------ | ------------------------------------------------------- |
+| Metrics: active series | 10,000 at **1 data point per minute** each | ~1,160 (mostly the phocal repo's jobs; Claude Code ~70) |
+| Logs                   | 50 GB                                      | 0.01 GB                                                 |
+| Traces                 | 50 GB                                      | 0.006 GB                                                |
+| Retention              | 14 days for metrics, logs and traces       |                                                         |
+
+A series exported more often than once a minute counts several times: at Effect's default 10 s interval, each counts about 6 times. The gateway therefore defaults to `OTEL_METRIC_EXPORT_INTERVAL=60000` (`budgetDefaults` in `apps/gateway/src/Telemetry.ts`), and Claude Code's default is already 60 s.
+
+**What one gateway costs**, roughly:
+
+- **Metric series:** about 27 per device plus 1 per point (the histogram alone is 15). 100 devices with 20 points each is about 4,700 series, so one large building fits but a second one would not; drop histogram buckets or the per-point gauge first.
+- **Traces:** one span per device per poll interval, about 1 KB each. 20 devices polled every 5 s is about 10 GB a month. Above roughly 10 devices, set `OTEL_TRACES_SAMPLER_ARG=0.1`.
+- **Logs:** quiet while healthy. A device that stays down logs a warning every cycle: about 0.5 GB a month at a 5 s interval.
+
+Check the numbers instead of guessing: the `grafanacloud-usage` datasource has `grafanacloud_org_metrics_billable_series`, `grafanacloud_org_logs_usage` and `grafanacloud_org_traces_usage` (GB this month), next to the matching `*_included_*` limits. `count by (job) ({__name__=~".+"})` on `grafanacloud-prom` shows which job owns the series.
 
 ## Claude Code telemetry
 

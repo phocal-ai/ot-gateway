@@ -2,7 +2,7 @@
  * The polling pipeline for one device:
  * read → scale → deadband → publish, repeated on the device's schedule.
  */
-import { Clock, Duration, Effect, Metric, Option, Schedule } from "effect"
+import { Clock, Duration, Effect, Metric, Option, Random, Schedule } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
@@ -24,6 +24,11 @@ export interface DeviceContext {
   readonly site: Slug
   readonly building: Slug
   readonly pollIntervalMs: number
+  /**
+   * Share of polling cycles exported as traces, from 0 to 1 (default 1).
+   * Metrics and logs cover every cycle; this only bounds trace volume.
+   */
+  readonly traceSampleRatio?: number
 }
 
 /** Payload published for every value change. */
@@ -56,7 +61,8 @@ const countCycle = (outcome: "ok" | "read_failed" | "publish_failed") =>
  *
  * Each cycle is its own root span (`Device.pollCycle`), so a trace ends with
  * its cycle instead of hanging under a span that never closes, and updates
- * the metrics in `Telemetry.ts` with a `device` attribute.
+ * the metrics in `Telemetry.ts` with a `device` attribute. Only
+ * `traceSampleRatio` of the cycles are exported as traces.
  */
 export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, driver: Driver) {
   const publisher = yield* Publisher
@@ -121,14 +127,23 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         ])
     }),
     Effect.timed,
-    Effect.flatMap(([duration]) => Metric.update(pollDuration, Duration.toSeconds(duration))),
-    Effect.withSpan("Device.pollCycle", {
-      root: true,
-      attributes: { "plenum.site": ctx.site, "plenum.building": ctx.building, "plenum.device": driver.deviceId }
-    })
+    Effect.flatMap(([duration]) => Metric.update(pollDuration, Duration.toSeconds(duration)))
   )
 
-  return yield* pollCycle.pipe(
+  // Head sampling: the decision is made when the cycle starts.
+  const sampleRatio = ctx.traceSampleRatio ?? 1
+  const tracedCycle = Effect.gen(function* () {
+    const draw = yield* Random.next
+    return yield* pollCycle.pipe(
+      Effect.withSpan("Device.pollCycle", {
+        root: true,
+        sampled: draw < sampleRatio,
+        attributes: { "plenum.site": ctx.site, "plenum.building": ctx.building, "plenum.device": driver.deviceId }
+      })
+    )
+  })
+
+  return yield* tracedCycle.pipe(
     Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)),
     Effect.annotateLogs({ device: driver.deviceId }),
     withMetricAttributes({ device: driver.deviceId })

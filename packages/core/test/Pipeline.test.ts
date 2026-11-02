@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Metric } from "effect"
+import { Effect, Fiber, Layer, Metric, Tracer } from "effect"
 import { TestClock } from "effect/testing"
 import {
   DriverError,
@@ -136,6 +136,57 @@ describe("runDevice metrics", () => {
 
       expect(yield* countOf(pollCycles, { device, outcome: "read_failed" })).toBe(1)
       expect(yield* countOf(readFailures, { device, reason: "timeout" })).toBe(1)
+    })
+  )
+})
+
+/** A tracer that records whether each `Device.pollCycle` span was sampled. */
+const recordingTracer = () => {
+  const sampled: Array<boolean> = []
+  const tracer = Tracer.make({
+    span: (options) => {
+      if (options.name === "Device.pollCycle") sampled.push(options.sampled)
+      return new Tracer.NativeSpan(options)
+    }
+  })
+  return { sampled, tracer } as const
+}
+
+/** Run ten cycles and return whether each was sampled. */
+const runCycles = (traceSampleRatio: number | undefined) =>
+  Effect.gen(function* () {
+    const { layer } = yield* makeMemoryPublisher
+    const { sampled, tracer } = recordingTracer()
+    const ctx = {
+      site: "s",
+      building: "b",
+      pollIntervalMs: 1000,
+      ...(traceSampleRatio === undefined ? {} : { traceSampleRatio })
+    }
+    const fiber = yield* runDevice(ctx, scriptedDriver([200], "sampling")).pipe(
+      Effect.provide(layer),
+      Effect.withTracer(tracer),
+      Effect.forkChild
+    )
+    yield* TestClock.adjust("9 seconds")
+    yield* Fiber.interrupt(fiber)
+    return sampled
+  })
+
+describe("runDevice trace sampling", () => {
+  it.effect("samples every cycle by default", () =>
+    Effect.gen(function* () {
+      const sampled = yield* runCycles(undefined)
+      expect(sampled).toHaveLength(10)
+      expect(sampled.every((value) => value)).toBe(true)
+    })
+  )
+
+  it.effect("samples no cycle at ratio 0", () =>
+    Effect.gen(function* () {
+      const sampled = yield* runCycles(0)
+      expect(sampled).toHaveLength(10)
+      expect(sampled.some((value) => value)).toBe(false)
     })
   )
 })
