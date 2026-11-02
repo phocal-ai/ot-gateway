@@ -18,10 +18,15 @@ import {
 } from "@plenum/core"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Effect, FileSystem, Layer } from "effect"
-import { telemetryLayer } from "./Telemetry.ts"
+import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
-const runOne = (config: { site: string; building: string }, device: Device) => {
-  const ctx = { site: config.site, building: config.building, pollIntervalMs: device.pollIntervalMs }
+const runOne = (config: GatewayConfig, device: Device, sampleRatio: number) => {
+  const ctx = {
+    site: config.site,
+    building: config.building,
+    pollIntervalMs: device.pollIntervalMs,
+    traceSampleRatio: sampleRatio
+  }
   switch (device.protocol) {
     case "simulator":
       return runDevice(ctx, makeSimulatorDriver(device))
@@ -34,8 +39,11 @@ const runOne = (config: { site: string; building: string }, device: Device) => {
 }
 
 const runGateway = Effect.fn("runGateway")(function* (config: GatewayConfig) {
-  yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`)
-  yield* Effect.forEach(config.devices, (device) => runOne(config, device), {
+  const sampleRatio = yield* traceSampleRatio
+  yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
+    Effect.annotateLogs({ traceSampleRatio: sampleRatio })
+  )
+  yield* Effect.forEach(config.devices, (device) => runOne(config, device, sampleRatio), {
     concurrency: "unbounded",
     discard: true
   })

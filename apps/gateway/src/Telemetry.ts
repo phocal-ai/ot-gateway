@@ -9,12 +9,44 @@
  */
 import { hostname } from "node:os"
 import type { GatewayConfig } from "@plenum/core"
-import { Config, Effect, Layer } from "effect"
+import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { Otlp, OtlpSerialization } from "effect/observability"
 import packageJson from "../package.json" with { type: "json" }
 
 export const serviceName = "plenum-gateway"
+
+/**
+ * Defaults that keep a gateway inside the Grafana Cloud free plan, which
+ * includes 1 data point per minute per series. Effect's own default metric
+ * interval is 10 s, which would bill every series about 6 times. An
+ * explicitly set environment variable always wins.
+ */
+export const budgetDefaults = {
+  OTEL_METRIC_EXPORT_INTERVAL: "60000"
+} as const
+
+export const withBudgetDefaults = ConfigProvider.layerAdd(ConfigProvider.fromUnknown(budgetDefaults))
+
+/**
+ * Share of polling cycles exported as traces, from the standard
+ * `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` variables. Supports
+ * `always_on` (default), `always_off` and `traceidratio` (and their
+ * `parentbased_` forms, since cycles are root spans).
+ */
+export const traceSampleRatio = Effect.gen(function* () {
+  const sampler = yield* Config.String("OTEL_TRACES_SAMPLER").pipe(Config.withDefault("always_on"))
+  switch (sampler.replace(/^parentbased_/, "")) {
+    case "always_off":
+      return 0
+    case "traceidratio": {
+      const ratio = yield* Config.Number("OTEL_TRACES_SAMPLER_ARG").pipe(Config.withDefault(1))
+      return Math.min(1, Math.max(0, ratio))
+    }
+    default:
+      return 1
+  }
+})
 
 export const telemetryLayer = (config: GatewayConfig) =>
   Layer.unwrap(
@@ -34,4 +66,8 @@ export const telemetryLayer = (config: GatewayConfig) =>
         }
       })
     })
-  ).pipe(Layer.provide(OtlpSerialization.layerProtobuf), Layer.provide(FetchHttpClient.layer))
+  ).pipe(
+    Layer.provide(OtlpSerialization.layerProtobuf),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(withBudgetDefaults)
+  )
