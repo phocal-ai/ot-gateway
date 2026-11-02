@@ -92,3 +92,13 @@ git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git e
 ## Before you finish a change
 
 Run `pnpm check`. Add or update tests for new behaviour. Update `README.md` or `docs/` when behaviour or config changes.
+
+Project hooks in `.claude/settings.json` back this up:
+
+- After every Write or Edit, oxfmt formats the file and oxlint's findings for it come back to you. Fix them while the file is still in view.
+- At the end of a turn with uncommitted changes, `pnpm check` runs and blocks the stop if it fails.
+- `npm` and `yarn` commands are denied; use pnpm.
+
+## Health and budget
+
+`/health` checks the gateway, Claude Code sessions in this repo and the Grafana Cloud free-plan quotas through the Grafana MCP. The stack is on the free plan: before adding telemetry, dashboards, CI or scheduled agents, estimate what they add (see "Free-plan budget" in `observability/README.md`). If the projection gets close to a quota, optimize first.

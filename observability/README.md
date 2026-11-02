@@ -112,3 +112,5 @@ Per-request `api_request` events carry `cost_usd`, token counts, `duration_ms` a
 ### Querying from Claude
 
 `.mcp.json.example` configures the read-only Grafana MCP server (`mcp-grafana --disable-write`). Copy it to `.mcp.json` (gitignored); it reads `GRAFANA_MCP_URL` and `GRAFANA_MCP_READ_TOKEN` from your shell (`~/.config/grafana-mcp/env`).
+
+The `/health` skill (`.claude/skills/health/SKILL.md`) runs the standard checks through it. It covers stale devices and failing cycles, failing tools and hooks, and cost in this repo's Claude Code sessions. It also projects month-end Grafana usage against the free-plan quotas, with the thresholds for when to optimize.
