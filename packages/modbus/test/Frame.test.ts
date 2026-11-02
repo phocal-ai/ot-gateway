@@ -10,7 +10,9 @@ import {
   encodeReadRequest,
   encodeRegisterResponse,
   encodeValue,
+  exceptionName,
   FunctionCode,
+  isTransientException,
   takeFrame
 } from "../src/index.ts"
 
@@ -207,6 +209,13 @@ describe("response matching (Implementation Guide §3.1.3, spec §7)", () => {
       expect(error._tag).toBe("ModbusFrameError")
     })
   )
+
+  it("tells transient exceptions from permanent ones", () => {
+    expect([1, 2, 3, 4].map(isTransientException)).toEqual([false, false, false, false])
+    expect([5, 6, 0x0a, 0x0b].map(isTransientException)).toEqual([true, true, true, true])
+    expect(exceptionName(2)).toBe("illegal_data_address")
+    expect(exceptionName(0x42)).toBe("exception_66")
+  })
 })
 
 describe("encodeValue", () => {

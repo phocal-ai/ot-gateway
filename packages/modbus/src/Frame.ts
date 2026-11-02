@@ -26,8 +26,38 @@ export const ExceptionCode = {
   IllegalFunction: 0x01,
   IllegalDataAddress: 0x02,
   IllegalDataValue: 0x03,
-  ServerDeviceFailure: 0x04
+  ServerDeviceFailure: 0x04,
+  Acknowledge: 0x05,
+  ServerDeviceBusy: 0x06,
+  GatewayPathUnavailable: 0x0a,
+  GatewayTargetFailedToRespond: 0x0b
 } as const
+
+const exceptionNames: Record<number, string> = {
+  [ExceptionCode.IllegalFunction]: "illegal_function",
+  [ExceptionCode.IllegalDataAddress]: "illegal_data_address",
+  [ExceptionCode.IllegalDataValue]: "illegal_data_value",
+  [ExceptionCode.ServerDeviceFailure]: "server_device_failure",
+  [ExceptionCode.Acknowledge]: "acknowledge",
+  [ExceptionCode.ServerDeviceBusy]: "server_device_busy",
+  [ExceptionCode.GatewayPathUnavailable]: "gateway_path_unavailable",
+  [ExceptionCode.GatewayTargetFailedToRespond]: "gateway_target_failed_to_respond"
+}
+
+/** A stable, label-safe name for an exception code (spec §7), e.g. `illegal_data_address`. */
+export const exceptionName = (code: number): string => exceptionNames[code] ?? `exception_${code}`
+
+/**
+ * Whether asking again soon can succeed (spec §7): the device is still busy
+ * with a long command (05, 06) or a gateway could not reach its target (0A,
+ * 0B). Every other code describes the request itself or the device's state,
+ * so repeating the same request gets the same answer.
+ */
+export const isTransientException = (code: number): boolean =>
+  code === ExceptionCode.Acknowledge ||
+  code === ExceptionCode.ServerDeviceBusy ||
+  code === ExceptionCode.GatewayPathUnavailable ||
+  code === ExceptionCode.GatewayTargetFailedToRespond
 
 /** Largest quantity one read may ask for (spec §6.1–6.4). */
 export const maxReadQuantity = (functionCode: ReadCode): number =>

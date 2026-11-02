@@ -79,6 +79,16 @@ export const driverRequests = Metric.counter("plenum_driver_requests", {
   incremental: true
 })
 
+/**
+ * Reads a device refused, by `exception` (for Modbus the exception name, e.g.
+ * `illegal_data_address`). Counted once per refused block and read, after
+ * retries; the driver logs a refusal only when it starts and when it ends.
+ */
+export const driverRefusals = Metric.counter("plenum_driver_refusals", {
+  description: "Reads a field device refused, by exception",
+  incremental: true
+})
+
 /** Connection attempts to a device, by `outcome`: `ok` or `failed`. A rising `ok` count means the link keeps dropping. */
 export const driverConnects = Metric.counter("plenum_driver_connects", {
   description: "Connection attempts to field devices, by outcome",
