@@ -7,7 +7,7 @@ import type { Driver, PointValue, Reading } from "./Driver.ts"
 import type { HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
-import type { PublishError } from "./Errors.ts"
+import type { DriverError, PublishError } from "./Errors.ts"
 import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
@@ -56,6 +56,29 @@ const metaPayload = (point: AnyPoint): string =>
 const retryPolicy = {
   schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered),
   times: 4
+}
+
+/**
+ * Whether a failed read may succeed if it is sent again right away. Only
+ * transport failures can: no answer, a lost connection, a garbled frame. A
+ * device that answered with a refusal (`protocol`, e.g. a Modbus exception or
+ * a BACnet abort) would refuse again, and retrying only multiplies requests
+ * to a device that already said no; `configuration` and `not-implemented`
+ * never change within a cycle. A driver that resends timeouts itself
+ * (`retriesTimeouts`) is not retried on `timeout` either.
+ */
+const isRetryable = (driver: Driver, error: DriverError): boolean => {
+  switch (error.reason) {
+    case "timeout":
+      return driver.retriesTimeouts !== true
+    case "connection":
+    case "invalid-response":
+      return true
+    case "protocol":
+    case "configuration":
+    case "not-implemented":
+      return false
+  }
 }
 
 const countCycle = (outcome: "ok" | "read_failed" | "publish_failed") =>
@@ -198,7 +221,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     const readings = yield* driver.readAll.pipe(
       Effect.retry({
         ...retryPolicy,
-        while: (error) => !(driver.retriesTimeouts === true && error.reason === "timeout")
+        while: (error) => isRetryable(driver, error)
       })
     )
     const readAt = yield* Clock.currentTimeMillis

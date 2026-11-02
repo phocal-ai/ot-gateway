@@ -202,6 +202,30 @@ describe("runDevice", () => {
 const countOf = (metric: Metric.Counter<number>, attributes: Record<string, string>) =>
   Metric.value(Metric.withAttributes(metric, attributes)).pipe(Effect.map((state) => state.count))
 
+/** How often a driver that always fails with `reason` is read in the first cycle. */
+const readsInOneCycle = (reason: DriverError["reason"]) =>
+  Effect.gen(function* () {
+    const { layer } = yield* makeMemoryPublisher
+    let reads = 0
+    const driver: Driver = {
+      deviceId: `always-${reason}`,
+      points: [point],
+      readAll: Effect.suspend(() => {
+        reads++
+        return Effect.fail(new DriverError({ device: `always-${reason}`, reason, message: "no" }))
+      }),
+      write: () => Effect.void
+    }
+    const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+      Effect.provide(layer),
+      Effect.forkChild
+    )
+    // Long enough for every retry of the first cycle, short of the next cycle.
+    yield* TestClock.adjust("30 seconds")
+    yield* Fiber.interrupt(fiber)
+    return reads
+  })
+
 describe("runDevice metrics", () => {
   it.effect("counts cycles, published and suppressed values per device", () =>
     Effect.gen(function* () {
@@ -257,6 +281,21 @@ describe("runDevice metrics", () => {
       yield* Fiber.interrupt(fiber)
       // One read for the first cycle: its timeout was not retried, and the next cycle is a minute away.
       expect(reads).toBe(1)
+    })
+  )
+
+  it.effect("does not retry a device that refused the read", () =>
+    Effect.gen(function* () {
+      expect(yield* readsInOneCycle("protocol")).toBe(1)
+      expect(yield* readsInOneCycle("configuration")).toBe(1)
+    })
+  )
+
+  it.effect("retries transport failures within the cycle", () =>
+    Effect.gen(function* () {
+      expect(yield* readsInOneCycle("timeout")).toBe(5)
+      expect(yield* readsInOneCycle("connection")).toBe(5)
+      expect(yield* readsInOneCycle("invalid-response")).toBe(5)
     })
   )
 })
