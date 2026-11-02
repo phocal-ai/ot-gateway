@@ -29,7 +29,9 @@ export const pollCycles = Metric.counter("plenum_poll_cycles", {
 export const pollDuration = Metric.histogram("plenum_poll_duration_seconds", {
   description: "Duration of one polling cycle, including retries",
   attributes: seconds,
-  boundaries: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+  // Five buckets (8 series per device with sum and count): enough to tell a fast device from one that
+  // retries or nears its cycle deadline, at half the cost of a finer histogram.
+  boundaries: [0.05, 0.25, 1, 5, 30]
 })
 
 /** Driver read failures after retries were exhausted, by `reason` (the `DriverError` reason). */
@@ -54,15 +56,6 @@ export const valuesPublished = Metric.counter("plenum_values_published", {
 export const valuesSuppressed = Metric.counter("plenum_values_suppressed", {
   description: "Point values suppressed by the deadband",
   incremental: true
-})
-
-/**
- * Unix time of the last successful read, per `point`. Staleness is
- * `time() - plenum_point_last_read_timestamp_seconds`; one series per point.
- */
-export const pointLastRead = Metric.gauge("plenum_point_last_read_timestamp_seconds", {
-  description: "Unix time of the last successful read of a point",
-  attributes: seconds
 })
 
 /** Unix time of the last cycle that read the device successfully. */

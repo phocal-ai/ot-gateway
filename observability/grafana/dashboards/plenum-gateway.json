@@ -1200,7 +1200,7 @@
     {
       "id": 24,
       "type": "row",
-      "title": "Points",
+      "title": "Freshness",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1213,8 +1213,8 @@
     {
       "id": 25,
       "type": "table",
-      "title": "Point freshness",
-      "description": "Seconds since each point was last read successfully. Orange after 1 minute, red after 5.",
+      "title": "Device freshness",
+      "description": "Seconds since each device last completed a successful cycle. Orange after 1 minute, red after 5. There is no per-point age (one series per point would not fit the free plan); a point that stops reading inside a working device shows in Points not read and in the log.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
@@ -1232,7 +1232,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "time() - max by (device, point) (max_over_time(plenum_point_last_read_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "time() - max by (device) (max_over_time(plenum_device_last_success_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
           "instant": true,
           "format": "table"
         }

@@ -392,14 +392,15 @@ timeseries(
 )
 y += 8
 
-row("Points")
+row("Freshness")
 staleness(
-  "Point freshness",
-  `time() - max by (device, point) (max_over_time(plenum_point_last_read_timestamp_seconds{${sel}}[$__range]))`,
+  "Device freshness",
+  `time() - max by (device) (max_over_time(plenum_device_last_success_timestamp_seconds{${sel}}[$__range]))`,
   {
     x: 0,
     w: 12,
-    description: "Seconds since each point was last read successfully. Orange after 1 minute, red after 5."
+    description:
+      "Seconds since each device last completed a successful cycle. Orange after 1 minute, red after 5. There is no per-point age (one series per point would not fit the free plan); a point that stops reading inside a working device shows in Points not read and in the log."
   }
 )
 timeseries(

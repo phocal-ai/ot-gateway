@@ -12,7 +12,6 @@ import { type DriverError, PipelineTimeout, type PublishError } from "./Errors.t
 import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
-  pointLastRead,
   pointReadFailures,
   pollCycles,
   pollDuration,
@@ -200,7 +199,6 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     if (nonFinitePoints.delete(point.id)) {
       yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
     }
-    yield* Metric.update(Metric.withAttributes(pointLastRead, { point: point.id }), reading.timestamp / 1000)
     if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
       return yield* Metric.update(valuesSuppressed, 1)
     }
