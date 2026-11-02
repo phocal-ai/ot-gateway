@@ -82,6 +82,16 @@ export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
   incremental: true
 })
 
+/**
+ * Times a device's pipeline died on a defect (a bug, not a device or broker
+ * failure) and was restarted. Any increase is a bug to report; the log has
+ * the cause.
+ */
+export const deviceRestarts = Metric.counter("plenum_device_restarts", {
+  description: "Device pipelines restarted after a defect",
+  incremental: true
+})
+
 /** Values a device pushed between polls (BACnet change-of-value), before the deadband. */
 export const pushedReadings = Metric.counter("plenum_pushed_readings", {
   description: "Values pushed by devices between polls",

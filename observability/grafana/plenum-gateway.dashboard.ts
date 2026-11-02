@@ -272,7 +272,7 @@ timeseries(
   {
     unit: "reqps",
     x: 0,
-    w: 12,
+    w: 8,
     stack: true,
     description:
       "Every request a driver sent. exception = the device refused (check the point address); timeout and connection = it is unreachable."
@@ -288,11 +288,27 @@ timeseries(
   ],
   {
     unit: "short",
-    x: 12,
-    w: 12,
+    x: 8,
+    w: 8,
     stack: true,
     description:
       "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect. $bacnet is the one UDP socket every BACnet device shares."
+  }
+)
+timeseries(
+  "Pipeline restarts by device",
+  [
+    {
+      expr: `sum by (device) (increase(plenum_device_restarts_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 16,
+    w: 8,
+    description:
+      "A device's pipeline died on a bug (a defect, not a device or broker failure) and was restarted with backoff, up to every 5 minutes. Any restart is a bug to report; the gateway log has the cause. Other devices keep running."
   }
 )
 y += 8

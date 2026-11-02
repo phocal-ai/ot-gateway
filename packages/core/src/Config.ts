@@ -21,8 +21,7 @@ const cycleTimeoutMsField = Schema.optionalKey(
 )
 
 /** The default cycle deadline: twice the poll interval, and at least the interval plus 30 s. */
-export const defaultCycleTimeoutMs = (intervalMs: number): number =>
-  Math.max(2 * intervalMs, intervalMs + 30_000)
+export const defaultCycleTimeoutMs = (intervalMs: number): number => Math.max(2 * intervalMs, intervalMs + 30_000)
 
 /** A device's cycle deadline: its `cycleTimeoutMs`, or the default for its poll interval. */
 export const cycleTimeoutMs = (device: { readonly pollIntervalMs: number; readonly cycleTimeoutMs?: number }) =>

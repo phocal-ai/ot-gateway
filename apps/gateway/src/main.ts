@@ -20,6 +20,7 @@ import {
   parseConfig,
   runDevice,
   runHealthReporter,
+  superviseDevice,
   withMetricAttributes
 } from "@plenum/core"
 import { makeModbusDriver } from "@plenum/modbus"
@@ -118,7 +119,13 @@ const runGateway = Effect.fn("runGateway")(function* (config: GatewayConfig, hea
   yield* Effect.all(
     [
       runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online }),
-      ...config.devices.map((device) => runOne(config, device, sampleRatio, health.registry, bacnet))
+      // A bug in one device's pipeline restarts that device only; suspended, so a restart builds a fresh driver.
+      ...config.devices.map((device) =>
+        superviseDevice(
+          Effect.suspend(() => runOne(config, device, sampleRatio, health.registry, bacnet)),
+          { deviceId: device.id, health: health.registry }
+        )
+      )
     ],
     { concurrency: "unbounded", discard: true }
   )
