@@ -106,7 +106,7 @@ describe("chaos: values that are not finite numbers", () => {
       expect(valuesOn(messages, "s/b/not-finite/temp")).toEqual([21])
       // 10 × 1e308 overflows to Infinity after scaling; 1 × 1e308 is finite.
       expect(valuesOn(messages, "s/b/not-finite/energy")).toEqual([1e308, 0])
-      expect(yield* countOf(pointReadFailures, { device: "not-finite" })).toBe(3)
+      expect(yield* countOf(pointReadFailures, { device: "not-finite", reason: "not_finite" })).toBe(3)
     })
   )
 
