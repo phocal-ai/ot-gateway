@@ -113,6 +113,14 @@ export const BacnetSettings = Schema.Struct({
    * the default route's interface only).
    */
   broadcastAddress: Ipv4Endpoint.pipe(Schema.withDecodingDefaultKey(Effect.succeed("255.255.255.255"))),
+  /**
+   * The BBMD on the gateway's subnet (Annex J.4), port 47808 unless given.
+   * Only it may forward BACnet messages from other subnets to the gateway
+   * (Forwarded-NPDU); without it, forwarded messages count only when they
+   * come from the device they name. Anyone on the LAN can forge one, so a
+   * forwarded answer or COV notification from any other host is dropped.
+   */
+  bbmdAddress: Schema.optionalKey(Ipv4Endpoint),
   /** How long to wait for an answer before resending (default 3 s). */
   requestTimeoutMs: Schema.Int.pipe(
     Schema.check(Schema.isBetween({ minimum: 100, maximum: 60_000 })),
