@@ -48,6 +48,7 @@ export const PropertyId = {
   "object-list": 76,
   "object-name": 77,
   "object-type": 79,
+  optional: 80,
   "out-of-service": 81,
   "present-value": 85,
   "priority-array": 87,

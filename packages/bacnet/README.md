@@ -1,6 +1,6 @@
 # @plenum/bacnet
 
-Effect-native BACnet/IP, implemented in-house against ASHRAE 135. The codecs are pure functions from bytes to a `Result`. The transport (next PR) will be the only part that does I/O.
+Effect-native BACnet/IP, implemented in-house against ASHRAE 135. The codecs are pure functions from bytes to a `Result`. Only the client and the simulator server do I/O, on `effect/socket/DatagramSocket`.
 
 ## Modules
 
@@ -14,6 +14,8 @@ Effect-native BACnet/IP, implemented in-house against ASHRAE 135. The codecs are
 | `Frame.ts`     | a whole datagram: BVLC + NPDU + APDU, including NPDUs a BBMD forwarded                                                        | Annex J.2             |
 | `Enums.ts`     | object types, property identifiers, error classes and codes, by their hyphenated spec names (`analog-input`, `present-value`) | 21                    |
 | `Simulator.ts` | a simulated device as pure request → response logic                                                                           |                       |
+| `Client.ts`    | the UDP client: confirmed requests with retries, Who-Is discovery                                                             | 5.4.4, 16.10          |
+| `Server.ts`    | puts a simulated device on a UDP socket                                                                                       |                       |
 
 Character strings are written as UTF-8 (character set 0). They are read leniently: UTF-8 with invalid bytes replaced, UCS-2, UCS-4 and ISO 8859-1, and the older DBCS and JIS sets byte by byte. A garbled description must not cost the present value read in the same request. Integers are read up to 8 bytes (above 2^53 they lose precision), and reals as the shortest decimal for the same single-precision number (72.4, not 72.40000152587891). Constructed values nest at most 32 deep.
 
@@ -27,12 +29,23 @@ Character strings are written as UTF-8 (character set 0). They are read lenientl
 - **Reject:** `invalid-tag` for a malformed request, `unrecognized-service` for any other confirmed service.
 - **Abort** (`segmentation-not-supported`) when the answer is larger than the requester or the device accepts, because the simulator never segments.
 
-`setPresentValue` changes a value the way a sensor would. The UDP server that puts the simulator on the network comes with the transport.
+`setPresentValue` changes a value the way a sensor would. `serveSimulatedDevice(socket, device)` answers datagrams on a socket until its scope closes. It sends I-Am back to the asker instead of broadcasting it, so several simulators can share one host on different ports.
+
+## Client
+
+`makeBacnetClient(socket, options)` owns one UDP socket for every BACnet device of the gateway. Bind it to port 47808 with broadcast enabled, because devices broadcast I-Am to that port.
+
+- **`readProperty`, `readPropertyMultiple`, `confirmed`:** each request gets an invoke ID. After a timeout (`requestTimeout`, default 3 s) it is resent with the same ID, up to `retries` times (default 2). Only an answer from the address the request went to counts, and for a device behind a router (`network` set) only one that names it as the source. An answer about another object or property than was asked is refused as invalid. An invoke ID whose request was given up on rests for at least 10 s (twice the timeout if that is longer), so a late answer cannot be taken for a new request.
+- **`discover`** broadcasts Who-Is to every BACnet network (or sends it to one address) and collects the I-Am answers. **`locate`** finds one device by instance and resends Who-Is like a request.
+- **Errors:** `BacnetTimeout`, `BacnetDeviceError` (`kind` `error`, `reject` or `abort`, with the class and code), `BacnetCodecError` for an answer that cannot be read, and `BacnetSocketError`, also when a datagram cannot be sent within the timeout.
+- **Segmentation:** the client asks for unsegmented answers. An answer too large for one datagram comes back as an abort with reason `segmentation-not-supported`, and the caller reads fewer properties per request. A device that segments anyway gets an Abort back.
+- **Socket failures:** a socket that fails while running is reopened every 5 s. A port that is already in use fails `makeBacnetClient` itself. A datagram that cannot be handled is logged and dropped; it never stops the receive loop.
+
+Requests are counted in `plenum_driver_requests` by `outcome`, once per request however often it was resent: `ok`, `timeout`, `exception` for an answer from the device, `invalid_response`, `connection`. Opening the socket is counted in `plenum_driver_connects` under the device name `$bacnet`, because one socket serves every BACnet device.
 
 ## Next
 
-1. UDP transport on `effect/socket/DatagramSocket`, with Who-Is discovery.
-2. A ReadProperty(Multiple) driver for the pipeline.
-3. SubscribeCOV.
+1. A ReadProperty(Multiple) driver for the pipeline, with BACnet devices on the bench.
+2. SubscribeCOV.
 
 Part of [Plenum](../../README.md).
