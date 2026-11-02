@@ -17,6 +17,7 @@ import {
   decodeWith,
   type ObjectId,
   type Reader,
+  MAX_INSTANCE,
   writeClosing,
   writeContextBoolean,
   writeContextObjectId,
@@ -36,8 +37,9 @@ export interface WhoIs {
 export const encodeWhoIs = (whoIs: WhoIs): Uint8Array => {
   const writer = new Writer()
   if (whoIs.range !== undefined) {
-    writeContextUnsigned(writer, 0, whoIs.range.low)
-    writeContextUnsigned(writer, 1, whoIs.range.high)
+    // Device instances, 0 to 4,194,303 (clause 16.10.1.1.1).
+    writeContextUnsigned(writer, 0, whoIs.range.low, MAX_INSTANCE)
+    writeContextUnsigned(writer, 1, whoIs.range.high, MAX_INSTANCE)
   }
   return writer.toBytes()
 }
@@ -271,9 +273,12 @@ export interface SubscribeCovRequest {
   readonly lifetime?: number
 }
 
+/** Subscriber process identifiers are Unsigned32 (clause 13.14.1.1). */
+const MAX_PROCESS_ID = 0xff_ff_ff_ff
+
 export const encodeSubscribeCov = (request: SubscribeCovRequest): Uint8Array => {
   const writer = new Writer()
-  writeContextUnsigned(writer, 0, request.processId)
+  writeContextUnsigned(writer, 0, request.processId, MAX_PROCESS_ID)
   writeContextObjectId(writer, 1, request.object)
   if (request.confirmed !== undefined) writeContextBoolean(writer, 2, request.confirmed)
   if (request.lifetime !== undefined) writeContextUnsigned(writer, 3, request.lifetime)
@@ -312,7 +317,7 @@ export interface CovNotification {
 
 export const encodeCovNotification = (notification: CovNotification): Uint8Array => {
   const writer = new Writer()
-  writeContextUnsigned(writer, 0, notification.processId)
+  writeContextUnsigned(writer, 0, notification.processId, MAX_PROCESS_ID)
   writeContextObjectId(writer, 1, notification.initiatingDevice)
   writeContextObjectId(writer, 2, notification.object)
   writeContextUnsigned(writer, 3, notification.timeRemaining)
