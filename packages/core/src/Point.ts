@@ -48,13 +48,30 @@ export const PointFields = {
 export const DataType = Schema.Literals(["int16", "uint16", "int32", "uint32", "float32", "bool"])
 export type DataType = typeof DataType.Type
 
-/** A point on a Modbus TCP device. */
+/**
+ * A point on a Modbus TCP device. Addresses are 0 to 65535 (Modbus
+ * Application Protocol §4.4), and a 32-bit value in two registers must end
+ * there too: a read cannot run past the last address.
+ */
 export const ModbusPoint = Schema.Struct({
   ...PointFields,
   table: Schema.Literals(["holding", "input", "coil", "discrete"]),
   address: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))),
   dataType: DataType
-})
+}).check(
+  Schema.makeFilter((point) => {
+    const wide =
+      (point.table === "holding" || point.table === "input") &&
+      (point.dataType === "int32" || point.dataType === "uint32" || point.dataType === "float32")
+    return (
+      !wide ||
+      point.address < 65535 || {
+        path: ["address"],
+        issue: `a ${point.dataType} takes two registers, so its address must be at most 65534`
+      }
+    )
+  })
+)
 export type ModbusPoint = typeof ModbusPoint.Type
 
 /** A point on a BACnet/IP device. */

@@ -10,7 +10,9 @@ import {
   encodeReadRequest,
   encodeRegisterResponse,
   encodeValue,
+  exceptionName,
   FunctionCode,
+  isTransientException,
   takeFrame
 } from "../src/index.ts"
 
@@ -31,7 +33,7 @@ describe("decodeReadResponse", () => {
   it.effect("reads registers", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x07, 0x11, 0x03, 0x04, 0x02, 0x2b, 0x00, 0x64])
-      const res = yield* decodeReadResponse(frame, { functionCode: 3, quantity: 2 })
+      const res = yield* decodeReadResponse(frame, { unitId: 0x11, functionCode: 3, quantity: 2 })
       expect(res.registers).toEqual([0x022b, 0x0064])
       expect(res.unitId).toBe(0x11)
     })
@@ -40,9 +42,9 @@ describe("decodeReadResponse", () => {
   it.effect("surfaces exceptions as typed errors", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x01, 0x00, 0x00, 0x00, 0x03, 0x11, 0x83, 0x02])
-      const exit = yield* Effect.exit(decodeReadResponse(frame, { functionCode: 3, quantity: 1 }))
+      const exit = yield* Effect.exit(decodeReadResponse(frame, { unitId: 0x11, functionCode: 3, quantity: 1 }))
       expect(Exit.isFailure(exit)).toBe(true)
-      const error = yield* Effect.flip(decodeReadResponse(frame, { functionCode: 3, quantity: 1 }))
+      const error = yield* Effect.flip(decodeReadResponse(frame, { unitId: 0x11, functionCode: 3, quantity: 1 }))
       expect(error._tag).toBe("ModbusException")
     })
   )
@@ -50,7 +52,7 @@ describe("decodeReadResponse", () => {
   it.effect("rejects truncated frames", () =>
     Effect.gen(function* () {
       const error = yield* Effect.flip(
-        decodeReadResponse(Uint8Array.from([0, 1, 0, 0]), { functionCode: 3, quantity: 1 })
+        decodeReadResponse(Uint8Array.from([0, 1, 0, 0]), { unitId: 1, functionCode: 3, quantity: 1 })
       )
       expect(error._tag).toBe("ModbusFrameError")
     })
@@ -60,7 +62,7 @@ describe("decodeReadResponse", () => {
     Effect.gen(function* () {
       const request = { transactionId: 1, unitId: 1, functionCode: FunctionCode.ReadHoldingRegisters, address: 100 }
       const short = encodeRegisterResponse({ ...request, quantity: 1 }, [1234])
-      const error = yield* Effect.flip(decodeReadResponse(short, { functionCode: 3, quantity: 4 }))
+      const error = yield* Effect.flip(decodeReadResponse(short, { unitId: 1, functionCode: 3, quantity: 4 }))
       expect(error).toMatchObject({ _tag: "ModbusFrameError", message: "byte count 2 does not fit 4 registers" })
     })
   )
@@ -69,7 +71,7 @@ describe("decodeReadResponse", () => {
     Effect.gen(function* () {
       const request = { transactionId: 1, unitId: 1, functionCode: FunctionCode.ReadInputRegisters, address: 0 }
       const input = encodeRegisterResponse({ ...request, quantity: 2 }, [1, 2])
-      const error = yield* Effect.flip(decodeReadResponse(input, { functionCode: 3, quantity: 2 }))
+      const error = yield* Effect.flip(decodeReadResponse(input, { unitId: 1, functionCode: 3, quantity: 2 }))
       expect(error).toMatchObject({
         _tag: "ModbusFrameError",
         message: "response function code 4 does not answer request 3"
@@ -115,7 +117,7 @@ describe("decodeBitResponse", () => {
   it.effect("unpacks coils LSB first (spec §6.1 example: coils 20–38)", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x02, 0x00, 0x00, 0x00, 0x06, 0x01, 0x01, 0x03, 0xcd, 0x6b, 0x05])
-      const { bits } = yield* decodeBitResponse(frame, { functionCode: 1, quantity: 19 })
+      const { bits } = yield* decodeBitResponse(frame, { unitId: 1, functionCode: 1, quantity: 19 })
       const asBits = bits.map((b) => (b ? 1 : 0))
       // 0xCD → coils 27..20 = 1100 1101, 0x6B → 35..28 = 0110 1011, 0x05 → 38..36 = 101
       expect(asBits).toEqual([1, 0, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1])
@@ -125,7 +127,7 @@ describe("decodeBitResponse", () => {
   it.effect("rejects a byte count that does not fit the quantity", () =>
     Effect.gen(function* () {
       const frame = Uint8Array.from([0x00, 0x02, 0x00, 0x00, 0x00, 0x04, 0x01, 0x01, 0x01, 0xff])
-      const error = yield* Effect.flip(decodeBitResponse(frame, { functionCode: 1, quantity: 19 }))
+      const error = yield* Effect.flip(decodeBitResponse(frame, { unitId: 1, functionCode: 1, quantity: 19 }))
       expect(error._tag).toBe("ModbusFrameError")
     })
   )
@@ -167,11 +169,53 @@ describe("server side", () => {
         functionCode: 0x2b
       })
       const error = yield* Effect.flip(
-        decodeReadResponse(encodeExceptionResponse(3, 1, 0x03, 0x02), { functionCode: 3, quantity: 1 })
+        decodeReadResponse(encodeExceptionResponse(3, 1, 0x03, 0x02), { unitId: 1, functionCode: 3, quantity: 1 })
       )
       expect(error).toMatchObject({ _tag: "ModbusException", functionCode: 3, exceptionCode: 2 })
     })
   )
+})
+
+describe("response matching (Implementation Guide §3.1.3, spec §7)", () => {
+  const request = {
+    transactionId: 9,
+    unitId: 1,
+    functionCode: FunctionCode.ReadHoldingRegisters,
+    address: 0,
+    quantity: 1
+  }
+
+  it.effect("rejects a response from another unit", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(
+        decodeReadResponse(encodeRegisterResponse({ ...request, unitId: 99 }, [42]), request)
+      )
+      expect(error).toMatchObject({ _tag: "ModbusFrameError" })
+      expect(error.message).toContain("unit 99")
+    })
+  )
+
+  it.effect("rejects an exception that answers another function", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(decodeReadResponse(encodeExceptionResponse(9, 1, 0x2b, 0x02), request))
+      expect(error._tag).toBe("ModbusFrameError")
+    })
+  )
+
+  it.effect("rejects an exception response with extra bytes", () =>
+    Effect.gen(function* () {
+      const frame = Uint8Array.from([0, 9, 0, 0, 0, 4, 1, 0x83, 0x02, 0x00])
+      const error = yield* Effect.flip(decodeReadResponse(frame, request))
+      expect(error._tag).toBe("ModbusFrameError")
+    })
+  )
+
+  it("tells transient exceptions from permanent ones", () => {
+    expect([1, 2, 3, 4].map(isTransientException)).toEqual([false, false, false, false])
+    expect([5, 6, 0x0a, 0x0b].map(isTransientException)).toEqual([true, true, true, true])
+    expect(exceptionName(2)).toBe("illegal_data_address")
+    expect(exceptionName(0x42)).toBe("exception_66")
+  })
 })
 
 describe("encodeValue", () => {

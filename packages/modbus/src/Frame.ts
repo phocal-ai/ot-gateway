@@ -26,8 +26,38 @@ export const ExceptionCode = {
   IllegalFunction: 0x01,
   IllegalDataAddress: 0x02,
   IllegalDataValue: 0x03,
-  ServerDeviceFailure: 0x04
+  ServerDeviceFailure: 0x04,
+  Acknowledge: 0x05,
+  ServerDeviceBusy: 0x06,
+  GatewayPathUnavailable: 0x0a,
+  GatewayTargetFailedToRespond: 0x0b
 } as const
+
+const exceptionNames: Record<number, string> = {
+  [ExceptionCode.IllegalFunction]: "illegal_function",
+  [ExceptionCode.IllegalDataAddress]: "illegal_data_address",
+  [ExceptionCode.IllegalDataValue]: "illegal_data_value",
+  [ExceptionCode.ServerDeviceFailure]: "server_device_failure",
+  [ExceptionCode.Acknowledge]: "acknowledge",
+  [ExceptionCode.ServerDeviceBusy]: "server_device_busy",
+  [ExceptionCode.GatewayPathUnavailable]: "gateway_path_unavailable",
+  [ExceptionCode.GatewayTargetFailedToRespond]: "gateway_target_failed_to_respond"
+}
+
+/** A stable, label-safe name for an exception code (spec §7), e.g. `illegal_data_address`. */
+export const exceptionName = (code: number): string => exceptionNames[code] ?? `exception_${code}`
+
+/**
+ * Whether asking again soon can succeed (spec §7): the device is still busy
+ * with a long command (05, 06) or a gateway could not reach its target (0A,
+ * 0B). Every other code describes the request itself or the device's state,
+ * so repeating the same request gets the same answer.
+ */
+export const isTransientException = (code: number): boolean =>
+  code === ExceptionCode.Acknowledge ||
+  code === ExceptionCode.ServerDeviceBusy ||
+  code === ExceptionCode.GatewayPathUnavailable ||
+  code === ExceptionCode.GatewayTargetFailedToRespond
 
 /** Largest quantity one read may ask for (spec §6.1–6.4). */
 export const maxReadQuantity = (functionCode: ReadCode): number =>
@@ -108,6 +138,13 @@ export const takeFrame = (buffer: Uint8Array): FrameSplit => {
   return { _tag: "Frame", frame: buffer.subarray(0, total), rest: buffer.subarray(total) }
 }
 
+/**
+ * The transaction identifier of a frame from `takeFrame`: the first MBAP
+ * field, which a server copies from the request so the client can pair them
+ * (Implementation Guide §3.1.3).
+ */
+export const frameTransactionId = (frame: Uint8Array): number => ((frame[0] ?? 0) << 8) | (frame[1] ?? 0)
+
 interface ResponseHeader {
   readonly transactionId: number
   readonly unitId: number
@@ -116,15 +153,19 @@ interface ResponseHeader {
   readonly data: Uint8Array
 }
 
-/** What a response must answer: the request's function code and quantity. */
+/** What a response must answer: the request's unit, function code and quantity. */
 export interface ExpectedResponse {
+  readonly unitId: number
   readonly functionCode: number
   readonly quantity: number
 }
 
 /**
  * Parse the MBAP header and the byte-counted body shared by FC 01–04
- * responses. A normal response repeats the request's function code (§4.1).
+ * responses. The server echoes the request's unit identifier (Implementation
+ * Guide §3.1.3, MBAP header). A normal response repeats the request's function
+ * code (spec §4.1); an exception response carries it with the high bit set
+ * (spec §7). Anything else answers some other request.
  */
 const decodeReadBody = (
   frame: Uint8Array,
@@ -146,8 +187,18 @@ const decodeReadBody = (
     if (frame.length !== 6 + length) {
       return yield* new ModbusFrameError({ message: `length field ${length} does not match frame` })
     }
-    if ((functionCode & 0x80) !== 0) {
-      return yield* new ModbusException({ functionCode: functionCode & 0x7f, exceptionCode: view.getUint8(8) })
+    // Some TCP devices answer with unit 0 or 255 whatever was asked; the
+    // transaction id already pairs the response, so only another real unit is refused.
+    if (unitId !== expected.unitId && unitId !== 0 && unitId !== 0xff) {
+      return yield* new ModbusFrameError({
+        message: `response from unit ${unitId} does not answer a request to unit ${expected.unitId}`
+      })
+    }
+    if (functionCode === (expected.functionCode | 0x80)) {
+      if (frame.length !== 9) {
+        return yield* new ModbusFrameError({ message: `exception response must be 9 bytes, got ${frame.length}` })
+      }
+      return yield* new ModbusException({ functionCode: expected.functionCode, exceptionCode: view.getUint8(8) })
     }
     if (functionCode !== expected.functionCode) {
       return yield* new ModbusFrameError({
