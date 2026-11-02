@@ -108,7 +108,7 @@ describe("Modbus driver over TCP", () => {
       const error = yield* Effect.flip(driver.readAll)
 
       expect(error).toMatchObject({ _tag: "DriverError", reason: "protocol" })
-      expect(error.message).toContain("illegal data address")
+      expect(error.message).toContain("illegal_data_address")
     })
   )
 

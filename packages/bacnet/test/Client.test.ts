@@ -385,7 +385,9 @@ describe("BACnet/IP client", () => {
       const peer = yield* startPeer((request, count) =>
         count === 1 ? undefined : { apdu: presentValueAck(request, 1) }
       )
-      const client = yield* startClient(peer.target.address, { ...short, retries: 0 })
+      // 255 requests at once on a loaded CI runner need more than the usual short timeout;
+      // the ID still rests for 10 s, far longer than the test.
+      const client = yield* startClient(peer.target.address, { requestTimeout: "1 second", retries: 0 })
       const read = client.readProperty(peer.target, { object: supplyTemp, property: presentValue })
       expect(yield* read.pipe(Effect.flip)).toMatchObject({ _tag: "BacnetTimeout" })
       // Use up every other ID once, so the next request comes round to the first one again.
