@@ -155,7 +155,12 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
 
   const pollCycle = Effect.gen(function* () {
     if (unpublishedMeta.size > 0) yield* publishMeta
-    const readings = yield* driver.readAll.pipe(Effect.retry(retryPolicy))
+    const readings = yield* driver.readAll.pipe(
+      Effect.retry({
+        ...retryPolicy,
+        while: (error) => !(driver.retriesTimeouts === true && error.reason === "timeout")
+      })
+    )
     const readAt = yield* Clock.currentTimeMillis
     ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* Metric.update(deviceLastSuccess, readAt / 1000)

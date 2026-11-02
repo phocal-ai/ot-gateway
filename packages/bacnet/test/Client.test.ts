@@ -247,6 +247,20 @@ describe("BACnet/IP client", () => {
     })
   )
 
+  it.live("locates a device at a given address only by an I-Am from that address", () =>
+    Effect.gen(function* () {
+      const { target } = yield* startDevice()
+      const silent = yield* startPeer(() => undefined)
+      const client = yield* startClient(target.address, { ...short, retries: 0 })
+      // While the client waits for 1001 at the silent address, the real 1001 answers a broadcast from elsewhere.
+      const [located] = yield* Effect.all(
+        [client.locate(1001, { target: silent.target }).pipe(Effect.flip), client.discover()],
+        { concurrency: "unbounded" }
+      )
+      expect(located).toMatchObject({ _tag: "BacnetTimeout" })
+    })
+  )
+
   it.live("resends a request that got no answer, with the same invoke ID", () =>
     Effect.gen(function* () {
       const peer = yield* startPeer((request, count) =>
@@ -289,7 +303,7 @@ describe("BACnet/IP client", () => {
     })
   )
 
-  it.live("treats a segmented answer as invalid, since it asked for none", () =>
+  it.live("treats a segmented answer as one that did not fit, since it asked for none", () =>
     Effect.gen(function* () {
       const peer = yield* startPeer((request) => ({
         apdu: {
@@ -304,7 +318,7 @@ describe("BACnet/IP client", () => {
       const error = yield* client
         .readProperty(peer.target, { object: supplyTemp, property: presentValue })
         .pipe(Effect.flip)
-      expect(error).toMatchObject({ _tag: "BacnetCodecError" })
+      expect(error).toMatchObject({ _tag: "BacnetDeviceError", kind: "abort", code: 4 })
       // The device waits for a SegmentAck; the client ends the transaction instead.
       yield* eventually(() => peer.seen.some((apdu) => apdu._tag === "Abort"))
       expect(peer.seen.find((apdu) => apdu._tag === "Abort")).toMatchObject({

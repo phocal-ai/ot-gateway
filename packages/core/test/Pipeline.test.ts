@@ -234,6 +234,30 @@ describe("runDevice metrics", () => {
       expect(yield* countOf(readFailures, { device, reason: "timeout" })).toBe(1)
     })
   )
+
+  it.effect("does not retry a timeout within the cycle when the driver resends requests itself", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeMemoryPublisher
+      let reads = 0
+      const scripted = scriptedDriver(["fail", 300], "self-retrying")
+      const driver: Driver = {
+        ...scripted,
+        retriesTimeouts: true,
+        readAll: Effect.suspend(() => {
+          reads++
+          return scripted.readAll
+        })
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("30 seconds")
+      yield* Fiber.interrupt(fiber)
+      // One read for the first cycle: its timeout was not retried, and the next cycle is a minute away.
+      expect(reads).toBe(1)
+    })
+  )
 })
 
 /** A tracer that records whether each `Device.pollCycle` span was sampled. */

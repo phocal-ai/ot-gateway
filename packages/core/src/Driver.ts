@@ -23,6 +23,12 @@ export interface Driver {
   readonly points: ReadonlyArray<AnyPoint>
   /** Read every configured point once. */
   readonly readAll: Effect.Effect<ReadonlyArray<Reading>, DriverError>
+  /**
+   * The driver already resends requests that time out, so the pipeline does
+   * not retry a `timeout` failure within the cycle; it would only multiply
+   * the wait for a device that is offline.
+   */
+  readonly retriesTimeouts?: boolean
   /** Write a value to a writable point. The core enforces safety before calling this. */
   readonly write: (pointId: string, value: PointValue) => Effect.Effect<void, DriverError>
 }

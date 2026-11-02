@@ -69,6 +69,16 @@ export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timest
 })
 
 /**
+ * Points a cycle could not read although the device answered, e.g. an
+ * unknown object or a value that is not a number. Without a `point`
+ * attribute, to keep the series count flat; the log says which point.
+ */
+export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
+  description: "Points a device could not read in an otherwise successful cycle",
+  incremental: true
+})
+
+/**
  * Requests a driver sent to its device, by `outcome`: `ok`, `timeout`,
  * `exception` (the device refused), `invalid_response` or `connection`.
  * Drivers count requests instead of opening a span per request, which would
