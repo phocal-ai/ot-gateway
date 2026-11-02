@@ -101,4 +101,4 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Health and budget
 
-`/health` checks the gateway, Claude Code sessions in this repo and the Grafana Cloud free-plan quotas through the Grafana MCP. The stack is on the free plan: before adding telemetry, dashboards, CI or scheduled agents, estimate what they add (see "Free-plan budget" in `observability/README.md`). If the projection gets close to a quota, optimize first.
+`/health` checks the gateway, Claude Code sessions in this repo and the Grafana Cloud free-plan quotas through the Grafana MCP. The stack is on the free plan: before adding telemetry, dashboards, CI or scheduled agents, estimate what they add (see "Free-plan budget" in `observability/README.md`). If the projection gets close to a quota, optimize first. The `Health` workflow (`.github/workflows/health.yml`, prompt in `.github/prompts/health.md`) runs the budget and gateway checks daily and tracks findings as `health` issues. Everything it writes is public.

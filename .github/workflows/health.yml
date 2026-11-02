@@ -1,0 +1,108 @@
+name: Health
+
+# Daily unattended health check: Claude Code runs the budget and gateway
+# sections of .claude/skills/health/SKILL.md against Grafana Cloud and tracks
+# findings as `health` issues. The prompt is .github/prompts/health.md.
+#
+# Secrets (the job skips with a warning until all three exist):
+#   CLAUDE_CODE_OAUTH_TOKEN  from `claude setup-token`
+#   GRAFANA_MCP_URL          the Grafana stack URL
+#   GRAFANA_MCP_READ_TOKEN   a Viewer service-account token, used only here
+#
+# Cost: public repo, so Actions minutes are free; about 3 min a day. Grafana
+# query volume is a few MB of Loki and Prometheus reads per run. Nothing here
+# exports telemetry.
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: health
+  cancel-in-progress: false
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CLAUDE_CODE_VERSION: 2.1.316
+      CLAUDE_MODEL: claude-sonnet-5-5
+      MCP_GRAFANA_VERSION: 2.0.2
+      MCP_GRAFANA_SHA256: 624e997b78bcadf236f82f8086827890ba77b6dfdc6fd6446f7c48dfd9e586f0
+    steps:
+      - name: Check secrets
+        id: secrets
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GRAFANA_MCP_URL: ${{ secrets.GRAFANA_MCP_URL }}
+          GRAFANA_MCP_READ_TOKEN: ${{ secrets.GRAFANA_MCP_READ_TOKEN }}
+        run: |
+          missing=""
+          for name in CLAUDE_CODE_OAUTH_TOKEN GRAFANA_MCP_URL GRAFANA_MCP_READ_TOKEN; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::warning::Health check skipped, missing secrets:$missing"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.secrets.outputs.ready == 'true'
+
+      - uses: actions/setup-node@v4
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+
+      - name: Install mcp-grafana
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          archive="$RUNNER_TEMP/mcp-grafana.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/grafana/mcp-grafana/releases/download/v${MCP_GRAFANA_VERSION}/mcp-grafana_Linux_x86_64.tar.gz"
+          echo "${MCP_GRAFANA_SHA256}  $archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/mcp-grafana"
+          tar -xzf "$archive" -C "$RUNNER_TEMP/mcp-grafana" mcp-grafana
+          jq -n --arg command "$RUNNER_TEMP/mcp-grafana/mcp-grafana" '{
+            mcpServers: { grafana: {
+              command: $command,
+              args: ["--disable-write", "--enabled-tools=datasource,prometheus,loki,tempo", "--usage-stats=disabled"],
+              env: { GRAFANA_URL: "${GRAFANA_MCP_URL}", GRAFANA_SERVICE_ACCOUNT_TOKEN: "${GRAFANA_MCP_READ_TOKEN}" }
+            } }
+          }' > "$RUNNER_TEMP/mcp.json"
+
+      - name: Run health check
+        if: steps.secrets.outputs.ready == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GRAFANA_MCP_URL: ${{ secrets.GRAFANA_MCP_URL }}
+          GRAFANA_MCP_READ_TOKEN: ${{ secrets.GRAFANA_MCP_READ_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          allowed=(
+            Read Grep Glob
+            mcp__grafana__query_prometheus mcp__grafana__query_loki_logs mcp__grafana__query_loki_stats
+            mcp__grafana__query_tempo_metrics mcp__grafana__search_tempo_traces
+            mcp__grafana__list_prometheus_metric_names mcp__grafana__list_prometheus_label_values
+            "Bash(gh issue list:*)" "Bash(gh issue view:*)" "Bash(gh issue create:*)"
+            "Bash(gh issue comment:*)" "Bash(gh issue close:*)" "Bash(gh label create:*)"
+          )
+          npx -y "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+            -p "$(cat .github/prompts/health.md)" \
+            --model "$CLAUDE_MODEL" \
+            --mcp-config "$RUNNER_TEMP/mcp.json" --strict-mcp-config \
+            --allowedTools "${allowed[@]}" \
+            --output-format text < /dev/null | tee "$RUNNER_TEMP/report.md"
+          cat "$RUNNER_TEMP/report.md" >> "$GITHUB_STEP_SUMMARY"
+          if grep -q '^OUTCOME: infra-gap' "$RUNNER_TEMP/report.md"; then
+            echo "::error::Health check could not reach Grafana or GitHub; see the report."
+            exit 1
+          fi
