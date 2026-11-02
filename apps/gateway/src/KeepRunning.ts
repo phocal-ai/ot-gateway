@@ -3,7 +3,7 @@
  * own supervisor in `@plenum/core`; this is the same idea without the
  * per-device health and metrics.
  */
-import { Cause, Duration, Effect } from "effect"
+import { Cause, type Duration, Effect } from "effect"
 
 /** Restart `task` after a defect (a bug), so the gateway outlives it; interruption still stops it. */
 export const keepRunning = Effect.fn("keepRunning")(function* <R>(
