@@ -1,6 +1,7 @@
 export * from "./Apdu.ts"
 export * from "./Bvlc.ts"
 export * from "./Client.ts"
+export * from "./Driver.ts"
 export * from "./Encoding.ts"
 export * from "./Enums.ts"
 export * from "./Frame.ts"

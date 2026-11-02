@@ -16,6 +16,7 @@ Effect-native BACnet/IP, implemented in-house against ASHRAE 135. The codecs are
 | `Simulator.ts` | a simulated device as pure request → response logic                                                                           |                       |
 | `Client.ts`    | the UDP client: confirmed requests with retries, Who-Is discovery                                                             | 5.4.4, 16.10          |
 | `Server.ts`    | puts a simulated device on a UDP socket                                                                                       |                       |
+| `Driver.ts`    | the pipeline driver: Who-Is, batched ReadPropertyMultiple, ReadProperty fallback                                              | 15.5, 15.7            |
 
 Character strings are written as UTF-8 (character set 0). They are read leniently: UTF-8 with invalid bytes replaced, UCS-2, UCS-4 and ISO 8859-1, and the older DBCS and JIS sets byte by byte. A garbled description must not cost the present value read in the same request. Integers are read up to 8 bytes (above 2^53 they lose precision), and reals as the shortest decimal for the same single-precision number (72.4, not 72.40000152587891). Constructed values nest at most 32 deep.
 
@@ -43,9 +44,17 @@ Character strings are written as UTF-8 (character set 0). They are read lenientl
 
 Requests are counted in `plenum_driver_requests` by `outcome`, once per request however often it was resent: `ok`, `timeout`, `exception` for an answer from the device, `invalid_response`, `connection`. Opening the socket is counted in `plenum_driver_connects` under the device name `$bacnet`, because one socket serves every BACnet device.
 
+## Driver
+
+`makeBacnetDriverFromClient(device, client)` turns a `bacnet-ip` device from the config into a pipeline `Driver`; `makeBacnetNetwork(settings)` opens the one client every BACnet device of the gateway shares, from the config's `bacnet` block.
+
+- **Finding the device:** Who-Is for its `deviceInstance`, sent to its `address` if one is set, broadcast otherwise. The answer is remembered until a request times out, so a device that moved is found again.
+- **Reading:** ReadPropertyMultiple in batches sized from the largest APDU the device accepts. A device that aborts or rejects an answer as too large gets half the batch from then on. A device that does not know ReadPropertyMultiple is read with ReadProperty, one point at a time.
+- **Values:** numbers stay numbers; binary objects' `active`/`inactive` become `true`/`false`. A point whose object or property does not exist, or whose value is not a number or boolean, is skipped and logged when it starts and stops failing. The cycle fails only when no point could be read.
+- **Errors:** a timeout is reported as `timeout`, a socket problem as `connection`, an unreadable answer as `invalid-response`, a point that does not resolve to an object type and property as `configuration`.
+
 ## Next
 
-1. A ReadProperty(Multiple) driver for the pipeline, with BACnet devices on the bench.
-2. SubscribeCOV.
+1. SubscribeCOV, so values arrive when they change instead of every poll.
 
 Part of [Plenum](../../README.md).

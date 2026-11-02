@@ -9,9 +9,13 @@
  * - a Modbus TCP simulator for every `modbus-tcp` device on localhost, with
  *   values that change over time (floats follow a slow sine, integers count
  *   up every 10 s, booleans flip every 30 s)
+ * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
+ *   is on localhost with a port other than the gateway's own, with analog
+ *   values on the same sine and binary values flipping every 30 s
  */
-import { NodeRuntime, NodeServices, NodeSocketServer } from "@effect/platform-node"
-import { type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
+import { NodeDatagramSocket, NodeRuntime, NodeServices, NodeSocketServer } from "@effect/platform-node"
+import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDeviceFor } from "@plenum/bacnet"
+import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
 import { makeRegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
 import { makeBrokerControl, parseBrokerUrl, serveMqtt } from "@plenum/mqtt"
 import { Clock, Console, Effect, FileSystem, Schedule } from "effect"
@@ -51,6 +55,40 @@ const runSimulator = Effect.fn("runSimulator")(function* (device: ModbusDevice) 
   return yield* serveModbus(server, bank)
 })
 
+const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
+  device: BacnetDevice,
+  host: string,
+  port: number
+) {
+  const simulated = simulatedDeviceFor(device)
+  const update = Effect.gen(function* () {
+    const seconds = (yield* Clock.currentTimeMillis) / 1000
+    device.points.forEach((point, index) => {
+      const objectType = objectTypeNumber(point.objectType)
+      if (objectType === undefined) return
+      const object = { objectType, instance: point.instance }
+      if (point.objectType.startsWith("binary-")) {
+        setPresentValue(simulated, object, { type: "enumerated", value: Math.floor(seconds / 30) % 2 })
+      } else {
+        const value = Math.round((50 + 50 * Math.sin((2 * Math.PI * seconds) / 120 + index)) * 100) / 100
+        setPresentValue(simulated, object, { type: "real", value })
+      }
+    })
+  })
+  yield* update.pipe(Effect.repeat(Schedule.spaced("1 second")), Effect.forkScoped)
+  const socket = yield* NodeDatagramSocket.make({ bind: { address: host, port } })
+  yield* serveSimulatedDevice(socket, simulated)
+  yield* Console.log(`BACnet simulator for ${device.id} (device ${device.deviceInstance}) on ${host}:${port}`)
+  return yield* Effect.never
+})
+
+/** The localhost address and port of a BACnet device the bench should simulate, if any. */
+const simulatedBacnetAt = (config: GatewayConfig, device: BacnetDevice) => {
+  const [host = "", portText] = (device.address ?? "").split(":")
+  const port = portText === undefined ? 47_808 : Number(portText)
+  return localHosts.has(host) && port !== config.bacnet.port ? { host, port } : undefined
+}
+
 const program = Effect.gen(function* () {
   const path = process.argv[2] ?? "plenum.json"
   const fs = yield* FileSystem.FileSystem
@@ -58,7 +96,15 @@ const program = Effect.gen(function* () {
   const simulated = config.devices.filter(
     (device): device is ModbusDevice => device.protocol === "modbus-tcp" && localHosts.has(device.host)
   )
-  yield* Effect.all([runBroker(config), ...simulated.map(runSimulator)], { concurrency: "unbounded", discard: true })
+  const bacnet = config.devices.flatMap((device) => {
+    if (device.protocol !== "bacnet-ip") return []
+    const at = simulatedBacnetAt(config, device)
+    return at === undefined ? [] : [runBacnetSimulator(device, at.host, at.port)]
+  })
+  yield* Effect.all([runBroker(config), ...simulated.map(runSimulator), ...bacnet], {
+    concurrency: "unbounded",
+    discard: true
+  })
 })
 
 program.pipe(Effect.scoped, Effect.provide(NodeServices.layer), NodeRuntime.runMain)

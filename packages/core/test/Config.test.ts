@@ -16,6 +16,15 @@ const minimal = {
   ]
 }
 
+/** A BACnet device as written in a config file, at `address` if given. */
+const bacnetDevice = (address?: string) => ({
+  protocol: "bacnet-ip",
+  id: "ahu-2",
+  deviceInstance: 1001,
+  ...(address === undefined ? {} : { address }),
+  points: [{ id: "supply-temp", name: "Supply temperature", objectType: "analog-input", instance: 1 }]
+})
+
 describe("parseConfig", () => {
   it.effect("applies defaults", () =>
     Effect.gen(function* () {
@@ -66,6 +75,27 @@ describe("parseConfig", () => {
       expect(
         Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, buffer: { path: "b" } }))))
       ).toBe(true)
+    })
+  )
+
+  it.effect("defaults the BACnet endpoint and checks device addresses", () =>
+    Effect.gen(function* () {
+      const config = yield* parseConfig(JSON.stringify({ ...minimal, devices: [bacnetDevice("192.168.1.20:47809")] }))
+      expect(config.bacnet).toEqual({
+        bindAddress: "0.0.0.0",
+        port: 47_808,
+        broadcastAddress: "255.255.255.255",
+        requestTimeoutMs: 3_000,
+        retries: 2
+      })
+      const device = config.devices[0]
+      expect(device?.protocol === "bacnet-ip" && device.points[0]?.property).toBe("present-value")
+      for (const address of ["ahu-2.local", "192.168.1.256", "10.0.0.1:", "::1"]) {
+        const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, devices: [bacnetDevice(address)] })))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }
+      const badBroadcast = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:47808" } }
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(badBroadcast))))).toBe(true)
     })
   )
 })

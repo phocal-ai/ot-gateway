@@ -7,6 +7,7 @@
  *
  * The UDP server that puts it on the network lives with the transport.
  */
+import type { BacnetDevice } from "@plenum/core"
 import { Result } from "effect"
 import { AbortReason, type Apdu, ConfirmedService, encodeApdu, RejectReason, UnconfirmedService } from "./Apdu.ts"
 import type { BacnetValue, ObjectId } from "./Encoding.ts"
@@ -127,11 +128,12 @@ export const makeSimulatedDevice = (config: SimulatedDeviceConfig): SimulatedDev
 /** Change a property, as a sensor or an operator would. Returns false if the object does not exist. */
 export const setProperty = (
   device: SimulatedDevice,
-  object: { readonly objectType: ObjectTypeName; readonly instance: number },
+  object: { readonly objectType: ObjectTypeName | number; readonly instance: number },
   property: number,
   value: BacnetValue
 ): boolean => {
-  const properties = device.objects.get(keyOf({ objectType: ObjectType[object.objectType], instance: object.instance }))
+  const objectType = typeof object.objectType === "number" ? object.objectType : ObjectType[object.objectType]
+  const properties = device.objects.get(keyOf({ objectType, instance: object.instance }))
   if (properties === undefined) return false
   properties.set(property, [value])
   return true
@@ -140,7 +142,7 @@ export const setProperty = (
 /** Change an object's present value. */
 export const setPresentValue = (
   device: SimulatedDevice,
-  object: { readonly objectType: ObjectTypeName; readonly instance: number },
+  object: { readonly objectType: ObjectTypeName | number; readonly instance: number },
   value: BacnetValue
 ) => setProperty(device, object, PropertyId["present-value"], value)
 
@@ -250,4 +252,28 @@ export const answer = (device: SimulatedDevice, request: Apdu): Apdu | undefined
     default:
       return reject(RejectReason.UnrecognizedService)
   }
+}
+
+const binaryObjectTypes = new Set<string>(["binary-input", "binary-output", "binary-value"])
+
+const isObjectTypeName = (name: string): name is ObjectTypeName => Object.hasOwn(ObjectType, name)
+
+/**
+ * A simulated device with an object for every point of `device` (named
+ * object types only; proprietary numeric ones are left out). Binary objects
+ * start `inactive`, everything else at 0.
+ */
+export const simulatedDeviceFor = (device: BacnetDevice): SimulatedDevice => {
+  const objects = new Map<string, SimulatedObjectConfig>()
+  for (const point of device.points) {
+    const objectType = point.objectType
+    if (!isObjectTypeName(objectType)) continue
+    objects.set(`${objectType}:${point.instance}`, {
+      objectType,
+      instance: point.instance,
+      name: point.name,
+      presentValue: binaryObjectTypes.has(objectType) ? { type: "enumerated", value: 0 } : { type: "real", value: 0 }
+    })
+  }
+  return makeSimulatedDevice({ instance: device.deviceInstance, name: device.id, objects: [...objects.values()] })
 }

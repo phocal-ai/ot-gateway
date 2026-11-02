@@ -58,7 +58,7 @@ A series exported more often than once a minute counts several times: at Effect'
 
 **What one gateway costs**, roughly:
 
-- **Metric series:** about 27 per device plus 1 per point (the histogram alone is 15), plus up to 7 per device for driver requests and connects, plus up to 4 per gateway for the broker connection and up to 6 for the buffer. 100 devices with 20 points each is about 4,700 series, so one large building fits but a second one would not; drop histogram buckets or the per-point gauge first.
+- **Metric series:** about 27 per device plus 1 per point (the histogram alone is 15), plus up to 7 per device for driver requests and connects (BACnet devices share one socket, so their connects are 2 series per gateway under `$bacnet`), plus up to 4 per gateway for the broker connection and up to 6 for the buffer. 100 devices with 20 points each is about 4,700 series, so one large building fits but a second one would not; drop histogram buckets or the per-point gauge first.
 - **Traces:** one span per device per poll interval, about 1 KB each. 20 devices polled every 5 s is about 10 GB a month. Above roughly 10 devices, set `OTEL_TRACES_SAMPLER_ARG=0.1`.
 - **Logs:** quiet while healthy. A device that stays down logs a warning every cycle: about 0.5 GB a month at a 5 s interval.
 

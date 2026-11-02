@@ -9,7 +9,7 @@ It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retri
 > A _plenum_ is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
 
 > [!NOTE]
-> Plenum is early. The core pipeline, config schema, Modbus TCP reads, MQTT 5 publishing, health topics and store-and-forward work; BACnet is next. See the [roadmap](#roadmap).
+> Plenum is early. The core pipeline, config schema, Modbus TCP and BACnet/IP reads, MQTT 5 publishing, health topics and store-and-forward work; BACnet COV subscriptions are next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -37,17 +37,18 @@ git clone https://github.com/phocal-ai/plenum
 cd plenum
 pnpm install
 pnpm check      # typecheck + tests across the workspace (Turborepo)
-pnpm bench      # terminal 1: a local MQTT test broker and a Modbus TCP simulator
+pnpm bench      # terminal 1: a local MQTT test broker, a Modbus TCP and a BACnet/IP simulator
 pnpm gateway    # terminal 2: run the gateway with examples/gateway.json
 ```
 
-The bench prints every message the gateway publishes, from a simulated air handler and a simulated Modbus meter:
+The bench prints every message the gateway publishes, from a simulated air handler, a simulated Modbus meter and a simulated BACnet air handler:
 
 ```text
 [retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
 demo-site/b1/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
 demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
 demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
+demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
 Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
@@ -83,12 +84,23 @@ A gateway is described by one JSON document:
           "semantics": { "brick": "Active_Power_Sensor", "haystack": ["elec", "power", "active", "sensor"] }
         }
       ]
+    },
+    {
+      "protocol": "bacnet-ip",
+      "id": "ahu-2",
+      "deviceInstance": 2001,
+      "points": [
+        { "id": "supply-air-temp", "name": "AHU 2 supply air temperature", "objectType": "analog-input", "instance": 1 }
+      ]
     }
-  ]
+  ],
+  "bacnet": { "broadcastAddress": "192.168.1.255" }
 }
 ```
 
 With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@plenum/buffer`](packages/buffer).
+
+BACnet devices are found by `deviceInstance` with Who-Is, or reached directly at `address` (`ip` or `ip:port`). A point reads `present-value` of its object unless it names another `property`. Every BACnet device shares one UDP socket, set in the optional `bacnet` block: `bindAddress` (default `0.0.0.0`), `port` (47808), `broadcastAddress` (`255.255.255.255`; set your subnet's), `requestTimeoutMs` (3000) and `retries` (2). See [`@plenum/bacnet`](packages/bacnet).
 
 IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
 
@@ -115,8 +127,8 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4                | Reads working      |
 | [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order | Working            |
 | [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker     | Publishing working |
-| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                                       | Early              |
-| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker and Modbus simulator)                         | Working            |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, client with Who-Is discovery, ReadProperty(Multiple) driver, simulator server    | Reads working      |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                | Working            |
 
 ## Architecture
 
