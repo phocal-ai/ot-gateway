@@ -10,6 +10,11 @@
  * stores values for later. QoS 1 publishes complete on
  * PUBACK. The session is clean (no session state survives a reconnect), so
  * nothing unacknowledged is resent behind the caller's back.
+ *
+ * Dead connections are noticed three ways: the broker stays silent past
+ * 1.5 keep alives (timed on the monotonic clock, since a Pi without an RTC
+ * has its wall clock stepped by NTP), two publishes in a row get no PUBACK,
+ * or the broker breaks the protocol.
  */
 import { describeSocketError, mqttConnected, mqttConnects } from "@plenum/core"
 import {
@@ -37,8 +42,9 @@ import {
   encodeDisconnect,
   encodePingreq,
   encodePublish,
+  makeFrameReader,
   Property,
-  takePacket
+  pubackRefusesMessage
 } from "./Packet.ts"
 import type { Will } from "./Packet.ts"
 
@@ -54,18 +60,30 @@ export class MqttRejected extends Schema.TaggedError<MqttRejected>()("MqttReject
 }) {}
 
 /**
- * A message could not be published. `unavailable`: no connection, or it broke
- * before the PUBACK; trying again later may work. `rejected`: the broker or
- * the protocol refuses this message, so retrying it will not help.
+ * A message could not be published. `unavailable`: no connection, it broke
+ * before the PUBACK, or the broker refused the message for now (quota
+ * exceeded, say); trying again later may work. `rejected`: the broker or the
+ * protocol refuses this message, so retrying it will not help. `inFlight`:
+ * the message was sent and then the connection broke or no PUBACK came.
  */
 export class MqttPublishError extends Schema.TaggedError<MqttPublishError>()("MqttPublishError", {
   topic: Schema.String,
   reason: Schema.Literals(["unavailable", "rejected"]),
-  message: Schema.String
+  message: Schema.String,
+  inFlight: Schema.optionalKey(Schema.Boolean)
 }) {}
 
 /** A connection that lasted this long resets the reconnect backoff. */
 const stableConnectionMs = 30_000
+
+/** Publishes in a row whose PUBACK never came before the connection is presumed dead. */
+const maxPubackTimeouts = 2
+
+/** Default Maximum Packet Size announced in CONNECT: Plenum only receives small control packets. */
+const defaultMaximumPacketSize = 1024 * 1024
+
+/** Monotonic milliseconds, for durations: unlike wall time, it does not jump when NTP steps the clock. */
+const monotonicMillis = Effect.map(Clock.monotonicTimeNanos, (nanos) => Number(nanos / 1_000_000n))
 
 export interface MqttClientOptions {
   readonly clientId: string
@@ -75,8 +93,17 @@ export interface MqttClientOptions {
   readonly keepAliveSeconds?: number
   /** Time allowed from dialing to CONNACK (default 10 s). */
   readonly connectTimeout?: Duration.Input
-  /** Time a publish may wait for a connection, and then for its PUBACK (default 10 s each). */
+  /**
+   * Time a publish may wait for a connection, and then for a free inflight
+   * slot (the broker's Receive Maximum) and its PUBACK together (default 10 s each).
+   */
   readonly publishTimeout?: Duration.Input
+  /**
+   * Largest packet accepted from the broker, in bytes (default 1 MiB). It is
+   * announced in CONNECT; a larger packet is a protocol error that closes the
+   * connection with DISCONNECT 0x95 (§3.1.2.11.4).
+   */
+  readonly maximumPacketSize?: number
   /**
    * Whether a publish made while disconnected waits for the connection
    * (default true). Turn it off when the caller stores what fails: waiting
@@ -87,7 +114,11 @@ export interface MqttClientOptions {
   readonly waitForConnection?: boolean
   /** Published by the broker if the gateway disappears without a clean DISCONNECT. */
   readonly will?: Will
-  /** First and largest delay between reconnect attempts (default 1 s and 60 s). */
+  /**
+   * First and largest delay between reconnect attempts (default 1 s and 15 s,
+   * each jittered down by up to half). A low cap keeps the gateway from
+   * buffering long after the broker is back.
+   */
   readonly reconnectDelay?: { readonly initial: Duration.Input; readonly max: Duration.Input }
   /**
    * Run after every successful connect, in the background, while the
@@ -116,22 +147,14 @@ interface Session {
   readonly maximumQoS: 0 | 1
   readonly retainAvailable: boolean
   readonly maximumPacketSize: number
+  /** Failing it ends the connection, from outside the read and ping loops. */
+  readonly abort: Deferred.Deferred<never, MqttConnectionError>
   nextPacketId: number
+  /** Publishes in a row whose PUBACK did not come in time; any PUBACK resets it. */
+  pubackTimeouts: number
 }
 
 const encoder = new TextEncoder()
-
-const appendBytes = (buffer: Uint8Array, chunks: ReadonlyArray<Uint8Array | string>): Uint8Array => {
-  const bytes = chunks.map((chunk) => (typeof chunk === "string" ? encoder.encode(chunk) : chunk))
-  const out = new Uint8Array(buffer.length + bytes.reduce((n, b) => n + b.length, 0))
-  out.set(buffer, 0)
-  let offset = buffer.length
-  for (const b of bytes) {
-    out.set(b, offset)
-    offset += b.length
-  }
-  return out
-}
 
 const numberProperty = (properties: ReadonlyMap<number, number | string>, id: number, fallback: number) => {
   const value = properties.get(id)
@@ -161,8 +184,9 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   const keepAliveSeconds = options.keepAliveSeconds ?? 30
   const connectTimeout = options.connectTimeout ?? "10 seconds"
   const publishTimeout = options.publishTimeout ?? "10 seconds"
+  const maximumPacketSize = options.maximumPacketSize ?? defaultMaximumPacketSize
   const initialDelay = Duration.toMillis(Duration.fromInputUnsafe(options.reconnectDelay?.initial ?? "1 second"))
-  const maxDelay = Duration.toMillis(Duration.fromInputUnsafe(options.reconnectDelay?.max ?? "60 seconds"))
+  const maxDelay = Duration.toMillis(Duration.fromInputUnsafe(options.reconnectDelay?.max ?? "15 seconds"))
   const connected = yield* Latch.make(false)
   // Opens once the first dial has connected or failed.
   const firstDialDone = yield* Latch.make(false)
@@ -192,18 +216,33 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             Deferred.await(closed)
           )
 
-        let buffer: Uint8Array = new Uint8Array(0)
+        /**
+         * A protocol error closes the connection: DISCONNECT with the reason
+         * first, if it can still be sent (§4.13.1, §4.13.2).
+         */
+        const protocolError = (reasonCode: number, message: string) =>
+          write(encodeDisconnect(reasonCode)).pipe(
+            Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
+            Effect.catchTag("MqttConnectionError", () => Effect.void),
+            Effect.andThen(Effect.fail(new MqttConnectionError({ message })))
+          )
+
+        const frames = makeFrameReader(maximumPacketSize)
         const nextPacket = Effect.gen(function* () {
           while (true) {
-            const split = takePacket(buffer)
-            switch (split._tag) {
+            const frame = frames.next()
+            switch (frame._tag) {
               case "Packet":
-                buffer = split.rest
-                return split
+                return frame
               case "Invalid":
-                return yield* new MqttConnectionError({ message: `unreadable packet: ${split.message}` })
+                return yield* protocolError(0x81, `unreadable packet: ${frame.message}`)
+              case "TooLarge":
+                return yield* protocolError(
+                  0x95,
+                  `broker sent a ${frame.size}-byte packet, above the ${maximumPacketSize}-byte limit`
+                )
               case "Incomplete":
-                buffer = appendBytes(buffer, yield* pull)
+                for (const chunk of yield* pull) frames.push(typeof chunk === "string" ? encoder.encode(chunk) : chunk)
             }
           }
         }).pipe(
@@ -218,6 +257,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             keepAliveSeconds,
             cleanStart: true,
             sessionExpirySeconds: 0,
+            maximumPacketSize,
             ...(options.username === undefined ? {} : { username: options.username }),
             ...(options.password === undefined ? {} : { password: Redacted.value(options.password) }),
             ...(options.will === undefined ? {} : { will: options.will })
@@ -247,6 +287,14 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         }
 
         const props = connack.properties
+        // A Receive Maximum or Maximum Packet Size of 0 is a protocol error (§3.2.2.3.3,
+        // §3.2.2.3.6); taken at its word, it would leave every QoS 1 publish waiting for good.
+        if (props.get(Property.ReceiveMaximum) === 0) {
+          return yield* protocolError(0x82, "broker sent Receive Maximum 0 in CONNACK, a protocol error")
+        }
+        if (props.get(Property.MaximumPacketSize) === 0) {
+          return yield* protocolError(0x82, "broker sent Maximum Packet Size 0 in CONNACK, a protocol error")
+        }
         const current: Session = {
           write,
           inflight: new Map(),
@@ -255,9 +303,15 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           maximumQoS: numberProperty(props, Property.MaximumQoS, 2) === 0 ? 0 : 1,
           retainAvailable: numberProperty(props, Property.RetainAvailable, 1) === 1,
           maximumPacketSize: numberProperty(props, Property.MaximumPacketSize, Number.POSITIVE_INFINITY),
-          nextPacketId: 1
+          abort: yield* Deferred.make<never, MqttConnectionError>(),
+          nextPacketId: 1,
+          pubackTimeouts: 0
         }
+        // The broker's Server Keep Alive replaces ours (§3.2.2.3.14). At 0 the broker stops
+        // checking on us, but a client may ping whenever it likes (§3.1.2.10), and it still has
+        // to notice a dead broker: keep pinging at our own interval then.
         const effectiveKeepAlive = numberProperty(props, Property.ServerKeepAlive, keepAliveSeconds)
+        const pingSeconds = effectiveKeepAlive > 0 ? effectiveKeepAlive : keepAliveSeconds
 
         yield* Effect.addFinalizer((exit) =>
           Effect.gen(function* () {
@@ -284,7 +338,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           })
         )
         session = current
-        onConnected(yield* Clock.currentTimeMillis)
+        onConnected(yield* monotonicMillis)
         yield* countConnect("ok")
         yield* Metric.update(mqttConnected, 1)
         yield* Latch.open(connected)
@@ -292,15 +346,16 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         yield* Effect.logInfo("connected to MQTT broker").pipe(Effect.annotateLogs({ keepAlive: effectiveKeepAlive }))
         if (options.onConnect !== undefined) yield* Effect.forkScoped(options.onConnect(client))
 
-        let lastReceived = yield* Clock.currentTimeMillis
+        let lastReceived = yield* monotonicMillis
         const readLoop = Effect.gen(function* () {
           while (true) {
             const packet = yield* nextPacket
-            lastReceived = yield* Clock.currentTimeMillis
+            lastReceived = yield* monotonicMillis
             switch (packet.type) {
               case PacketType.PUBACK: {
                 const puback = decodePuback(packet.body)
                 if (Result.isSuccess(puback)) {
+                  current.pubackTimeouts = 0
                   const deferred = current.inflight.get(puback.success.packetId)
                   if (deferred !== undefined) yield* Deferred.succeed(deferred, puback.success.reasonCode)
                 }
@@ -322,23 +377,23 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         // Ping at half the keep alive; give up when the broker has been silent
         // for 1.5 keep alives (§3.1.2.10 lets the broker wait that long too).
         const pingLoop = Effect.gen(function* () {
-          if (effectiveKeepAlive === 0) return yield* Effect.never
+          if (pingSeconds === 0) return yield* Effect.never
           while (true) {
-            yield* Effect.sleep(Duration.seconds(effectiveKeepAlive / 2))
-            const silentFor = (yield* Clock.currentTimeMillis) - lastReceived
-            if (silentFor > effectiveKeepAlive * 1500) {
+            yield* Effect.sleep(Duration.seconds(pingSeconds / 2))
+            const silentFor = (yield* monotonicMillis) - lastReceived
+            if (silentFor > pingSeconds * 1500) {
               return yield* new MqttConnectionError({ message: `broker silent for ${Math.round(silentFor / 1000)} s` })
             }
             // A write stuck on a half-open connection would keep the silence check from ever running.
             yield* write(encodePingreq()).pipe(
               Effect.timeoutOrElse({
-                duration: Duration.seconds(effectiveKeepAlive / 2),
+                duration: Duration.seconds(pingSeconds / 2),
                 orElse: () => Effect.fail(new MqttConnectionError({ message: "could not send PINGREQ" }))
               })
             )
           }
         })
-        return yield* Effect.raceFirst(readLoop, pingLoop)
+        return yield* Effect.raceFirst(readLoop, Effect.raceFirst(pingLoop, Deferred.await(current.abort)))
       })
     ).pipe(
       Effect.catchTag("SocketError", (error) =>
@@ -372,7 +427,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       // Back off unless the connection held for a while: a broker that accepts and then
       // drops the client at once (a session taken over by a twin with the same client
       // id, a quota) must not be redialed every second.
-      const heldFor = connectedAt === undefined ? 0 : (yield* Clock.currentTimeMillis) - connectedAt
+      const heldFor = connectedAt === undefined ? 0 : (yield* monotonicMillis) - connectedAt
       failures = heldFor >= stableConnectionMs ? 0 : failures + 1
       const base = Math.min(maxDelay, initialDelay * 2 ** Math.max(0, failures - 1))
       // Full jitter between half and all of the delay, so many gateways do not reconnect in step.
@@ -381,64 +436,94 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   })
 
   const publish: MqttClient["publish"] = (topic, payload, publishOptions = {}) =>
-    Effect.gen(function* () {
-      const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
-      const problem = topicProblem(topic)
-      if (problem !== undefined) return yield* rejected(problem)
-      yield* (options.waitForConnection === false ? firstDialDone : connected).await.pipe(
-        Effect.timeoutOrElse({
-          duration: publishTimeout,
-          orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
-        })
-      )
-      const current = session
-      if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
-      const retain = publishOptions.retain === true
-      if (retain && !current.retainAvailable) {
-        return yield* rejected("the broker does not support retained messages")
-      }
-      // The broker's Maximum QoS caps what the client may send (§3.2.2.3.4).
-      const qos = Math.min(publishOptions.qos ?? 1, current.maximumQoS) === 0 ? 0 : 1
-      const bytes = encoder.encode(payload)
-
-      if (qos === 0) {
-        const packet = encodePublish({ topic, payload: bytes, qos: 0, retain })
-        if (packet.length > current.maximumPacketSize) {
-          return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
+    Effect.suspend(() => {
+      // Set once the PUBLISH is on the wire, so a failure after it is reported as in flight.
+      let sent = false
+      return Effect.gen(function* () {
+        const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
+        const problem = topicProblem(topic)
+        if (problem !== undefined) return yield* rejected(problem)
+        yield* (options.waitForConnection === false ? firstDialDone : connected).await.pipe(
+          Effect.timeoutOrElse({
+            duration: publishTimeout,
+            orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
+          })
+        )
+        const current = session
+        if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
+        const retain = publishOptions.retain === true
+        if (retain && !current.retainAvailable) {
+          return yield* rejected("the broker does not support retained messages")
         }
-        return yield* current.write(packet)
-      }
+        // The broker's Maximum QoS caps what the client may send (§3.2.2.3.4).
+        const qos = Math.min(publishOptions.qos ?? 1, current.maximumQoS) === 0 ? 0 : 1
+        const bytes = encoder.encode(payload)
 
-      return yield* Semaphore.withPermit(
-        current.inflightLimit,
-        Effect.gen(function* () {
-          let packetId = current.nextPacketId
-          while (current.inflight.has(packetId)) packetId = (packetId % 0xffff) + 1
-          current.nextPacketId = (packetId % 0xffff) + 1
-          const packet = encodePublish({ topic, payload: bytes, qos: 1, retain, packetId })
+        if (qos === 0) {
+          const packet = encodePublish({ topic, payload: bytes, qos: 0, retain })
           if (packet.length > current.maximumPacketSize) {
             return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
           }
-          const acked = yield* Deferred.make<number, MqttConnectionError>()
-          current.inflight.set(packetId, acked)
-          const reasonCode = yield* current.write(packet).pipe(
-            Effect.andThen(Deferred.await(acked)),
-            Effect.timeoutOrElse({
-              duration: publishTimeout,
-              orElse: () => Effect.fail(new MqttConnectionError({ message: "no PUBACK in time" }))
-            }),
-            Effect.ensuring(Effect.sync(() => current.inflight.delete(packetId)))
+          return yield* current.write(packet)
+        }
+
+        // One deadline covers waiting for an inflight slot (Receive Maximum), sending and the PUBACK.
+        const reasonCode = yield* Semaphore.withPermit(
+          current.inflightLimit,
+          Effect.gen(function* () {
+            let packetId = current.nextPacketId
+            while (current.inflight.has(packetId)) packetId = (packetId % 0xffff) + 1
+            current.nextPacketId = (packetId % 0xffff) + 1
+            const packet = encodePublish({ topic, payload: bytes, qos: 1, retain, packetId })
+            if (packet.length > current.maximumPacketSize) {
+              return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
+            }
+            const acked = yield* Deferred.make<number, MqttConnectionError>()
+            current.inflight.set(packetId, acked)
+            return yield* Effect.gen(function* () {
+              yield* current.write(packet)
+              sent = true
+              return yield* Deferred.await(acked)
+            }).pipe(Effect.ensuring(Effect.sync(() => current.inflight.delete(packetId))))
+          })
+        ).pipe(
+          Effect.timeoutOrElse({
+            duration: publishTimeout,
+            orElse: () =>
+              Effect.gen(function* () {
+                if (!sent) return yield* new MqttConnectionError({ message: "no free inflight slot in time" })
+                // A connection that answers pings but acknowledges nothing is no use: after a few
+                // PUBACKs in a row fail to come, drop it and dial again.
+                current.pubackTimeouts++
+                if (current.pubackTimeouts >= maxPubackTimeouts) {
+                  yield* Deferred.fail(
+                    current.abort,
+                    new MqttConnectionError({ message: `no PUBACK for ${current.pubackTimeouts} publishes in a row` })
+                  )
+                }
+                return yield* new MqttConnectionError({ message: "no PUBACK in time" })
+              })
+          })
+        )
+        if (reasonCode >= 0x80) {
+          const message = `broker refused the message: reason 0x${reasonCode.toString(16)}`
+          // Only some codes refuse the message itself; the rest (quota exceeded, say) may pass later.
+          if (pubackRefusesMessage(reasonCode)) return yield* rejected(message)
+          return yield* new MqttPublishError({ topic, reason: "unavailable", message })
+        }
+      }).pipe(
+        Effect.catchTag("MqttConnectionError", (error) =>
+          Effect.fail(
+            new MqttPublishError({
+              topic,
+              reason: "unavailable",
+              message: error.message,
+              ...(sent ? { inFlight: true } : {})
+            })
           )
-          if (reasonCode >= 0x80) {
-            return yield* rejected(`broker refused the message: reason 0x${reasonCode.toString(16)}`)
-          }
-        })
+        )
       )
-    }).pipe(
-      Effect.catchTag("MqttConnectionError", (error) =>
-        Effect.fail(new MqttPublishError({ topic, reason: "unavailable", message: error.message }))
-      )
-    )
+    })
 
   const client: MqttClient = { publish, isConnected: Effect.sync(() => session !== undefined) }
   // Started last, so `onConnect` always receives a finished client.

@@ -56,7 +56,7 @@ describe("MQTT client over TCP", () => {
       yield* client.publish("s/b/d/p/$meta", '{"unit":"°C"}', { retain: true })
 
       expect(control.connects).toMatchObject([
-        { clientId: "test-gw", username: "gw", hasPassword: true, cleanStart: true }
+        { clientId: "test-gw", username: "gw", hasPassword: true, cleanStart: true, maximumPacketSize: 1024 * 1024 }
       ])
       expect(control.messages).toEqual([
         { clientId: "test-gw", topic: "s/b/d/p", payload: '{"value":1}', qos: 0, retain: false },
@@ -105,7 +105,8 @@ describe("MQTT client over TCP", () => {
         _tag: "MqttPublishError",
         topic: "t",
         reason: "unavailable",
-        message: "no PUBACK in time"
+        message: "no PUBACK in time",
+        inFlight: true
       })
 
       control.ackPublishes = true

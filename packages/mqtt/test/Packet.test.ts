@@ -17,8 +17,10 @@ import {
   encodePingresp,
   encodePuback,
   encodePublish,
+  makeFrameReader,
   PacketType,
   Property,
+  pubackRefusesMessage,
   takePacket
 } from "../src/index.ts"
 
@@ -48,6 +50,59 @@ describe("takePacket", () => {
 
   it("rejects a remaining length longer than four bytes (§1.5.5)", () => {
     expect(takePacket(bytes(0x30, 0xff, 0xff, 0xff, 0xff, 0x01))._tag).toBe("Invalid")
+  })
+})
+
+describe("makeFrameReader", () => {
+  it("reassembles packets split across chunks and keeps what follows", () => {
+    const stream = new Uint8Array([...encodePuback(7), ...encodePingresp()])
+    const frames = makeFrameReader()
+    expect(frames.next()._tag).toBe("Incomplete")
+    for (const byte of stream.subarray(0, 4)) frames.push(Uint8Array.of(byte))
+    expect(frames.next()._tag).toBe("Incomplete")
+    frames.push(stream.subarray(4))
+    const first = frames.next()
+    expect(first).toMatchObject({ _tag: "Packet", type: PacketType.PUBACK })
+    expect(decodePuback(first._tag === "Packet" ? first.body : new Uint8Array())).toEqual(
+      Result.succeed({ packetId: 7, reasonCode: 0 })
+    )
+    expect(frames.next()).toMatchObject({ _tag: "Packet", type: PacketType.PINGRESP, body: new Uint8Array() })
+    expect(frames.next()._tag).toBe("Incomplete")
+  })
+
+  it("reads a large packet dribbled in small chunks in linear time", () => {
+    const size = 32 * 1024 * 1024
+    const frames = makeFrameReader()
+    // QoS 0 PUBLISH with a remaining length of 32 MiB (Variable Byte Integer 0x80 0x80 0x80 0x10).
+    frames.push(Uint8Array.of(0x30, 0x80, 0x80, 0x80, 0x10))
+    const chunk = new Uint8Array(16 * 1024)
+    const started = performance.now()
+    const early: Array<string> = []
+    for (let sent = chunk.length; sent < size; sent += chunk.length) {
+      frames.push(chunk)
+      // Asked after every chunk, as the client does; copying all so far each time would take minutes.
+      early.push(frames.next()._tag)
+    }
+    frames.push(chunk)
+    expect(new Set(early)).toEqual(new Set(["Incomplete"]))
+    const frame = frames.next()
+    expect(frame._tag === "Packet" && frame.body.length).toBe(size)
+    expect(performance.now() - started).toBeLessThan(5000)
+  })
+
+  it("reports a packet above the limit from its fixed header alone (§3.1.2.11.4)", () => {
+    const frames = makeFrameReader(1024)
+    frames.push(Uint8Array.of(0x30, 0x80, 0x80, 0x80, 0x10))
+    expect(frames.next()).toEqual({ _tag: "TooLarge", size: 5 + 32 * 1024 * 1024 })
+    const fits = makeFrameReader(4)
+    fits.push(encodePuback(1).subarray(0, 4))
+    expect(fits.next()._tag).toBe("TooLarge")
+  })
+
+  it("rejects a remaining length longer than four bytes (§1.5.5)", () => {
+    const frames = makeFrameReader()
+    frames.push(bytes(0x30, 0xff, 0xff, 0xff, 0xff, 0x01))
+    expect(frames.next()._tag).toBe("Invalid")
   })
 })
 
@@ -85,6 +140,18 @@ describe("CONNECT", () => {
     } as const
     const { body } = bodyOf(encodeConnect(connect), PacketType.CONNECT)
     expect(body[7]).toBe(0x80 | 0x40 | 0x20 | 0x08 | 0x04 | 0x02)
+    expect(decodeConnect(body)).toEqual(Result.succeed(connect))
+  })
+
+  it("announces a Maximum Packet Size (§3.1.2.11.4)", () => {
+    const connect = {
+      clientId: "gw",
+      keepAliveSeconds: 30,
+      cleanStart: true,
+      sessionExpirySeconds: 0,
+      maximumPacketSize: 1024 * 1024
+    }
+    const { body } = bodyOf(encodeConnect(connect), PacketType.CONNECT)
     expect(decodeConnect(body)).toEqual(Result.succeed(connect))
   })
 
@@ -153,6 +220,11 @@ describe("PUBACK", () => {
   it("round-trips a packet id and reason", () => {
     const { body } = bodyOf(encodePuback(65_535, 0x87), PacketType.PUBACK)
     expect(decodePuback(body)).toEqual(Result.succeed({ packetId: 65_535, reasonCode: 0x87 }))
+  })
+
+  it("refuses a message for good only on permanent reason codes (§3.4.2.1)", () => {
+    expect([0x87, 0x90, 0x95, 0x99].every(pubackRefusesMessage)).toBe(true)
+    expect([0x00, 0x10, 0x80, 0x83, 0x91, 0x97].some(pubackRefusesMessage)).toBe(false)
   })
 
   it("reads the short form, where a missing reason means success (§3.4.2.1)", () => {

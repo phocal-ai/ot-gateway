@@ -61,7 +61,14 @@ export interface MqttPublisherOptions extends Pick<
 const translate = <A>(effect: Effect.Effect<A, MqttPublishError>): Effect.Effect<A, PublishError> =>
   effect.pipe(
     Effect.catchTag("MqttPublishError", (error) =>
-      Effect.fail(new PublishError({ topic: error.topic, reason: error.reason, message: error.message }))
+      Effect.fail(
+        new PublishError({
+          topic: error.topic,
+          reason: error.reason,
+          message: error.message,
+          ...(error.inFlight === undefined ? {} : { inFlight: error.inFlight })
+        })
+      )
     )
   )
 
