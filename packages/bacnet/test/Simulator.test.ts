@@ -273,3 +273,22 @@ describe("rejects", () => {
     })
   })
 })
+
+describe("device conventions", () => {
+  it("reads the device itself through the wildcard instance", () => {
+    const wildcard = { objectType: ObjectType.device, instance: 4_194_303 }
+    expect(valuesOf(answer(makeDevice(), readProperty(wildcard, PropertyId["object-identifier"])))).toEqual(
+      Result.succeed([{ type: "object-identifier", value: deviceObject }])
+    )
+  })
+
+  it("gives outputs a priority array and relinquish default", () => {
+    const fan = { objectType: ObjectType["binary-output"], instance: 2 }
+    expect(valuesOf(answer(makeDevice(), readProperty(fan, PropertyId["priority-array"], 0)))).toEqual(
+      Result.succeed([{ type: "unsigned", value: 16 }])
+    )
+    expect(valuesOf(answer(makeDevice(), readProperty(fan, PropertyId["relinquish-default"])))).toEqual(
+      Result.succeed([{ type: "enumerated", value: 1 }])
+    )
+  })
+})

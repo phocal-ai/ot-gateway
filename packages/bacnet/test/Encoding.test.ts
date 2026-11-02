@@ -7,6 +7,7 @@ import { Result } from "effect"
 import {
   type BacnetValue,
   decodeValues,
+  MAX_NESTING,
   decodeWith,
   encodeValues,
   writeClosing,
@@ -48,9 +49,7 @@ describe("application values", () => {
 
   it("encodes a real as IEEE 754 single precision (Annex F: 72.4)", () => {
     expect(hex(encodeValues([{ type: "real", value: 72.4 }]))).toBe("44 42 90 cc cd")
-    expect(reencode({ type: "real", value: 72.4 })).toEqual(
-      Result.succeed([{ type: "real", value: Math.fround(72.4) }])
-    )
+    expect(reencode({ type: "real", value: 72.4 })).toEqual(Result.succeed([{ type: "real", value: 72.4 }]))
   })
 
   it("uses an extended length above 4 bytes (20.2.1.3.1)", () => {
@@ -102,7 +101,7 @@ describe("decoding errors", () => {
     ["a truncated real", "44 42 90"],
     ["an unclosed constructed value", "0e 21 01"],
     ["a stray closing tag", "0f"],
-    ["a non-UTF-8 character set", "73 04 48 69"],
+    ["an application tag with an opening-tag length", "26"],
     ["a reserved application tag", "d1 00"],
     ["a bit string with 9 unused bits", "82 09 00"]
   ])("rejects %s", (_name, bytes) => {
@@ -120,5 +119,38 @@ describe("decoding errors", () => {
   it("rejects trailing bytes", () => {
     const decoded = decodeWith(bytesOf("21 01 00"), (reader) => reader.applicationUnsigned())
     expect(Result.isFailure(decoded)).toBe(true)
+  })
+})
+
+/** `depth` opening tags 0 followed by as many closing ones. */
+const nested = (depth: number) =>
+  Uint8Array.from([...Array.from({ length: depth }, () => 0x0e), ...Array.from({ length: depth }, () => 0x0f)])
+
+describe("lenient decoding", () => {
+  it.each([
+    ["UTF-8", "75 06 00 52 c3 a4 75 6d", "Räum"],
+    ["UTF-8 with an invalid byte", "74 00 52 e4 75", "R\ufffdu"],
+    ["UCS-2", "75 05 04 00 48 00 69", "Hi"],
+    ["UCS-4", "75 09 03 00 00 00 48 00 00 00 69", "Hi"],
+    ["ISO 8859-1", "75 05 05 52 e4 75 6d", "Räum"]
+  ])("reads a %s character string", (_name, bytes, text) => {
+    expect(decodeValues(bytesOf(bytes))).toEqual(Result.succeed([{ type: "character-string", value: text }]))
+  })
+
+  it("reads 8-byte integers", () => {
+    expect(decodeValues(bytesOf("25 08 00 00 00 01 00 00 00 00"))).toEqual(
+      Result.succeed([{ type: "unsigned", value: 2 ** 32 }])
+    )
+    expect(decodeValues(bytesOf("35 08 ff ff ff ff ff ff ff fe"))).toEqual(
+      Result.succeed([{ type: "signed", value: -2 }])
+    )
+  })
+
+  it("refuses values nested deeper than the limit instead of exhausting the stack", () => {
+    expect(Result.isSuccess(decodeValues(nested(MAX_NESTING)))).toBe(true)
+    expect(decodeValues(nested(MAX_NESTING + 1))).toMatchObject(
+      Result.fail({ message: `constructed values nested deeper than ${MAX_NESTING}` })
+    )
+    expect(Result.isFailure(decodeValues(new Uint8Array(20_000).fill(0x0e)))).toBe(true)
   })
 })

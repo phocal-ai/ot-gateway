@@ -54,6 +54,12 @@ export interface SimulatedDevice {
 
 const keyOf = (id: ObjectId) => `${id.objectType}:${id.instance}`
 
+/** Device instance 4,194,303 in a request means "this device", whatever its instance (clause 15.5.1.1.1). */
+const WILDCARD_INSTANCE = 4_194_303
+
+/** Objects whose present value is commanded through a priority array (clause 19.2); outputs must be. */
+const commandable = new Set<ObjectTypeName>(["analog-output", "binary-output", "multi-state-output"])
+
 /** A single-valued property. */
 const one = (value: BacnetValue): ReadonlyArray<BacnetValue> => [value]
 
@@ -106,6 +112,13 @@ export const makeSimulatedDevice = (config: SimulatedDeviceConfig): SimulatedDev
       [PropertyId["out-of-service"], one({ type: "boolean", value: false })]
     ])
     if (object.units !== undefined) properties.set(PropertyId.units, one({ type: "enumerated", value: object.units }))
+    if (commandable.has(object.objectType)) {
+      properties.set(
+        PropertyId["priority-array"],
+        Array.from({ length: 16 }, (): BacnetValue => ({ type: "null" }))
+      )
+      properties.set(PropertyId["relinquish-default"], one(object.presentValue))
+    }
     objects.set(keyOf(id), properties)
   })
   return { instance: config.instance, vendorId, maxApdu, objects }
@@ -171,6 +184,11 @@ const expand = (
  * (an unconfirmed request it does not act on, or anything that is not a
  * request).
  */
+const resolveWildcard = (device: SimulatedDevice, object: ObjectId): ObjectId =>
+  object.objectType === ObjectType.device && object.instance === WILDCARD_INSTANCE
+    ? { objectType: ObjectType.device, instance: device.instance }
+    : object
+
 export const answer = (device: SimulatedDevice, request: Apdu): Apdu | undefined => {
   if (request._tag === "UnconfirmedRequest") {
     if (request.service !== UnconfirmedService.WhoIs) return undefined
@@ -202,7 +220,8 @@ export const answer = (device: SimulatedDevice, request: Apdu): Apdu | undefined
     case ConfirmedService.ReadProperty: {
       const decoded = decodeReadProperty(request.body)
       if (Result.isFailure(decoded)) return reject(RejectReason.InvalidTag)
-      const { object, ...reference } = decoded.success
+      const { object: requested, ...reference } = decoded.success
+      const object = resolveWildcard(device, requested)
       const result = readOne(device, object, reference)
       if (result._tag === "Error") {
         return {
@@ -217,12 +236,15 @@ export const answer = (device: SimulatedDevice, request: Apdu): Apdu | undefined
     case ConfirmedService.ReadPropertyMultiple: {
       const decoded = decodeReadPropertyMultiple(request.body)
       if (Result.isFailure(decoded)) return reject(RejectReason.InvalidTag)
-      const results: Array<ReadAccessResult> = decoded.success.map((specification) => ({
-        object: specification.object,
-        results: specification.properties
-          .flatMap((reference) => expand(device, specification.object, reference))
-          .map((reference) => readOne(device, specification.object, reference))
-      }))
+      const results: Array<ReadAccessResult> = decoded.success.map((specification) => {
+        const object = resolveWildcard(device, specification.object)
+        return {
+          object,
+          results: specification.properties
+            .flatMap((reference) => expand(device, object, reference))
+            .map((reference) => readOne(device, object, reference))
+        }
+      })
       return ack(encodeReadPropertyMultipleAck(results))
     }
     default:
