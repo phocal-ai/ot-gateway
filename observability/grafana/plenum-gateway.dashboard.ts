@@ -199,7 +199,14 @@ timeseries(
   [
     { expr: `sum by (outcome) (rate(plenum_poll_cycles_total{${sel}}[$__rate_interval]))`, legendFormat: "{{outcome}}" }
   ],
-  { unit: "ops", x: 0, w: 8, stack: true }
+  {
+    unit: "ops",
+    x: 0,
+    w: 8,
+    stack: true,
+    description:
+      "timed_out: a cycle hung past the device's cycleTimeoutMs (a device or the broker side that never answers) and was abandoned."
+  }
 )
 timeseries(
   "Read failures by device and reason",
@@ -265,7 +272,7 @@ timeseries(
   {
     unit: "reqps",
     x: 0,
-    w: 12,
+    w: 8,
     stack: true,
     description:
       "Every request a driver sent. exception = the device refused (check the point address); timeout and connection = it is unreachable."
@@ -281,11 +288,27 @@ timeseries(
   ],
   {
     unit: "short",
-    x: 12,
-    w: 12,
+    x: 8,
+    w: 8,
     stack: true,
     description:
       "A healthy link connects once. Repeated ok connects mean it keeps dropping; failed means it cannot connect. $bacnet is the one UDP socket every BACnet device shares."
+  }
+)
+timeseries(
+  "Pipeline restarts by device",
+  [
+    {
+      expr: `sum by (device) (increase(plenum_device_restarts_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 16,
+    w: 8,
+    description:
+      "A device's pipeline died on a bug (a defect, not a device or broker failure) and was restarted with backoff, up to every 5 minutes. Any restart is a bug to report; the gateway log has the cause. Other devices keep running."
   }
 )
 y += 8
@@ -387,14 +410,15 @@ timeseries(
 )
 y += 8
 
-row("Points")
+row("Freshness")
 staleness(
-  "Point freshness",
-  `time() - max by (device, point) (max_over_time(plenum_point_last_read_timestamp_seconds{${sel}}[$__range]))`,
+  "Device freshness",
+  `time() - max by (device) (max_over_time(plenum_device_last_success_timestamp_seconds{${sel}}[$__range]))`,
   {
     x: 0,
     w: 12,
-    description: "Seconds since each point was last read successfully. Orange after 1 minute, red after 5."
+    description:
+      "Seconds since each device last completed a successful cycle. Orange after 1 minute, red after 5. There is no per-point age (one series per point would not fit the free plan); a point that stops reading inside a working device shows in Points not read and in the log."
   }
 )
 timeseries(
@@ -410,7 +434,7 @@ timeseries(
     x: 12,
     w: 12,
     description:
-      "Points a device did not deliver, by reason. refused: it answered without a value (unknown object or property, a value that is not a number); the gateway log names each point once when it starts and stops failing. not_read: the device stopped answering or was busy partway through a cycle, so the rest waited for the next one. A device that does not answer at all is counted under read failures, not per point."
+      "Points a device did not deliver, by reason. refused: it answered without a value (unknown object or property, a value that is not a number). not_finite: the value was NaN or Infinity, also after scaling, and was not published. The gateway log names each point once when it starts and stops failing. not_read: the device stopped answering or was busy partway through a cycle, so the rest waited for the next one. A device that does not answer at all is counted under read failures, not per point."
   }
 )
 y += 8

@@ -10,6 +10,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
 import { type BacnetClient, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
 import {
+  cycleTimeoutMs,
   type Device,
   type GatewayConfig,
   type HealthRegistry,
@@ -19,6 +20,7 @@ import {
   parseConfig,
   runDevice,
   runHealthReporter,
+  superviseDevice,
   withMetricAttributes
 } from "@plenum/core"
 import { makeModbusDriver } from "@plenum/modbus"
@@ -26,6 +28,8 @@ import { MqttPublisher } from "@plenum/mqtt"
 import { BufferedPublisher } from "@plenum/buffer"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, FileSystem, Layer, Schedule, Scope } from "effect"
+import { keepRunning } from "./KeepRunning.ts"
+import { gatewayTeardown } from "./Shutdown.ts"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
 /** The gateway's BACnet/IP endpoint, once its socket is open; absent without BACnet devices. */
@@ -77,6 +81,7 @@ const runOne = (
     site: config.site,
     building: config.building,
     pollIntervalMs: device.pollIntervalMs,
+    cycleTimeoutMs: cycleTimeoutMs(device),
     traceSampleRatio: sampleRatio,
     health
   }
@@ -115,8 +120,17 @@ const runGateway = Effect.fn("runGateway")(function* (config: GatewayConfig, hea
   }
   yield* Effect.all(
     [
-      runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online }),
-      ...config.devices.map((device) => runOne(config, device, sampleRatio, health.registry, bacnet))
+      keepRunning(
+        "health reporter",
+        runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online })
+      ),
+      // A bug in one device's pipeline restarts that device only; suspended, so a restart builds a fresh driver.
+      ...config.devices.map((device) =>
+        superviseDevice(
+          Effect.suspend(() => runOne(config, device, sampleRatio, health.registry, bacnet)),
+          { deviceId: device.id, health: health.registry }
+        )
+      )
     ],
     { concurrency: "unbounded", discard: true }
   )
@@ -160,4 +174,4 @@ const program = Effect.gen(function* () {
   )
 })
 
-program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain)
+program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain({ teardown: gatewayTeardown }))

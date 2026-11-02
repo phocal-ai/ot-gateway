@@ -10,7 +10,7 @@
 import { hostname } from "node:os"
 import type { GatewayConfig } from "@plenum/core"
 import { Config, ConfigProvider, Effect, Layer } from "effect"
-import { FetchHttpClient } from "effect/http"
+import { FetchHttpClient, HttpClient } from "effect/http"
 import { Otlp, OtlpSerialization } from "effect/observability"
 import packageJson from "../package.json" with { type: "json" }
 
@@ -48,6 +48,23 @@ export const traceSampleRatio = Effect.gen(function* () {
   }
 })
 
+/**
+ * The HTTP client the OTLP exporters send with, with a deadline on every
+ * request: `OTEL_EXPORTER_OTLP_TIMEOUT` ms (default 10 s, as in the
+ * OpenTelemetry spec). Effect's exporter only uses that variable for the
+ * shutdown flush, so without this a collector that accepts the connection
+ * and never answers holds each request, and its socket, forever: about one
+ * leaked socket a minute, until the gateway runs out of file descriptors.
+ * A request that times out is aborted, which closes its socket.
+ */
+export const otlpHttpClient = Layer.effect(
+  HttpClient.HttpClient,
+  Effect.gen(function* () {
+    const timeoutMs = yield* Config.Int("OTEL_EXPORTER_OTLP_TIMEOUT").pipe(Config.withDefault(10_000))
+    return (yield* HttpClient.HttpClient).pipe(HttpClient.timeout(timeoutMs))
+  })
+).pipe(Layer.provide(FetchHttpClient.layer))
+
 export const telemetryLayer = (config: GatewayConfig) =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -68,6 +85,6 @@ export const telemetryLayer = (config: GatewayConfig) =>
     })
   ).pipe(
     Layer.provide(OtlpSerialization.layerProtobuf),
-    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(otlpHttpClient),
     Layer.provide(withBudgetDefaults)
   )
