@@ -35,7 +35,7 @@ const makeInner = () => {
   const state = {
     up: true,
     delivered: [] as Array<string>,
-    /** Per payload: fail after it went out, as a broken connection or a withheld PUBACK does. */
+    /** Per payload: fail after it went out, as a connection that breaks before the PUBACK does. */
     loseInFlight: (_payload: string): boolean => false,
     delay: "0 millis" as `${number} millis`
   }

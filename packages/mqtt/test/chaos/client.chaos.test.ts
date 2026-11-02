@@ -105,9 +105,11 @@ describe("chaos: MQTT client", () => {
       const client = yield* clientOn(port, { keepAliveSeconds: 1 })
       yield* waitUntil(() => script.connections > 0)
 
+      // Neither publish is blamed: a broker that acknowledges nothing is slow, not refusing these messages.
       const first = yield* Effect.flip(client.publish("a/b", "0"))
-      expect(first.inFlight).toBe(true)
-      yield* Effect.flip(client.publish("a/b", "1"))
+      expect(first.inFlight).toBeUndefined()
+      const second = yield* Effect.flip(client.publish("a/b", "1"))
+      expect(second.inFlight).toBeUndefined()
       // Two PUBACKs in a row did not come: the client gives up on the connection and the next one works.
       expect(yield* waitUntil(() => script.connections >= 2)).toBe(true)
       yield* client.publish("a/b", "2")

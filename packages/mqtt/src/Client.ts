@@ -51,7 +51,9 @@ export class MqttRejected extends Schema.TaggedError<MqttRejected>()("MqttReject
  * before the PUBACK, or the broker refused the message for now (quota
  * exceeded, say); trying again later may work. `rejected`: the broker or the
  * protocol refuses this message, so retrying it will not help. `inFlight`:
- * the message was sent and then the connection broke or no PUBACK came.
+ * the message was sent and then the connection broke. A missing PUBACK, or a
+ * connection the client dropped for missing PUBACKs, is not `inFlight`: that
+ * is a slow broker, not a message the broker cannot take.
  */
 export class MqttPublishError extends Schema.TaggedError<MqttPublishError>()("MqttPublishError", {
   topic: Schema.String,
@@ -136,6 +138,8 @@ interface Session {
   nextPacketId: number
   /** Publishes in a row whose PUBACK did not come in time; any PUBACK resets it. */
   pubackTimeouts: number
+  /** Set when the client itself dropped the connection for missing PUBACKs: a slow broker, not a bad message. */
+  droppedForSilence: boolean
 }
 
 const encoder = new TextEncoder()
@@ -289,7 +293,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           maximumPacketSize: numberProperty(props, Property.MaximumPacketSize, Number.POSITIVE_INFINITY),
           abort: yield* Deferred.make<never, MqttConnectionError>(),
           nextPacketId: 1,
-          pubackTimeouts: 0
+          pubackTimeouts: 0,
+          droppedForSilence: false
         }
         // The broker's Server Keep Alive replaces ours (§3.2.2.3.14). At 0 the broker stops
         // checking on us, but a client may ping whenever it likes (§3.1.2.10), and it still has
@@ -422,7 +427,11 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   const publish: MqttClient["publish"] = (topic, payload, publishOptions = {}) =>
     Effect.suspend(() => {
       // Set once the PUBLISH is on the wire, so a failure after it is reported as in flight.
+      // `inFlight` blames the message for a broken connection. A missing PUBACK is a slow or
+      // overloaded broker, which says nothing about the message, so it never counts.
       let sent = false
+      let blameless = false
+      let used: Session | undefined
       return Effect.gen(function* () {
         const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
         const problem = topicProblem(topic)
@@ -435,6 +444,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         )
         const current = session
         if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
+        used = current
         const retain = publishOptions.retain === true
         if (retain && !current.retainAvailable) {
           return yield* rejected("the broker does not support retained messages")
@@ -476,10 +486,12 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             orElse: () =>
               Effect.gen(function* () {
                 if (!sent) return yield* new MqttConnectionError({ message: "no free inflight slot in time" })
+                blameless = true
                 // A connection that answers pings but acknowledges nothing is no use: after a few
                 // PUBACKs in a row fail to come, drop it and dial again.
                 current.pubackTimeouts++
                 if (current.pubackTimeouts >= maxPubackTimeouts) {
+                  current.droppedForSilence = true
                   yield* Deferred.fail(
                     current.abort,
                     new MqttConnectionError({ message: `no PUBACK for ${current.pubackTimeouts} publishes in a row` })
@@ -502,7 +514,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
               topic,
               reason: "unavailable",
               message: error.message,
-              ...(sent ? { inFlight: true } : {})
+              ...(sent && !blameless && used?.droppedForSilence !== true ? { inFlight: true } : {})
             })
           )
         )

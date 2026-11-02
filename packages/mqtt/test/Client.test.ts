@@ -105,9 +105,10 @@ describe("MQTT client over TCP", () => {
         _tag: "MqttPublishError",
         topic: "t",
         reason: "unavailable",
-        message: "no PUBACK in time",
-        inFlight: true
+        message: "no PUBACK in time"
       })
+      // A slow broker says nothing about the message, so it is not blamed for it.
+      expect(timedOut.inFlight).toBeUndefined()
 
       control.ackPublishes = true
       control.pubackReason = 0x87

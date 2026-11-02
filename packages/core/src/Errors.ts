@@ -23,9 +23,10 @@ export class DriverError extends Schema.TaggedError<DriverError>()("DriverError"
  * topic), so retrying it will not help.
  *
  * `inFlight` marks an `unavailable` failure after the message went out: the
- * connection broke or the broker never answered while it waited for its
- * acknowledgement. The broker may have it, or the message itself may be what
- * broke the connection, so a store-and-forward buffer counts these per message.
+ * connection broke while it waited for its acknowledgement. The broker may
+ * have it, or the message itself may be what broke the connection, so a
+ * store-and-forward buffer counts these per message. A missing acknowledgement
+ * on a connection that stays up is a slow broker and is not `inFlight`.
  */
 export class PublishError extends Schema.TaggedError<PublishError>()("PublishError", {
   topic: Schema.String,
