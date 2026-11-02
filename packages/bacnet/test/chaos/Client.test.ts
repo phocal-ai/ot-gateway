@@ -221,8 +221,12 @@ describe("chaos: client over UDP", () => {
           { concurrency: 1 }
         )
         const [, results] = yield* Effect.all([flood, reads], { concurrency: 2 })
+        // The flood can overflow the socket's receive buffer and take the device's one I-Am with it
+        // (kernel loss, not the filter), so during it only "no other device" is certain.
         const found = yield* Fiber.join(discovering)
-        expect(found.map((device) => device.instance)).toEqual([7])
+        expect(found.filter((device) => device.instance !== 7)).toEqual([])
+        const after = yield* client.discover({ target: { address: deviceAddress }, within: "500 millis" })
+        expect(after.map((device) => device.instance)).toEqual([7])
         expect(results.filter(Result.isSuccess).length).toBeGreaterThan(0)
       }).pipe(Effect.scoped),
     30_000
