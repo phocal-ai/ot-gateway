@@ -4,6 +4,7 @@
  * pure.
  */
 import { Result } from "effect"
+import * as NetAddress from "effect/net/NetAddress"
 import { type Apdu, decodeApdu, encodeApdu } from "./Apdu.ts"
 import { BvlcFunction, decodeBvlc, encodeBvlc } from "./Bvlc.ts"
 import { BacnetCodecError } from "./Encoding.ts"
@@ -15,7 +16,7 @@ export interface Frame {
   /** Set when the datagram came through a router from another BACnet network. */
   readonly source?: NetworkAddress
   /** Set when a BBMD forwarded it: the IP address and port of the original sender (Annex J.2.5). */
-  readonly forwardedFrom?: { readonly host: string; readonly port: number }
+  readonly forwardedFrom?: NetAddress.InetAddress
 }
 
 export interface EncodeOptions {
@@ -52,11 +53,11 @@ export const decodeFrame = (datagram: Uint8Array): Result.Result<Frame | undefin
       break
     case BvlcFunction.ForwardedNpdu: {
       if (payload.length < 6) return Result.fail(new BacnetCodecError({ message: "forwarded NPDU without its origin" }))
-      const view = new DataView(payload.buffer, payload.byteOffset, 6)
-      forwardedFrom = {
-        host: [0, 1, 2, 3].map((i) => view.getUint8(i)).join("."),
-        port: view.getUint16(4)
-      }
+      // Four address bytes and a 16-bit port always make a valid IPv4 socket address.
+      forwardedFrom = NetAddress.inetAddressUnsafe(
+        NetAddress.ipv4FromBytesUnsafe(payload.subarray(0, 4)),
+        ((payload[4] ?? 0) << 8) | (payload[5] ?? 0)
+      )
       payload = payload.subarray(6)
       break
     }
