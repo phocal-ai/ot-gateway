@@ -290,6 +290,42 @@ timeseries(
 )
 y += 8
 
+row("Broker")
+timeseries(
+  "Connected to the MQTT broker",
+  [
+    {
+      expr: `max by (service_instance_id) (plenum_mqtt_connected{${sel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "bool_yes_no",
+    x: 0,
+    w: 12,
+    description:
+      "1 while the gateway holds a broker connection. Publishes fail while it is 0, and values are retried next cycle."
+  }
+)
+timeseries(
+  "Broker connection attempts by outcome",
+  [
+    {
+      expr: `sum by (outcome) (increase(plenum_mqtt_connects_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    stack: true,
+    description:
+      "A healthy gateway connects once. Repeated ok means the connection keeps dropping; failed means the broker is unreachable; rejected means it refused (check credentials)."
+  }
+)
+y += 8
+
 row("Points")
 staleness(
   "Point freshness",

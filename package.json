@@ -10,6 +10,7 @@
     "test": "turbo run test",
     "check": "pnpm format:check && pnpm lint && turbo run typecheck test",
     "gateway": "pnpm --filter @plenum/gateway start",
+    "bench": "pnpm --filter @plenum/gateway bench",
     "lint": "oxlint --type-aware --disable-nested-config --deny-warnings",
     "lint:fix": "oxlint --type-aware --disable-nested-config --fix",
     "format": "oxfmt --write .",

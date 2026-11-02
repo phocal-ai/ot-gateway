@@ -75,11 +75,27 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     point
   })
 
-  // Publish metadata once, retained.
-  yield* Effect.forEach(
-    driver.points,
-    (point) => publisher.publish(metaTopic(topicFor(point.id)), metaPayload(point), { retain: true }),
+  // Metadata goes out once per point, retained. It is retried at the start of
+  // every cycle until the broker took it, so a broker that is down when the
+  // gateway starts delays metadata instead of stopping the device.
+  const unpublishedMeta = new Set(driver.points)
+  const publishMeta = Effect.forEach(
+    unpublishedMeta,
+    Effect.fnUntraced(function* (point) {
+      yield* publisher.publish(metaTopic(topicFor(point.id)), metaPayload(point), { retain: true })
+      unpublishedMeta.delete(point)
+    }),
     { discard: true }
+  ).pipe(
+    // The device is still read: its health is independent of the broker's.
+    Effect.catchTag("PublishError", (error) =>
+      Effect.all([
+        Effect.logWarning("metadata publish failed").pipe(
+          Effect.annotateLogs({ topic: error.topic, error: error.message })
+        ),
+        Metric.update(publishFailures, 1)
+      ])
+    )
   )
 
   const handleReading = Effect.fnUntraced(function* (reading: Reading) {
@@ -102,6 +118,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   })
 
   const pollCycle = Effect.gen(function* () {
+    if (unpublishedMeta.size > 0) yield* publishMeta
     const readings = yield* driver.readAll.pipe(Effect.retry(retryPolicy))
     yield* Metric.update(deviceLastSuccess, (yield* Clock.currentTimeMillis) / 1000)
     yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)

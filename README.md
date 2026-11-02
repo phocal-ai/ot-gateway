@@ -9,7 +9,7 @@ It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retri
 > A _plenum_ is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
 
 > [!NOTE]
-> Plenum is early. The core pipeline, config schema and the Modbus TCP read path work; the MQTT and BACnet transports are being built. See the [roadmap](#roadmap).
+> Plenum is early. The core pipeline, config schema, Modbus TCP reads and MQTT 5 publishing work (v0.1); store-and-forward and BACnet are next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -37,16 +37,20 @@ git clone https://github.com/phocal-ai/plenum
 cd plenum
 pnpm install
 pnpm check      # typecheck + tests across the workspace (Turborepo)
-pnpm gateway    # run the gateway with examples/gateway.json
+pnpm bench      # terminal 1: a local MQTT test broker and a Modbus TCP simulator
+pnpm gateway    # terminal 2: run the gateway with examples/gateway.json
 ```
 
-You'll see simulated values flowing:
+The bench prints every message the gateway publishes, from a simulated air handler and a simulated Modbus meter:
 
 ```text
 [retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
-demo-site/b1/ahu-1/supply-air-temp {"value":20.19,"ts":1793616626074,"unit":"unit:DEG_C"}
-demo-site/b1/ahu-1/fan-speed {"value":86.91,"ts":1793616626074,"unit":"unit:PERCENT"}
+demo-site/b1/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
+demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
+demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 ```
+
+Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own.
 
 Plenum runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
 
@@ -87,18 +91,18 @@ IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defau
 
 ## Observability
 
-The gateway exports traces, metrics and logs over OTLP when the standard OpenTelemetry environment variables are set (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_<SIGNAL>_EXPORTER=otlp`). Every polling cycle is a trace; metrics cover cycle outcomes and duration, read and publish failures, and how long ago each device and point was last read. Without the variables nothing is exported. See [`observability/README.md`](observability/README.md).
+The gateway exports traces, metrics and logs over OTLP when the standard OpenTelemetry environment variables are set (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_<SIGNAL>_EXPORTER=otlp`). Every polling cycle is a trace; metrics cover cycle outcomes and duration, read and publish failures, device and broker connections, and how long ago each device and point was last read. Without the variables nothing is exported. See [`observability/README.md`](observability/README.md).
 
 ## Packages
 
-| Package                                   | What it does                                                                             | Status                  |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------- |
-| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service | Working                 |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                             | Working                 |
-| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4     | Reads working           |
-| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: wire codec started, client next                                                  | In progress             |
-| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                            | Early                   |
-| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway                                                                     | Working with simulators |
+| Package                                   | What it does                                                                                    | Status             |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------ |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service        | Working            |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                    | Working            |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4            | Reads working      |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker | Publishing working |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: BVLC codec started                                                                   | Early              |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker and Modbus simulator)                     | Working            |
 
 ## Architecture
 

@@ -85,6 +85,25 @@ export const driverConnects = Metric.counter("plenum_driver_connects", {
   incremental: true
 })
 
+/**
+ * Connection attempts to the MQTT broker, by `outcome`: `ok`, `failed` (network
+ * or timeout) or `rejected` (the broker refused, e.g. bad credentials).
+ */
+export const mqttConnects = Metric.counter("plenum_mqtt_connects", {
+  description: "Connection attempts to the MQTT broker, by outcome",
+  incremental: true
+})
+
+/**
+ * 1 while the gateway holds a broker connection, else 0. The unit is a UCUM
+ * annotation, which Grafana's OTLP translation drops, so the name gets no
+ * `_ratio` suffix.
+ */
+export const mqttConnected = Metric.gauge("plenum_mqtt_connected", {
+  description: "Whether the gateway is connected to the MQTT broker",
+  attributes: { unit: "{connection}" }
+})
+
 /** Add attributes to every metric updated inside `effect`, keeping the ones already set. */
 export const withMetricAttributes =
   (attributes: Metric.Metric.AttributeSet) =>

@@ -46,7 +46,7 @@
     {
       "protocol": "modbus-tcp",
       "id": "main-meter",
-      "host": "192.168.1.50",
+      "host": "127.0.0.1",
       "unitId": 1,
       "points": [
         {
@@ -60,8 +60,32 @@
             "brick": "Active_Power_Sensor",
             "haystack": ["elec", "power", "active", "sensor"]
           }
+        },
+        {
+          "id": "energy",
+          "name": "Main meter energy counter",
+          "unit": "unit:KiloW-HR",
+          "table": "input",
+          "address": 0,
+          "dataType": "uint32",
+          "semantics": {
+            "brick": "Energy_Sensor",
+            "haystack": ["elec", "energy", "sensor"]
+          }
+        },
+        {
+          "id": "breaker-tripped",
+          "name": "Main breaker tripped",
+          "table": "discrete",
+          "address": 0,
+          "dataType": "bool",
+          "semantics": {
+            "brick": "Alarm",
+            "haystack": ["elec", "breaker", "alarm"]
+          }
         }
-      ]
+      ],
+      "port": 5020
     }
   ]
 }
