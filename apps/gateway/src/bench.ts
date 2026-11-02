@@ -12,6 +12,9 @@
  * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
  *   is on localhost with a port other than the gateway's own, with analog
  *   values on the same sine and binary values flipping every 30 s
+ *
+ * `--only broker` or `--only devices` starts one half, so a soak test can stop
+ * the broker without stopping the devices.
  */
 import { NodeDatagramSocket, NodeRuntime, NodeServices, NodeSocketServer } from "@effect/platform-node"
 import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDeviceFor } from "@plenum/bacnet"
@@ -90,7 +93,13 @@ const simulatedBacnetAt = (config: GatewayConfig, device: BacnetDevice) => {
 }
 
 const program = Effect.gen(function* () {
-  const path = process.argv[2] ?? "plenum.json"
+  const args = process.argv.slice(2)
+  const onlyAt = args.indexOf("--only")
+  const only = onlyAt === -1 ? undefined : args.splice(onlyAt, 2)[1]
+  if (only !== undefined && only !== "broker" && only !== "devices") {
+    return yield* Effect.die(new Error(`--only takes broker or devices, not ${only}`))
+  }
+  const path = args[0] ?? "plenum.json"
   const fs = yield* FileSystem.FileSystem
   const config = yield* parseConfig(yield* fs.readFileString(path))
   const simulated = config.devices.filter(
@@ -101,7 +110,9 @@ const program = Effect.gen(function* () {
     const at = simulatedBacnetAt(config, device)
     return at === undefined ? [] : [runBacnetSimulator(device, at.host, at.port)]
   })
-  yield* Effect.all([runBroker(config), ...simulated.map(runSimulator), ...bacnet], {
+  const broker = only === "devices" ? [] : [runBroker(config)]
+  const devices = only === "broker" ? [] : [...simulated.map(runSimulator), ...bacnet]
+  yield* Effect.all([...broker, ...devices], {
     concurrency: "unbounded",
     discard: true
   })
