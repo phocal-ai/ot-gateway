@@ -312,6 +312,24 @@ timeseries(
   }
 )
 y += 8
+timeseries(
+  "Device refusals by exception",
+  [
+    {
+      expr: `sum by (device, exception) (increase(plenum_driver_refusals_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}} {{exception}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    stack: true,
+    description:
+      "Reads a device refused, after retries. illegal_data_address on every cycle means a point address is wrong; busy and gateway exceptions come and go. The log has one warning when a refusal starts, not one per cycle."
+  }
+)
+y += 8
 
 row("Broker")
 timeseries(

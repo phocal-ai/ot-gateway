@@ -28,6 +28,7 @@ import { MqttPublisher } from "@plenum/mqtt"
 import { BufferedPublisher } from "@plenum/buffer"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, FileSystem, Layer, Schedule, Scope } from "effect"
+import { keepRunning } from "./KeepRunning.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
@@ -119,7 +120,10 @@ const runGateway = Effect.fn("runGateway")(function* (config: GatewayConfig, hea
   }
   yield* Effect.all(
     [
-      runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online }),
+      keepRunning(
+        "health reporter",
+        runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online })
+      ),
       // A bug in one device's pipeline restarts that device only; suspended, so a restart builds a fresh driver.
       ...config.devices.map((device) =>
         superviseDevice(
