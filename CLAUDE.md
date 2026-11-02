@@ -17,6 +17,7 @@ pnpm typecheck
 pnpm test
 pnpm gateway          # run apps/gateway with examples/gateway.json
 pnpm --filter @plenum/core test   # one package
+scripts/soak.sh [hours]          # soak test with broker, device and disk faults (see the script header)
 ```
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
@@ -82,7 +83,7 @@ git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git e
 - Retries: `Effect.retry({ schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered), times: 4 })`.
 - Tests: `@effect/vitest` with `it.effect`; control time with `TestClock` from `effect/testing`.
 - Modules that used to live in `effect/unstable/*` in the betas are now top-level subpaths such as `effect/socket/Socket` and `effect/sql/SqlClient`. When unsure, check `repos/effect/` (above) rather than examples online, which are often Effect 3 and wrong for 4.
-- `.claude/rules/effect.md` (loaded when you touch `packages/` or `apps/`) covers type evidence, tagged-error translation, `gen` vs `pipe`, v4 spellings and the v4 traps. `/review-effect` reviews a change against it.
+- `.claude/rules/effect.md` (loaded when you touch `packages/` or `apps/`) covers type evidence, tagged-error translation, `gen` vs `pipe`, v4 spellings and the v4 traps. `/review-effect` reviews a change against it. `.claude/rules/edge.md` is the Raspberry Pi checklist: monotonic time, deadlines, misbehaving peers, isolation, storage faults and log budget.
 
 ## TypeScript style
 
