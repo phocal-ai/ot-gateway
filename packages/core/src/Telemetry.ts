@@ -68,6 +68,23 @@ export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timest
   attributes: seconds
 })
 
+/**
+ * Requests a driver sent to its device, by `outcome`: `ok`, `timeout`,
+ * `exception` (the device refused), `invalid_response` or `connection`.
+ * Drivers count requests instead of opening a span per request, which would
+ * multiply trace volume; the cycle span carries the request count.
+ */
+export const driverRequests = Metric.counter("plenum_driver_requests", {
+  description: "Requests sent to field devices, by outcome",
+  incremental: true
+})
+
+/** Connection attempts to a device, by `outcome`: `ok` or `failed`. A rising `ok` count means the link keeps dropping. */
+export const driverConnects = Metric.counter("plenum_driver_connects", {
+  description: "Connection attempts to field devices, by outcome",
+  incremental: true
+})
+
 /** Add attributes to every metric updated inside `effect`, keeping the ones already set. */
 export const withMetricAttributes =
   (attributes: Metric.Metric.AttributeSet) =>
