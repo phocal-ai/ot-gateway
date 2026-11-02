@@ -65,13 +65,16 @@ export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timest
 })
 
 /**
- * Points a cycle could not read although the device answered, e.g. an
- * unknown object, a value that is not a number, or one that is not finite
- * (NaN or Infinity, also after scaling). Without a `point`
+ * Points a cycle did not get a value for while the device was reachable, by
+ * `reason`: `refused` (the device answered without one, e.g. an unknown
+ * object or a value that is not a number), `not_read` (it stopped answering
+ * or was busy partway through the cycle) or `not_finite` (NaN or Infinity,
+ * also after scaling; never published). A device that does not answer at all
+ * is a read failure, not a point failure. Without a `point`
  * attribute, to keep the series count flat; the log says which point.
  */
 export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
-  description: "Points a device could not read in an otherwise successful cycle",
+  description: "Points a reachable device did not deliver in a cycle, by reason",
   incremental: true
 })
 

@@ -208,7 +208,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
    */
   const nonFinitePoints = new Set<string>()
   const nonFinite = Effect.fnUntraced(function* (pointId: string, raw: PointValue) {
-    yield* Metric.update(pointReadFailures, 1)
+    yield* Metric.update(Metric.withAttributes(pointReadFailures, { reason: "not_finite" }), 1)
     if (nonFinitePoints.has(pointId)) return
     nonFinitePoints.add(pointId)
     yield* Effect.logWarning("point value is not a finite number, not publishing it").pipe(

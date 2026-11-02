@@ -19,16 +19,24 @@
  *   their process identifier. The client asks for unconfirmed notifications
  *   only, so it never acknowledges any.
  *
+ * - A BBMD's Forwarded-NPDU (Annex J.2.5) names the original sender, which
+ *   anyone on the LAN can forge. It is believed only when it comes from the
+ *   configured BBMD or from the address it names; otherwise it is dropped.
+ * - At most 256 requests are in flight (one-byte invoke IDs), and at most 64
+ *   of them COV subscriptions, so subscriptions cannot starve the polls. A
+ *   request that finds no free invoke ID within its whole timeout (every
+ *   attempt) fails as a timeout instead of waiting without bound.
+ *
  * If the socket fails while running, it is reopened every 5 s; requests in
  * the meantime time out. A datagram that cannot be handled is logged and
  * dropped, and never stops the receive loop.
  */
 import { describeDatagramSocketError, driverConnects, driverRequests, monotonicMillis } from "@plenum/core"
-import { Deferred, Duration, Effect, Exit, Metric, Result, Schema, Scope, Semaphore } from "effect"
+import { Deferred, Duration, Effect, Exit, Metric, Random, Result, Schema, Scope, Semaphore } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import { AbortReason, type Apdu, ConfirmedService, MAX_APDU_IP, RejectReason, UnconfirmedService } from "./Apdu.ts"
-import { BacnetCodecError, type BacnetValue, type ObjectId } from "./Encoding.ts"
+import { BacnetCodecError, type BacnetEncodeError, type BacnetValue, type ObjectId, tryEncode } from "./Encoding.ts"
 import { ErrorClass, ErrorCode, nameOf, ObjectType, PropertyId } from "./Enums.ts"
 import { decodeFrame, encodeFrame } from "./Frame.ts"
 import type { NetworkAddress } from "./Npdu.ts"
@@ -74,7 +82,13 @@ export class BacnetSocketError extends Schema.TaggedError<BacnetSocketError>()("
   message: Schema.String
 }) {}
 
-export type BacnetRequestError = BacnetTimeout | BacnetDeviceError | BacnetCodecError | BacnetSocketError
+/** Every way a request can fail; `BacnetEncodeError` when it carries a value out of range and was never sent. */
+export type BacnetRequestError =
+  | BacnetTimeout
+  | BacnetDeviceError
+  | BacnetCodecError
+  | BacnetSocketError
+  | BacnetEncodeError
 
 /** Where a device is reached. */
 export interface DeviceAddress {
@@ -96,6 +110,12 @@ export interface BacnetClientOptions {
   readonly requestTimeout?: Duration.Input
   /** How often to resend after a timeout (Number_Of_APDU_Retries, clause 12.11.28). Default 2. */
   readonly retries?: number
+  /**
+   * The BBMD on this subnet (Annex J.4), whose Forwarded-NPDUs are believed.
+   * Without it, a Forwarded-NPDU counts only when it comes from the address
+   * it names, i.e. from a device that is its own BBMD.
+   */
+  readonly bbmdAddress?: NetAddress.InetAddress
 }
 
 export interface DiscoverOptions {
@@ -122,7 +142,7 @@ export interface BacnetClient {
     target: DeviceAddress,
     specifications: ReadonlyArray<ReadAccessSpecification>
   ) => Effect.Effect<ReadonlyArray<ReadAccessResult>, BacnetRequestError>
-  /** Broadcast Who-Is and collect the devices that answer, one entry per instance. */
+  /** Broadcast Who-Is (or ask `target` only) and collect the devices that answer, one entry per instance. */
   readonly discover: (options?: DiscoverOptions) => Effect.Effect<ReadonlyArray<DiscoveredDevice>, BacnetSocketError>
   /**
    * Find one device by instance: Who-Is for exactly that instance, resent
@@ -138,7 +158,7 @@ export interface BacnetClient {
     target: DeviceAddress,
     request: SubscribeCovRequest
   ) => Effect.Effect<void, BacnetRequestError>
-  /** A subscriber process identifier that no other caller of this client gets. */
+  /** A random subscriber process identifier that no other caller of this client gets. */
   readonly newProcessId: Effect.Effect<number>
   /** Hand every COV notification for `processId` to `listener`, until the scope closes. */
   readonly onCovNotification: (
@@ -148,6 +168,9 @@ export interface BacnetClient {
 }
 
 const keyOf = (address: NetAddress.InetAddress) => NetAddress.formatInet(address)
+
+/** Of the 256 invoke IDs, how many COV subscriptions may hold at once, across every device. */
+const COV_REQUESTS = 64
 
 const countRequest = (outcome: "ok" | "timeout" | "exception" | "invalid_response" | "connection") =>
   Metric.update(Metric.withAttributes(driverRequests, { outcome }), 1)
@@ -176,6 +199,10 @@ const sameNetwork = (left: NetworkAddress | undefined, right: NetworkAddress | u
     : left.network === right.network &&
       left.address.length === right.address.length &&
       left.address.every((byte, index) => byte === right.address[index])
+
+/** Whether `device` answered from `target`: the same IP address and port, and the same network behind a router. */
+const sameDevice = (device: DeviceAddress, target: DeviceAddress) =>
+  keyOf(device.address) === keyOf(target.address) && sameNetwork(device.network, target.network)
 
 const sameObject = (asked: ObjectId, answered: ObjectId) =>
   asked.objectType === answered.objectType &&
@@ -319,14 +346,19 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   // An invoke ID whose request was given up on is not reused for a while, so
   // a late answer to it cannot be taken for the answer to a new request.
   const quarantineMillis = Math.max(10_000, 2 * Duration.toMillis(requestTimeout))
+  // How long a whole request may take, every attempt included; waiting for an invoke ID counts against it.
+  const requestDeadline = Duration.millis(Duration.toMillis(Duration.fromInputUnsafe(requestTimeout)) * (retries + 1))
+  const bbmd = options.bbmdAddress === undefined ? undefined : keyOf(options.bbmdAddress)
   const pending = new Map<number, Pending>()
   const quarantined = new Map<number, number>()
   const iAmListeners = new Set<(device: DiscoveredDevice) => void>()
   const covListeners = new Map<number, (notification: CovNotification, from: DeviceAddress) => void>()
-  // Unsigned32 (clause 13.14.1.1); 0 is left out so that a missing value never matches.
-  let nextProcessId = 1
+  const issuedProcessIds = new Set<number>()
+  // Senders of refused Forwarded-NPDUs already warned about (bounded, so a spoofing host cannot grow it).
+  const untrustedForwarders = new Set<string>()
   // Invoke IDs are one byte (clause 20.1.2.3): at most 256 requests in flight.
   const invokeIds = yield* Semaphore.make(256)
+  const covRequests = yield* Semaphore.make(COV_REQUESTS)
   let nextInvokeId = 0
 
   const clientScope = yield* Effect.scope
@@ -341,6 +373,21 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
     }
     const frame = decoded.success
     if (frame === undefined) return Effect.void
+    if (frame.forwardedFrom !== undefined) {
+      // Anyone can claim to forward for anyone (Annex J.2.5 has no authentication): only the BBMD, or the device itself.
+      const sender = keyOf(datagram.address)
+      if (sender !== bbmd && sender !== keyOf(frame.forwardedFrom)) {
+        // Once per sender as a warning: a site with a BBMD but no `bacnet.bbmdAddress` loses its remote devices here.
+        const firstTime = !untrustedForwarders.has(sender) && untrustedForwarders.size < 64
+        if (firstTime) untrustedForwarders.add(sender)
+        const log = firstTime
+          ? Effect.logWarning("ignored a Forwarded-NPDU from an address that is not the configured BBMD")
+          : Effect.logDebug("ignored a Forwarded-NPDU that did not come from the BBMD")
+        return log.pipe(
+          Effect.annotateLogs({ from: sender, claimed: keyOf(frame.forwardedFrom), bbmdAddress: bbmd ?? "not set" })
+        )
+      }
+    }
     const from = frame.forwardedFrom ?? datagram.address
     const apdu = frame.apdu
     switch (apdu._tag) {
@@ -469,6 +516,29 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
       )
     )
 
+  /**
+   * Run `use` holding a permit of each of `semaphores`. Waiting for them
+   * counts against the request's deadline, so a gateway with too many
+   * requests in flight fails requests as timeouts instead of stalling them.
+   */
+  const withPermits = <A, E>(semaphores: ReadonlyArray<Semaphore.Semaphore>, use: Effect.Effect<A, E>) =>
+    Effect.scoped(
+      Effect.andThen(
+        Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
+          Effect.timeoutOrElse({
+            duration: requestDeadline,
+            orElse: () =>
+              Effect.fail(
+                new BacnetTimeout({
+                  message: `no free invoke ID within ${Duration.format(requestDeadline)}, too many requests in flight`
+                })
+              )
+          })
+        ),
+        use
+      )
+    )
+
   /** Send one confirmed request, resending it after each timeout, and return the answer. */
   const exchange = (target: DeviceAddress, service: number, body: Uint8Array) =>
     Effect.acquireUseRelease(
@@ -519,29 +589,38 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
             if (!Deferred.isDoneUnsafe(answer)) quarantined.set(invokeId, now + quarantineMillis)
           })
         )
-    ).pipe(Semaphore.withPermit(invokeIds))
+    )
 
+  /**
+   * Encode, send and decode one confirmed request. A body the encoder refuses
+   * fails before anything is sent, and is not counted as a request.
+   */
   const request = <A>(
     target: DeviceAddress,
     service: number,
-    body: Uint8Array,
-    decode: (body: Uint8Array) => Result.Result<A, BacnetCodecError>
+    encode: () => Uint8Array,
+    decode: (body: Uint8Array) => Result.Result<A, BacnetCodecError>,
+    pools: ReadonlyArray<Semaphore.Semaphore> = [invokeIds]
   ): Effect.Effect<A, BacnetRequestError> =>
-    exchange(target, service, body).pipe(
-      Effect.flatMap((answer) => Effect.fromResult(Result.flatMap(interpretAnswer(service, answer), decode))),
-      Effect.tap(() => countRequest("ok")),
-      Effect.tapError((error) => {
-        switch (error._tag) {
-          case "BacnetDeviceError":
-            return countRequest("exception")
-          case "BacnetCodecError":
-            return countRequest("invalid_response")
-          case "BacnetSocketError":
-            return countRequest("connection")
-          case "BacnetTimeout":
-            return countRequest("timeout")
-        }
-      })
+    Effect.flatMap(
+      Effect.suspend(() => Effect.fromResult(tryEncode(encode))),
+      (body) =>
+        withPermits(pools, exchange(target, service, body)).pipe(
+          Effect.flatMap((answer) => Effect.fromResult(Result.flatMap(interpretAnswer(service, answer), decode))),
+          Effect.tap(() => countRequest("ok")),
+          Effect.tapError((error) => {
+            switch (error._tag) {
+              case "BacnetDeviceError":
+                return countRequest("exception")
+              case "BacnetCodecError":
+                return countRequest("invalid_response")
+              case "BacnetSocketError":
+                return countRequest("connection")
+              case "BacnetTimeout":
+                return countRequest("timeout")
+            }
+          })
+        )
     )
 
   const sendWhoIs = (whoIs: WhoIs, target: DeviceAddress | undefined) =>
@@ -562,23 +641,33 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
     )
 
   const client: BacnetClient = {
-    confirmed: (target, service, body) => request(target, service, body, Result.succeed),
+    confirmed: (target, service, body) => request(target, service, () => body, Result.succeed),
     readProperty: (target, readRequest) =>
-      request(target, ConfirmedService.ReadProperty, encodeReadProperty(readRequest), (body) =>
-        Result.flatMap(decodeReadPropertyAck(body), (ack) => checkReadPropertyAck(readRequest, ack))
+      request(
+        target,
+        ConfirmedService.ReadProperty,
+        () => encodeReadProperty(readRequest),
+        (body) => Result.flatMap(decodeReadPropertyAck(body), (ack) => checkReadPropertyAck(readRequest, ack))
       ),
     readPropertyMultiple: (target, specifications) =>
-      request(target, ConfirmedService.ReadPropertyMultiple, encodeReadPropertyMultiple(specifications), (body) =>
-        Result.flatMap(decodeReadPropertyMultipleAck(body), (results) =>
-          checkReadPropertyMultipleAck(specifications, results)
-        )
+      request(
+        target,
+        ConfirmedService.ReadPropertyMultiple,
+        () => encodeReadPropertyMultiple(specifications),
+        (body) =>
+          Result.flatMap(decodeReadPropertyMultipleAck(body), (results) =>
+            checkReadPropertyMultipleAck(specifications, results)
+          )
       ),
     discover: (discoverOptions = {}) =>
       Effect.suspend(() => {
         const found = new Map<number, DiscoveredDevice>()
         const whoIs: WhoIs = discoverOptions.range === undefined ? {} : { range: discoverOptions.range }
+        const target = discoverOptions.target
         return listening(
           (device) => {
+            // Asked one address: an I-Am from anywhere else answers someone else's Who-Is.
+            if (target !== undefined && !sameDevice(device, target)) return
             if (whoIsMatches(whoIs, device.instance)) found.set(device.instance, device)
           },
           sendWhoIs(whoIs, discoverOptions.target).pipe(
@@ -587,17 +676,22 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         ).pipe(Effect.map(() => [...found.values()]))
       }),
     subscribeCov: (target, subscription) =>
-      // Suspended, so a value the encoder refuses is a defect of this effect, not a throw at the call.
-      Effect.suspend(() =>
-        request(target, ConfirmedService.SubscribeCov, encodeSubscribeCov(subscription), (body) =>
+      request(
+        target,
+        ConfirmedService.SubscribeCov,
+        () => encodeSubscribeCov(subscription),
+        (body) =>
           body.length === 0
             ? Result.succeed(undefined)
-            : Result.fail(new BacnetCodecError({ message: "SubscribeCOV was answered with data, not a simple ack" }))
-        )
+            : Result.fail(new BacnetCodecError({ message: "SubscribeCOV was answered with data, not a simple ack" })),
+        [covRequests, invokeIds]
       ),
-    newProcessId: Effect.sync(() => {
-      const processId = nextProcessId
-      nextProcessId = nextProcessId >= 0xff_ff_ff_ff ? 1 : nextProcessId + 1
+    // Unsigned32 (clause 13.14.1.1), 0 left out so that a missing value never matches. Random, so that a
+    // host that cannot see the subscription cannot guess the identifier its notifications must carry.
+    newProcessId: Effect.gen(function* () {
+      let processId = yield* Random.nextIntBetween(1, 0xff_ff_ff_ff)
+      while (issuedProcessIds.has(processId)) processId = yield* Random.nextIntBetween(1, 0xff_ff_ff_ff)
+      issuedProcessIds.add(processId)
       return processId
     }),
     onCovNotification: (processId, listener) =>
@@ -621,9 +715,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         return listening(
           (device) => {
             const target = locateOptions.target
-            const fromTarget =
-              target === undefined ||
-              (keyOf(device.address) === keyOf(target.address) && sameNetwork(device.network, target.network))
+            const fromTarget = target === undefined || sameDevice(device, target)
             if (device.instance === instance && fromTarget) Deferred.doneUnsafe(found, Effect.succeed(device))
           },
           attempt.pipe(Effect.retry({ times: retries, while: (error) => error._tag === "BacnetTimeout" }))

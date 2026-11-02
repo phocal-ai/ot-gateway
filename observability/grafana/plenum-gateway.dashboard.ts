@@ -463,8 +463,8 @@ timeseries(
   "Points not read by device",
   [
     {
-      expr: `sum by (device) (increase(plenum_point_read_failures_total{${sel}}[$__rate_interval]))`,
-      legendFormat: "{{device}}"
+      expr: `sum by (device, reason) (increase(plenum_point_read_failures_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}} {{reason}}"
     }
   ],
   {
@@ -472,7 +472,7 @@ timeseries(
     x: 12,
     w: 12,
     description:
-      "Points a device answered for but could not deliver: unknown object or property, a value that is not a number, or NaN/Infinity (never published). The gateway log names each point once when it starts and stops failing."
+      "Points a device did not deliver, by reason. refused: it answered without a value (unknown object or property, a value that is not a number). not_finite: the value was NaN or Infinity, also after scaling, and was not published. The gateway log names each point once when it starts and stops failing. not_read: the device stopped answering or was busy partway through a cycle, so the rest waited for the next one. A device that does not answer at all is counted under read failures, not per point."
   }
 )
 y += 8
