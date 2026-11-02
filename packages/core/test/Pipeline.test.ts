@@ -99,6 +99,44 @@ describe("runDevice", () => {
       expect(published).toEqual([20])
     })
   )
+
+  it.effect("keeps reading while the broker is down at startup, and sends metadata once it is back", () =>
+    Effect.gen(function* () {
+      const topics: Array<string> = []
+      let brokerUp = false
+      let reads = 0
+      const publisher = Layer.succeed(Publisher, {
+        publish: (topic) =>
+          Effect.suspend(() => {
+            if (!brokerUp) return Effect.fail(new PublishError({ topic, message: "broker down" }))
+            topics.push(topic)
+            return Effect.void
+          })
+      })
+      const driver = scriptedDriver([200], "late-broker")
+      const counted: Driver = {
+        ...driver,
+        readAll: Effect.suspend(() => {
+          reads++
+          return driver.readAll
+        })
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, counted).pipe(
+        Effect.provide(publisher),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 second")
+      expect(reads).toBe(2)
+      expect(topics).toEqual([])
+
+      brokerUp = true
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      // Metadata first, exactly once, then the value that never got out.
+      expect(topics).toEqual(["s/b/late-broker/zone-temp/$meta", "s/b/late-broker/zone-temp"])
+    })
+  )
 })
 
 /** Read a counter's count for one combination of attributes. */

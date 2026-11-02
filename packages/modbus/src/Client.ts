@@ -9,7 +9,7 @@
  * transaction id. Backoff between failing requests comes from the caller
  * (the pipeline's retry policy and poll interval).
  */
-import { driverConnects, driverRequests } from "@plenum/core"
+import { describeSocketError, driverConnects, driverRequests } from "@plenum/core"
 import { Duration, Effect, Exit, Metric, Schema, Scope, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import {
@@ -63,9 +63,6 @@ interface Connection {
   buffer: Uint8Array
 }
 
-const describe = (error: Socket.SocketError): string =>
-  error.cause instanceof Error ? `${error.message}: ${error.cause.message}` : error.message
-
 const countRequest = (outcome: "ok" | "timeout" | "exception" | "invalid_response" | "connection") =>
   Metric.update(Metric.withAttributes(driverRequests, { outcome }), 1)
 
@@ -100,7 +97,7 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       Effect.onError(() => Scope.close(scope, Exit.void)),
       Effect.catchTag("SocketError", (error) =>
         countConnect("failed").pipe(
-          Effect.andThen(Effect.fail(new ModbusConnectionError({ message: `connect failed: ${describe(error)}` })))
+          Effect.andThen(Effect.fail(new ModbusConnectionError({ message: describeSocketError(error) })))
         )
       )
     )
@@ -144,7 +141,9 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       transactionId = (transactionId + 1) & 0xffff
       const id = transactionId
       const frame = yield* exchange(conn, encode(id), id).pipe(
-        Effect.catchTag("SocketError", (error) => Effect.fail(new ModbusConnectionError({ message: describe(error) }))),
+        Effect.catchTag("SocketError", (error) =>
+          Effect.fail(new ModbusConnectionError({ message: describeSocketError(error) }))
+        ),
         Effect.timeoutOrElse({
           duration: requestTimeout,
           orElse: () =>

@@ -4,21 +4,15 @@
  *
  *   node apps/gateway/src/main.ts path/to/gateway.json
  *
- * Runs simulator and Modbus TCP devices and prints to the console. BACnet
- * and MQTT plug in here as they land.
+ * Polls simulator and Modbus TCP devices and publishes to the MQTT broker in
+ * `mqtt`. BACnet plugs in here as it lands.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import {
-  ConsolePublisher,
-  type Device,
-  type GatewayConfig,
-  parseConfig,
-  runDevice,
-  withMetricAttributes
-} from "@plenum/core"
+import { type Device, type GatewayConfig, parseConfig, runDevice, withMetricAttributes } from "@plenum/core"
 import { makeModbusDriver } from "@plenum/modbus"
+import { MqttPublisher } from "@plenum/mqtt"
 import { makeSimulatorDriver } from "@plenum/simulator"
-import { Effect, FileSystem, Layer } from "effect"
+import { Effect, FileSystem } from "effect"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
 const runOne = (config: GatewayConfig, device: Device, sampleRatio: number) => {
@@ -58,9 +52,11 @@ const program = Effect.gen(function* () {
   const config = yield* parseConfig(yield* fs.readFileString(path))
 
   yield* runGateway(config).pipe(
+    // Inside the metric attributes, so the broker connection's metrics carry site and building too.
+    Effect.provide(MqttPublisher(config.mqtt)),
     withMetricAttributes({ site: config.site, building: config.building }),
     Effect.provide(telemetryLayer(config))
   )
 })
 
-program.pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, ConsolePublisher)), NodeRuntime.runMain)
+program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain)

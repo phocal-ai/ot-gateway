@@ -896,7 +896,7 @@
     {
       "id": 17,
       "type": "row",
-      "title": "Points",
+      "title": "Broker",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -908,6 +908,123 @@
     },
     {
       "id": 18,
+      "type": "timeseries",
+      "title": "Connected to the MQTT broker",
+      "description": "1 while the gateway holds a broker connection. Publishes fail while it is 0, and values are retried next cycle.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "max by (service_instance_id) (plenum_mqtt_connected{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "legendFormat": "{{service_instance_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool_yes_no",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Broker connection attempts by outcome",
+      "description": "A healthy gateway connects once. Repeated ok means the connection keeps dropping; failed means the broker is unreachable; rejected means it refused (check credentials).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 32
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (outcome) (increase(plenum_mqtt_connects_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "row",
+      "title": "Points",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 40
+      },
+      "panels": []
+    },
+    {
+      "id": 21,
       "type": "table",
       "title": "Point freshness",
       "description": "Seconds since each point was last read successfully. Orange after 1 minute, red after 5.",
@@ -919,7 +1036,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 41
       },
       "targets": [
         {
@@ -994,7 +1111,7 @@
       }
     },
     {
-      "id": 19,
+      "id": 22,
       "type": "row",
       "title": "Logs and traces",
       "collapsed": false,
@@ -1002,12 +1119,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 40
+        "y": 49
       },
       "panels": []
     },
     {
-      "id": 20,
+      "id": 23,
       "type": "logs",
       "title": "Warnings and errors",
       "datasource": {
@@ -1018,7 +1135,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 50
       },
       "targets": [
         {
@@ -1038,7 +1155,7 @@
       }
     },
     {
-      "id": 21,
+      "id": 24,
       "type": "table",
       "title": "Failed polling cycles (traces)",
       "description": "Device.pollCycle spans annotated with plenum.outcome. Click a trace ID for the span and its logs.",
@@ -1050,7 +1167,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 58
       },
       "targets": [
         {

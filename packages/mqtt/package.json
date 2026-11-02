@@ -1,7 +1,7 @@
 {
   "name": "@plenum/mqtt",
   "version": "0.0.0",
-  "description": "Effect-native MQTT 5 client for Plenum.",
+  "description": "Effect-native MQTT 5 publishing client for Plenum.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -12,6 +12,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@effect/platform-node": "4.1.2",
     "@plenum/core": "workspace:*",
     "effect": "4.1.2"
   }
