@@ -101,12 +101,18 @@ describe("MQTT client over TCP", () => {
 
       control.ackPublishes = false
       const timedOut = yield* Effect.flip(client.publish("t", "x"))
-      expect(timedOut).toMatchObject({ _tag: "MqttPublishError", topic: "t", message: "no PUBACK in time" })
+      expect(timedOut).toMatchObject({
+        _tag: "MqttPublishError",
+        topic: "t",
+        reason: "unavailable",
+        message: "no PUBACK in time"
+      })
 
       control.ackPublishes = true
       control.pubackReason = 0x87
       const refused = yield* Effect.flip(client.publish("t", "x"))
       expect(refused.message).toContain("refused the message: reason 0x87")
+      expect(refused.reason).toBe("rejected")
     })
   )
 
@@ -114,7 +120,8 @@ describe("MQTT client over TCP", () => {
     Effect.gen(function* () {
       const { port, control } = yield* startBroker()
       const client = yield* clientOn(port)
-      expect((yield* Effect.flip(client.publish("s/+/x", "x"))).message).toBe("topic contains a wildcard")
+      const wildcard = yield* Effect.flip(client.publish("s/+/x", "x"))
+      expect(wildcard).toMatchObject({ reason: "rejected", message: "topic contains a wildcard" })
       expect((yield* Effect.flip(client.publish("", "x"))).message).toBe("topic is empty")
       expect(control.messages).toEqual([])
     })
@@ -143,6 +150,17 @@ describe("MQTT client over TCP", () => {
       expect(error.message).toBe("not connected to the broker")
       expect(yield* connectCount("unreachable", "failed")).toBeGreaterThanOrEqual(1)
     }).pipe(withMetricAttributes({ test: "unreachable" }))
+  )
+
+  it.live("fails a publish at once while disconnected when told not to wait", () =>
+    Effect.gen(function* () {
+      const port = yield* Effect.scoped(Effect.map(NodeSocketServer.make({ host: "127.0.0.1", port: 0 }), portOf))
+      const client = yield* clientOn(port, { publishTimeout: "5 seconds", waitForConnection: false })
+      const started = Date.now()
+      const error = yield* Effect.flip(client.publish("t", "x"))
+      expect(error).toMatchObject({ reason: "unavailable", message: "not connected to the broker" })
+      expect(Date.now() - started).toBeLessThan(1000)
+    })
   )
 
   it.live("reconnects after the broker restarts", () =>
@@ -210,7 +228,7 @@ describe("MqttPublisher", () => {
         const publisher = yield* Publisher
         yield* publisher.publish("s/b/d/p", "1", { retain: true })
         const error = yield* Effect.flip(publisher.publish("s/b/d/p", "1", { qos: 2 }))
-        expect(error).toMatchObject({ _tag: "PublishError", message: "QoS 2 is not supported" })
+        expect(error).toMatchObject({ _tag: "PublishError", reason: "rejected", message: "QoS 2 is not supported" })
       }).pipe(Effect.provide(layer))
 
       expect(control.connects).toMatchObject([{ clientId: "layer-gw", username: "gw", hasPassword: true }])

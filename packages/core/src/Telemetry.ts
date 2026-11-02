@@ -104,6 +104,33 @@ export const mqttConnected = Metric.gauge("plenum_mqtt_connected", {
   attributes: { unit: "{connection}" }
 })
 
+/** Messages waiting in the store-and-forward outbox. A UCUM annotation unit, so no `_ratio` suffix. */
+export const bufferRows = Metric.gauge("plenum_buffer_rows", {
+  description: "Messages waiting in the store-and-forward outbox",
+  attributes: { unit: "{row}" }
+})
+
+/** Messages written to the outbox because the broker was unavailable (or older ones were still waiting). */
+export const bufferWritten = Metric.counter("plenum_buffer_written", {
+  description: "Messages stored in the outbox",
+  incremental: true
+})
+
+/** Messages from the outbox that reached the broker. */
+export const bufferDrained = Metric.counter("plenum_buffer_drained", {
+  description: "Messages from the outbox delivered to the broker",
+  incremental: true
+})
+
+/**
+ * Messages the outbox gave up on, by `reason`: `overflow` (the oldest rows,
+ * past `buffer.maxRows`) or `rejected` (the broker refused the message).
+ */
+export const bufferDropped = Metric.counter("plenum_buffer_dropped", {
+  description: "Messages dropped from the outbox, by reason",
+  incremental: true
+})
+
 /** Add attributes to every metric updated inside `effect`, keeping the ones already set. */
 export const withMetricAttributes =
   (attributes: Metric.Metric.AttributeSet) =>

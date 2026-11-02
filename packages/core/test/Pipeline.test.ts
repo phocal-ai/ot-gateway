@@ -101,7 +101,8 @@ describe("runDevice", () => {
           Effect.suspend(() => {
             if (topic.endsWith("$meta")) return Effect.void
             valuePublishes++
-            if (valuePublishes === 1) return Effect.fail(new PublishError({ topic, message: "broker down" }))
+            if (valuePublishes === 1)
+              return Effect.fail(new PublishError({ topic, reason: "unavailable", message: "broker down" }))
             published.push(JSON.parse(payload).value)
             return Effect.void
           })
@@ -126,7 +127,8 @@ describe("runDevice", () => {
       const publisher = Layer.succeed(Publisher, {
         publish: (topic) =>
           Effect.suspend(() => {
-            if (!brokerUp) return Effect.fail(new PublishError({ topic, message: "broker down" }))
+            if (!brokerUp)
+              return Effect.fail(new PublishError({ topic, reason: "unavailable", message: "broker down" }))
             topics.push(topic)
             return Effect.void
           })

@@ -304,7 +304,7 @@ timeseries(
     x: 0,
     w: 12,
     description:
-      "1 while the gateway holds a broker connection. Publishes fail while it is 0, and values are retried next cycle."
+      "1 while the gateway holds a broker connection. While it is 0, values go to the store-and-forward buffer if one is configured, and are lost otherwise."
   }
 )
 timeseries(
@@ -322,6 +322,49 @@ timeseries(
     stack: true,
     description:
       "A healthy gateway connects once. Repeated ok means the connection keeps dropping; failed means the broker is unreachable; rejected means it refused (check credentials)."
+  }
+)
+y += 8
+
+row("Buffer")
+timeseries(
+  "Messages waiting in the buffer",
+  [
+    {
+      expr: `max by (service_instance_id) (plenum_buffer_rows{${sel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    description:
+      "Rows in the SQLite outbox. It grows during a broker outage and falls back to 0 once the gateway has delivered them. A line that stays above 0 while the broker is connected means draining is stuck."
+  }
+)
+timeseries(
+  "Buffer traffic",
+  [
+    {
+      expr: `sum(increase(plenum_buffer_written_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "stored"
+    },
+    {
+      expr: `sum(increase(plenum_buffer_drained_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "delivered"
+    },
+    {
+      expr: `sum by (reason) (increase(plenum_buffer_dropped_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "dropped: {{reason}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    description:
+      "Stored during an outage, delivered after it. Dropped means data was lost: overflow when the outbox passed buffer.maxRows, rejected when the broker refused a stored message."
   }
 )
 y += 8

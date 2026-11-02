@@ -3,9 +3,10 @@
  * with jittered exponential backoff for as long as the client's scope lives.
  *
  * Publishing never queues across outages: while disconnected, a publish
- * waits up to `publishTimeout` for the connection and then fails, so the
- * caller decides what to retry (the pipeline retries a value on the next
- * cycle; durable store-and-forward is v0.2). QoS 1 publishes complete on
+ * waits up to `publishTimeout` for the connection and then fails (or fails
+ * at once with `waitForConnection: false`), so the caller decides what to
+ * retry: the pipeline retries `$meta` on the next cycle, and `@plenum/buffer`
+ * stores values for later. QoS 1 publishes complete on
  * PUBACK. The session is clean (no session state survives a reconnect), so
  * nothing unacknowledged is resent behind the caller's back.
  */
@@ -51,9 +52,14 @@ export class MqttRejected extends Schema.TaggedError<MqttRejected>()("MqttReject
   message: Schema.String
 }) {}
 
-/** A message could not be published. */
+/**
+ * A message could not be published. `unavailable`: no connection, or it broke
+ * before the PUBACK; trying again later may work. `rejected`: the broker or
+ * the protocol refuses this message, so retrying it will not help.
+ */
 export class MqttPublishError extends Schema.TaggedError<MqttPublishError>()("MqttPublishError", {
   topic: Schema.String,
+  reason: Schema.Literals(["unavailable", "rejected"]),
   message: Schema.String
 }) {}
 
@@ -67,6 +73,12 @@ export interface MqttClientOptions {
   readonly connectTimeout?: Duration.Input
   /** Time a publish may wait for a connection, and then for its PUBACK (default 10 s each). */
   readonly publishTimeout?: Duration.Input
+  /**
+   * Whether a publish made while disconnected waits for the connection
+   * (default true). Turn it off when the caller stores what fails: waiting
+   * would stall the caller, and every reading it skips meanwhile is lost.
+   */
+  readonly waitForConnection?: boolean
   /** Published by the broker if the gateway disappears without a clean DISCONNECT. */
   readonly will?: Will
   /** First and largest delay between reconnect attempts (default 1 s and 60 s). */
@@ -343,19 +355,22 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
 
   const publish: MqttClient["publish"] = (topic, payload, publishOptions = {}) =>
     Effect.gen(function* () {
+      const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
       const problem = topicProblem(topic)
-      if (problem !== undefined) return yield* new MqttConnectionError({ message: problem })
-      yield* connected.await.pipe(
-        Effect.timeoutOrElse({
-          duration: publishTimeout,
-          orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
-        })
-      )
+      if (problem !== undefined) return yield* rejected(problem)
+      if (options.waitForConnection !== false) {
+        yield* connected.await.pipe(
+          Effect.timeoutOrElse({
+            duration: publishTimeout,
+            orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
+          })
+        )
+      }
       const current = session
       if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
       const retain = publishOptions.retain === true
       if (retain && !current.retainAvailable) {
-        return yield* new MqttConnectionError({ message: "the broker does not support retained messages" })
+        return yield* rejected("the broker does not support retained messages")
       }
       // The broker's Maximum QoS caps what the client may send (§3.2.2.3.4).
       const qos = Math.min(publishOptions.qos ?? 1, current.maximumQoS) === 0 ? 0 : 1
@@ -364,9 +379,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       if (qos === 0) {
         const packet = encodePublish({ topic, payload: bytes, qos: 0, retain })
         if (packet.length > current.maximumPacketSize) {
-          return yield* new MqttConnectionError({
-            message: `message exceeds the broker's ${current.maximumPacketSize} byte limit`
-          })
+          return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
         }
         return yield* current.write(packet)
       }
@@ -379,9 +392,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           current.nextPacketId = (packetId % 0xffff) + 1
           const packet = encodePublish({ topic, payload: bytes, qos: 1, retain, packetId })
           if (packet.length > current.maximumPacketSize) {
-            return yield* new MqttConnectionError({
-              message: `message exceeds the broker's ${current.maximumPacketSize} byte limit`
-            })
+            return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
           }
           const acked = yield* Deferred.make<number, MqttConnectionError>()
           current.inflight.set(packetId, acked)
@@ -394,15 +405,13 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             Effect.ensuring(Effect.sync(() => current.inflight.delete(packetId)))
           )
           if (reasonCode >= 0x80) {
-            return yield* new MqttConnectionError({
-              message: `broker refused the message: reason 0x${reasonCode.toString(16)}`
-            })
+            return yield* rejected(`broker refused the message: reason 0x${reasonCode.toString(16)}`)
           }
         })
       )
     }).pipe(
       Effect.catchTag("MqttConnectionError", (error) =>
-        Effect.fail(new MqttPublishError({ topic, message: error.message }))
+        Effect.fail(new MqttPublishError({ topic, reason: "unavailable", message: error.message }))
       )
     )
 

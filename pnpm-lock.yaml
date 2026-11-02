@@ -41,6 +41,9 @@ importers:
       '@effect/platform-node':
         specifier: 4.1.2
         version: 4.1.2(effect@4.1.2)(redis@6.3.1)
+      '@plenum/buffer':
+        specifier: workspace:*
+        version: link:../../packages/buffer
       '@plenum/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -65,6 +68,22 @@ importers:
       effect:
         specifier: 4.1.2
         version: 4.1.2
+
+  packages/buffer:
+    dependencies:
+      '@effect/sql-sqlite-node':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)
+      '@plenum/core':
+        specifier: workspace:*
+        version: link:../core
+      effect:
+        specifier: 4.1.2
+        version: 4.1.2
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)(redis@6.3.1)
 
   packages/core:
     dependencies:
@@ -119,6 +138,11 @@ packages:
     peerDependencies:
       effect: ^4.1.2
       redis: '>=5.1.0 <7.0.0'
+
+  '@effect/sql-sqlite-node@4.1.2':
+    resolution: {integrity: sha512-fTmI8Ol1Lf8rGITtdIW285nuT9G46ETOPZ48CxlZ7vkfWDYgipYnH0dILxPGcZ6f/BMLeybmLRKKBcRWStShfQ==}
+    peerDependencies:
+      effect: ^4.1.2
 
   '@effect/tsgo-darwin-arm64@0.63.0':
     resolution: {integrity: sha512-KBvYatuEol71+i+BERWuDRU9XE+4sTK78N83Ko6VNF5gy6yXiujj/bgtWs2P3cDGXsevAV6L+HtpuAWjAQKC6Q==}
@@ -1078,6 +1102,10 @@ snapshots:
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
+
+  '@effect/sql-sqlite-node@4.1.2(effect@4.1.2)':
+    dependencies:
+      effect: 4.1.2
 
   '@effect/tsgo-darwin-arm64@0.63.0':
     optional: true

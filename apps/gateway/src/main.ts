@@ -23,8 +23,9 @@ import {
 } from "@plenum/core"
 import { makeModbusDriver } from "@plenum/modbus"
 import { MqttPublisher } from "@plenum/mqtt"
+import { BufferedPublisher } from "@plenum/buffer"
 import { makeSimulatorDriver } from "@plenum/simulator"
-import { Clock, Effect, FileSystem } from "effect"
+import { Clock, Effect, FileSystem, Layer } from "effect"
 import { telemetryLayer, traceSampleRatio } from "./Telemetry.ts"
 
 const runOne = (config: GatewayConfig, device: Device, sampleRatio: number, health: HealthRegistry) => {
@@ -69,6 +70,16 @@ interface GatewayHealth {
   readonly online: Effect.Effect<string>
 }
 
+/** MQTT, behind a SQLite outbox when `buffer` is configured. */
+const northbound = (config: GatewayConfig, health: GatewayHealth) => {
+  const mqtt = MqttPublisher(config.mqtt, {
+    health: { topic: health.topic, online: health.online },
+    // With a buffer, a value that cannot go out now is stored, so waiting for the broker would only stall reads.
+    waitForConnection: config.buffer === undefined
+  })
+  return config.buffer === undefined ? mqtt : BufferedPublisher(config.buffer).pipe(Layer.provide(mqtt))
+}
+
 const program = Effect.gen(function* () {
   const path = process.argv[2] ?? "plenum.json"
   const fs = yield* FileSystem.FileSystem
@@ -83,7 +94,7 @@ const program = Effect.gen(function* () {
 
   yield* runGateway(config, health).pipe(
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
-    Effect.provide(MqttPublisher(config.mqtt, { health: { topic: health.topic, online: health.online } })),
+    Effect.provide(northbound(config, health)),
     withMetricAttributes({ site: config.site, building: config.building }),
     Effect.provide(telemetryLayer(config))
   )

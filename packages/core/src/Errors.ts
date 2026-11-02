@@ -8,13 +8,37 @@ export class DriverError extends Schema.TaggedError<DriverError>()("DriverError"
   message: Schema.String
 }) {}
 
-/** A failure while publishing northbound. */
+/**
+ * A failure while publishing northbound. `unavailable`: the broker cannot be
+ * reached right now, so the message may be retried (or buffered).
+ * `rejected`: this message is refused (too large, not authorized, invalid
+ * topic), so retrying it will not help.
+ */
 export class PublishError extends Schema.TaggedError<PublishError>()("PublishError", {
   topic: Schema.String,
+  reason: Schema.Literals(["unavailable", "rejected"]),
   message: Schema.String
 }) {}
 
-const withCause = (what: string, cause: unknown) => (cause instanceof Error ? `${what}: ${cause.message}` : what)
+/**
+ * The most specific text in a Node error. Dialing a name with several
+ * addresses (`localhost` is `::1` and `127.0.0.1`) fails with an
+ * `AggregateError` whose message is empty; its parts carry the detail.
+ */
+const causeText = (cause: unknown): string | undefined => {
+  if (!(cause instanceof Error)) return undefined
+  if (cause.message !== "") return cause.message
+  if (cause instanceof AggregateError) {
+    const parts = cause.errors.map(causeText).filter((part) => part !== undefined)
+    if (parts.length > 0) return [...new Set(parts)].join("; ")
+  }
+  return "code" in cause && typeof cause.code === "string" ? cause.code : undefined
+}
+
+const withCause = (what: string, cause: unknown) => {
+  const text = causeText(cause)
+  return text === undefined ? what : `${what}: ${text}`
+}
 
 /**
  * A log-friendly description of a socket failure, for the protocol clients.

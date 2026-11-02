@@ -82,7 +82,7 @@ describe("runHealthReporter", () => {
         publish: (topic) =>
           Effect.suspend(() => {
             attempts++
-            return Effect.fail(new PublishError({ topic, message: "broker down" }))
+            return Effect.fail(new PublishError({ topic, reason: "unavailable", message: "broker down" }))
           })
       })
       const fiber = yield* runHealthReporter({ topic: "t", intervalMs: 1000, online: Effect.succeed("{}") }).pipe(
