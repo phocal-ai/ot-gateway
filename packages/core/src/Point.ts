@@ -8,10 +8,13 @@
 import { Effect, Schema } from "effect"
 
 /**
- * Identifier used in MQTT topics: lowercase letters, digits, `-` and `_`.
- * MQTT wildcards and separators (`+`, `#`, `/`) can never appear.
+ * Identifier used in MQTT topics: lowercase letters, digits, `-` and `_`, at
+ * most 64 characters. MQTT wildcards and separators (`+`, `#`, `/`) can never
+ * appear, and the longest topic (`site/building/device/point/$meta`, or the
+ * health topic that is also the MQTT will) stays far below MQTT's 65,535-byte
+ * limit, past which the CONNECT packet could not even be encoded.
  */
-export const Slug = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/)))
+export const Slug = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/), Schema.isMaxLength(64)))
 export type Slug = typeof Slug.Type
 
 /** Optional semantic tagging. Brick is primary, Haystack tags are for integrators. */
@@ -25,7 +28,11 @@ export type Semantics = typeof Semantics.Type
 
 /** Linear scaling applied to raw values: `value = raw * factor + offset`. */
 export const Scaling = Schema.Struct({
-  factor: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1))),
+  /** Not 0, which would publish `offset` whatever the device reads. */
+  factor: Schema.Finite.pipe(
+    Schema.check(Schema.makeFilter((factor) => factor !== 0 || "a scaling factor of 0 hides every reading")),
+    Schema.withDecodingDefaultKey(Effect.succeed(1))
+  ),
   offset: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0)))
 })
 export type Scaling = typeof Scaling.Type
@@ -39,7 +46,7 @@ export const PointFields = {
   /** Writing is opt-in per point. */
   writable: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   /** Minimum change (after scaling) before a new value is published. */
-  deadband: Schema.optionalKey(Schema.Finite),
+  deadband: Schema.optionalKey(Schema.Finite.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
   scaling: Schema.optionalKey(Scaling),
   semantics: Schema.optionalKey(Semantics)
 } as const

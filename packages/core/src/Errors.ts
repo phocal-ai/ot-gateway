@@ -29,6 +29,19 @@ export class PublishError extends Schema.TaggedError<PublishError>()("PublishErr
 }) {}
 
 /**
+ * A step of a device's pipeline that did not finish within the device's
+ * cycle deadline: a polling cycle (`poll-cycle`: reading the device and
+ * publishing its values), or handling one value the device pushed
+ * (`pushed-value`). Something below it hangs, a device or the broker side.
+ */
+export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("PipelineTimeout", {
+  device: Schema.String,
+  stage: Schema.Literals(["poll-cycle", "pushed-value"]),
+  timeoutMs: Schema.Number,
+  message: Schema.String
+}) {}
+
+/**
  * The most specific text in a Node error. Dialing a name with several
  * addresses (`localhost` is `::1` and `127.0.0.1`) fails with an
  * `AggregateError` whose message is empty; its parts carry the detail.

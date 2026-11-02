@@ -16,7 +16,10 @@ import { Effect, Metric } from "effect"
  */
 const seconds = { unit: "seconds" } as const
 
-/** Polling cycles finished, by `outcome`: `ok`, `read_failed` or `publish_failed`. */
+/**
+ * Polling cycles finished, by `outcome`: `ok`, `read_failed`, `publish_failed`
+ * or `timed_out` (the cycle hung past the device's `cycleTimeoutMs` and was abandoned).
+ */
 export const pollCycles = Metric.counter("plenum_poll_cycles", {
   description: "Polling cycles finished, by outcome",
   incremental: true
@@ -26,7 +29,9 @@ export const pollCycles = Metric.counter("plenum_poll_cycles", {
 export const pollDuration = Metric.histogram("plenum_poll_duration_seconds", {
   description: "Duration of one polling cycle, including retries",
   attributes: seconds,
-  boundaries: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+  // Five buckets (8 series per device with sum and count): enough to tell a fast device from one that
+  // retries or nears its cycle deadline, at half the cost of a finer histogram.
+  boundaries: [0.05, 0.25, 1, 5, 30]
 })
 
 /** Driver read failures after retries were exhausted, by `reason` (the `DriverError` reason). */
@@ -53,15 +58,6 @@ export const valuesSuppressed = Metric.counter("plenum_values_suppressed", {
   incremental: true
 })
 
-/**
- * Unix time of the last successful read, per `point`. Staleness is
- * `time() - plenum_point_last_read_timestamp_seconds`; one series per point.
- */
-export const pointLastRead = Metric.gauge("plenum_point_last_read_timestamp_seconds", {
-  description: "Unix time of the last successful read of a point",
-  attributes: seconds
-})
-
 /** Unix time of the last cycle that read the device successfully. */
 export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timestamp_seconds", {
   description: "Unix time of the last successful polling cycle of a device",
@@ -70,11 +66,22 @@ export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timest
 
 /**
  * Points a cycle could not read although the device answered, e.g. an
- * unknown object or a value that is not a number. Without a `point`
+ * unknown object, a value that is not a number, or one that is not finite
+ * (NaN or Infinity, also after scaling). Without a `point`
  * attribute, to keep the series count flat; the log says which point.
  */
 export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
   description: "Points a device could not read in an otherwise successful cycle",
+  incremental: true
+})
+
+/**
+ * Times a device's pipeline died on a defect (a bug, not a device or broker
+ * failure) and was restarted. Any increase is a bug to report; the log has
+ * the cause.
+ */
+export const deviceRestarts = Metric.counter("plenum_device_restarts", {
+  description: "Device pipelines restarted after a defect",
   incremental: true
 })
 
