@@ -3,15 +3,18 @@
  * Each test asserts the fixed behaviour.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { Clock, Effect, Fiber, Layer, Metric, Queue, Stream } from "effect"
+import { Clock, Effect, Fiber, Layer, Logger, Metric, Queue, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import {
+  DriverError,
   makeHealthRegistry,
   makeMemoryPublisher,
   pointReadFailures,
   pollCycles,
   Publisher,
+  PublishError,
   publishFailures,
+  readFailures,
   runDevice
 } from "../../src/index.ts"
 import type { AnyPoint, Driver, PointValue, Reading } from "../../src/index.ts"
@@ -215,6 +218,77 @@ describe("chaos: hangs", () => {
       expect(valuesOn(messages, "s/b/hang-push/temp")).toContain(3)
       expect(valuesOn(messages, "s/b/hang-push/temp")).not.toContain(99)
       expect(yield* countOf(publishFailures, { device: "hang-push" })).toBeGreaterThanOrEqual(1)
+    })
+  )
+})
+
+/** A logger that records each message with its level, instead of printing it. */
+const recordLogs = () => {
+  const lines: Array<string> = []
+  const layer = Logger.layer([
+    Logger.make(({ logLevel, message }) => {
+      lines.push(`${logLevel}: ${(Array.isArray(message) ? message : [message]).join(" ")}`)
+    })
+  ])
+  return { lines, layer } as const
+}
+
+describe("chaos: a device or broker that stays down", () => {
+  it.effect("logs a failing device when it starts failing and when it recovers, not every cycle", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeMemoryPublisher
+      const logs = recordLogs()
+      let reads = 0
+      const driver: Driver = {
+        deviceId: "down",
+        points: [pointNamed("temp")],
+        readAll: Effect.suspend(() => {
+          reads++
+          if (reads <= 10)
+            return Effect.fail(new DriverError({ device: "down", reason: "protocol", message: "refused" }))
+          return Effect.map(Clock.currentTimeMillis, (now): ReadonlyArray<Reading> => [
+            { pointId: "temp", value: reads, timestamp: now }
+          ])
+        }),
+        write: () => Effect.void
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.provide(logs.layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("15 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(logs.lines.filter((line) => line.includes("device read failed"))).toEqual(["Warn: device read failed"])
+      expect(logs.lines.filter((line) => line.includes("device works again"))).toEqual(["Info: device works again"])
+      expect(yield* countOf(readFailures, { device: "down", reason: "protocol" })).toBe(10)
+    })
+  )
+
+  it.effect("logs a broker outage once per device, and once when publishing works again", () =>
+    Effect.gen(function* () {
+      const logs = recordLogs()
+      let brokerDown = true
+      const publisher = Layer.succeed(Publisher, {
+        publish: (topic) =>
+          brokerDown ? Effect.fail(new PublishError({ topic, reason: "unavailable", message: "down" })) : Effect.void
+      })
+      const driver = scripted("no-broker", [pointNamed("temp")], [[["temp", 1]], [["temp", 2]]])
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(publisher),
+        Effect.provide(logs.layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("10 seconds")
+      brokerDown = false
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      const warnings = logs.lines.filter((line) => line.startsWith("Warn"))
+      expect(warnings).toHaveLength(1)
+      expect(logs.lines.filter((line) => line.includes("publishing works again"))).toHaveLength(1)
+      expect(yield* countOf(publishFailures, { device: "no-broker" })).toBeGreaterThanOrEqual(20)
     })
   )
 })

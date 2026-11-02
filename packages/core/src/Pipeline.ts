@@ -4,7 +4,7 @@
  */
 import { Clock, Duration, Effect, Metric, Option, Random, Result, Schedule, Semaphore, Stream } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
-import type { HealthRegistry } from "./Health.ts"
+import type { HealthReason, HealthRegistry } from "./Health.ts"
 import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
 import { defaultCycleTimeoutMs } from "./Config.ts"
@@ -139,6 +139,40 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     refusedTopics.delete(topic)
   })
 
+  /**
+   * A device or broker that stays down fails every cycle. Each failure is
+   * counted, but logged only when it starts or changes, and once more when it
+   * ends, so a gateway with many devices and no broker does not flood its log.
+   * `deviceProblem` follows the health status: the reason the device is
+   * failing, until a cycle completes again. `publishFailing` is set by a
+   * failed value or metadata publish, until a cycle publishes again.
+   */
+  let deviceProblem: HealthReason | undefined
+  let publishFailing = false
+  const deviceFailed = (problem: HealthReason, message: string, annotations: Record<string, unknown>) =>
+    Effect.suspend(() => {
+      if (problem === deviceProblem) return Effect.void
+      deviceProblem = problem
+      return Effect.logWarning(message).pipe(Effect.annotateLogs(annotations))
+    })
+  const deviceRecovered = Effect.suspend(() => {
+    const was = deviceProblem
+    if (was === undefined) return Effect.void
+    deviceProblem = undefined
+    return Effect.logInfo("device works again").pipe(Effect.annotateLogs({ after: was }))
+  })
+  const publishFailed = (message: string, error: PublishError) =>
+    Effect.suspend(() => {
+      if (publishFailing) return Effect.void
+      publishFailing = true
+      return Effect.logWarning(message).pipe(Effect.annotateLogs({ topic: error.topic, error: error.message }))
+    })
+  const publishRecovered = Effect.suspend(() => {
+    if (!publishFailing) return Effect.void
+    publishFailing = false
+    return Effect.logInfo("publishing works again")
+  })
+
   // Metadata goes out once per point, retained. It is retried at the start of
   // every cycle until the broker took it, so a broker that is down when the
   // gateway starts delays metadata instead of stopping the device. Metadata the
@@ -155,12 +189,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   ).pipe(
     // The device is still read: its health is independent of the broker's.
     Effect.catchTag("PublishError", (error) =>
-      Effect.all([
-        Effect.logWarning("metadata publish failed").pipe(
-          Effect.annotateLogs({ topic: error.topic, error: error.message })
-        ),
-        Metric.update(publishFailures, 1)
-      ])
+      Effect.all([publishFailed("metadata publish failed", error), Metric.update(publishFailures, 1)])
     )
   )
 
@@ -253,7 +282,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     // The device is `ok` once its values were handled: a broker that refuses or is down does not make the device
     // failing, but a cycle that hangs in publishing (and hits the deadline) never gets here.
     ctx.health?.recordSuccess(driver.deviceId, readAt)
+    yield* deviceRecovered
     if (Result.isFailure(published)) return yield* published.failure
+    yield* publishRecovered
     yield* countCycle("ok")
   }).pipe(
     deadline("poll-cycle"),
@@ -261,16 +292,14 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       DriverError: (error) =>
         Effect.all([
           Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, error.reason)),
-          Effect.logWarning("device read failed").pipe(
-            Effect.annotateLogs({ reason: error.reason, error: error.message })
-          ),
+          deviceFailed(error.reason, "device read failed", { reason: error.reason, error: error.message }),
           Effect.annotateCurrentSpan({ "plenum.outcome": "read_failed", "plenum.reason": error.reason }),
           Metric.update(Metric.withAttributes(readFailures, { reason: error.reason }), 1),
           countCycle("read_failed")
         ]),
       PublishError: (error) =>
         Effect.all([
-          Effect.logWarning("publish failed").pipe(Effect.annotateLogs({ topic: error.topic, error: error.message })),
+          publishFailed("publish failed", error),
           Effect.annotateCurrentSpan({ "plenum.outcome": "publish_failed" }),
           Metric.update(publishFailures, 1),
           countCycle("publish_failed")
@@ -278,9 +307,10 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       PipelineTimeout: (error) =>
         Effect.all([
           Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, "cycle-timeout")),
-          Effect.logWarning("polling cycle hung, abandoned it").pipe(
-            Effect.annotateLogs({ timeoutMs: error.timeoutMs, error: error.message })
-          ),
+          deviceFailed("cycle-timeout", "polling cycle hung, abandoned it", {
+            timeoutMs: error.timeoutMs,
+            error: error.message
+          }),
           Effect.annotateCurrentSpan({ "plenum.outcome": "timed_out" }),
           countCycle("timed_out")
         ])
