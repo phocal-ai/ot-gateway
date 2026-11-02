@@ -5,9 +5,7 @@
   "files.watcherExclude": {
     "repos/**": true
   },
-  "typescript.preferences.autoImportFileExcludePatterns": [
-    "**/repos/**"
-  ],
+  "typescript.preferences.autoImportFileExcludePatterns": ["**/repos/**"],
   "editor.defaultFormatter": "oxc.oxc-vscode",
   "editor.formatOnSave": true
 }
