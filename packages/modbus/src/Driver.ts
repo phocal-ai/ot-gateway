@@ -164,12 +164,17 @@ export const makeModbusDriverFromClient = (
   }
 }
 
-/** Integer ranges of the register types; float32 takes any finite number. */
+/**
+ * Integer ranges of the register types; floats take any finite number. A
+ * 64-bit integer is written exactly up to ±2^53, as far as a number reaches.
+ */
 const integerRange = {
   int16: [-32_768, 32_767],
   uint16: [0, 65_535],
   int32: [-(2 ** 31), 2 ** 31 - 1],
-  uint32: [0, 2 ** 32 - 1]
+  uint32: [0, 2 ** 32 - 1],
+  int64: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+  uint64: [0, Number.MAX_SAFE_INTEGER]
 } as const
 
 /**
@@ -191,12 +196,12 @@ export const writeRequestFor = (point: ModbusPoint, value: WriteValue): WriteReq
     return { functionCode: FunctionCode.WriteSingleRegister, address: point.address, value: value ? 1 : 0 }
   }
   if (typeof value !== "number" || !Number.isFinite(value)) return `a ${point.dataType} takes a finite number`
-  if (point.dataType !== "float32") {
+  if (point.dataType !== "float32" && point.dataType !== "float64") {
     const [minimum, maximum] = integerRange[point.dataType]
     if (!Number.isInteger(value)) return `${value} is not a whole number, as a ${point.dataType} needs`
     if (value < minimum || value > maximum) return `${value} does not fit a ${point.dataType}`
   }
-  const registers = encodeValue(value, point.dataType)
+  const registers = encodeValue(value, point.dataType, point.byteOrder)
   const [first] = registers
   return registers.length === 1 && first !== undefined
     ? { functionCode: FunctionCode.WriteSingleRegister, address: point.address, value: first }
