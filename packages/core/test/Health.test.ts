@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Metric } from "effect"
+import { Effect, Fiber, Layer, Logger, Metric } from "effect"
 import { TestClock } from "effect/testing"
 import {
   healthTopic,
@@ -96,5 +96,39 @@ describe("runHealthReporter", () => {
       const failures = yield* Metric.value(Metric.withAttributes(publishFailures, { test: "health-reporter" }))
       expect(failures.count).toBe(3)
     }).pipe(withMetricAttributes({ test: "health-reporter" }))
+  )
+
+  it.effect("logs when refreshes start failing and when they recover, not every interval", () =>
+    Effect.gen(function* () {
+      let down = true
+      const lines: Array<string> = []
+      const logger = Logger.layer([
+        Logger.make(({ logLevel, message }) => {
+          lines.push(`${logLevel}: ${(Array.isArray(message) ? message : [message]).join(" ")}`)
+        })
+      ])
+      const flaky = Layer.succeed(Publisher, {
+        publish: (topic) =>
+          Effect.suspend(() =>
+            down ? Effect.fail(new PublishError({ topic, reason: "unavailable", message: "broker down" })) : Effect.void
+          )
+      })
+      const fiber = yield* runHealthReporter({ topic: "t", intervalMs: 1000, online: Effect.succeed("{}") }).pipe(
+        Effect.provide([flaky, logger]),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("10 seconds")
+      down = false
+      yield* TestClock.adjust("10 seconds")
+      down = true
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(lines).toEqual([
+        "Warn: health publish failed",
+        "Info: health publish recovered",
+        "Warn: health publish failed"
+      ])
+    })
   )
 })

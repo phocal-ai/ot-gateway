@@ -85,19 +85,28 @@ export interface HealthReporterOptions {
 /**
  * Refresh the retained online message every `intervalMs`, so subscribers see
  * device status change and `ts` advance. The publisher announces the gateway
- * on connect; this keeps the message current between connects. A failed
- * refresh is logged and counted, and the next interval tries again.
+ * on connect; this keeps the message current between connects. Every failed
+ * refresh is counted, and the next interval tries again. Only the first
+ * failure of a run is logged, and the recovery after it: a broker outage is
+ * two lines, not one per interval.
  */
 export const runHealthReporter = Effect.fn("runHealthReporter")(function* (options: HealthReporterOptions) {
   const publisher = yield* Publisher
+  let failing = false
   const refresh = Effect.gen(function* () {
     yield* publisher.publish(options.topic, yield* options.online, { retain: true })
+    if (failing) {
+      failing = false
+      yield* Effect.logInfo("health publish recovered")
+    }
   }).pipe(
     Effect.catchTag("PublishError", (error) =>
-      Effect.all([
-        Effect.logWarning("health publish failed").pipe(Effect.annotateLogs({ error: error.message })),
-        Metric.update(publishFailures, 1)
-      ])
+      Effect.gen(function* () {
+        yield* Metric.update(publishFailures, 1)
+        if (failing) return
+        failing = true
+        yield* Effect.logWarning("health publish failed").pipe(Effect.annotateLogs({ error: error.message }))
+      })
     )
   )
   return yield* Effect.sleep(options.intervalMs).pipe(Effect.andThen(refresh), Effect.repeat(Schedule.forever))
