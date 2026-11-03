@@ -9,7 +9,13 @@
   "options": {
     "typeAware": true
   },
-  "ignorePatterns": ["repos/**", "observability/grafana/dashboards/**"],
+  "ignorePatterns": [
+    "repos/**",
+    "observability/grafana/dashboards/**",
+    "apps/web/.next/**",
+    "apps/web/out/**",
+    "apps/web/next-env.d.ts"
+  ],
   "rules": {
     "typescript/no-explicit-any": "error",
     "typescript/no-non-null-assertion": "error",
@@ -51,6 +57,12 @@
             "message": "Import the module you need, e.g. @effect/platform-node/NodeSocket: the barrel loads every Node module (HTTP, workers, cluster) and costs the gateway about 30 MB of memory."
           }
         ]
+      }
+    ],
+    "import/no-unassigned-import": [
+      "error",
+      {
+        "allow": ["**/*.css"]
       }
     ]
   },

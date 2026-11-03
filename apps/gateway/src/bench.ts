@@ -12,6 +12,8 @@
  * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
  *   is on localhost with a port other than the gateway's own, with analog
  *   values on the same sine and binary values flipping every 30 s
+ * - writable points are left alone, so a command's value stays; the broker
+ *   routes commands to the gateway, so `$set` works against the bench too
  *
  * `--only broker` or `--only devices` starts one half, so a soak test can stop
  * the broker without stopping the devices. `--speed N` makes the simulated
@@ -25,7 +27,7 @@ import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDevic
 import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
 import { makeRegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
 import { makeBrokerControl, parseBrokerUrl, serveMqtt } from "@plenum/mqtt"
-import { Clock, Console, Effect, FileSystem, Schedule } from "effect"
+import { Clock, Console, Effect, FileSystem, Result, Schedule } from "effect"
 
 const localHosts = new Set(["localhost", "127.0.0.1", "::1"])
 
@@ -48,20 +50,34 @@ const runBroker = Effect.fn("runBroker")(function* (config: GatewayConfig) {
   if (address.tls || !localHosts.has(address.host)) {
     return yield* Effect.logWarning(`mqtt.url ${config.mqtt.url} is not a plain local broker, not starting one`)
   }
-  const server = yield* NodeSocketServer.make({ host: address.host, port: address.port })
+  // `localhost` is both loopbacks (Docker's /etc/hosts lists ::1 too), and binding the name takes only the
+  // first: listen on each that exists, as real brokers do, so a client finds it whichever family it tries.
+  const hosts = address.host === "localhost" ? ["127.0.0.1", "::1"] : [address.host]
+  const bound = yield* Effect.forEach(hosts, (host) =>
+    Effect.result(NodeSocketServer.make({ host, port: address.port }))
+  )
+  const servers = bound.flatMap((result) => (Result.isSuccess(result) ? [result.success] : []))
+  const [first] = bound
+  if (servers.length === 0 && first !== undefined && Result.isFailure(first)) return yield* first.failure
   const control = makeBrokerControl()
   control.onMessage = (message) =>
     console.log(`${message.retain ? "[retained] " : ""}${message.topic} ${message.payload}`)
   yield* Console.log(`MQTT test broker on ${address.host}:${address.port}`)
-  return yield* serveMqtt(server, control)
+  return yield* Effect.forEach(servers, (server) => serveMqtt(server, control), {
+    concurrency: "unbounded",
+    discard: true
+  })
 })
 
 const runSimulator = Effect.fn("runSimulator")(function* (device: ModbusDevice, pace: Pace) {
   const server = yield* NodeSocketServer.make({ host: device.host, port: device.port })
   const bank = makeRegisterBank()
+  // A writable point starts at its lower limit (or 0) and then changes only by command.
+  for (const point of device.points) if (point.writable) setPointValue(bank, point, point.limits?.min ?? 0)
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
+      if (point.writable) return
       if (point.dataType === "bool") return setPointValue(bank, point, Math.floor(seconds / 30) % 2 === 0)
       // Integers count up like a meter; floats follow a sine between 0 and 100, phase-shifted so points differ.
       const value =
@@ -86,6 +102,8 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
+      // A writable point changes only by command.
+      if (point.writable) return
       const objectType = objectTypeNumber(point.objectType)
       if (objectType === undefined) return
       const object = { objectType, instance: point.instance }

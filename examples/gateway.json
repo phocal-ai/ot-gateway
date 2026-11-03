@@ -9,6 +9,7 @@
   "buffer": {
     "path": "./plenum-buffer.sqlite"
   },
+  "status": {},
   "devices": [
     {
       "protocol": "simulator",

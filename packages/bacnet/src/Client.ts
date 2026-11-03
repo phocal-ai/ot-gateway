@@ -50,6 +50,7 @@ import {
   encodeReadProperty,
   encodeReadPropertyMultiple,
   encodeSubscribeCov,
+  encodeWriteProperty,
   encodeWhoIs,
   type IAm,
   type PropertyReference,
@@ -58,6 +59,7 @@ import {
   type ReadPropertyAck,
   type ReadPropertyRequest,
   type SubscribeCovRequest,
+  type WritePropertyRequest,
   type WhoIs,
   whoIsMatches
 } from "./Services.ts"
@@ -157,6 +159,15 @@ export interface BacnetClient {
   readonly subscribeCov: (
     target: DeviceAddress,
     request: SubscribeCovRequest
+  ) => Effect.Effect<void, BacnetRequestError>
+  /**
+   * Write one property (clause 15.9). Resent with the same invoke ID after a
+   * timeout like every confirmed request, which is safe: writing the same
+   * value at the same priority again leaves the same state.
+   */
+  readonly writeProperty: (
+    target: DeviceAddress,
+    request: WritePropertyRequest
   ) => Effect.Effect<void, BacnetRequestError>
   /** A random subscriber process identifier that no other caller of this client gets. */
   readonly newProcessId: Effect.Effect<number>
@@ -347,7 +358,8 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   // a late answer to it cannot be taken for the answer to a new request.
   const quarantineMillis = Math.max(10_000, 2 * Duration.toMillis(requestTimeout))
   // How long a whole request may take, every attempt included; waiting for an invoke ID counts against it.
-  const requestDeadline = Duration.millis(Duration.toMillis(Duration.fromInputUnsafe(requestTimeout)) * (retries + 1))
+  const requestTimeoutMillis = Duration.toMillis(Duration.fromInputUnsafe(requestTimeout))
+  const requestDeadline = Duration.millis(requestTimeoutMillis * (retries + 1))
   const bbmd = options.bbmdAddress === undefined ? undefined : keyOf(options.bbmdAddress)
   const pending = new Map<number, Pending>()
   const quarantined = new Map<number, number>()
@@ -520,27 +532,44 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
    * Run `use` holding a permit of each of `semaphores`. Waiting for them
    * counts against the request's deadline, so a gateway with too many
    * requests in flight fails requests as timeouts instead of stalling them.
+   * `use` is handed the request's deadline (monotonic milliseconds), so its
+   * attempts end by it however late the permits came.
    */
-  const withPermits = <A, E>(semaphores: ReadonlyArray<Semaphore.Semaphore>, use: Effect.Effect<A, E>) =>
-    Effect.scoped(
-      Effect.andThen(
-        Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
-          Effect.timeoutOrElse({
-            duration: requestDeadline,
-            orElse: () =>
-              Effect.fail(
-                new BacnetTimeout({
-                  message: `no free invoke ID within ${Duration.format(requestDeadline)}, too many requests in flight`
-                })
-              )
-          })
-        ),
-        use
-      )
+  const noFreeInvokeId = () =>
+    Effect.fail(
+      new BacnetTimeout({
+        message: `no free invoke ID within ${Duration.format(requestDeadline)}, too many requests in flight`
+      })
     )
 
-  /** Send one confirmed request, resending it after each timeout, and return the answer. */
-  const exchange = (target: DeviceAddress, service: number, body: Uint8Array) =>
+  const withPermits = <A, E>(
+    semaphores: ReadonlyArray<Semaphore.Semaphore>,
+    use: (deadlineAt: number) => Effect.Effect<A, E>
+  ) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* monotonicMillis
+        const deadlineAt = started + Duration.toMillis(requestDeadline)
+        yield* Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
+          Effect.timeoutOrElse({
+            duration: requestDeadline,
+            orElse: () => noFreeInvokeId()
+          })
+        )
+        // A permit that came only as the deadline passed is no better than none: nothing is sent.
+        if ((yield* monotonicMillis) >= deadlineAt) return yield* noFreeInvokeId()
+        return yield* use(deadlineAt)
+      })
+    )
+
+  /**
+   * Send one confirmed request, resending it after each timeout, and return
+   * the answer. Each attempt waits the request timeout or what is left until
+   * `deadlineAt`, whichever is shorter, and none starts after it: one timer
+   * per attempt, so the request ends by its deadline with the message of the
+   * attempt that ran out.
+   */
+  const exchange = (target: DeviceAddress, service: number, body: Uint8Array, deadlineAt: number) =>
     Effect.acquireUseRelease(
       // Registered uninterruptibly, so an interrupted request never leaves its invoke ID behind.
       Effect.flatMap(monotonicMillis, (now) =>
@@ -563,17 +592,23 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
           },
           routedTo(target)
         )
-        const attempt = writer.write({ payload, address: target.address }).pipe(
-          Effect.mapError(socketError),
-          Effect.andThen(Deferred.await(answer)),
-          Effect.timeoutOrElse({
-            duration: requestTimeout,
-            orElse: () =>
-              Effect.fail(
-                new BacnetTimeout({ message: `no answer from ${keyOf(target.address)} within ${timeoutText}` })
-              )
-          })
-        )
+        const attempt = Effect.gen(function* () {
+          const left = deadlineAt - (yield* monotonicMillis)
+          const budget = Math.min(requestTimeoutMillis, left)
+          const within =
+            budget === requestTimeoutMillis
+              ? timeoutText
+              : `${Math.max(0, budget)}ms, what was left of its ${Duration.format(requestDeadline)} (waiting for an invoke ID counts)`
+          const timedOut = new BacnetTimeout({ message: `no answer from ${keyOf(target.address)} within ${within}` })
+          if (budget <= 0) return yield* timedOut
+          return yield* writer
+            .write({ payload, address: target.address })
+            .pipe(
+              Effect.mapError(socketError),
+              Effect.andThen(Deferred.await(answer)),
+              Effect.timeoutOrElse({ duration: Duration.millis(budget), orElse: () => Effect.fail(timedOut) })
+            )
+        })
         // Resent with the same invoke ID, so a late answer to an earlier attempt still counts (clause 5.4.4.1).
         return attempt.pipe(
           Effect.retry({ times: retries, while: (error) => error._tag === "BacnetTimeout" }),
@@ -605,7 +640,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
     Effect.flatMap(
       Effect.suspend(() => Effect.fromResult(tryEncode(encode))),
       (body) =>
-        withPermits(pools, exchange(target, service, body)).pipe(
+        withPermits(pools, (deadlineAt) => exchange(target, service, body, deadlineAt)).pipe(
           Effect.flatMap((answer) => Effect.fromResult(Result.flatMap(interpretAnswer(service, answer), decode))),
           Effect.tap(() => countRequest("ok")),
           Effect.tapError((error) => {
@@ -675,6 +710,16 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
           )
         ).pipe(Effect.map(() => [...found.values()]))
       }),
+    writeProperty: (target, writeRequest) =>
+      request(
+        target,
+        ConfirmedService.WriteProperty,
+        () => encodeWriteProperty(writeRequest),
+        (body) =>
+          body.length === 0
+            ? Result.succeed(undefined)
+            : Result.fail(new BacnetCodecError({ message: "WriteProperty was answered with data, not a simple ack" }))
+      ),
     subscribeCov: (target, subscription) =>
       request(
         target,

@@ -25,15 +25,19 @@ import {
   decodeConnack,
   decodeDisconnect,
   decodePuback,
+  decodePublish,
+  decodeSuback,
   encodeConnect,
   encodeDisconnect,
   encodePingreq,
   encodePublish,
+  encodePuback,
+  encodeSubscribe,
   makeFrameReader,
   Property,
   pubackRefusesMessage
 } from "./Packet.ts"
-import type { Will } from "./Packet.ts"
+import type { Subscription, Will } from "./Packet.ts"
 
 /** The connection could not be opened, broke, or the broker stopped answering. */
 export class MqttConnectionError extends Schema.TaggedError<MqttConnectionError>()("MqttConnectionError", {
@@ -112,11 +116,37 @@ export interface MqttClientOptions {
    * announce the gateway and restore retained state the broker may have lost.
    */
   readonly onConnect?: (client: MqttClient) => Effect.Effect<void>
+  /**
+   * Topic filters subscribed on every connect. The session is clean, so
+   * nothing sent while the client was away is delivered later: a command
+   * reaches the gateway live or not at all.
+   */
+  readonly subscriptions?: ReadonlyArray<Subscription>
+  /**
+   * Every message received on a subscription. A QoS 1 message is
+   * acknowledged before this runs, so the broker never delivers it twice. It
+   * runs on the connection's read loop: hand the message on and return.
+   */
+  readonly onMessage?: (message: InboundMessage) => Effect.Effect<void>
+}
+
+export interface InboundMessage {
+  readonly topic: string
+  /** The payload as UTF-8 (invalid bytes become U+FFFD). */
+  readonly payload: string
+  /** Set when the broker sends a retained message on subscribing, not a live one. */
+  readonly retain: boolean
+  /** What is left of the message's lifetime, in seconds, when the broker sent it (§3.3.2.3.3). */
+  readonly messageExpirySeconds?: number
+  readonly responseTopic?: string
+  readonly correlationData?: Uint8Array
 }
 
 export interface PublishOptions {
   readonly qos?: 0 | 1
   readonly retain?: boolean
+  /** Echo of a request's correlation data, in an answer (§3.3.2.3.6). */
+  readonly correlationData?: Uint8Array
 }
 
 export interface MqttClient {
@@ -143,8 +173,13 @@ interface Session {
 }
 
 const encoder = new TextEncoder()
+const lenientDecoder = new TextDecoder()
 
-const numberProperty = (properties: ReadonlyMap<number, number | string>, id: number, fallback: number) => {
+const numberProperty = (
+  properties: ReadonlyMap<number, number | string | Uint8Array>,
+  id: number,
+  fallback: number
+) => {
   const value = properties.get(id)
   return typeof value === "number" ? value : fallback
 }
@@ -340,6 +375,12 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           })
         )
         if (options.onConnect !== undefined) yield* Effect.forkScoped(options.onConnect(client))
+        const subscriptions = options.subscriptions ?? []
+        if (subscriptions.length > 0) {
+          const packetId = current.nextPacketId
+          current.nextPacketId = (packetId % 0xffff) + 1
+          yield* write(encodeSubscribe({ packetId, subscriptions }))
+        }
 
         let lastReceived = yield* monotonicMillis
         const readLoop = Effect.gen(function* () {
@@ -363,8 +404,40 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                   : "unreadable reason"
                 return yield* new MqttConnectionError({ message: `broker disconnected: ${reason}` })
               }
-              // PINGRESP only refreshes lastReceived. Nothing is subscribed yet,
-              // so any other packet is unexpected and ignored.
+              case PacketType.PUBLISH: {
+                const publish = decodePublish(packet.flags, packet.body)
+                if (Result.isFailure(publish)) {
+                  return yield* protocolError(0x81, `unreadable PUBLISH: ${publish.failure.message}`)
+                }
+                const { topic, payload, retain, packetId, messageExpirySeconds, responseTopic, correlationData } =
+                  publish.success
+                // Acknowledged on receipt: once the broker has the PUBACK it never sends this again.
+                if (packetId !== undefined) yield* write(encodePuback(packetId))
+                if (options.onMessage !== undefined) {
+                  yield* options.onMessage({
+                    topic,
+                    payload: lenientDecoder.decode(payload),
+                    retain,
+                    ...(messageExpirySeconds === undefined ? {} : { messageExpirySeconds }),
+                    ...(responseTopic === undefined ? {} : { responseTopic }),
+                    ...(correlationData === undefined ? {} : { correlationData })
+                  })
+                }
+                break
+              }
+              case PacketType.SUBACK: {
+                const suback = decodeSuback(packet.body)
+                const refused = Result.isSuccess(suback)
+                  ? subscriptions.filter((_, index) => (suback.success.reasonCodes[index] ?? 0x80) >= 0x80)
+                  : subscriptions
+                if (refused.length > 0) {
+                  yield* Effect.logError("MQTT broker refused a subscription, commands on it will not arrive").pipe(
+                    Effect.annotateLogs({ filters: refused.map((subscription) => subscription.filter).join(", ") })
+                  )
+                }
+                break
+              }
+              // PINGRESP only refreshes lastReceived; anything else is unexpected and ignored.
               default:
             }
           }
@@ -489,9 +562,11 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         // The broker's Maximum QoS caps what the client may send (§3.2.2.3.4).
         const qos = Math.min(publishOptions.qos ?? 1, current.maximumQoS) === 0 ? 0 : 1
         const bytes = encoder.encode(payload)
+        const correlation =
+          publishOptions.correlationData === undefined ? {} : { correlationData: publishOptions.correlationData }
 
         if (qos === 0) {
-          const packet = encodePublish({ topic, payload: bytes, qos: 0, retain })
+          const packet = encodePublish({ topic, payload: bytes, qos: 0, retain, ...correlation })
           if (packet.length > current.maximumPacketSize) {
             return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
           }
@@ -505,7 +580,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             let packetId = current.nextPacketId
             while (current.inflight.has(packetId)) packetId = (packetId % 0xffff) + 1
             current.nextPacketId = (packetId % 0xffff) + 1
-            const packet = encodePublish({ topic, payload: bytes, qos: 1, retain, packetId })
+            const packet = encodePublish({ topic, payload: bytes, qos: 1, retain, packetId, ...correlation })
             if (packet.length > current.maximumPacketSize) {
               return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
             }

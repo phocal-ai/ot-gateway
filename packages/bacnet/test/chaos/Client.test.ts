@@ -132,7 +132,15 @@ describe("chaos: client over UDP", () => {
         pollIntervalMs: 1000,
         address: NetAddress.formatInet(deviceAddress),
         points: [
-          { id: "t", name: "t", writable: false, objectType: "analog-input", instance: 1, property: "present-value" }
+          {
+            id: "t",
+            name: "t",
+            writable: false,
+            objectType: "analog-input",
+            instance: 1,
+            property: "present-value",
+            priority: 8
+          }
         ]
       }
       const driver = yield* makeBacnetDriverFromClient(config, client, { cov: { checkMs: 50 } })
@@ -235,28 +243,45 @@ describe("chaos: client over UDP", () => {
   it.live("a request that finds no free invoke ID fails within its timeout instead of queueing", () =>
     Effect.gen(function* () {
       const silent = yield* peer()
-      const client = yield* startClient({ requestTimeout: "250 millis", retries: 0 })
+      const client = yield* startClient({ requestTimeout: "1 second", retries: 0 })
       const started = Date.now()
       // Four times the 256 invoke IDs, all to a device that never answers.
-      const results = yield* Effect.forEach(
+      const timed = yield* Effect.forEach(
         Array.from({ length: 1024 }, (_, index) => index),
         () =>
-          Effect.result(
-            client.readProperty(
-              { address: silent.address },
-              { object: analogInput1, property: PropertyId["present-value"] }
+          Effect.gen(function* () {
+            const begun = Date.now()
+            const result = yield* Effect.result(
+              client.readProperty(
+                { address: silent.address },
+                { object: analogInput1, property: PropertyId["present-value"] }
+              )
             )
-          ),
+            return { result, took: Date.now() - begun }
+          }),
         { concurrency: "unbounded" }
       )
       const elapsed = Date.now() - started
-      // Queued, the last quarter would wait three timeouts first and end after a second.
-      expect(elapsed).toBeLessThan(800)
+      const results = timed.map(({ result }) => result)
+      // Queued, the last quarter would wait three timeouts first and end after four seconds.
+      expect(elapsed).toBeLessThan(3000)
+      // Each request, its wait for an invoke ID included, ends near its 1 s deadline: one that gets an ID
+      // freed just before its deadline must not start a fresh 1 s exchange on top (two seconds in all).
+      // The bound sits midway: a CI runner busy with every package's tests delays timers by ~350 ms.
+      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(1600)
       expect(
         results.some(
           (result) => Result.isFailure(result) && result.failure.message.startsWith("no free invoke ID within")
         )
       ).toBe(true)
+      // Every failure says which it was: no invoke ID in time, or the device that did not answer.
+      const unexplained = results.filter(
+        (result) =>
+          Result.isFailure(result) &&
+          !result.failure.message.startsWith("no free invoke ID within") &&
+          !result.failure.message.startsWith(`no answer from 127.0.0.1:${silent.address.port} within`)
+      )
+      expect(unexplained).toEqual([])
     }).pipe(Effect.scoped)
   )
 

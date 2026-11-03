@@ -25,6 +25,15 @@ const bacnetDevice = (address?: string) => ({
   points: [{ id: "supply-temp", name: "Supply temperature", objectType: "analog-input", instance: 1 }]
 })
 
+/** A config whose one BACnet point has `priority`, or none. */
+const withPriority = (priority?: number) => {
+  const [point] = bacnetDevice().points
+  return JSON.stringify({
+    ...minimal,
+    devices: [{ ...bacnetDevice(), points: [{ ...point, ...(priority === undefined ? {} : { priority }) }] }]
+  })
+}
+
 describe("parseConfig", () => {
   it.effect("applies defaults", () =>
     Effect.gen(function* () {
@@ -118,6 +127,18 @@ describe("parseConfig", () => {
         const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, bacnet: { covLifetimeSeconds } })))
         expect(Exit.isFailure(exit)).toBe(true)
       }
+    })
+  )
+
+  it.effect("defaults a BACnet point's write priority to 8, and refuses 6 and anything outside 1 to 16", () =>
+    Effect.gen(function* () {
+      const device = (yield* parseConfig(withPriority())).devices[0]
+      expect(device?.protocol === "bacnet-ip" && device.points[0]?.priority).toBe(8)
+      for (const priority of [0, 6, 17, 1.5]) {
+        expect(Exit.isFailure(yield* Effect.exit(parseConfig(withPriority(priority))))).toBe(true)
+      }
+      for (const priority of [1, 16])
+        expect(Exit.isSuccess(yield* Effect.exit(parseConfig(withPriority(priority))))).toBe(true)
     })
   )
 

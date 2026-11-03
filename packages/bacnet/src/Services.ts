@@ -5,6 +5,7 @@
  * - Who-Is and I-Am (clause 16.10)
  * - ReadProperty (clause 15.5)
  * - ReadPropertyMultiple (clause 15.7)
+ * - WriteProperty (clause 15.9), with a priority for commandable properties
  * - SubscribeCOV and the COV notifications (clauses 13.14, 13.6 and 13.7)
  * - the Error PDU's error class and code (clause 18)
  *
@@ -154,6 +155,39 @@ export const decodeReadPropertyAck = (body: Uint8Array): Result.Result<ReadPrope
     const object = reader.contextObjectId(0)
     const reference = readReference(reader, 1)
     return { object, ...reference, values: readValuesIn(reader, 3) }
+  })
+
+// --- WriteProperty -----------------------------------------------------------------
+
+/**
+ * WriteProperty (clause 15.9). For a commandable property (an output's
+ * present value, clause 19.2) `priority` picks the slot of the priority
+ * array, 1 (highest) to 16, and a Null value relinquishes that slot. The
+ * answer is a SimpleACK.
+ */
+export interface WritePropertyRequest extends ReadPropertyRequest {
+  readonly value: BacnetValue
+  readonly priority?: number
+}
+
+export const encodeWriteProperty = (request: WritePropertyRequest): Uint8Array => {
+  const writer = new Writer()
+  writeContextObjectId(writer, 0, request.object)
+  writeReference(writer, request, 1)
+  writeValuesIn(writer, 3, [request.value])
+  if (request.priority !== undefined) writeContextUnsigned(writer, 4, request.priority)
+  return writer.toBytes()
+}
+
+export const decodeWriteProperty = (body: Uint8Array): Result.Result<WritePropertyRequest, BacnetCodecError> =>
+  decodeWith(body, (reader) => {
+    const object = reader.contextObjectId(0)
+    const reference = readReference(reader, 1)
+    const [value, ...extra] = readValuesIn(reader, 3)
+    if (value === undefined || extra.length > 0) reader.fail("WriteProperty must carry exactly one value")
+    const priority = reader.peekContext(4) ? reader.contextUnsigned(4) : undefined
+    if (priority !== undefined && (priority < 1 || priority > 16)) reader.fail(`priority ${priority} is not 1 to 16`)
+    return { object, ...reference, value: value ?? { type: "null" }, ...(priority === undefined ? {} : { priority }) }
   })
 
 // --- ReadPropertyMultiple ----------------------------------------------------------

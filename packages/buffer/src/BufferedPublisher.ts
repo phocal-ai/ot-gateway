@@ -6,12 +6,15 @@
  *
  * - Only values are buffered. Retained messages (`$meta`, health) pass
  *   straight through: the pipeline retries `$meta` and the MQTT publisher
- *   replays retained state after a reconnect.
+ *   replays retained state after a reconnect. So do transient ones (command
+ *   results), which would mislead if delivered late.
  * - Once anything is waiting, new values queue behind it, so delivery keeps
  *   the order values were read in. The drainer pipelines up to 16 messages
  *   at a time for throughput, starts no new ones after the first failure,
  *   and removes rows as they are acknowledged, so a shutdown mid-drain
- *   resends at most a handful. Every message carries its own `ts`.
+ *   resends at most a handful. A message the broker refuses for now (quota
+ *   exceeded) while later ones are already on their way is resent after
+ *   them: it arrives at most 15 places late. Every message carries its own `ts`.
  * - `unavailable` failures are stored; `rejected` ones (too large, not
  *   authorized) are not, because retrying them cannot help. A rejected
  *   message already in the outbox is dropped and counted, so it never blocks
@@ -234,7 +237,15 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   let storeRetryAt = 0
 
   /** Append a message; false when it could not be stored (counted and logged here). */
-  const store = Effect.fnUntraced(function* (target: Store, topic: string, payload: string, qos: 0 | 1) {
+  /**
+   * Append a message to the file in use, or report that it cannot. The file
+   * is looked up under the permit, never passed in: a restore or replace
+   * holds the permit while it swaps files, so a store waiting behind it
+   * writes to the new file, not the old one it closed.
+   */
+  const store = Effect.fnUntraced(function* (topic: string, payload: string, qos: 0 | 1) {
+    const target = current
+    if (target === undefined) return false
     if ((yield* monotonicMillis) < storeRetryAt) {
       yield* Metric.update(Metric.withAttributes(bufferFailures, { operation: "insert" }), 1)
       return false
@@ -490,18 +501,20 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
 
   /** Publish now, or store if the broker is unavailable or older messages are still waiting. */
   const publishOrStore = Effect.fnUntraced(function* (topic: string, payload: string, qos: 0 | 1) {
-    const target = current
+    // No file: running unbuffered, or a restore or replace is swapping files right now. Waiting for the
+    // permit tells the two apart; publishing straight away would lose the message if the broker is down.
+    const target = current ?? (yield* Effect.sync(() => current).pipe(Semaphore.withPermit(bookkeeping)))
     if (target === undefined) return yield* inner.publish(topic, payload, { qos })
     // Behind waiting messages, so order is kept; ahead of them if the outbox cannot take it right now.
     if (target.pending > 0) {
-      if (yield* store(target, topic, payload, qos)) return
+      if (yield* store(topic, payload, qos)) return
       yield* inner.publish(topic, payload, { qos })
       return yield* Metric.update(bufferBypassed, 1)
     }
     const sent = yield* Effect.result(inner.publish(topic, payload, { qos }))
     if (Result.isSuccess(sent)) return
     if (sent.failure.reason === "rejected") return yield* sent.failure
-    if (yield* store(target, topic, payload, qos)) return
+    if (yield* store(topic, payload, qos)) return
     return yield* new PublishError({
       topic,
       reason: "unavailable",
@@ -513,7 +526,10 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
     publish: (topic, payload, publishOptions) => {
       const qos = publishOptions?.qos
       // Retained state is restored by the pipeline and the MQTT publisher; QoS 2 is refused downstream.
-      if (publishOptions?.retain === true || qos === 2) return inner.publish(topic, payload, publishOptions)
+      // Retained and transient messages are not stored: see the module comment.
+      if (publishOptions?.retain === true || publishOptions?.transient === true || qos === 2) {
+        return inner.publish(topic, payload, publishOptions)
+      }
       return publishOrStore(topic, payload, qos === 0 ? 0 : 1)
     }
   })

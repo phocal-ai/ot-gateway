@@ -6,5 +6,12 @@
   "trailingComma": "none",
   "arrowParens": "always",
   "proseWrap": "preserve",
-  "ignorePatterns": ["repos/**", "pnpm-lock.yaml", "observability/grafana/dashboards/**"]
+  "ignorePatterns": [
+    "repos/**",
+    "pnpm-lock.yaml",
+    "observability/grafana/dashboards/**",
+    "apps/web/.next/**",
+    "apps/web/out/**",
+    "apps/web/next-env.d.ts"
+  ]
 }

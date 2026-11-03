@@ -34,7 +34,7 @@ import {
   pointReadFailures,
   pushedPoints
 } from "@plenum/core"
-import type { BacnetPoint, Driver, Network, PointValue, Reading } from "@plenum/core"
+import type { BacnetPoint, Driver, Network, PointValue, Reading, WriteValue } from "@plenum/core"
 import { Clock, Duration, Effect, Metric, Option, Queue, Result, Schedule, Schema, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { AbortReason, MAX_APDU_IP, RejectReason } from "./Apdu.ts"
@@ -60,6 +60,8 @@ interface ResolvedPoint {
   readonly property: number
   /** Publish the value as a boolean (a binary object's present value). */
   readonly binary: boolean
+  /** A multi-state object's present value: an Unsigned state index from 1 (clause 12.18-12.20). */
+  readonly multiState: boolean
 }
 
 const binaryTypes = new Set<number>([
@@ -67,6 +69,34 @@ const binaryTypes = new Set<number>([
   ObjectType["binary-output"],
   ObjectType["binary-value"]
 ])
+
+const multiStateTypes = new Set<number>([
+  ObjectType["multi-state-input"],
+  ObjectType["multi-state-output"],
+  ObjectType["multi-state-value"]
+])
+
+/**
+ * The BACnet value that writes `value` to a point, or why it cannot: a
+ * binary object takes the enumerations inactive (0) and active (1), a
+ * multi-state one an Unsigned state from 1, anything else a REAL, and Null
+ * relinquishes the gateway's priority slot.
+ */
+export const writeValueFor = (resolved: ResolvedPoint, value: WriteValue): BacnetValue | string => {
+  if (value === null) return { type: "null" }
+  if (resolved.binary) {
+    return typeof value === "boolean"
+      ? { type: "enumerated", value: value ? 1 : 0 }
+      : "a binary point takes true or false"
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) return "an analog point takes a finite number"
+  if (resolved.multiState) {
+    return Number.isInteger(value) && value >= 1 && value <= 0xffff_ffff
+      ? { type: "unsigned", value }
+      : "a multi-state point takes a whole number from 1 (its state)"
+  }
+  return { type: "real", value }
+}
 
 /** Resolve the point's names to numbers, or say what is wrong with it. */
 export const resolvePoint = (point: BacnetPoint): Result.Result<ResolvedPoint, string> => {
@@ -81,7 +111,8 @@ export const resolvePoint = (point: BacnetPoint): Result.Result<ResolvedPoint, s
     point,
     object: { objectType, instance: point.instance },
     property,
-    binary: binaryTypes.has(objectType) && property === PropertyId["present-value"]
+    binary: binaryTypes.has(objectType) && property === PropertyId["present-value"],
+    multiState: multiStateTypes.has(objectType) && property === PropertyId["present-value"]
   })
 }
 
@@ -1194,8 +1225,29 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     readAll,
     retriesTimeouts: true,
     ...(cov === undefined || cov.objects === 0 ? {} : { changes: cov.changes }),
-    // Write-back is v0.4 (docs/VISION.md): it lands with the command guard, not before.
-    write: (pointId) => fail("not-implemented", `writing ${pointId} is not supported yet`)
+    write: (pointId, value) =>
+      Effect.gen(function* () {
+        const resolved = points.find((candidate) => candidate.point.id === pointId)
+        if (resolved === undefined) return yield* fail("configuration", `no point ${pointId}`)
+        const target = location
+        if (target === undefined) return yield* fail("connection", "the device has not been found yet")
+        const encoded = writeValueFor(resolved, value)
+        if (typeof encoded === "string") return yield* fail("configuration", `${pointId}: ${encoded}`)
+        yield* client.writeProperty(target, {
+          object: resolved.object,
+          property: resolved.property,
+          value: encoded,
+          priority: resolved.point.priority
+        })
+      }).pipe(
+        Effect.catchTags({
+          BacnetDeviceError: (error) => fail("protocol", `device refused the write: ${error.message}`),
+          BacnetTimeout: (error) => fail("timeout", error.message),
+          BacnetSocketError: (error) => fail("connection", error.message),
+          BacnetCodecError: (error) => fail("invalid-response", error.message),
+          BacnetEncodeError: (error) => fail("configuration", error.message)
+        })
+      )
   }
   return driver
 })

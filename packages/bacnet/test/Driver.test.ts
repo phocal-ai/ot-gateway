@@ -37,6 +37,7 @@ const point = (id: string, objectType: string, instance: number, property?: stri
   id,
   name: id,
   writable: false,
+  priority: 8,
   objectType,
   instance,
   property: property ?? "present-value"
@@ -103,7 +104,7 @@ const setUp = Effect.fnUntraced(function* (
 describe("point values", () => {
   it("resolves names and numbers, and refuses unknown ones", () => {
     expect(resolvePoint(supplyTemp)).toMatchObject(
-      Result.succeed({ object: { objectType: 0, instance: 1 }, property: 85, binary: false })
+      Result.succeed({ object: { objectType: 0, instance: 1 }, property: 85, binary: false, multiState: false })
     )
     expect(resolvePoint(fanRunning)).toMatchObject(Result.succeed({ binary: true }))
     expect(resolvePoint(point("vendor", "130", 1, "1000"))).toMatchObject(
@@ -302,7 +303,10 @@ describe("BACnet driver over UDP", () => {
       expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
         _tag: "DriverError",
         reason: "timeout",
-        message: expect.stringMatching(/^no answer from 127\.0\.0\.1:\d+ within 150ms$/)
+        // The last attempt gets 150 ms, or what is left of the request's 300 ms when the first ran late.
+        message: expect.stringMatching(
+          /^no answer from 127\.0\.0\.1:\d+ within (150ms$|\d+ms, what was left of its 300ms)/
+        )
       })
     })
   )

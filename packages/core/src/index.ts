@@ -1,3 +1,4 @@
+export * from "./Command.ts"
 export * from "./Config.ts"
 export * from "./Driver.ts"
 export * from "./Errors.ts"

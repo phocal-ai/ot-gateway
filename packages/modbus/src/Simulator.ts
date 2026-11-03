@@ -17,12 +17,13 @@ import {
   encodeExceptionResponse,
   encodeRegisterResponse,
   encodeValue,
+  encodeWriteResponse,
   ExceptionCode,
   FunctionCode,
   maxReadQuantity,
   takeFrame
 } from "./Frame.ts"
-import type { ReadRequest } from "./Frame.ts"
+import type { ReadRequest, WriteRequest } from "./Frame.ts"
 
 /** Simulated device memory, one map per Modbus table. */
 export interface RegisterBank {
@@ -61,9 +62,13 @@ export interface SimulatorControl {
   silent: boolean
   /** Requests received so far. */
   requests: number
+  /** Writes applied, in order. */
+  readonly writes: Array<WriteRequest>
+  /** Refuse every write with this exception code (a device in local override, say). */
+  refuseWrites?: number
 }
 
-export const makeSimulatorControl = (): SimulatorControl => ({ silent: false, requests: 0 })
+export const makeSimulatorControl = (): SimulatorControl => ({ silent: false, requests: 0, writes: [] })
 
 const readTable = <A>(table: Map<number, A>, address: number, quantity: number): ReadonlyArray<A> | undefined => {
   const values: Array<A> = []
@@ -100,6 +105,39 @@ export const answerRead = (bank: RegisterBank, request: ReadRequest): Uint8Array
   }
 }
 
+/**
+ * Apply one write to `bank` and return the response frame. Like a device, it
+ * refuses an address it does not have; only coils and holding registers
+ * can be written.
+ */
+export const answerWrite = (
+  bank: RegisterBank,
+  control: SimulatorControl,
+  transactionId: number,
+  unitId: number,
+  request: WriteRequest
+): Uint8Array => {
+  const refuse = (code: number) => encodeExceptionResponse(transactionId, unitId, request.functionCode, code)
+  if (control.refuseWrites !== undefined) return refuse(control.refuseWrites)
+  switch (request.functionCode) {
+    case FunctionCode.WriteSingleCoil:
+      if (!bank.coil.has(request.address)) return refuse(ExceptionCode.IllegalDataAddress)
+      bank.coil.set(request.address, request.value)
+      break
+    case FunctionCode.WriteSingleRegister:
+      if (!bank.holding.has(request.address)) return refuse(ExceptionCode.IllegalDataAddress)
+      bank.holding.set(request.address, request.value)
+      break
+    case FunctionCode.WriteMultipleRegisters:
+      if (request.values.some((_, index) => !bank.holding.has(request.address + index))) {
+        return refuse(ExceptionCode.IllegalDataAddress)
+      }
+      request.values.forEach((value, index) => bank.holding.set(request.address + index, value))
+  }
+  control.writes.push(request)
+  return encodeWriteResponse(transactionId, unitId, request)
+}
+
 const serveConnection = (bank: RegisterBank, control: SimulatorControl) =>
   Effect.fnUntraced(
     function* (socket: Socket.Socket) {
@@ -117,12 +155,14 @@ const serveConnection = (bank: RegisterBank, control: SimulatorControl) =>
             yield* writer.write(
               decoded._tag === "Read"
                 ? answerRead(bank, decoded.request)
-                : encodeExceptionResponse(
-                    decoded.transactionId,
-                    decoded.unitId,
-                    decoded.functionCode,
-                    ExceptionCode.IllegalFunction
-                  )
+                : decoded._tag === "Write"
+                  ? answerWrite(bank, control, decoded.transactionId, decoded.unitId, decoded.request)
+                  : encodeExceptionResponse(
+                      decoded.transactionId,
+                      decoded.unitId,
+                      decoded.functionCode,
+                      ExceptionCode.IllegalFunction
+                    )
             )
           }
           split = takeFrame(buffer)

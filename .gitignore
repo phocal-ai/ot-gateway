@@ -13,3 +13,12 @@ coverage/
 # Local MCP config (copy from .mcp.json.example)
 .mcp.json
 .claude/settings.local.json
+
+# Next.js (apps/web): build output and generated types
+.next/
+out/
+next-env.d.ts
+
+# A local gateway config and its secrets (/setup writes these)
+/plenum.json
+/plenum.env

@@ -16,9 +16,12 @@ pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
 pnpm test
 pnpm gateway          # run apps/gateway with examples/gateway.json
+node apps/gateway/src/main.ts --check plenum.json      # validate a config without connecting
+node apps/gateway/src/main.ts --discover plenum.json   # find BACnet devices, print a draft of their config
 pnpm --filter @plenum/core test   # one package
 pnpm --filter @plenum/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
+scripts/interop.sh [mqtt|bacnet|modbus]   # against Mosquitto, EMQX, the BACnet Stack server and pymodbus (Docker, Python)
 ```
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
@@ -33,8 +36,11 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/simulator`: simulated devices
 - `packages/modbus`, `packages/mqtt`, `packages/bacnet`: in-house protocol stacks
 - `packages/buffer`: SQLite store-and-forward, a `Publisher` that wraps the MQTT one
+- `packages/api`: the local HTTP API's contract (`HttpApi`), shared by the gateway and the status page
 - `apps/gateway`: the runnable gateway
+- `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @plenum/web build`) that the gateway serves; no Next server at runtime
 - `examples/`: sample configs
+- `packaging/`: the systemd unit and `install.sh`; the container image is the root `Dockerfile`
 - `docs/`: vision and design notes
 - `observability/`: Grafana dashboards as code and the telemetry setup for the gateway and for Claude Code (see `observability/README.md`)
 - `repos/`: read-only reference subtrees (see below)
@@ -101,6 +107,10 @@ Project hooks in `.claude/settings.json` back this up:
 - After every Write or Edit, oxfmt formats the file and oxlint's findings for it come back to you. Fix them while the file is still in view.
 - At the end of a turn with uncommitted changes, `pnpm check` runs and blocks the stop if it fails.
 - `npm` and `yarn` commands are denied; use pnpm.
+
+## Quickstart
+
+`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from a fresh checkout to a running gateway: it writes `plenum.json` (git-ignored, with secrets in `plenum.env`). The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
 
 ## Health and budget
 

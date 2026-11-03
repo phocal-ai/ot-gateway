@@ -1,0 +1,23 @@
+# Only what the gateway runs: sources, manifests and the lockfile.
+**/node_modules
+**/test
+**/*.test.ts
+.git
+.github
+.claude
+.turbo
+repos
+docs
+observability
+test
+apps/web/.next
+apps/web/out
+# Secrets and local state that must never reach an image
+.npmrc
+**/.npmrc
+.env
+.env.*
+plenum.env
+plenum.json
+*.sqlite
+*.sqlite-*

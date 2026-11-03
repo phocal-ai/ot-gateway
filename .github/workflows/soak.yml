@@ -18,6 +18,9 @@ on:
         description: "SOAK_DEVICES: copies of every device"
         default: "4"
 
+permissions:
+  contents: read
+
 jobs:
   # The whole gateway on an in-memory network under virtual time (apps/gateway/test/Simulation.test.ts):
   # a simulated week per seed in a few minutes, with new seeds every night. A failure names its seed.
@@ -42,6 +45,61 @@ jobs:
           pnpm --filter @plenum/gateway sim
         env:
           SIM_HOURS: "168"
+
+  # A Raspberry Pi stand-in until one is on the bench: the arm64 image under QEMU, held to two cores and 1 GB.
+  # Emulation is several times slower than a Pi, so the speed is lower; what it shows is the ARM build and
+  # the memory and CPU headroom under the same faults, not the SD card, heat or the real network.
+  soak-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          load: true
+          tags: plenum-gateway:arm64
+      - name: Soak on arm64
+        run: |
+          mkdir -p "$RUNNER_TEMP/soak"
+          docker run --rm --platform linux/arm64 --cpus 2 --memory 1g --user root \
+            -v "$RUNNER_TEMP/soak:/soak" -e SOAK_DIR=/soak -e SOAK_SPEED=20 -e SOAK_DEVICES=2 \
+            --entrypoint bash plenum-gateway:arm64 scripts/soak.sh 40m
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '### arm64 under QEMU, 2 cores, 1 GB'
+            echo '```'
+            cat "$RUNNER_TEMP/soak/events.log" "$RUNNER_TEMP/soak/summary.txt" 2>/dev/null || true
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - name: Logs
+        if: failure()
+        # In the job log too, not only the artifact: the gateway's, the broker's and the devices' last lines.
+        run: |
+          echo "--- gateway.log, first 60 lines"
+          head -n 60 "$RUNNER_TEMP/soak/gateway.log" 2>/dev/null || echo "(none)"
+          echo "--- gateway.log, MQTT lines"
+          grep -i -A4 "mqtt" "$RUNNER_TEMP/soak/gateway.log" 2>/dev/null | head -n 80 || true
+          for name in gateway broker devices; do
+            echo "--- $name.log, last 80 lines"
+            tail -n 80 "$RUNNER_TEMP/soak/$name.log" 2>/dev/null || echo "(none)"
+          done
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: soak-arm64
+          path: |
+            ${{ runner.temp }}/soak/*.log
+            ${{ runner.temp }}/soak/*.csv
+            ${{ runner.temp }}/soak/*.txt
+          retention-days: 7
 
   soak:
     runs-on: ubuntu-latest
@@ -73,6 +131,14 @@ jobs:
             cat "$RUNNER_TEMP/soak/events.log" "$RUNNER_TEMP/soak/summary.txt" 2>/dev/null || true
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
+      - name: Logs
+        if: failure()
+        # In the job log too, not only the artifact: the gateway's, the broker's and the devices' last lines.
+        run: |
+          for name in gateway broker devices; do
+            echo "--- $name.log, last 80 lines"
+            tail -n 80 "$RUNNER_TEMP/soak/$name.log" 2>/dev/null || echo "(none)"
+          done
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

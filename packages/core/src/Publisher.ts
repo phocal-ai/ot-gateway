@@ -8,6 +8,13 @@ import type { PublishError } from "./Errors.ts"
 export interface PublishOptions {
   readonly retain?: boolean
   readonly qos?: 0 | 1 | 2
+  /** Echo of a request's correlation data, when answering one (MQTT 5 request/response). */
+  readonly correlationData?: Uint8Array
+  /**
+   * Only worth delivering now (a command result): not stored for later if the
+   * broker is unavailable, since by then it would mislead.
+   */
+  readonly transient?: boolean
 }
 
 export class Publisher extends Context.Service<

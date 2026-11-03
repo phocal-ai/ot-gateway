@@ -120,19 +120,20 @@ Modbus TCP to MQTT ships end to end first, because it is the simplest protocol a
 
 ## Decisions
 
-| Topic            | Decision                                                                | Notes                                                              |
-| ---------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Runtime          | Node.js (LTS)                                                           | Bun is not a target                                                |
-| Effect version   | Latest Effect 4.x                                                       | Stable since late Sep 2026, bug fixes until at least Sep 2029      |
-| Dependencies     | Effect-native: `effect` plus `@effect/*` packages                       | Use what Effect offers first; protocol stacks are written in-house |
-| MQTT             | MQTT 5                                                                  | In-house client on Effect sockets                                  |
-| Topic convention | `site/building/device/point`                                            | Metadata on retained `.../point/$meta`                             |
-| Config format    | JSON, validated with Effect Schema                                      | Storable in a file or a database                                   |
-| Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                    | Uses Node's built-in `node:sqlite`, so no native build on ARM      |
-| Monorepo         | pnpm workspaces + Turborepo                                             |                                                                    |
-| Web UI           | Local status page in v1.0; Next.js configuration app after v1.0         | Separate package                                                   |
-| License          | MIT                                                                     |                                                                    |
-| Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point | See below                                                          |
+| Topic            | Decision                                                                   | Notes                                                              |
+| ---------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Runtime          | Node.js (LTS)                                                              | Bun is not a target                                                |
+| Effect version   | Latest Effect 4.x                                                          | Stable since late Sep 2026, bug fixes until at least Sep 2029      |
+| Dependencies     | Effect-native: `effect` plus `@effect/*` packages                          | Use what Effect offers first; protocol stacks are written in-house |
+| MQTT             | MQTT 5                                                                     | In-house client on Effect sockets                                  |
+| Topic convention | `site/building/device/point`                                               | Metadata on retained `.../point/$meta`                             |
+| Config format    | JSON, validated with Effect Schema                                         | Storable in a file or a database                                   |
+| Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                       | Uses Node's built-in `node:sqlite`, so no native build on ARM      |
+| Monorepo         | pnpm workspaces + Turborepo                                                |                                                                    |
+| Web UI           | Local status page in v1.0; Next.js configuration app after v1.0            | Separate package                                                   |
+| License          | MIT                                                                        |                                                                    |
+| Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point    | See below                                                          |
+| Commands         | Live only on `.../point/$set`, one result each, never retained or replayed | Limits required on writable numeric points; BACnet priority 8      |
 
 ## Semantic model
 
