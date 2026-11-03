@@ -19,6 +19,30 @@ on:
         default: "4"
 
 jobs:
+  # The whole gateway on an in-memory network under virtual time (apps/gateway/test/Simulation.test.ts):
+  # a simulated week per seed in a few minutes, with new seeds every night. A failure names its seed.
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Simulate
+        run: |
+          base=$((GITHUB_RUN_NUMBER * 10))
+          export SIM_SEEDS=$(seq -s, "$base" "$((base + 4))")
+          echo "seeds $SIM_SEEDS" | tee -a "$GITHUB_STEP_SUMMARY"
+          pnpm --filter @plenum/gateway sim
+        env:
+          SIM_HOURS: "168"
+
   soak:
     runs-on: ubuntu-latest
     timeout-minutes: 180

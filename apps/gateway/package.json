@@ -11,6 +11,7 @@
   "scripts": {
     "start": "node --max-semi-space-size=4 --env-file-if-exists=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env} src/main.ts ../../examples/gateway.json",
     "bench": "node src/bench.ts ../../examples/gateway.json",
+    "sim": "vitest run test/Simulation.test.ts --silent=false",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --passWithNoTests"
   },

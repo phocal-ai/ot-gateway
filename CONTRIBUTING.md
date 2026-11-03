@@ -31,7 +31,15 @@ CI runs `pnpm check` on every pull request into `dev` or `main` and on every pus
 
 Use short, imperative subjects, such as `modbus: group adjacent registers into one read`. Prefix with the package name when a change is scoped to one package.
 
-## Soak testing
+## Simulation
+
+`apps/gateway/test/Simulation.test.ts` runs the whole gateway (pipelines, outbox, MQTT client, Modbus and BACnet drivers) against the test broker and device simulators on an in-memory network (`MemoryNetwork` in `@plenum/core`) under the test clock. A seeded schedule crashes and partitions the broker, the devices and the gateway's host, loses datagrams and restarts the gateway. At the end it checks that no accepted value was lost, values arrived in order, duplicates stayed within the in-flight window, the outbox drained, every device is ok, no socket leaked and warnings stayed within the log budget. `pnpm test` runs three seeds of six hours (about 30 seconds); a week per seed takes about four minutes:
+
+```bash
+SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @plenum/gateway sim
+```
+
+A failing run prints its seed, and the same seed replays the same faults. The `Soak` workflow simulates a week for five new seeds every night. Write a regression as a seed and an assertion, not a sleep.
 
 Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run. What a soak finds depends on how many events happen (poll cycles, outages, COV renewals, buffer fills and drains), not on how many hours pass, so run it accelerated:
 
