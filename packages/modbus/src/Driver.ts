@@ -11,7 +11,7 @@
  * fails when every block is refused, or on any timeout or connection
  * problem, since the device is unreachable then.
  */
-import { NodeSocket } from "@effect/platform-node"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { DriverError, driverRefusals } from "@plenum/core"
 import type { Driver, ModbusDevice, Reading } from "@plenum/core"
 import { Clock, Effect, Metric, Schedule } from "effect"

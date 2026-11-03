@@ -3,7 +3,7 @@
  * third host that forges BBMD-forwarded answers and notifications, floods
  * I-Am, or crowds out the invoke IDs.
  */
-import { NodeDatagramSocket } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetSettings } from "@plenum/core"
 import { Effect, Fiber, Result, Schedule, Stream } from "effect"

@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --max-semi-space-size=4
 /**
  * Plenum gateway entry point.
  *
@@ -6,8 +6,13 @@
  *
  * Polls simulator, Modbus TCP and BACnet/IP devices and publishes to the MQTT
  * broker in `mqtt`, with the gateway's status on its retained health topic.
+ *
+ * Run it with `--max-semi-space-size=4` (the shebang and `pnpm gateway` do):
+ * V8's default young generation reserves about 40 MB more memory than the
+ * gateway's allocation rate needs, at no measurable CPU cost.
  */
-import { NodeRuntime, NodeServices } from "@effect/platform-node"
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
+import * as NodeServices from "@effect/platform-node/NodeServices"
 import { type BacnetClient, covTimingFor, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
 import {
   cycleTimeoutMs,

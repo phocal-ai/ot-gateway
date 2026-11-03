@@ -5,7 +5,7 @@
  * kept open (with reconnects) for the layer's lifetime, so a broker that is
  * down at startup delays publishing but does not stop the gateway.
  */
-import { NodeSocket } from "@effect/platform-node"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { type MqttSettings, offlinePayload, Publisher, PublishError } from "@plenum/core"
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"

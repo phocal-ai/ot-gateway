@@ -2,7 +2,7 @@
  * The BACnet/IP client over real UDP on loopback, against simulated devices
  * and against hand-written peers that drop, delay or misdirect answers.
  */
-import { NodeDatagramSocket } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
 import { driverRequests, withMetricAttributes } from "@plenum/core"
 import { Effect, Exit, Metric, Queue, Result, Schedule } from "effect"

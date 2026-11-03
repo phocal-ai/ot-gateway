@@ -5,7 +5,8 @@
  * fixed behaviour. The outbox file is locked while open, so tests inject
  * faults into it (triggers) between runs and observe it through metrics.
  */
-import { NodeServices, NodeSocketServer } from "@effect/platform-node"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import {
   bufferBypassed,

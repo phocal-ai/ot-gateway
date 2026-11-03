@@ -25,7 +25,7 @@
  * Binary objects' present values (`inactive`/`active`) are published as
  * booleans; every other numeric value as a number.
  */
-import { NodeDatagramSocket } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import {
   type BacnetDevice,
   type BacnetSettings,

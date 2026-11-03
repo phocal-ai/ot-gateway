@@ -4,7 +4,7 @@
  * poll, about 864k lines a day per block). Refusals are counted instead, and
  * logged when they start and when the block reads again.
  */
-import { NodeSocketServer } from "@effect/platform-node"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { driverRefusals, driverRequests, withMetricAttributes } from "@plenum/core"
 import type { ModbusPoint } from "@plenum/core"

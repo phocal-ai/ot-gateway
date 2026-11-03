@@ -17,7 +17,10 @@
  * the broker without stopping the devices. `--speed N` makes the simulated
  * values change N times faster (an accelerated soak polls N times faster too).
  */
-import { NodeDatagramSocket, NodeRuntime, NodeServices, NodeSocketServer } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDeviceFor } from "@plenum/bacnet"
 import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
 import { makeRegisterBank, serveModbus, setPointValue } from "@plenum/modbus"

@@ -290,7 +290,7 @@ trap 'exit 130' INT TERM
 start_broker
 start_devices
 sleep 3
-node --env-file-if-exists="$env_file" "$repo/apps/gateway/src/main.ts" "$config" >"$dir/gateway.log" 2>&1 &
+node --max-semi-space-size=4 --env-file-if-exists="$env_file" "$repo/apps/gateway/src/main.ts" "$config" >"$dir/gateway.log" 2>&1 &
 gateway=$!
 log "soak started for $seconds s at speed $speed with $copies copy(ies) of every device in $dir (gateway $gateway, broker $broker, devices $devices)"
 log "outage every $outage_every s for $outage_for s, sample every $sample_every s, the last $drain s without outages"
