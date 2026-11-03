@@ -10,7 +10,6 @@ import {
   commandFilter,
   cycleTimeoutMs,
   type DriverRegistry,
-  type InboundCommand,
   makeCommandGuard,
   makeDriverRegistry,
   type Device,
@@ -31,7 +30,8 @@ import {
 import { makeModbusDriver } from "@plenum/modbus"
 import { MqttPublisher } from "@plenum/mqtt"
 import { makeSimulatorDriver } from "@plenum/simulator"
-import { Clock, Deferred, Effect, Exit, Layer, Queue, Schedule, Scope } from "effect"
+import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
+import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { keepRunning } from "./KeepRunning.ts"
 import { makeStatusState, serveStatus, type StatusState } from "./Status.ts"
 import { traceSampleRatio } from "./Telemetry.ts"
@@ -47,16 +47,13 @@ export interface GatewayOptions {
 
 /**
  * Commands on their way to the guard: the drivers of the running devices,
- * and the received commands waiting their turn (none when no point is
- * writable, so the gateway does not even subscribe).
+ * and the routing from MQTT to them (none when no point is writable, so the
+ * gateway does not even subscribe).
  */
 interface Commands {
   readonly drivers: DriverRegistry
-  readonly inbox: Queue.Queue<InboundCommand> | undefined
+  readonly routing: CommandRouting | undefined
 }
-
-/** Commands waiting beyond this are dropped and logged: a flood must not grow memory or delay the rest. */
-const COMMAND_BACKLOG = 64
 
 /** The gateway's BACnet/IP endpoint, once its socket is open; absent without BACnet devices. */
 type BacnetNetwork = Deferred.Deferred<BacnetClient> | undefined
@@ -166,7 +163,6 @@ const runDevices = Effect.fn("runGateway")(function* (
   }
   if (config.status !== undefined && status !== undefined)
     yield* serveStatus(config.status, status).pipe(Effect.forkScoped)
-  const clock = yield* Clock.clockWith(Effect.succeed)
   yield* Effect.all(
     [
       keepRunning(
@@ -180,31 +176,8 @@ const runDevices = Effect.fn("runGateway")(function* (
           { deviceId: device.id, health: health.registry }
         )
       ),
-      // One command at a time, each with its own deadline: commands are rare, and order matters.
-      ...(commands.inbox === undefined
-        ? []
-        : [
-            keepRunning(
-              "command guard",
-              Effect.forever(
-                Effect.flatMap(
-                  Queue.take(commands.inbox),
-                  makeCommandGuard({
-                    site: config.site,
-                    building: config.building,
-                    devices: config.devices,
-                    drivers: commands.drivers,
-                    ...(status === undefined
-                      ? {}
-                      : {
-                          onOutcome: (command, outcome) =>
-                            status.recordCommand(clock.currentTimeMillisUnsafe(), command, outcome)
-                        })
-                  }).handle
-                )
-              )
-            )
-          ])
+      // A command at a time per device, each with its own deadline; devices do not wait for each other.
+      ...(commands.routing === undefined ? [] : [keepRunning("command guard", commands.routing.run)])
     ],
     { concurrency: "unbounded", discard: true }
   )
@@ -215,7 +188,7 @@ const northbound = (
   config: GatewayConfig,
   health: GatewayHealth,
   options: GatewayOptions,
-  inbox: Queue.Queue<InboundCommand> | undefined,
+  routing: CommandRouting | undefined,
   status: StatusState | undefined
 ) => {
   const mqtt = MqttPublisher(config.mqtt, {
@@ -223,19 +196,15 @@ const northbound = (
     // With a buffer, a value that cannot go out now is stored, so waiting for the broker would only stall reads.
     waitForConnection: config.buffer === undefined,
     ...(options.network === undefined ? {} : { network: options.network }),
-    ...(inbox === undefined
+    ...(routing === undefined
       ? {}
       : {
           // Retain As Published, so a command published retained is seen as such even live, and refused.
-          subscriptions: [{ filter: commandFilter(config.site, config.building), qos: 1, retainAsPublished: true }],
-          onMessage: (message) =>
-            Effect.flatMap(Queue.offer(inbox, message), (queued) =>
-              queued
-                ? Effect.void
-                : Effect.logWarning("command dropped: too many waiting").pipe(
-                    Effect.annotateLogs({ topic: message.topic })
-                  )
-            )
+          // No Local, so nothing the gateway publishes itself is ever taken for a command.
+          subscriptions: [
+            { filter: commandFilter(config.site, config.building), qos: 1, retainAsPublished: true, noLocal: true }
+          ],
+          onMessage: routing.onMessage
         })
   })
   const publisher =
@@ -270,17 +239,28 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     registry,
     online: Effect.map(Clock.currentTimeMillis, (now) => onlinePayload(registry, startedAt, now))
   }
+  const status = config.status === undefined ? undefined : makeStatusState(config, registry, startedAt)
+  const drivers = makeDriverRegistry()
+  const clock = yield* Clock.clockWith(Effect.succeed)
+  const guard = makeCommandGuard({
+    site: config.site,
+    building: config.building,
+    devices: config.devices,
+    drivers,
+    ...(status === undefined
+      ? {}
+      : { onOutcome: (command, outcome) => status.recordCommand(clock.currentTimeMillisUnsafe(), command, outcome) })
+  })
   const writable = config.devices.some((device) => device.points.some((point) => point.writable))
   const commands: Commands = {
-    drivers: makeDriverRegistry(),
-    inbox: writable ? yield* Queue.dropping<InboundCommand>(COMMAND_BACKLOG) : undefined
+    drivers,
+    routing: writable ? yield* makeCommandRouting(config, guard.handle) : undefined
   }
-  const status = config.status === undefined ? undefined : makeStatusState(config, registry, startedAt)
   return yield* runDevices(config, health, options.network, commands, status).pipe(
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
-    Effect.provide(northbound(config, health, options, commands.inbox, status)),
+    Effect.provide(northbound(config, health, options, commands.routing, status)),
     withMetricAttributes({ site: config.site, building: config.building })
   )
 })

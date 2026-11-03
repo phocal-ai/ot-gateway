@@ -60,6 +60,8 @@ interface ResolvedPoint {
   readonly property: number
   /** Publish the value as a boolean (a binary object's present value). */
   readonly binary: boolean
+  /** A multi-state object's present value: an Unsigned state index from 1 (clause 12.18-12.20). */
+  readonly multiState: boolean
 }
 
 const binaryTypes = new Set<number>([
@@ -68,10 +70,17 @@ const binaryTypes = new Set<number>([
   ObjectType["binary-value"]
 ])
 
+const multiStateTypes = new Set<number>([
+  ObjectType["multi-state-input"],
+  ObjectType["multi-state-output"],
+  ObjectType["multi-state-value"]
+])
+
 /**
  * The BACnet value that writes `value` to a point, or why it cannot: a
- * binary object takes the enumerations inactive (0) and active (1), an
- * analog one a REAL, and Null relinquishes the gateway's priority slot.
+ * binary object takes the enumerations inactive (0) and active (1), a
+ * multi-state one an Unsigned state from 1, anything else a REAL, and Null
+ * relinquishes the gateway's priority slot.
  */
 export const writeValueFor = (resolved: ResolvedPoint, value: WriteValue): BacnetValue | string => {
   if (value === null) return { type: "null" }
@@ -81,6 +90,11 @@ export const writeValueFor = (resolved: ResolvedPoint, value: WriteValue): Bacne
       : "a binary point takes true or false"
   }
   if (typeof value !== "number" || !Number.isFinite(value)) return "an analog point takes a finite number"
+  if (resolved.multiState) {
+    return Number.isInteger(value) && value >= 1 && value <= 0xffff_ffff
+      ? { type: "unsigned", value }
+      : "a multi-state point takes a whole number from 1 (its state)"
+  }
   return { type: "real", value }
 }
 
@@ -97,7 +111,8 @@ export const resolvePoint = (point: BacnetPoint): Result.Result<ResolvedPoint, s
     point,
     object: { objectType, instance: point.instance },
     property,
-    binary: binaryTypes.has(objectType) && property === PropertyId["present-value"]
+    binary: binaryTypes.has(objectType) && property === PropertyId["present-value"],
+    multiState: multiStateTypes.has(objectType) && property === PropertyId["present-value"]
   })
 }
 

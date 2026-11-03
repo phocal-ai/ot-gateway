@@ -13,7 +13,9 @@ import {
   makeCommandGuard,
   makeDriverRegistry,
   makeMemoryPublisher,
+  monotonicMillis,
   parseConfig,
+  toDeviceUnits,
   type WriteValue,
   withMetricAttributes
 } from "../src/index.ts"
@@ -55,7 +57,17 @@ const config = parseConfig(
             instance: 1,
             writable: true,
             limits: { min: 0, max: 100 }
-          }
+          },
+          {
+            id: "mode",
+            name: "Mode",
+            objectType: "multi-state-value",
+            instance: 2,
+            writable: true,
+            limits: { min: 1, max: 4 }
+          },
+          // Object type and property by number: a binary output's present value, binary all the same.
+          { id: "fan", name: "Fan", objectType: "4", instance: 3, property: "85", writable: true }
         ]
       }
     ]
@@ -116,40 +128,67 @@ const setup = Effect.fnUntraced(function* () {
   yield* drivers.register(meter.driver)
   yield* drivers.register(ahu.driver)
   const { messages, layer } = yield* makeMemoryPublisher
-  const guard = makeCommandGuard({ site: "s", building: "b", devices, drivers })
-  const send = (topic: string, payload: unknown, extra: { retain?: boolean; responseTopic?: string } = {}) =>
-    guard
-      .handle({
+  const outcomes: Array<{ readonly device: string; readonly point: string }> = []
+  const guard = makeCommandGuard({
+    site: "s",
+    building: "b",
+    devices,
+    drivers,
+    onOutcome: (command) => outcomes.push(command)
+  })
+  const send = (
+    topic: string,
+    payload: unknown,
+    extra: { retain?: boolean; receivedAt?: number; expirySeconds?: number } = {}
+  ) =>
+    Effect.gen(function* () {
+      const now = yield* monotonicMillis
+      yield* guard.handle({
         topic: `s/b/${topic}/$set`,
         payload: typeof payload === "string" ? payload : JSON.stringify(payload),
         retain: extra.retain ?? false,
-        ...(extra.responseTopic === undefined ? {} : { responseTopic: extra.responseTopic }),
+        receivedAt: extra.receivedAt ?? now,
+        ...(extra.expirySeconds === undefined ? {} : { expirySeconds: extra.expirySeconds }),
         correlationData: Uint8Array.of(7)
       })
-      .pipe(Effect.provide(layer))
+    }).pipe(Effect.provide(layer))
   const results = () => messages.map((message) => decodeResult(message.payload))
-  return { meter, ahu, messages, send, results, guard }
+  return { meter, ahu, messages, send, results, guard, outcomes }
 })
 
 describe("command guard", () => {
   it.effect("writes an in-range value in device units and answers once, with the correlation data", () =>
     Effect.gen(function* () {
-      const { meter, ahu, send, results, guard } = yield* setup()
+      const { meter, ahu, messages, send, results, guard } = yield* setup()
       expect(guard.filter).toBe("s/b/+/+/$set")
-      yield* send("meter/setpoint", { value: 21.5 }, { responseTopic: "app/responses" })
+      yield* send("meter/setpoint", { value: 21.5 })
+      // 19.9 / 0.1 is 198.99999999999997 in floating point: still register value 199, not a refusal.
+      yield* send("meter/setpoint", { value: 19.9 })
       yield* send("meter/enable", { value: true })
       yield* send("ahu/valve", { value: null })
+      yield* send("ahu/mode", { value: 3 })
+      yield* send("ahu/fan", { value: true })
       // Scaling factor 0.1: 21.5 °C is register value 215.
       expect(meter.writes).toEqual([
         ["setpoint", 215],
+        ["setpoint", 199],
         ["enable", true]
       ])
-      expect(ahu.writes).toEqual([["valve", null]])
+      expect(ahu.writes).toEqual([
+        ["valve", null],
+        ["mode", 3],
+        ["fan", true]
+      ])
       expect(results().map(({ status, value }) => [status, value])).toEqual([
         ["written", 21.5],
+        ["written", 19.9],
         ["written", true],
-        ["written", null]
+        ["written", null],
+        ["written", 3],
+        ["written", true]
       ])
+      // Always on …/$set/result (the simulation checks the correlation data end to end).
+      expect(messages[0]?.topic).toBe("s/b/meter/setpoint/$set/result")
     }).pipe(Effect.scoped)
   )
 
@@ -166,6 +205,10 @@ describe("command guard", () => {
       yield* send("meter/setpoint", { value: null })
       yield* send("meter/setpoint", { value: 25.01 })
       yield* send("ahu/valve", { value: -1 })
+      // Anything beside the value: no other message, a command result included, passes for a command.
+      yield* send("meter/setpoint", { status: "written", value: 20, ts: 1 })
+      yield* send("ahu/mode", { value: 2.5 })
+      yield* send("ahu/fan", { value: 1 })
       expect(results().map(({ status, reason }) => `${status} ${reason ?? ""}`)).toEqual([
         "rejected retained",
         "rejected unknown-point",
@@ -176,7 +219,10 @@ describe("command guard", () => {
         "rejected wrong-type",
         "rejected wrong-type",
         "rejected out-of-range",
-        "rejected out-of-range"
+        "rejected out-of-range",
+        "rejected invalid-payload",
+        "rejected wrong-type",
+        "rejected wrong-type"
       ])
       expect([...meter.writes, ...ahu.writes]).toEqual([])
     }).pipe(Effect.scoped)
@@ -199,6 +245,31 @@ describe("command guard", () => {
     }).pipe(Effect.scoped)
   )
 
+  it.effect("refuses a command that waited longer than its maximum age or its message expiry", () =>
+    Effect.gen(function* () {
+      const { meter, send, results } = yield* setup()
+      const now = yield* monotonicMillis
+      yield* send("meter/setpoint", { value: 20 }, { receivedAt: now - 10_001 })
+      yield* send("meter/setpoint", { value: 20 }, { receivedAt: now - 2_000, expirySeconds: 1 })
+      yield* send("meter/setpoint", { value: 21 }, { receivedAt: now - 9_000 })
+      expect(results().map(({ status, reason }) => `${status} ${reason ?? ""}`)).toEqual([
+        "rejected expired",
+        "rejected expired",
+        "written "
+      ])
+      expect(meter.writes).toEqual([["setpoint", 210]])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("keeps topic levels from senders short in what it records", () =>
+    Effect.gen(function* () {
+      const { send, outcomes } = yield* setup()
+      yield* send(`${"x".repeat(100_000)}/p`, { value: 1 })
+      expect(outcomes[0]?.device).toHaveLength(65)
+      expect(outcomes[0]?.point).toBe("p")
+    }).pipe(Effect.scoped)
+  )
+
   it.effect("counts every command by outcome and reason", () =>
     Effect.gen(function* () {
       const { send } = yield* setup()
@@ -208,6 +279,18 @@ describe("command guard", () => {
       expect(yield* count({ outcome: "rejected", reason: "out-of-range" })).toBe(1)
     }).pipe(Effect.scoped, withMetricAttributes({ test: "commands" }))
   )
+})
+
+describe("toDeviceUnits", () => {
+  it("undoes scaling, and lands on the whole number floating point just missed", () => {
+    expect(toDeviceUnits(19.9, { factor: 0.1, offset: 0 })).toBe(199)
+    expect(toDeviceUnits(0.7, { factor: 0.1, offset: 0 })).toBe(7)
+    expect(toDeviceUnits(22.7, { factor: 0.1, offset: 0 })).toBe(227)
+    expect(toDeviceUnits(-40, { factor: 0.5, offset: -50 })).toBe(20)
+    // A real fraction stays one: the driver refuses it for an integer register.
+    expect(toDeviceUnits(19.95, { factor: 0.1, offset: 0 })).toBeCloseTo(199.5)
+    expect(toDeviceUnits(3.3, undefined)).toBe(3.3)
+  })
 })
 
 describe("config for writable points", () => {

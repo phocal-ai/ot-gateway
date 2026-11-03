@@ -71,7 +71,9 @@ const checkCommands = (run: SimulationRun) => {
   const violations: Array<string> = []
   const results = new Map<number, Array<{ readonly status: string; readonly reason?: string }>>()
   for (const message of run.received) {
-    if (message.topic !== RESPONSES || message.correlationData === undefined) continue
+    // Commands name a response topic; the gateway must ignore it and answer on …/$set/result only.
+    if (message.topic === RESPONSES) violations.push(`a result went to the command's response topic ${RESPONSES}`)
+    if (!message.topic.endsWith("/$set/result") || message.correlationData === undefined) continue
     const data = message.correlationData
     const id = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, true)
     results.set(id, [...(results.get(id) ?? []), decodeResult(message.payload)])
@@ -119,7 +121,9 @@ const checkCommands = (run: SimulationRun) => {
     if (status === "written") written++
     if (status === "written" && writes !== 1)
       violations.push(`${name} was answered written but applied ${writes} times`)
-    if (status === "rejected") violations.push(`${name} was rejected: ${answers[0]?.reason ?? ""}`)
+    // Expired: it waited too long behind a stalled write to its device; the healthy-path check below catches the rest.
+    if (status === "rejected" && answers[0]?.reason !== "expired")
+      violations.push(`${name} was rejected: ${answers[0]?.reason ?? ""}`)
     const healthy =
       command.delivered &&
       !run.faults.some(
@@ -144,7 +148,11 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
   const violations: Array<string> = []
   // Device values only: commands (`…/$set`) and their results share the broker.
   const values = run.received.filter(
-    (message) => !message.retain && !message.topic.endsWith("/$set") && message.topic !== RESPONSES
+    (message) =>
+      !message.retain &&
+      !message.topic.endsWith("/$set") &&
+      !message.topic.endsWith("/$set/result") &&
+      message.topic !== RESPONSES
   )
 
   // 1. No value the gateway accepted is lost: it reaches the broker, through every outage and restart.

@@ -430,10 +430,14 @@ const writeOne = (
     return { errorClass: ErrorClass.property, errorCode: ErrorCode["write-access-denied"] }
   }
   const binary = objectTypeName?.startsWith("binary-") === true
+  const multiState = objectTypeName?.startsWith("multi-state-") === true
   const { value } = request
+  // As a strict device checks it: binary takes BACnetBinaryPV, multi-state an Unsigned state from 1, analog a REAL.
   const typeMatches = binary
     ? value.type === "enumerated" && (value.value === 0 || value.value === 1)
-    : value.type === "real"
+    : multiState
+      ? value.type === "unsigned" && value.value >= 1
+      : value.type === "real"
   const priorities = properties.get(PropertyId["priority-array"])
   if (priorities === undefined) {
     if (!typeMatches) return { errorClass: ErrorClass.property, errorCode: ErrorCode["invalid-data-type"] }
@@ -457,13 +461,14 @@ const writeOne = (
 }
 
 const binaryObjectTypes = new Set<string>(["binary-input", "binary-output", "binary-value"])
+const multiStateObjectTypes = new Set<string>(["multi-state-input", "multi-state-output", "multi-state-value"])
 
 const isObjectTypeName = (name: string): name is ObjectTypeName => Object.hasOwn(ObjectType, name)
 
 /**
  * A simulated device with an object for every point of `device` (named
  * object types only; proprietary numeric ones are left out). Binary objects
- * start `inactive`, everything else at 0.
+ * start `inactive`, multi-state ones in state 1, everything else at 0.
  */
 export const simulatedDeviceFor = (device: BacnetDevice): SimulatedDevice => {
   const objects = new Map<string, SimulatedObjectConfig>()
@@ -474,7 +479,11 @@ export const simulatedDeviceFor = (device: BacnetDevice): SimulatedDevice => {
       objectType,
       instance: point.instance,
       name: point.name,
-      presentValue: binaryObjectTypes.has(objectType) ? { type: "enumerated", value: 0 } : { type: "real", value: 0 }
+      presentValue: binaryObjectTypes.has(objectType)
+        ? { type: "enumerated", value: 0 }
+        : multiStateObjectTypes.has(objectType)
+          ? { type: "unsigned", value: 1 }
+          : { type: "real", value: 0 }
     })
   }
   return makeSimulatedDevice({ instance: device.deviceInstance, name: device.id, objects: [...objects.values()] })

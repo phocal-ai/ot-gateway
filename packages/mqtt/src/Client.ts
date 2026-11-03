@@ -136,6 +136,8 @@ export interface InboundMessage {
   readonly payload: string
   /** Set when the broker sends a retained message on subscribing, not a live one. */
   readonly retain: boolean
+  /** What is left of the message's lifetime, in seconds, when the broker sent it (§3.3.2.3.3). */
+  readonly messageExpirySeconds?: number
   readonly responseTopic?: string
   readonly correlationData?: Uint8Array
 }
@@ -407,7 +409,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 if (Result.isFailure(publish)) {
                   return yield* protocolError(0x81, `unreadable PUBLISH: ${publish.failure.message}`)
                 }
-                const { topic, payload, retain, packetId, responseTopic, correlationData } = publish.success
+                const { topic, payload, retain, packetId, messageExpirySeconds, responseTopic, correlationData } =
+                  publish.success
                 // Acknowledged on receipt: once the broker has the PUBACK it never sends this again.
                 if (packetId !== undefined) yield* write(encodePuback(packetId))
                 if (options.onMessage !== undefined) {
@@ -415,6 +418,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                     topic,
                     payload: lenientDecoder.decode(payload),
                     retain,
+                    ...(messageExpirySeconds === undefined ? {} : { messageExpirySeconds }),
                     ...(responseTopic === undefined ? {} : { responseTopic }),
                     ...(correlationData === undefined ? {} : { correlationData })
                   })

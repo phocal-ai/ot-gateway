@@ -104,7 +104,7 @@ const setUp = Effect.fnUntraced(function* (
 describe("point values", () => {
   it("resolves names and numbers, and refuses unknown ones", () => {
     expect(resolvePoint(supplyTemp)).toMatchObject(
-      Result.succeed({ object: { objectType: 0, instance: 1 }, property: 85, binary: false })
+      Result.succeed({ object: { objectType: 0, instance: 1 }, property: 85, binary: false, multiState: false })
     )
     expect(resolvePoint(fanRunning)).toMatchObject(Result.succeed({ binary: true }))
     expect(resolvePoint(point("vendor", "130", 1, "1000"))).toMatchObject(
