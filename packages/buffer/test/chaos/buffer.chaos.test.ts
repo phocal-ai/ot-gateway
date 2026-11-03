@@ -334,11 +334,15 @@ describe("chaos: buffer", () => {
       const publisher = yield* openBuffer(path, inner.publisher, scope)
       yield* Effect.forEach(range(10), (value) => publisher.publish("s/b/d/p", value), { discard: true })
       for (const suffix of ["", "-wal", "-shm"]) rmSync(path + suffix, { force: true })
+      // Publishing on through the restore (checked every 100 ms): a message sent while the files are being
+      // swapped must wait for the new one, not go to the broker, which is down, and be lost.
+      for (let i = 10; i < 60; i++) {
+        yield* publisher.publish("s/b/d/p", String(i))
+        yield* Effect.sleep("5 millis")
+      }
       yield* eventually(() => existsSync(path))
-      yield* Effect.sleep("100 millis")
-      yield* Effect.forEach(range(10), (i) => publisher.publish("s/b/d/p", String(10 + Number(i))), { discard: true })
       yield* Scope.close(scope, Exit.void)
-      expect(rowsInFile(path)).toBe(20)
+      expect(rowsInFile(path)).toBe(60)
     })
   )
 
