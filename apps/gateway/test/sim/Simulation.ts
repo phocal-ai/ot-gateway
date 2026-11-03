@@ -579,7 +579,9 @@ export const simulate = (options: SimulationOptions) =>
       for (const command of schedule) {
         yield* Effect.sleep(Math.max(0, command.at - (yield* Clock.currentTimeMillis)))
         const control = brokerControl
-        commands.push({ ...command, delivered: control !== undefined })
+        // When it actually went out: clearing a retained command holds the next ones back for five minutes,
+        // and the invariants judge a command by the faults around the moment it was sent, not when it was due.
+        commands.push({ ...command, at: yield* Clock.currentTimeMillis, delivered: control !== undefined })
         if (control === undefined) continue
         const topic = `${config.site}/${config.building}/${command.device}/${command.point}/$set`
         const value = command.kind === "wrong-type" ? true : command.value
