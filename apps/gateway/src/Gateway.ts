@@ -217,13 +217,10 @@ const northbound = (
       const inner = yield* Publisher
       return Publisher.of({
         publish: (topic, payload, publishOptions) =>
-          inner.publish(topic, payload, publishOptions).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                onAccepted?.(topic, payload, publishOptions)
-                status?.recordPublish(topic, payload)
-              })
-            )
+          // The status page sees every value read, delivered or not: it matters most while the broker is down.
+          Effect.sync(() => status?.recordPublish(topic, payload)).pipe(
+            Effect.andThen(inner.publish(topic, payload, publishOptions)),
+            Effect.tap(() => Effect.sync(() => onAccepted?.(topic, payload, publishOptions)))
           )
       })
     })

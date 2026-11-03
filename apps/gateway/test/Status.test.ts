@@ -9,6 +9,7 @@ import { makeHealthRegistry, parseConfig } from "@plenum/core"
 import { Effect, Fiber } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
+import { get } from "node:http"
 import { createServer } from "node:net"
 import { makeStatusState, serveStatus } from "../src/Status.ts"
 
@@ -40,6 +41,19 @@ const config = parseConfig(
   })
 )
 
+/** The status code of GET /api/status with the Host header set to `host`. */
+const statusCodeFor = (port: number, host: string) =>
+  Effect.promise(
+    () =>
+      new Promise<number>((resolve, reject) => {
+        const request = get({ host: "127.0.0.1", port, path: "/api/status", headers: { host } }, (response) => {
+          response.resume()
+          resolve(response.statusCode ?? 0)
+        })
+        request.on("error", reject)
+      })
+  )
+
 /** A port nothing listens on right now. */
 const freePort = Effect.promise(
   () =>
@@ -59,10 +73,12 @@ describe("status", () => {
       const health = makeHealthRegistry(["meter"])
       health.recordSuccess("meter", 1_000)
       const state = makeStatusState(parsed, health, 500)
+      // An undecodable payload shows as no value, not an error; the next good one replaces it.
+      state.recordPublish("s/b/meter/power", "not json")
+      expect((yield* state.snapshot).devices[0]?.points[0]?.value).toBeUndefined()
       state.recordPublish("s/b/meter/power", '{"value":12.5,"ts":900,"unit":"unit:KiloW"}')
       state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}')
       state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}')
-      state.recordPublish("s/b/meter/power", "not json")
       for (let index = 0; index < 52; index++) {
         state.recordCommand(index, { device: "meter", point: "setpoint" }, { status: "written", value: index })
       }
@@ -118,6 +134,9 @@ describe("status", () => {
       // Without a built web app, the root says so instead of failing.
       const root = yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/`).then((response) => response.text()))
       expect(root).toContain("/api/status")
+      // Another host name on a loopback-bound page is a DNS-rebinding attempt: refused.
+      expect(yield* statusCodeFor(port, `rebind.example:${port}`)).toBe(421)
+      expect(yield* statusCodeFor(port, `localhost:${port}`)).toBe(200)
       yield* Fiber.interrupt(server)
     }).pipe(Effect.provide(FetchHttpClient.layer))
   )
