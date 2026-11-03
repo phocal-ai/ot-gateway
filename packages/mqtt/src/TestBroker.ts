@@ -102,10 +102,16 @@ export const makeBrokerControl = (): BrokerControl => ({
 const decoder = new TextDecoder()
 const encoder = new TextEncoder()
 
-/** Queue `message` to a subscriber whose filters match, at the lower of the two QoS levels (§3.8.4). */
-const deliver = (subscriber: Subscriber, message: ReceivedMessage, retain: boolean) => {
+/**
+ * Queue `message` to a subscriber whose filters match, at the lower of the two
+ * QoS levels (§3.8.4). On subscribing a retained message is flagged retained;
+ * a live one keeps its flag only for Retain As Published (§3.3.1.3).
+ */
+const deliver = (subscriber: Subscriber, message: ReceivedMessage, onSubscribe: boolean) => {
   const matching = subscriber.subscriptions.filter((subscription) => topicMatches(subscription.filter, message.topic))
   if (matching.length === 0) return
+  const retain =
+    onSubscribe || (message.retain && matching.some((subscription) => subscription.retainAsPublished === true))
   const qos = Math.min(message.qos, Math.max(...matching.map((subscription) => subscription.qos))) === 1 ? 1 : 0
   const packetId = qos === 1 ? subscriber.nextPacketId : undefined
   if (packetId !== undefined) subscriber.nextPacketId = (packetId % 0xffff) + 1
@@ -127,11 +133,14 @@ const deliver = (subscriber: Subscriber, message: ReceivedMessage, retain: boole
 const accept = (control: BrokerControl, message: ReceivedMessage) => {
   if (control.onMessage === undefined) control.messages.push(message)
   else control.onMessage(message)
-  if (message.retain) {
+  // An empty retained message clears the topic's retained message (§3.3.1.3).
+  if (message.retain && message.payload === "") {
+    control.retained.delete(message.topic)
+    control.retainedMessages.delete(message.topic)
+  } else if (message.retain) {
     control.retained.set(message.topic, message.payload)
     control.retainedMessages.set(message.topic, message)
   }
-  // Retain As Published is off: a live message reaches subscribers with retain cleared (§3.3.1.3).
   for (const subscriber of control.subscribers) deliver(subscriber, message, false)
 }
 

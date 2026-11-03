@@ -13,7 +13,7 @@ import { makeBrokerControl, publishToSubscribers, serveMqtt } from "../src/TestB
 
 const commands = "s/b/+/+/$set"
 
-const setup = Effect.fnUntraced(function* () {
+const setup = Effect.fnUntraced(function* (retainAsPublished = false) {
   const network = makeMemoryNetwork()
   const control = makeBrokerControl()
   const startBroker = Effect.gen(function* () {
@@ -28,7 +28,7 @@ const setup = Effect.fnUntraced(function* () {
   const socket = yield* network.host("10.0.0.1").tcp({ host: "10.0.0.2", port: 1883, openTimeout: "5 seconds" })
   const client = yield* makeMqttClient(socket, {
     clientId: "gateway",
-    subscriptions: [{ filter: commands, qos: 1 }],
+    subscriptions: [{ filter: commands, qos: 1, retainAsPublished }],
     onMessage: (message) => Effect.sync(() => received.push(message))
   })
   return { control, startBroker, received, client }
@@ -93,6 +93,19 @@ describe("MQTT subscriptions", () => {
       publishToSubscribers(control, command(8))
       yield* TestClock.adjust("1 second")
       expect(received.map((message) => message.payload)).toEqual(['{"value":8}'])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("keeps the retain flag on a live message with Retain As Published, and clears it without", () =>
+    Effect.gen(function* () {
+      for (const retainAsPublished of [true, false]) {
+        const { control, startBroker, received } = yield* setup(retainAsPublished)
+        yield* startBroker
+        yield* TestClock.adjust("2 seconds")
+        publishToSubscribers(control, command(3, { retain: true }))
+        yield* TestClock.adjust("1 second")
+        expect(received.map((message) => message.retain)).toEqual([retainAsPublished])
+      }
     }).pipe(Effect.scoped)
   )
 })

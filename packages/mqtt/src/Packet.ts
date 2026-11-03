@@ -605,6 +605,13 @@ export const encodePuback = (packetId: number, reasonCode = 0): Uint8Array =>
 export interface Subscription {
   readonly filter: string
   readonly qos: 0 | 1
+  /**
+   * Retain As Published (§3.8.3.1): live messages keep the retain flag they
+   * were published with. Without it a retained publish reaches a client that
+   * is already subscribed as if it were live, and only a later subscribe
+   * shows it as retained.
+   */
+  readonly retainAsPublished?: boolean
 }
 
 export interface Subscribe {
@@ -614,13 +621,15 @@ export interface Subscribe {
 
 /**
  * Encode a SUBSCRIBE. Options per filter (§3.8.3.1): the maximum QoS, No
- * Local and Retain As Published off, and Retain Handling 0 (send retained
- * messages on subscribe), so a retained message on a filter is seen, flagged
- * as retained, and can be refused.
+ * Local off, Retain As Published as asked, and Retain Handling 0 (send
+ * retained messages on subscribe), so a retained message on a filter is
+ * seen, flagged as retained, and can be refused.
  */
 export const encodeSubscribe = (subscribe: Subscribe): Uint8Array => {
   const body = new Writer().u16(subscribe.packetId).bytes(encodeProperties(() => {}))
-  for (const { filter, qos } of subscribe.subscriptions) body.string(filter).byte(qos)
+  for (const { filter, qos, retainAsPublished } of subscribe.subscriptions) {
+    body.string(filter).byte(qos | (retainAsPublished === true ? 0x08 : 0))
+  }
   // The fixed header flags of SUBSCRIBE are reserved as 0b0010 (§3.8.1).
   return packet(PacketType.SUBSCRIBE, 0b0010, body.toBytes())
 }
@@ -632,9 +641,14 @@ export const decodeSubscribe = (body: Uint8Array): Result.Result<Subscribe, Mqtt
     const subscriptions: Array<Subscription> = []
     while (r.remaining > 0) {
       const filter = r.string()
-      const qos = r.byte() & 0x03
+      const options = r.byte()
+      const qos = options & 0x03
       if (qos > 1) throw new MqttCodecError({ message: `QoS ${qos} is not supported` })
-      subscriptions.push({ filter, qos: qos === 1 ? 1 : 0 })
+      subscriptions.push({
+        filter,
+        qos: qos === 1 ? 1 : 0,
+        ...((options & 0x08) === 0 ? {} : { retainAsPublished: true })
+      })
     }
     // A SUBSCRIBE with no filter is a protocol error (§3.8.3).
     if (subscriptions.length === 0) throw new MqttCodecError({ message: "SUBSCRIBE without a topic filter" })
