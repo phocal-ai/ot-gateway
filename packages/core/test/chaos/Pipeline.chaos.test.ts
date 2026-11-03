@@ -266,7 +266,7 @@ describe("chaos: a device or broker that stays down", () => {
     })
   )
 
-  it.effect("logs a broker outage once per device, and once when publishing works again", () =>
+  it.effect("logs a broker outage once per device and kind of message, and once when each works again", () =>
     Effect.gen(function* () {
       const logs = recordLogs()
       let brokerDown = true
@@ -285,10 +285,43 @@ describe("chaos: a device or broker that stays down", () => {
       yield* TestClock.adjust("2 seconds")
       yield* Fiber.interrupt(fiber)
 
-      const warnings = logs.lines.filter((line) => line.startsWith("Warn"))
-      expect(warnings).toHaveLength(1)
-      expect(logs.lines.filter((line) => line.includes("publishing works again"))).toHaveLength(1)
+      // Without an outbox, metadata and values both fail: one warning and one recovery for each.
+      expect(logs.lines.filter((line) => line.startsWith("Warn"))).toEqual([
+        "Warn: metadata publish failed",
+        "Warn: publish failed"
+      ])
+      expect(logs.lines.filter((line) => line.includes("works again"))).toEqual([
+        "Info: metadata publishing works again",
+        "Info: publishing works again"
+      ])
       expect(yield* countOf(publishFailures, { device: "no-broker" })).toBeGreaterThanOrEqual(20)
+    })
+  )
+
+  it.effect("logs metadata that keeps failing once, while values go into the outbox", () =>
+    Effect.gen(function* () {
+      const logs = recordLogs()
+      // Behind the outbox with the broker down: values are taken (stored), retained metadata is not.
+      const publisher = Layer.succeed(Publisher, {
+        publish: (topic, _payload, options) =>
+          options?.retain === true
+            ? Effect.fail(new PublishError({ topic, reason: "unavailable", message: "down" }))
+            : Effect.void
+      })
+      const values = Array.from({ length: 20 }, (_, index): ReadonlyArray<readonly [string, PointValue]> => [
+        ["temp", index]
+      ])
+      const driver = scripted("meta-down", [pointNamed("temp")], values)
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(publisher),
+        Effect.provide(logs.layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("15 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(logs.lines.filter((line) => line.startsWith("Warn"))).toEqual(["Warn: metadata publish failed"])
+      expect(logs.lines.filter((line) => line.includes("works again"))).toEqual([])
     })
   )
 
