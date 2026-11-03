@@ -27,7 +27,7 @@ import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDevic
 import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
 import { makeRegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
 import { makeBrokerControl, parseBrokerUrl, serveMqtt } from "@plenum/mqtt"
-import { Clock, Console, Effect, FileSystem, Schedule } from "effect"
+import { Clock, Console, Effect, FileSystem, Result, Schedule } from "effect"
 
 const localHosts = new Set(["localhost", "127.0.0.1", "::1"])
 
@@ -50,12 +50,23 @@ const runBroker = Effect.fn("runBroker")(function* (config: GatewayConfig) {
   if (address.tls || !localHosts.has(address.host)) {
     return yield* Effect.logWarning(`mqtt.url ${config.mqtt.url} is not a plain local broker, not starting one`)
   }
-  const server = yield* NodeSocketServer.make({ host: address.host, port: address.port })
+  // `localhost` is both loopbacks (Docker's /etc/hosts lists ::1 too), and binding the name takes only the
+  // first: listen on each that exists, as real brokers do, so a client finds it whichever family it tries.
+  const hosts = address.host === "localhost" ? ["127.0.0.1", "::1"] : [address.host]
+  const bound = yield* Effect.forEach(hosts, (host) =>
+    Effect.result(NodeSocketServer.make({ host, port: address.port }))
+  )
+  const servers = bound.flatMap((result) => (Result.isSuccess(result) ? [result.success] : []))
+  const [first] = bound
+  if (servers.length === 0 && first !== undefined && Result.isFailure(first)) return yield* first.failure
   const control = makeBrokerControl()
   control.onMessage = (message) =>
     console.log(`${message.retain ? "[retained] " : ""}${message.topic} ${message.payload}`)
   yield* Console.log(`MQTT test broker on ${address.host}:${address.port}`)
-  return yield* serveMqtt(server, control)
+  return yield* Effect.forEach(servers, (server) => serveMqtt(server, control), {
+    concurrency: "unbounded",
+    discard: true
+  })
 })
 
 const runSimulator = Effect.fn("runSimulator")(function* (device: ModbusDevice, pace: Pace) {

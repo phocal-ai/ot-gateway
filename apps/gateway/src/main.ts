@@ -22,6 +22,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { type GatewayConfig, parseConfig } from "@plenum/core"
 import { Console, Effect, FileSystem } from "effect"
+import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { discover } from "./Discover.ts"
 import { runGateway } from "./Gateway.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
@@ -45,6 +46,12 @@ const describe = (config: GatewayConfig) =>
       return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}, every ${device.pollIntervalMs} ms`
     })
   ].join("\n")
+
+// A broker or device named by host name may have several addresses (localhost: 127.0.0.1 and ::1). Node tries
+// them in turn and abandons each but the last after 250 ms, which a busy event loop (a loaded Pi, emulation)
+// can pass before it has even seen the connection succeed; the gateway then never reaches a broker that
+// listens on the first address. Two seconds per address, well inside the 10 s connect timeout.
+setDefaultAutoSelectFamilyAttemptTimeout(2000)
 
 const program = Effect.gen(function* () {
   const args = process.argv.slice(2)
