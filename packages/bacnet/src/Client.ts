@@ -180,6 +180,13 @@ export interface BacnetClient {
 
 const keyOf = (address: NetAddress.InetAddress) => NetAddress.formatInet(address)
 
+/**
+ * How far past its deadline a request that waited for an invoke ID may run.
+ * A wait shorter than this cannot cut the last attempt short, so its own
+ * timeout (with the device's address) ends the request.
+ */
+const DEADLINE_GRACE_MS = 50
+
 /** Of the 256 invoke IDs, how many COV subscriptions may hold at once, across every device. */
 const COV_REQUESTS = 64
 
@@ -531,8 +538,10 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
    * Run `use` holding a permit of each of `semaphores`. Waiting for them
    * counts against the request's deadline, so a gateway with too many
    * requests in flight fails requests as timeouts instead of stalling them;
-   * `use` gets only what the wait left of it, so the whole request ends by
-   * its deadline however late its permit came.
+   * `use` gets only what the wait left of it, plus `DEADLINE_GRACE_MS`, so
+   * the whole request ends by its deadline (and that grace) however late its
+   * permit came. The grace lets a request that barely waited end through its
+   * own last attempt, whose timeout names the device, instead of racing it.
    */
   const withPermits = <A, E>(semaphores: ReadonlyArray<Semaphore.Semaphore>, use: Effect.Effect<A, E>) =>
     Effect.scoped(
@@ -550,11 +559,9 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
           })
         )
         const waited = (yield* monotonicMillis) - started
-        // Without a wait the attempts end by the deadline on their own, with their own, more telling message.
-        if (waited <= 0) return yield* use
         return yield* use.pipe(
           Effect.timeoutOrElse({
-            duration: Duration.millis(Math.max(0, Duration.toMillis(requestDeadline) - waited)),
+            duration: Duration.millis(Math.max(0, Duration.toMillis(requestDeadline) - waited) + DEADLINE_GRACE_MS),
             orElse: () =>
               Effect.fail(
                 new BacnetTimeout({
