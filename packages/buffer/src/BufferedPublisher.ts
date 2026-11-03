@@ -64,6 +64,11 @@ export interface BufferedPublisherOptions {
    * again (default 30 s).
    */
   readonly checkInterval?: Duration.Input
+  /**
+   * Opens the outbox file (default `openDatabase`). A simulation wraps the
+   * real one to make the disk fill up or lock under a running gateway.
+   */
+  readonly openDatabase?: typeof openDatabase
 }
 
 /** Messages delivered concurrently while draining; bounded by the broker's Receive Maximum anyway. */
@@ -120,6 +125,7 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   const batchSize = options.batchSize ?? 100
   const retryDelay = options.retryDelay ?? "5 seconds"
   const checkInterval = options.checkInterval ?? "30 seconds"
+  const open = options.openDatabase ?? openDatabase
 
   // Every change to the table, to `current` and to its counters happens under
   // `bookkeeping`, as a delta of what the statement reported; `pending` is
@@ -382,7 +388,7 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
 
   /** Open the file (moving an unusable one aside); on failure run unbuffered. Logs only when the state changes. */
   const reopen = Effect.gen(function* () {
-    const opened = yield* Effect.result(openDatabase(settings.path))
+    const opened = yield* Effect.result(open(settings.path))
     if (Result.isSuccess(opened)) {
       yield* install(opened.success)
       return yield* recovered("open", "buffer file open again, buffering resumed")
@@ -470,7 +476,7 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   })
 
   // A second gateway on the same file fails here, at startup, with `BufferLocked`.
-  const opened = yield* openDatabase(settings.path).pipe(
+  const opened = yield* open(settings.path).pipe(
     Effect.map((database): OutboxDatabase | undefined => database),
     Effect.catchTag("BufferOpenFailed", (error) => Effect.as(failed("open", cannotOpen, error.message), undefined))
   )
