@@ -26,11 +26,11 @@ An integrator should be able to drop a Pi into a plant room, point it at a confi
 
 ## Users and use cases
 
-| User | What they need from Plenum |
-| --- | --- |
-| Building automation integrator | Meter, HVAC and plant data in MQTT quickly, configured from a file, with clear diagnostics on site |
-| Developer | A typed library to build a custom gateway or add a protocol driver |
-| Facility or energy platform team | Reliable, normalized telemetry for dashboards, energy reporting or a data lake |
+| User                             | What they need from Plenum                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Building automation integrator   | Meter, HVAC and plant data in MQTT quickly, configured from a file, with clear diagnostics on site |
+| Developer                        | A typed library to build a custom gateway or add a protocol driver                                 |
+| Facility or energy platform team | Reliable, normalized telemetry for dashboards, energy reporting or a data lake                     |
 
 Typical use cases:
 
@@ -89,25 +89,25 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 
 Plenum aims at the gap between visual flow tools and closed vendor gateways: code-first, typed and testable, yet usable from a config file.
 
-| Tool | Strength | Where Plenum differs |
-| --- | --- | --- |
-| Node-RED | Fast visual prototyping, big ecosystem | Typed, version-controlled config and code; testable without hardware |
-| EMQX Neuron | Many industrial protocols | Open, small, library-first; focused on building automation |
-| ThingsBoard IoT Gateway | Broad connector set | Not tied to one platform; generic MQTT output |
-| Telegraf | Excellent metrics collection | Two-way, with safe command write-back and point semantics |
-| Vendor gateways | Supported, certified | Open source, extensible, no lock-in |
+| Tool                    | Strength                               | Where Plenum differs                                                 |
+| ----------------------- | -------------------------------------- | -------------------------------------------------------------------- |
+| Node-RED                | Fast visual prototyping, big ecosystem | Typed, version-controlled config and code; testable without hardware |
+| EMQX Neuron             | Many industrial protocols              | Open, small, library-first; focused on building automation           |
+| ThingsBoard IoT Gateway | Broad connector set                    | Not tied to one platform; generic MQTT output                        |
+| Telegraf                | Excellent metrics collection           | Two-way, with safe command write-back and point semantics            |
+| Vendor gateways         | Supported, certified                   | Open source, extensible, no lock-in                                  |
 
 ## Roadmap
 
 Modbus TCP to MQTT ships end to end first, because it is the simplest protocol and proves the core. BACnet follows once the core is reliable. Write-back comes last on purpose, after read paths have run unattended in the field.
 
-| Version | Focus |
-| --- | --- |
-| v0.1 Foundation | Core + Schema, Modbus TCP, MQTT publish |
-| v0.2 Reliability | Buffering, health topics, simulators + CI |
-| v0.3 BACnet/IP | Discovery, ReadProperty, COV subscribe |
-| v0.4 Write-back | MQTT commands, range limits, BACnet priority |
-| v1.0 Production | Status page, packaging + docs, first building |
+| Version          | Focus                                         |
+| ---------------- | --------------------------------------------- |
+| v0.1 Foundation  | Core + Schema, Modbus TCP, MQTT publish       |
+| v0.2 Reliability | Buffering, health topics, simulators + CI     |
+| v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscribe        |
+| v0.4 Write-back  | MQTT commands, range limits, BACnet priority  |
+| v1.0 Production  | Status page, packaging + docs, first building |
 
 ## Success criteria
 
@@ -120,29 +120,29 @@ Modbus TCP to MQTT ships end to end first, because it is the simplest protocol a
 
 ## Decisions
 
-| Topic | Decision | Notes |
-| --- | --- | --- |
-| Runtime | Node.js (LTS) | Bun is not a target |
-| Effect version | Latest Effect 4.x | Stable since late Sep 2026, bug fixes until at least Sep 2029 |
-| Dependencies | Effect-native: `effect` plus `@effect/*` packages | Use what Effect offers first; protocol stacks are written in-house |
-| MQTT | MQTT 5 | In-house client on Effect sockets |
-| Topic convention | `site/building/device/point` | Metadata on retained `.../point/$meta` |
-| Config format | JSON, validated with Effect Schema | Storable in a file or a database |
-| Buffer storage | SQLite via `@effect/sql-sqlite-node` | Uses Node's built-in `node:sqlite`, so no native build on ARM |
-| Monorepo | pnpm workspaces + Turborepo | |
-| Web UI | Local status page in v1.0; Next.js configuration app after v1.0 | Separate package |
-| License | MIT | |
-| Semantic model | Ontology-neutral core, optional Brick class and Haystack tags per point | See below |
+| Topic            | Decision                                                                | Notes                                                              |
+| ---------------- | ----------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Runtime          | Node.js (LTS)                                                           | Bun is not a target                                                |
+| Effect version   | Latest Effect 4.x                                                       | Stable since late Sep 2026, bug fixes until at least Sep 2029      |
+| Dependencies     | Effect-native: `effect` plus `@effect/*` packages                       | Use what Effect offers first; protocol stacks are written in-house |
+| MQTT             | MQTT 5                                                                  | In-house client on Effect sockets                                  |
+| Topic convention | `site/building/device/point`                                            | Metadata on retained `.../point/$meta`                             |
+| Config format    | JSON, validated with Effect Schema                                      | Storable in a file or a database                                   |
+| Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                    | Uses Node's built-in `node:sqlite`, so no native build on ARM      |
+| Monorepo         | pnpm workspaces + Turborepo                                             |                                                                    |
+| Web UI           | Local status page in v1.0; Next.js configuration app after v1.0         | Separate package                                                   |
+| License          | MIT                                                                     |                                                                    |
+| Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point | See below                                                          |
 
 ## Semantic model
 
 The core stays ontology-neutral, and each point can carry an optional Brick class and Haystack tags. The field is converging on RDF graphs with validation, but the formal standard (ASHRAE 223P) is not published yet.
 
-| Model | What it is | Status (Nov 2026) |
-| --- | --- | --- |
-| ASHRAE 223P | RDF/SHACL standard for detailed system topology, connections and points | Second public review Apr to Jun 2026; publication expected by end of 2026 |
-| Brick 1.4 | RDF/OWL class hierarchy for equipment, points and spaces, harmonized with RealEstateCore | Stable |
-| Project Haystack 5 | Tag-based model; v5 adds Xeto typed specs, validation and RDF export | Haystack 4 widely deployed; v5 specs still being built out |
+| Model              | What it is                                                                               | Status (Nov 2026)                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| ASHRAE 223P        | RDF/SHACL standard for detailed system topology, connections and points                  | Second public review Apr to Jun 2026; publication expected by end of 2026 |
+| Brick 1.4          | RDF/OWL class hierarchy for equipment, points and spaces, harmonized with RealEstateCore | Stable                                                                    |
+| Project Haystack 5 | Tag-based model; v5 adds Xeto typed specs, validation and RDF export                     | Haystack 4 widely deployed; v5 specs still being built out                |
 
 The three are moving toward each other: Haystack 5 exports to RDF and its Xeto tool translates Haystack to Brick, and Brick aligns with 223P. The likely end state is 223P for detailed engineering models, Brick as the lighter query layer, and Haystack tags as the vocabulary people use in the field.
 

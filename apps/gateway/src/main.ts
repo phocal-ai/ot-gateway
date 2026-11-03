@@ -1,41 +1,29 @@
-#!/usr/bin/env node
+#!/usr/bin/env -S node --max-semi-space-size=4
 /**
  * Plenum gateway entry point.
  *
  *   node apps/gateway/src/main.ts path/to/gateway.json
  *
- * Today it runs simulator devices and prints to the console. Modbus, BACnet
- * and MQTT plug in here as their drivers land.
+ * Polls simulator, Modbus TCP and BACnet/IP devices and publishes to the MQTT
+ * broker in `mqtt`, with the gateway's status on its retained health topic.
+ *
+ * Run it with `--max-semi-space-size=4` (the shebang and `pnpm gateway` do):
+ * V8's default young generation reserves about 40 MB more memory than the
+ * gateway's allocation rate needs, at no measurable CPU cost.
  */
-import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import { ConsolePublisher, type Device, parseConfig, runDevice } from "@plenum/core"
-import { makeSimulatorDriver } from "@plenum/simulator"
-import { Effect, FileSystem, Layer } from "effect"
+import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import { parseConfig } from "@plenum/core"
+import { Effect, FileSystem } from "effect"
+import { runGateway } from "./Gateway.ts"
+import { gatewayTeardown } from "./Shutdown.ts"
+import { telemetryLayer } from "./Telemetry.ts"
 
-const runOne = (config: { site: string; building: string }, device: Device) => {
-  const ctx = { site: config.site, building: config.building, pollIntervalMs: device.pollIntervalMs }
-  switch (device.protocol) {
-    case "simulator":
-      return runDevice(ctx, makeSimulatorDriver(device))
-    case "modbus-tcp":
-    case "bacnet-ip":
-      return Effect.logWarning(`${device.protocol} driver is not implemented yet, skipping`, { device: device.id })
-  }
-}
-
-const program = Effect.gen(function*() {
+const program = Effect.gen(function* () {
   const path = process.argv[2] ?? "plenum.json"
   const fs = yield* FileSystem.FileSystem
   const config = yield* parseConfig(yield* fs.readFileString(path))
-
-  yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`)
-  yield* Effect.forEach(config.devices, (device) => runOne(config, device), {
-    concurrency: "unbounded",
-    discard: true
-  })
+  yield* runGateway(config).pipe(Effect.provide(telemetryLayer(config)))
 })
 
-program.pipe(
-  Effect.provide(Layer.mergeAll(NodeServices.layer, ConsolePublisher)),
-  NodeRuntime.runMain
-)
+program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain({ teardown: gatewayTeardown }))

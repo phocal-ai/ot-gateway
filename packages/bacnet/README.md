@@ -1,8 +1,71 @@
 # @plenum/bacnet
 
-Effect-native BACnet/IP, implemented in-house.
+Effect-native BACnet/IP, implemented in-house against ASHRAE 135. The codecs are pure functions from bytes to a `Result`. Only the client and the simulator server do I/O, on `effect/socket/DatagramSocket`.
 
-- Done: BVLC header codec (Annex J)
-- Next: NPDU/APDU, Who-Is/I-Am, ReadProperty(Multiple), SubscribeCOV, WriteProperty with priority, UDP transport on `effect/socket/DatagramSocket`
+## Modules
+
+| Module         | Covers                                                                                                                        | Spec                               |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `Bvlc.ts`      | BACnet/IP virtual link header                                                                                                 | Annex J                            |
+| `Npdu.ts`      | network layer header, with routing (`destination`, `source`) and network messages                                             | 6.2                                |
+| `Apdu.ts`      | all eight APDU types. Segmented requests are refused; segmented acks are decoded but not reassembled                          | 20.1                               |
+| `Encoding.ts`  | application and context tags, every application data type, constructed values                                                 | 20.2                               |
+| `Services.ts`  | Who-Is / I-Am, ReadProperty, ReadPropertyMultiple, SubscribeCOV, COV notifications, Error PDU bodies                          | 13.6, 13.14, 15.5, 15.7, 16.10, 18 |
+| `Frame.ts`     | a whole datagram: BVLC + NPDU + APDU, including NPDUs a BBMD forwarded                                                        | Annex J.2                          |
+| `Enums.ts`     | object types, property identifiers, error classes and codes, by their hyphenated spec names (`analog-input`, `present-value`) | 21                                 |
+| `Simulator.ts` | a simulated device as pure request → response logic                                                                           |                                    |
+| `Client.ts`    | the UDP client: confirmed requests with retries, Who-Is discovery, COV subscriptions                                          | 5.4.4, 13.14, 16.10                |
+| `Server.ts`    | puts a simulated device on a UDP socket                                                                                       |                                    |
+| `Driver.ts`    | the pipeline driver: Who-Is, batched ReadPropertyMultiple, ReadProperty fallback, change of value                             | 13.14, 15.5, 15.7                  |
+
+Character strings are written as UTF-8 (character set 0). They are read leniently: UTF-8 with invalid bytes replaced, UCS-2, UCS-4 and ISO 8859-1, and the older DBCS and JIS sets byte by byte. A garbled description must not cost the present value read in the same request. Integers are read up to 8 bytes (above 2^53 they lose precision), and reals as the shortest decimal for the same single-precision number (72.4, not 72.40000152587891). Constructed values nest at most 32 deep.
+
+## Simulator
+
+`makeSimulatedDevice` builds a device object plus any number of objects, each with the standard required properties; outputs also get a priority array and relinquish default. Device instance 4,194,303 in a request reads the device itself, as on a real device. `answer(device, apdu)` returns the device's response:
+
+- **Who-Is** in range: I-Am.
+- **ReadProperty / ReadPropertyMultiple:** the values. `all` and `required` are expanded, and the array properties (`object-list`, `priority-array`, `state-text`) can be read by index.
+- **An error class and code** for an unknown object or property, an index into a non-array, or an index past the end.
+- **SubscribeCOV:** a simple ack, and unconfirmed COV notifications of present value and status flags to the subscriber until the lifetime runs out or it cancels. Confirmed notifications are refused (`optional-functionality-not-supported`), and so is an object without a present value.
+- **Reject:** `invalid-tag` for a malformed request, `unrecognized-service` for any other confirmed service.
+- **Abort** (`segmentation-not-supported`) when the answer is larger than the requester or the device accepts, because the simulator never segments.
+
+`setPresentValue` changes a value the way a sensor would. `serveSimulatedDevice(socket, device)` answers datagrams on a socket until its scope closes, and sends each subscriber a notification right after it subscribes and whenever its object changes. It sends I-Am back to the asker instead of broadcasting it, so several simulators can share one host on different ports.
+
+## Client
+
+`makeBacnetClient(socket, options)` owns one UDP socket for every BACnet device of the gateway. Bind it to port 47808 with broadcast enabled, because devices broadcast I-Am to that port.
+
+- **`readProperty`, `readPropertyMultiple`, `confirmed`:** each request gets an invoke ID. After a timeout (`requestTimeout`, default 3 s) it is resent with the same ID, up to `retries` times (default 2). Only an answer from the address the request went to counts, and for a device behind a router (`network` set) only one that names it as the source. An answer about another object or property than was asked is refused as invalid. An invoke ID whose request was given up on rests for at least 10 s (twice the timeout if that is longer), so a late answer cannot be taken for a new request. A request that finds all 256 invoke IDs in use waits at most as long as it would have waited for answers (the timeout times one plus `retries`) and then fails as `BacnetTimeout` ("no free invoke ID"), instead of queueing without limit. A request whose values cannot be encoded (a NaN instance, a process identifier above 2^32 − 1, a date out of range) fails as `BacnetEncodeError` before anything is sent.
+- **`subscribeCov`, `newProcessId`, `onCovNotification`:** subscribes to an object's changes (or cancels), and hands the UnconfirmedCOVNotifications for a process identifier to whoever registered for it, until that scope closes. Only unconfirmed notifications are asked for, so the client never acknowledges any. Process identifiers are random (1 to 2^32 − 1, never two alike), so a host that cannot see the traffic cannot guess one. Subscriptions use at most 64 of the 256 invoke IDs at a time, so renewals cannot crowd out reads.
+- **Forwarded frames:** a Forwarded-NPDU (Annex J.2.5) names its origin inside the frame, so anyone can claim to forward for a device. With `bbmdAddress` set only that BBMD's forwards are taken; without it, only a device's own address may send one. Everything else forwarded is dropped, with a warning once per sender (so a missing `bbmdAddress` shows up in the log) and at debug after that.
+- **`discover`** broadcasts Who-Is to every BACnet network (or sends it to one address, and then keeps only the I-Am answers from that address) and collects the I-Am answers. **`locate`** finds one device by instance and resends Who-Is like a request.
+- **Errors:** `BacnetTimeout`, `BacnetDeviceError` (`kind` `error`, `reject` or `abort`, with the class and code), `BacnetCodecError` for an answer that cannot be read, `BacnetEncodeError` for a request that cannot be written, and `BacnetSocketError`, also when a datagram cannot be sent within the timeout.
+- **Segmentation:** the client asks for unsegmented answers. An answer too large for one datagram comes back as an abort with reason `segmentation-not-supported`, and the caller reads fewer properties per request. A device that segments anyway gets an Abort back.
+- **Socket failures:** a socket that fails while running is reopened every 5 s. A port that is already in use fails `makeBacnetClient` itself. A datagram that cannot be handled is logged and dropped; it never stops the receive loop.
+
+Requests are counted in `plenum_driver_requests` by `outcome`, once per request however often it was resent: `ok`, `timeout`, `exception` for an answer from the device, `invalid_response`, `connection`. Opening the socket is counted in `plenum_driver_connects` under the device name `$bacnet`, because one socket serves every BACnet device.
+
+## Driver
+
+`makeBacnetDriverFromClient(device, client)` turns a `bacnet-ip` device from the config into a pipeline `Driver`; `makeBacnetNetwork(settings)` opens the one client every BACnet device of the gateway shares, from the config's `bacnet` block.
+
+- **Finding the device:** with an `address`, Who-Is goes there once to learn the device's largest APDU; a device that does not answer (an I-Am broadcast on another subnet never arrives) is read there anyway, assuming 480 bytes. Only an I-Am from that address counts, so a device elsewhere with the same instance is not taken for it. When Who-Is is not answered the driver reads the device object's `max-apdu-length-accepted` instead. The size is checked again every hour (every 10 minutes while it is only assumed), so a device that was not up when the gateway started is not read in small batches for good. Without an `address` the device is found by global broadcast, and looked for again only after 3 cycles in a row timed out. Broadcasts that find nothing wait 30 s, then twice as long each time, up to 10 minutes, because they reach every network on site.
+- **Reading:** ReadPropertyMultiple in batches sized from the largest APDU the device accepts (capped at what one BACnet/IP datagram carries). A full batch whose answer is too large (an abort or reject for size, or a segmented answer) halves the batch size; after 10 clean cycles the size doubles again, up to the device's. A device that does not know ReadPropertyMultiple (a reject `unrecognized-service`, or a refused batch whose single point ReadProperty reads fine) is read with ReadProperty, one point at a time, and asked once an hour whether it knows it again; the downgrade is logged once.
+- **Containing failures:** a batch the device refuses as a whole, or an answer the codec cannot read, is halved until the point that fails it is found, and that point is then read alone each cycle (asked again with the others after an hour); the other points stay in batches. Finding culprits spends at most 32 requests per cycle, so a device that refuses everything gets one request per batch plus 32, not one per point. A timeout keeps what was read before it and stops the cycle.
+- **Busy devices:** an abort other than for size (`preempted-by-higher-priority-task`, `out-of-resources` and the like) means the device is busy. The cycle stops at once and fails as `protocol`, and the driver sends nothing to that device for 5 s, doubling each busy cycle in a row up to 60 s; calls in the meantime fail at once without a request, so the pipeline's retries do not hit the device. An `out-of-resources` or `buffer-overflow` abort on a full batch also halves the batch size. The cycle fails only when no point could be read. The client already resends after a timeout, so the pipeline does not retry a timed-out cycle.
+- **Values:** numbers stay numbers; binary objects' `active`/`inactive` become `true`/`false`. A point whose object or property does not exist, or whose value is null, not finite (NaN) or not a number or boolean, is skipped, counted in `plenum_point_read_failures` with `reason` `refused`, and logged when it starts and stops failing. Points a reachable device did not get to in a cycle (after a timeout or busy abort mid-cycle) are counted with `reason` `not_read` and not logged.
+- **Logs:** a device that stops answering, turns busy or comes back is logged once per change, never once per point, so a 1,000-point device costs no more in logs than a small one.
+- **Change of value** (`cov`, default `true`): once the device has been found, every object with a `present-value` point gets an unconfirmed subscription with a 300 s lifetime (`bacnet.covLifetimeSeconds`), renewed at half of it. Notifications from the device's address, about this device and with a usable present value, are published like polled values (same scaling and deadband). A notification from the device's address that names another device is dropped, and warned about once, since `deviceInstance` is likely wrong. Subscriptions are sent four at a time, those due first first; an object that does not answer is asked again after 30 s, twice as long each time it stays silent, up to 10 minutes, and goes to the back of the queue. A round stops after 8 unanswered subscriptions in a row, and nothing is subscribed while the device itself does not answer. While an object's notifications arrive, the polling cycle skips its present-value points; points on other properties are always polled. When every point is pushed, the cycle still reads the first one, so a device that stopped answering is noticed within a cycle. While some points are pushed, polled points that fail do not fail the device; only a timeout does. The first cycle after a timeout reads every point and subscribes again, in case the device restarted and lost its subscriptions. An object the device refuses is polled and asked again after an hour; one that goes quiet for a lifetime is polled again. A device that moved is subscribed again at its new address. At most 1,024 notifications wait to be published; beyond that the oldest are dropped, and the next renewal brings current values. Subscriptions are cancelled where they were made when the gateway stops. Renewals, lapses, backoffs and the invoke-ID rest run on the monotonic clock, so an NTP step (a Pi has no real-time clock) cannot stall or expire them.
+- **Errors:** a timeout is reported as `timeout`, a socket problem as `connection`, a point that does not resolve to one object type and property as `configuration`.
+
+Values pushed between polls are counted in `plenum_pushed_readings`, and the points a live subscription currently covers in the `plenum_pushed_points` gauge.
+
+The gateway opens the shared socket in the background and keeps trying, from every 5 s up to every 5 minutes, if the port is taken or the bind address is not assigned yet; until then its BACnet devices report `connection`.
+
+## Next
+
+Write-back (WriteProperty with a priority) lands with the command guard in v0.4.
 
 Part of [Plenum](../../README.md).

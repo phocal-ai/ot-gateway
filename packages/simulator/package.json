@@ -12,7 +12,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "effect": "4.1.2",
-    "@plenum/core": "workspace:*"
+    "@plenum/core": "workspace:*",
+    "effect": "4.1.2"
   }
 }

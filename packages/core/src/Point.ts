@@ -8,12 +8,13 @@
 import { Effect, Schema } from "effect"
 
 /**
- * Identifier used in MQTT topics: lowercase letters, digits, `-` and `_`.
- * MQTT wildcards and separators (`+`, `#`, `/`) can never appear.
+ * Identifier used in MQTT topics: lowercase letters, digits, `-` and `_`, at
+ * most 64 characters. MQTT wildcards and separators (`+`, `#`, `/`) can never
+ * appear, and the longest topic (`site/building/device/point/$meta`, or the
+ * health topic that is also the MQTT will) stays far below MQTT's 65,535-byte
+ * limit, past which the CONNECT packet could not even be encoded.
  */
-export const Slug = Schema.String.pipe(
-  Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/))
-)
+export const Slug = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/), Schema.isMaxLength(64)))
 export type Slug = typeof Slug.Type
 
 /** Optional semantic tagging. Brick is primary, Haystack tags are for integrators. */
@@ -27,7 +28,11 @@ export type Semantics = typeof Semantics.Type
 
 /** Linear scaling applied to raw values: `value = raw * factor + offset`. */
 export const Scaling = Schema.Struct({
-  factor: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(1))),
+  /** Not 0, which would publish `offset` whatever the device reads. */
+  factor: Schema.Finite.pipe(
+    Schema.check(Schema.makeFilter((factor) => factor !== 0 || "a scaling factor of 0 hides every reading")),
+    Schema.withDecodingDefaultKey(Effect.succeed(1))
+  ),
   offset: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0)))
 })
 export type Scaling = typeof Scaling.Type
@@ -41,7 +46,7 @@ export const PointFields = {
   /** Writing is opt-in per point. */
   writable: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   /** Minimum change (after scaling) before a new value is published. */
-  deadband: Schema.optionalKey(Schema.Finite),
+  deadband: Schema.optionalKey(Schema.Finite.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
   scaling: Schema.optionalKey(Scaling),
   semantics: Schema.optionalKey(Semantics)
 } as const
@@ -50,20 +55,40 @@ export const PointFields = {
 export const DataType = Schema.Literals(["int16", "uint16", "int32", "uint32", "float32", "bool"])
 export type DataType = typeof DataType.Type
 
-/** A point on a Modbus TCP device. */
+/**
+ * A point on a Modbus TCP device. Addresses are 0 to 65535 (Modbus
+ * Application Protocol §4.4), and a 32-bit value in two registers must end
+ * there too: a read cannot run past the last address.
+ */
 export const ModbusPoint = Schema.Struct({
   ...PointFields,
   table: Schema.Literals(["holding", "input", "coil", "discrete"]),
   address: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))),
   dataType: DataType
-})
+}).check(
+  Schema.makeFilter((point) => {
+    const wide =
+      (point.table === "holding" || point.table === "input") &&
+      (point.dataType === "int32" || point.dataType === "uint32" || point.dataType === "float32")
+    return (
+      !wide ||
+      point.address < 65535 || {
+        path: ["address"],
+        issue: `a ${point.dataType} takes two registers, so its address must be at most 65534`
+      }
+    )
+  })
+)
 export type ModbusPoint = typeof ModbusPoint.Type
 
 /** A point on a BACnet/IP device. */
 export const BacnetPoint = Schema.Struct({
   ...PointFields,
+  /** Object type by its ASHRAE 135 name (`analog-input`) or number (proprietary types, 128 and up). */
   objectType: Schema.String,
-  instance: Schema.Int,
+  /** 22 bits on the wire (clause 20.2.14). */
+  instance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
+  /** Property by its ASHRAE 135 name or number (default `present-value`). */
   property: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("present-value")))
 })
 export type BacnetPoint = typeof BacnetPoint.Type

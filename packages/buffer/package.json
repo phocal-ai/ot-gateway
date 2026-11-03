@@ -1,0 +1,23 @@
+{
+  "name": "@plenum/buffer",
+  "version": "0.0.0",
+  "description": "SQLite store-and-forward for Plenum's northbound messages.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect/sql-sqlite-node": "4.1.2",
+    "@plenum/core": "workspace:*",
+    "effect": "4.1.2"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.1.2",
+    "@plenum/mqtt": "workspace:*"
+  }
+}

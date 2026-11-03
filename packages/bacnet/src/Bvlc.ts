@@ -39,9 +39,7 @@ export const encodeBvlc = (fn: number, npdu: Uint8Array): Uint8Array => {
 }
 
 /** Split a datagram into its BVLC function and payload. */
-export const decodeBvlc = (
-  datagram: Uint8Array
-): { readonly fn: number; readonly payload: Uint8Array } | BvlcError => {
+export const decodeBvlc = (datagram: Uint8Array): { readonly fn: number; readonly payload: Uint8Array } | BvlcError => {
   if (datagram.length < 4) return new BvlcError({ message: "datagram too short" })
   const view = new DataView(datagram.buffer, datagram.byteOffset, datagram.byteLength)
   if (view.getUint8(0) !== BVLC_TYPE_BACNET_IP) return new BvlcError({ message: "not a BACnet/IP datagram" })

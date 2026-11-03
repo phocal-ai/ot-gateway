@@ -6,10 +6,10 @@ Plenum runs on small Linux devices like a Raspberry Pi. It reads building protoc
 
 It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable, not hidden in callbacks or flow graphs. Plenum is both a library you compose in code and a ready-to-run gateway you configure with one JSON file.
 
-> A *plenum* is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
+> A _plenum_ is the space above ceilings and below floors where a building's cables and air ducts run. Plenum the project lives in the same place: out of sight, carrying everything.
 
 > [!NOTE]
-> Plenum is early. The core pipeline, config schema and protocol codecs work; the Modbus, MQTT and BACnet transports are being built. See the [roadmap](#roadmap).
+> Plenum is early. The core pipeline, config schema, Modbus TCP and BACnet/IP reads, MQTT 5 publishing, health topics and store-and-forward work; BACnet COV subscriptions are next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -24,7 +24,7 @@ Plenum treats field reality as normal: devices time out, brokers go offline, reg
 - **Clean topics.** Values go to `site/building/device/point`, and metadata is retained on `.../point/$meta`.
 - **Normalization.** Scaling, deadband and units (QUDT) are set per point.
 - **Semantic tagging.** Each point can carry an optional Brick class and Haystack tags.
-- **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite (planned).
+- **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite.
 - **Safe writes.** Writing is opt-in per point, allowlisted and range-checked (planned).
 - **Testable without hardware.** Every driver gets a simulator, and CI runs end to end.
 
@@ -37,16 +37,21 @@ git clone https://github.com/phocal-ai/plenum
 cd plenum
 pnpm install
 pnpm check      # typecheck + tests across the workspace (Turborepo)
-pnpm gateway    # run the gateway with examples/gateway.json
+pnpm bench      # terminal 1: a local MQTT test broker, a Modbus TCP and a BACnet/IP simulator
+pnpm gateway    # terminal 2: run the gateway with examples/gateway.json
 ```
 
-You'll see simulated values flowing:
+The bench prints every message the gateway publishes, from a simulated air handler, a simulated Modbus meter and a simulated BACnet air handler:
 
 ```text
 [retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
-demo-site/b1/ahu-1/supply-air-temp {"value":20.19,"ts":1793616626074,"unit":"unit:DEG_C"}
-demo-site/b1/ahu-1/fan-speed {"value":86.91,"ts":1793616626074,"unit":"unit:PERCENT"}
+demo-site/b1/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
+demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
+demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
+demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
+
+Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
 
 Plenum runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
 
@@ -58,6 +63,7 @@ A gateway is described by one JSON document:
 {
   "site": "vienna-hq",
   "building": "b1",
+  "id": "main",
   "mqtt": { "url": "mqtt://broker.local:1883", "passwordEnv": "PLENUM_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/plenum/buffer.sqlite" },
   "devices": [
@@ -78,23 +84,53 @@ A gateway is described by one JSON document:
           "semantics": { "brick": "Active_Power_Sensor", "haystack": ["elec", "power", "active", "sensor"] }
         }
       ]
+    },
+    {
+      "protocol": "bacnet-ip",
+      "id": "ahu-2",
+      "deviceInstance": 2001,
+      "points": [
+        { "id": "supply-air-temp", "name": "AHU 2 supply air temperature", "objectType": "analog-input", "instance": 1 }
+      ]
     }
-  ]
+  ],
+  "bacnet": { "broadcastAddress": "192.168.1.255" }
 }
 ```
 
-IDs must be lowercase slugs, so they are always valid MQTT topic segments. Defaults such as port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
+With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@plenum/buffer`](packages/buffer).
+
+BACnet devices are found by `deviceInstance` with Who-Is, or reached directly at `address` (`ip` or `ip:port`). A point reads `present-value` of its object unless it names another `property`. With `cov` (default `true`) the gateway subscribes to change-of-value notifications for present values and polls only what they do not cover. Every BACnet device shares one UDP socket, set in the optional `bacnet` block: `bindAddress` (default `0.0.0.0`; on Linux, binding one address stops broadcasts from arriving), `port` (47808; devices broadcast I-Am there), `broadcastAddress` (`255.255.255.255`, port 47808 unless given; set your subnet's, since the default leaves through one interface only), `requestTimeoutMs` (3000), `retries` (2), `covLifetimeSeconds` (300, the lifetime requested for change-of-value subscriptions, renewed at half of it) and `bbmdAddress` (`ip` or `ip:port` of the subnet's BBMD; only it may forward answers to the gateway, and without it only the device itself may). See [`@plenum/bacnet`](packages/bacnet).
+
+Every device has an optional `cycleTimeoutMs`: how long one polling cycle (the read with its retries, and publishing the values) may take before it is abandoned as hung, counted as `timed_out` and reported as `cycle-timeout` in the health topic. It defaults to twice `pollIntervalMs` and at least `pollIntervalMs` plus 30 seconds; raise it for a slow device with many points.
+
+IDs must be lowercase slugs of at most 64 characters, so they are always valid MQTT topic segments. Device ids are unique within the gateway and point ids within their device, since each names a topic. The config is checked strictly: a key the schema does not know (a typo such as `intervall`) fails the start with its path instead of being ignored, every device needs at least one point, `host` and the broker `url` must not be empty, a `deadband` cannot be negative and a scaling `factor` cannot be 0. A JSON syntax error reports its position. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
+
+## Topics
+
+| Topic                                | Retained | Payload                                                                                          |
+| ------------------------------------ | -------- | ------------------------------------------------------------------------------------------------ |
+| `site/building/device/point`         | no       | `{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}` when the value moves beyond the deadband |
+| `site/building/device/point/$meta`   | yes      | name, unit, writability and Brick/Haystack semantics                                             |
+| `site/building/$gateway/<id>/health` | yes      | `online` with per-device status, or `offline` (see below)                                        |
+
+The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`: the driver's `timeout`, `connection`, `protocol`, …, `cycle-timeout` when a polling cycle hung past its deadline, or `crashed` when the device's pipeline hit a bug and is being restarted). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back.
+
+## Observability
+
+The gateway exports traces, metrics and logs over OTLP when the standard OpenTelemetry environment variables are set (`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `OTEL_<SIGNAL>_EXPORTER=otlp`). Every polling cycle is a trace; metrics cover cycle outcomes and duration, read and publish failures, device and broker connections, and how long ago each device was last read successfully. Without the variables nothing is exported. See [`observability/README.md`](observability/README.md).
 
 ## Packages
 
-| Package | What it does | Status |
-| --- | --- | --- |
-| [`@plenum/core`](packages/core) | Point model, config schema, normalization, topics, polling pipeline, `Publisher` service | Working |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos | Working |
-| [`@plenum/modbus`](packages/modbus) | Modbus TCP: frame codec done, client next | In progress |
-| [`@plenum/mqtt`](packages/mqtt) | MQTT 5: wire codec started, client next | In progress |
-| [`@plenum/bacnet`](packages/bacnet) | BACnet/IP: BVLC codec started | Early |
-| [`@plenum/gateway`](apps/gateway) | Ready-to-run gateway | Working with simulators |
+| Package                                   | What it does                                                                                             | Status                |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------- |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service         | Working               |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                             | Working               |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4                     | Reads working         |
+| [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order      | Working               |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker          | Publishing working    |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, client with Who-Is discovery, ReadProperty(Multiple) and COV driver, simulator server | Reads and COV working |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                     | Working               |
 
 ## Architecture
 
@@ -130,13 +166,13 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 
 ## Roadmap
 
-| Version | Focus |
-| --- | --- |
-| v0.1 Foundation | Core, Schema config, Modbus TCP, MQTT publish |
-| v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI |
-| v0.3 BACnet/IP | Discovery, ReadProperty, COV subscriptions |
-| v0.4 Write-back | MQTT commands, range limits, BACnet priority |
-| v1.0 Production | Local status page, packaging (container, systemd), docs, first building |
+| Version          | Focus                                                                   |
+| ---------------- | ----------------------------------------------------------------------- |
+| v0.1 Foundation  | Core, Schema config, Modbus TCP, MQTT publish                           |
+| v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI              |
+| v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscriptions                              |
+| v0.4 Write-back  | MQTT commands, range limits, BACnet priority                            |
+| v1.0 Production  | Local status page, packaging (container, systemd), docs, first building |
 
 After v1.0 comes a Next.js configuration app, as a separate package.
 

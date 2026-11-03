@@ -4,18 +4,25 @@
   "private": true,
   "description": "Ready-to-run Plenum gateway.",
   "license": "MIT",
-  "type": "module",
   "bin": {
     "plenum": "./src/main.ts"
   },
+  "type": "module",
   "scripts": {
-    "start": "node src/main.ts ../../examples/gateway.json",
-    "typecheck": "tsc -p tsconfig.json"
+    "start": "node --max-semi-space-size=4 --env-file-if-exists=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env} src/main.ts ../../examples/gateway.json",
+    "bench": "node src/bench.ts ../../examples/gateway.json",
+    "sim": "vitest run test/Simulation.test.ts --silent=false",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "effect": "4.1.2",
     "@effect/platform-node": "4.1.2",
+    "@plenum/bacnet": "workspace:*",
+    "@plenum/buffer": "workspace:*",
     "@plenum/core": "workspace:*",
-    "@plenum/simulator": "workspace:*"
+    "@plenum/modbus": "workspace:*",
+    "@plenum/mqtt": "workspace:*",
+    "@plenum/simulator": "workspace:*",
+    "effect": "4.1.2"
   }
 }
