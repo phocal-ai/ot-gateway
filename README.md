@@ -90,6 +90,8 @@ node apps/gateway/src/main.ts --discover path/to/gateway.json
 
 ## Running it for real
 
+[docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
+
 On a Raspberry Pi (64-bit OS) or any Linux machine with systemd and Node.js 22.18 or newer, from a checkout:
 
 ```bash
@@ -112,7 +114,7 @@ The status page listens on `127.0.0.1` only, by default, and then answers only r
 
 ## Configuration
 
-A gateway is described by one JSON document:
+A gateway is described by one JSON document; [docs/configuration.md](docs/configuration.md) lists every key with its default.
 
 ```json
 {
