@@ -4,8 +4,12 @@
  * clock that jumps. Each test asserts the fixed behaviour of a chaos finding.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { Clock, Effect, Exit } from "effect"
+import { makeMemoryNetwork } from "@plenum/core"
+import { Clock, Effect, Exit, Logger } from "effect"
+import { TestClock } from "effect/testing"
+import { makeMqttClient } from "../../src/Client.ts"
 import type { MqttPublishError } from "../../src/Client.ts"
+import { makeBrokerControl, serveMqtt } from "../../src/TestBroker.ts"
 import { Property } from "../../src/Packet.ts"
 import { clientOn, makeScript, startScriptedBroker, waitUntil } from "./harness.ts"
 
@@ -181,5 +185,29 @@ describe("chaos: MQTT client", () => {
       script.answerPings = false
       expect(yield* waitUntil(() => script.connections >= 2, 4000)).toBe(true)
     })
+  )
+})
+
+describe("chaos: a broker that stays down", () => {
+  it.effect("logs the first failed dial and the reconnect, not every redial", () =>
+    Effect.gen(function* () {
+      const lines: Array<string> = []
+      const logger = Logger.layer([
+        Logger.make(({ logLevel, message }) => {
+          if (logLevel === "Debug") return
+          lines.push(`${logLevel}: ${(Array.isArray(message) ? message : [message]).join(" ")}`)
+        })
+      ])
+      const network = makeMemoryNetwork()
+      const socket = yield* network.host("10.0.0.1").tcp({ host: "10.0.0.2", port: 1883, openTimeout: "5 seconds" })
+      yield* makeMqttClient(socket, { clientId: "down" }).pipe(Effect.provide(logger))
+      // Nobody listens for half an hour: a redial every 15 s at most, about 120 refused dials.
+      yield* TestClock.adjust("30 minutes")
+      const broker = yield* network.listen("10.0.0.2", 1883)
+      yield* serveMqtt(broker, makeBrokerControl()).pipe(Effect.forkScoped)
+      yield* TestClock.adjust("20 seconds")
+
+      expect(lines).toEqual(["Warn: MQTT connect failed, retrying", "Info: connected to MQTT broker"])
+    }).pipe(Effect.scoped)
   )
 })

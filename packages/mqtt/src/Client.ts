@@ -181,7 +181,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   let session: Session | undefined
 
   /** One connection, from dialing until it fails. Never succeeds. */
-  const runSession = (onConnected: (at: number) => void) =>
+  /** `onConnected` returns how many dials failed before this one, for the log. */
+  const runSession = (onConnected: (at: number) => number) =>
     Effect.scoped(
       Effect.gen(function* () {
         const { pull } = yield* socket.reader
@@ -327,12 +328,17 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           })
         )
         session = current
-        onConnected(yield* monotonicMillis)
+        const failedBefore = onConnected(yield* monotonicMillis)
         yield* countConnect("ok")
         yield* Metric.update(mqttConnected, 1)
         yield* Latch.open(connected)
         yield* Latch.open(firstDialDone)
-        yield* Effect.logInfo("connected to MQTT broker").pipe(Effect.annotateLogs({ keepAlive: effectiveKeepAlive }))
+        yield* Effect.logInfo("connected to MQTT broker").pipe(
+          Effect.annotateLogs({
+            keepAlive: effectiveKeepAlive,
+            ...(failedBefore > 0 ? { failedDials: failedBefore } : {})
+          })
+        )
         if (options.onConnect !== undefined) yield* Effect.forkScoped(options.onConnect(client))
 
         let lastReceived = yield* monotonicMillis
@@ -392,23 +398,54 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
 
   const connectionLoop = Effect.gen(function* () {
     let failures = 0
+    /**
+     * Why the last dial failed, while the broker cannot be reached. A broker
+     * that stays down fails every redial (every 15 s at most): each one is
+     * counted, but only a new reason is logged, and the next connect says
+     * how many dials it took.
+     */
+    let unreachable: string | undefined
+    let failedDials = 0
+    const dialFailed = (reason: string, log: Effect.Effect<void>) =>
+      Effect.suspend(() => {
+        failedDials++
+        if (reason === unreachable) return Effect.logDebug("MQTT dial failed again")
+        unreachable = reason
+        return log
+      })
     while (true) {
       let connectedAt: number | undefined
       yield* runSession((at) => {
         connectedAt = at
+        unreachable = undefined
+        const dials = failedDials
+        failedDials = 0
+        return dials
       }).pipe(
         Effect.catchTags({
           MqttRejected: (error) =>
             countConnect("rejected").pipe(
-              Effect.andThen(Effect.logError("MQTT broker refused the connection")),
-              Effect.annotateLogs({ reason: error.message, reasonCode: error.reasonCode })
+              Effect.andThen(
+                dialFailed(
+                  `rejected ${error.reasonCode}`,
+                  Effect.logError("MQTT broker refused the connection").pipe(
+                    Effect.annotateLogs({ reason: error.message, reasonCode: error.reasonCode })
+                  )
+                )
+              )
             ),
           MqttConnectionError: (error) =>
             connectedAt !== undefined
               ? Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: error.message }))
               : countConnect("failed").pipe(
-                  Effect.andThen(Effect.logWarning("MQTT connect failed")),
-                  Effect.annotateLogs({ error: error.message })
+                  Effect.andThen(
+                    dialFailed(
+                      "unreachable",
+                      Effect.logWarning("MQTT connect failed, retrying").pipe(
+                        Effect.annotateLogs({ error: error.message })
+                      )
+                    )
+                  )
                 )
         })
       )
