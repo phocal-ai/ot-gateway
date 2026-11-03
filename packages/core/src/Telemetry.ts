@@ -204,6 +204,17 @@ export const bufferDisabled = Metric.gauge("plenum_buffer_disabled", {
   attributes: { unit: "{state}" }
 })
 
+/**
+ * Commands received on `.../$set`, by `outcome`: `written`, `rejected` (the
+ * command guard refused it: not writable, out of range, wrong type, a
+ * retained message) or `failed` (the device could not be written), and by
+ * `reason` for the last two. Every command is also logged.
+ */
+export const commands = Metric.counter("plenum_commands", {
+  description: "Commands received over MQTT, by outcome and reason",
+  incremental: true
+})
+
 /** Add attributes to every metric updated inside `effect`, keeping the ones already set. */
 export const withMetricAttributes =
   (attributes: Metric.Metric.AttributeSet) =>

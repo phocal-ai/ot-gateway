@@ -1,6 +1,6 @@
 # @plenum/mqtt
 
-Effect-native MQTT 5 publishing client, implemented in-house.
+Effect-native MQTT 5 client, implemented in-house: publishing, and subscriptions for commands.
 
 - **Codecs** (`Codec.ts`, `Packet.ts`): pure encoding and decoding per OASIS MQTT 5.0 chapter 3.
   - CONNECT/CONNACK with properties, PUBLISH at QoS 0 and 1, PUBACK, PINGREQ/PINGRESP, DISCONNECT.
@@ -24,6 +24,8 @@ Effect-native MQTT 5 publishing client, implemented in-house.
 
 Metrics: `plenum_mqtt_connects_total{outcome}` (`ok`, `failed`, `rejected`) and `plenum_mqtt_connected`.
 
-Not yet: SUBSCRIBE for commands (v0.4), QoS 2 and WebSocket transport.
+- **Subscriptions**: `subscriptions` are subscribed on every connect (the session is clean, so a message sent while the client was away is never delivered later), with Retain As Published when asked. Received messages are acknowledged on receipt and handed to `onMessage` with their retain flag, response topic and correlation data. The test broker routes publishes to subscribers, sends retained messages on subscribe, and `publishToSubscribers` lets a test send one.
+
+Not yet: QoS 2, UNSUBSCRIBE and WebSocket transport.
 
 Part of [Plenum](../../README.md).

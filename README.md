@@ -25,7 +25,7 @@ Plenum treats field reality as normal: devices time out, brokers go offline, reg
 - **Normalization.** Scaling, deadband and units (QUDT) are set per point.
 - **Semantic tagging.** Each point can carry an optional Brick class and Haystack tags.
 - **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite.
-- **Safe writes.** Writing is opt-in per point, allowlisted and range-checked (planned).
+- **Safe writes.** Writing is opt-in per point, range-checked, live-only and logged: a command is written once or not at all, never replayed.
 - **Testable without hardware.** Every driver gets a simulator, and CI runs end to end.
 
 ## Quick start
@@ -108,13 +108,28 @@ IDs must be lowercase slugs of at most 64 characters, so they are always valid M
 
 ## Topics
 
-| Topic                                | Retained | Payload                                                                                          |
-| ------------------------------------ | -------- | ------------------------------------------------------------------------------------------------ |
-| `site/building/device/point`         | no       | `{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}` when the value moves beyond the deadband |
-| `site/building/device/point/$meta`   | yes      | name, unit, writability and Brick/Haystack semantics                                             |
-| `site/building/$gateway/<id>/health` | yes      | `online` with per-device status, or `offline` (see below)                                        |
+| Topic                                    | Retained | Payload                                                                                          |
+| ---------------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `site/building/device/point`             | no       | `{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}` when the value moves beyond the deadband |
+| `site/building/device/point/$meta`       | yes      | name, unit, writability and Brick/Haystack semantics                                             |
+| `site/building/$gateway/<id>/health`     | yes      | `online` with per-device status, or `offline` (see below)                                        |
+| `site/building/device/point/$set`        | never    | a command to the gateway: `{"value":21.5}` (see Commands)                                        |
+| `site/building/device/point/$set/result` | no       | the command's result, unless the command named an MQTT 5 response topic                          |
 
 The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`: the driver's `timeout`, `connection`, `protocol`, …, `cycle-timeout` when a polling cycle hung past its deadline, or `crashed` when the device's pipeline hit a bug and is being restarted). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back.
+
+## Commands
+
+A point with `"writable": true` takes commands on `site/building/device/point/$set`, as `{"value": 21.5}` (a number, `true`/`false` for a coil, bool register or binary object, or `null` to release a BACnet point). The gateway subscribes only when some point is writable. A command is written only if all of these hold, and otherwise refused without touching the device:
+
+- it is live: a retained command is refused every time it is seen (the gateway subscribes with Retain As Published, so it sees the flag even when it is online), since it would otherwise be applied again after every reconnect;
+- the point exists and is writable;
+- the value has the point's type, and a number lies within the point's `limits` (`{"min": 15, "max": 25}`, in engineering units, required on every writable numeric point);
+- the session is clean: a command sent while the gateway was offline is never delivered later.
+
+The value is unscaled into device units and written once, with a 10 s deadline: Modbus with FC 05 (coil), FC 06 (one register) or FC 16 (32-bit values, both halves in one request), never resent; BACnet with WriteProperty at the point's `priority` (default 8, manual operator; 1 to 16, not 6). A BACnet client resends a request whose answer was lost, as the standard has it, so a device may apply the same value at the same priority twice in a row, which leaves the same state; another BACnet client writing the same priority slot within those seconds could be overwritten.
+
+Every command gets one result, `{"status":"written","value":21.5,"ts":…}`, or `rejected` / `failed` with a `reason` (`retained`, `unknown-point`, `not-writable`, `invalid-payload`, `wrong-type`, `out-of-range`; `device-unavailable`, `timeout`, or the driver's reason) and a `message`. It goes to the MQTT 5 Response Topic the command named, with its Correlation Data, or to `…/$set/result`. Results are not buffered: delivered now or not at all. Every command is logged and counted in `plenum_commands_total{outcome,reason}`. Who may publish to `$set` topics is the broker's business: restrict it with the broker's ACLs.
 
 ## Observability
 
@@ -122,15 +137,15 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 
 ## Packages
 
-| Package                                   | What it does                                                                                             | Status                |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------- |
-| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service         | Working               |
-| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                             | Working               |
-| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server; writes in v0.4                     | Reads working         |
-| [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order      | Working               |
-| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, publishing client with reconnect and keep alive, `Publisher` layer, test broker          | Publishing working    |
-| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, client with Who-Is discovery, ReadProperty(Multiple) and COV driver, simulator server | Reads and COV working |
-| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                     | Working               |
+| Package                                   | What it does                                                                                         | Status  |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------- |
+| [`@plenum/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service     | Working |
+| [`@plenum/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                         | Working |
+| [`@plenum/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server, with writes                    | Working |
+| [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order  | Working |
+| [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, client with reconnect, keep alive and subscriptions, `Publisher` layer, test broker  | Working |
+| [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, Who-Is discovery, ReadProperty(Multiple), COV and WriteProperty, simulator server | Working |
+| [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                 | Working |
 
 ## Architecture
 

@@ -367,6 +367,43 @@ timeseries(
 )
 y += 8
 
+row("Commands")
+timeseries(
+  "Commands by outcome",
+  [
+    {
+      expr: `sum by (outcome) (increase(plenum_commands_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    stack: true,
+    description:
+      "Commands received on site/building/device/point/$set. written reached the device; rejected was refused by the command guard (not writable, out of range, wrong type, retained) and never reached it; failed could not be written (device down, refused, no answer)."
+  }
+)
+timeseries(
+  "Rejected and failed commands by reason",
+  [
+    {
+      expr: `sum by (outcome, reason) (increase(plenum_commands_total{${sel}, outcome!="written"}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}: {{reason}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    stack: true,
+    description:
+      "Why commands did not get through. retained on every reconnect means a retained message sits on a $set topic: clear it on the broker. Every command is also in the logs."
+  }
+)
+y += 8
+
 row("Buffer")
 timeseries(
   "Messages waiting in the buffer",

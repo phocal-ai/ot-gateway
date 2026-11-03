@@ -4,7 +4,7 @@
  */
 import { healthTopic } from "@plenum/core"
 import { Schema } from "effect"
-import type { SimulationRun } from "./Simulation.ts"
+import { type CommandKind, RESPONSES, type SimulationRun } from "./Simulation.ts"
 
 /** Messages the drainer may have in flight when a connection breaks (`BufferedPublisher.ts`). */
 const IN_FLIGHT = 16
@@ -40,6 +40,101 @@ const activeAt = (run: SimulationRun, at: number) =>
     .map((fault) => `${fault.kind} ${fault.target} ${fault.at}+${fault.durationMs}`)
     .join(", ") || "none"
 
+/** A command result as the gateway publishes it, decoded like any MQTT payload. */
+const decodeResult = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Struct({ status: Schema.String, reason: Schema.optionalKey(Schema.String) }))
+)
+
+/** The reason each kind of bad command must be refused with. */
+const expectedReason: Record<Exclude<CommandKind, "valid">, string> = {
+  "out-of-range": "out-of-range",
+  "wrong-type": "wrong-type",
+  "not-writable": "not-writable",
+  "unknown-point": "unknown-point",
+  "invalid-payload": "invalid-payload",
+  retained: "retained"
+}
+
+/** Faults after which a command on `device` may go unanswered: anything between the sender and the device. */
+const blocksCommand = (kind: string, target: string, device: string) =>
+  target === device || kind.startsWith("broker-") || kind.startsWith("gateway-")
+
+/** How long a command may take to be written and answered. */
+const COMMAND_DEADLINE_MS = 60_000
+
+/**
+ * Write-back (v0.4): nothing unsafe reaches a device, nothing is written
+ * twice or without a command, every result is right, and a command sent
+ * while its whole path is healthy is written.
+ */
+const checkCommands = (run: SimulationRun) => {
+  const violations: Array<string> = []
+  const results = new Map<number, Array<{ readonly status: string; readonly reason?: string }>>()
+  for (const message of run.received) {
+    if (message.topic !== RESPONSES || message.correlationData === undefined) continue
+    const data = message.correlationData
+    const id = new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, true)
+    results.set(id, [...(results.get(id) ?? []), decodeResult(message.payload)])
+  }
+  // Writes name their command by value: values are unique per command (`commandSchedule`).
+  const commandOf = (device: string, value: number) =>
+    run.commands.find((command) => command.device === device && Math.abs(Math.fround(command.value) - value) < 1e-4)
+  // Applications per command. BACnet resends a confirmed request whose answer was lost (clause 5.4.4.1),
+  // so a device may apply one WriteProperty twice in a row: the same value at the same priority, the same
+  // state as once. Back-to-back repeats on one object count as one application; the same write coming back
+  // after another one to that object is a replay and counts again. Modbus never resends a write.
+  const bacnet = new Set(
+    run.config.devices.filter((device) => device.protocol === "bacnet-ip").map((device) => device.id)
+  )
+  const writesPer = new Map<number, number>()
+  const lastOn = new Map<string, number>()
+  for (const write of run.deviceWrites) {
+    const command = commandOf(write.device, write.value)
+    if (command === undefined) {
+      violations.push(`${write.device} applied ${write.value} to ${write.target}, which no command asked for`)
+      continue
+    }
+    const object = `${write.device} ${write.target}`
+    const retransmission = bacnet.has(write.device) && lastOn.get(object) === command.id
+    lastOn.set(object, command.id)
+    if (!retransmission) writesPer.set(command.id, (writesPer.get(command.id) ?? 0) + 1)
+  }
+  let written = 0
+  let unanswered = 0
+  for (const command of run.commands) {
+    const answers = results.get(command.id) ?? []
+    const writes = writesPer.get(command.id) ?? 0
+    const name = `command ${command.id} (${command.kind}, ${command.device}/${command.point}, at ${command.at})`
+    if (answers.length === 0) unanswered++
+    if (answers.length > 1 && command.kind !== "retained") violations.push(`${name} got ${answers.length} results`)
+    if (command.kind !== "valid") {
+      if (writes > 0) violations.push(`${name} reached the device`)
+      const reason = expectedReason[command.kind]
+      const wrong = answers.find((answer) => answer.status !== "rejected" || answer.reason !== reason)
+      if (wrong !== undefined) violations.push(`${name} was answered ${wrong.status} ${wrong.reason ?? ""}`)
+      continue
+    }
+    if (writes > 1) violations.push(`${name} was written ${writes} times (faults then: ${activeAt(run, command.at)})`)
+    const status = answers[0]?.status
+    if (status === "written") written++
+    if (status === "written" && writes !== 1)
+      violations.push(`${name} was answered written but applied ${writes} times`)
+    if (status === "rejected") violations.push(`${name} was rejected: ${answers[0]?.reason ?? ""}`)
+    const healthy =
+      command.delivered &&
+      !run.faults.some(
+        (fault) =>
+          blocksCommand(fault.kind, fault.target, command.device) &&
+          fault.at <= command.at + COMMAND_DEADLINE_MS &&
+          command.at <= fault.at + fault.durationMs + RECOVERY_MS
+      )
+    if (healthy && status !== "written") {
+      violations.push(`${name} was sent while its path was healthy, but answered ${status ?? "nothing"}`)
+    }
+  }
+  return { violations, summary: { commands: run.commands.length, written, unanswered } }
+}
+
 export interface Verdict {
   readonly violations: ReadonlyArray<string>
   readonly summary: Record<string, number>
@@ -47,7 +142,10 @@ export interface Verdict {
 
 export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict => {
   const violations: Array<string> = []
-  const values = run.received.filter((message) => !message.retain)
+  // Device values only: commands (`…/$set`) and their results share the broker.
+  const values = run.received.filter(
+    (message) => !message.retain && !message.topic.endsWith("/$set") && message.topic !== RESPONSES
+  )
 
   // 1. No value the gateway accepted is lost: it reaches the broker, through every outage and restart.
   const delivered = new Map<string, number>()
@@ -153,7 +251,10 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
     }
     let stalls = 0
     let first = ""
+    const writable = new Set(device.points.filter((point) => point.writable).map((point) => `${prefix}${point.id}`))
     for (const [pointTopic, times] of byTopic) {
+      // A writable point only changes when commanded.
+      if (writable.has(pointTopic)) continue
       // A point that only changes every quarter of an hour (a flag) gets a longer leash than a measurement.
       const gaps = times.slice(1).map((time, index) => time - (times[index] ?? time))
       const typical = gaps.toSorted((a, b) => a - b)[Math.floor(gaps.length / 2)] ?? 0
@@ -192,9 +293,13 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
     )
   }
 
+  const commandCheck = checkCommands(run)
+  violations.push(...commandCheck.violations)
+
   return {
     violations,
     summary: {
+      ...commandCheck.summary,
       ...run.faults.reduce<Record<string, number>>((counts, fault) => {
         counts[fault.kind] = (counts[fault.kind] ?? 0) + 1
         return counts

@@ -38,6 +38,16 @@ export const Scaling = Schema.Struct({
 export type Scaling = typeof Scaling.Type
 
 /** Fields every point has, whatever its protocol. */
+/**
+ * The values a command may set, in engineering units (after scaling),
+ * inclusive. Required on every writable numeric point: there is no
+ * unlimited write (VISION.md, principle 6).
+ */
+export const Limits = Schema.Struct({ min: Schema.Finite, max: Schema.Finite }).check(
+  Schema.makeFilter((limits) => limits.min <= limits.max || { path: ["max"], issue: "max is below min" })
+)
+export type Limits = typeof Limits.Type
+
 export const PointFields = {
   id: Slug,
   name: Schema.String,
@@ -45,6 +55,7 @@ export const PointFields = {
   unit: Schema.optionalKey(Schema.String),
   /** Writing is opt-in per point. */
   writable: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
+  limits: Schema.optionalKey(Limits),
   /** Minimum change (after scaling) before a new value is published. */
   deadband: Schema.optionalKey(Schema.Finite.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
   scaling: Schema.optionalKey(Scaling),
@@ -77,9 +88,26 @@ export const ModbusPoint = Schema.Struct({
         issue: `a ${point.dataType} takes two registers, so its address must be at most 65534`
       }
     )
+  }),
+  Schema.makeFilter((point) => {
+    if (!point.writable) return true
+    if (point.table !== "holding" && point.table !== "coil") {
+      return {
+        path: ["writable"],
+        issue: `${point.table} ${point.table === "input" ? "registers" : "inputs"} are read-only`
+      }
+    }
+    const numeric = point.table === "holding" && point.dataType !== "bool"
+    return !numeric || point.limits !== undefined || limitsRequired
   })
 )
 export type ModbusPoint = typeof ModbusPoint.Type
+
+/** The issue of a writable numeric point without limits. */
+const limitsRequired = {
+  path: ["limits"],
+  issue: "a writable numeric point needs limits ({ min, max }): there is no unlimited write"
+} as const
 
 /** A point on a BACnet/IP device. */
 export const BacnetPoint = Schema.Struct({
@@ -89,8 +117,25 @@ export const BacnetPoint = Schema.Struct({
   /** 22 bits on the wire (clause 20.2.14). */
   instance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
   /** Property by its ASHRAE 135 name or number (default `present-value`). */
-  property: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("present-value")))
-})
+  property: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("present-value"))),
+  /**
+   * The priority array slot writes use (clause 19.2), 1 (highest) to 16;
+   * default 8, manual operator. 6 is reserved for minimum on/off time.
+   */
+  priority: Schema.Int.pipe(
+    Schema.check(
+      Schema.isBetween({ minimum: 1, maximum: 16 }),
+      Schema.makeFilter((priority) => priority !== 6 || "priority 6 is reserved for minimum on/off time")
+    ),
+    Schema.withDecodingDefaultKey(Effect.succeed(8))
+  )
+}).check(
+  Schema.makeFilter((point) => {
+    // A binary object's present value is active or inactive; anything else written is a number.
+    const numeric = !(point.objectType.startsWith("binary-") && point.property === "present-value")
+    return !point.writable || !numeric || point.limits !== undefined || limitsRequired
+  })
+)
 export type BacnetPoint = typeof BacnetPoint.Type
 
 /** A simulated point, used in tests and demos. */
@@ -100,7 +145,11 @@ export const SimulatedPoint = Schema.Struct({
   min: Schema.Finite,
   max: Schema.Finite,
   periodSeconds: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(60)))
-})
+}).check(
+  Schema.makeFilter(
+    (point) => !point.writable || { path: ["writable"], issue: "a simulated waveform cannot be written" }
+  )
+)
 export type SimulatedPoint = typeof SimulatedPoint.Type
 
 /** The shared view of any point, used by the pipeline. */
@@ -109,6 +158,7 @@ export interface AnyPoint {
   readonly name: string
   readonly unit?: string
   readonly writable: boolean
+  readonly limits?: Limits
   readonly deadband?: number
   readonly scaling?: Scaling
   readonly semantics?: Semantics

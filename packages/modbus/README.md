@@ -22,6 +22,8 @@ Effect-native Modbus TCP, implemented in-house.
 
 Metrics: `plenum_driver_requests_total{outcome}`, `plenum_driver_connects_total{outcome}` and `plenum_driver_refusals_total{exception}`. The driver adds no span per request; the cycle span carries `plenum.requests` and `plenum.refused`.
 
-Not yet: writes (v0.4, with the command guard) and word-swapped 32-bit values.
+- **Writes** (`Driver.write`, behind the command guard in `@plenum/core`): FC 05 for coils, FC 06 for one-register values and FC 16 for 32-bit ones, so both halves change in one request. The client never resends a write, not even on a connection it finds closed, since a device that took it would apply it twice. Values that do not fit their type, and input registers or discrete inputs, are refused before anything is sent. The simulator applies writes and records them in `SimulatorControl.writes`; `refuseWrites` makes it answer with an exception.
+
+Not yet: word-swapped 32-bit values.
 
 Part of [Plenum](../../README.md).

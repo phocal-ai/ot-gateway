@@ -35,6 +35,7 @@ export const points = (count: number): Array<BacnetPoint> =>
     id: `p-${index}`,
     name: `p-${index}`,
     writable: false,
+    priority: 8,
     objectType: "analog-input",
     instance: index + 1,
     property: "present-value"
@@ -110,6 +111,7 @@ export const scriptedClient = () => {
   }
   const client: BacnetClient = {
     confirmed: () => Effect.die("not scripted"),
+    writeProperty: () => Effect.die("not scripted"),
     readProperty: (_target, request) =>
       Effect.suspend((): Effect.Effect<ReadonlyArray<BacnetValue>, BacnetRequestError> => {
         state.rp++

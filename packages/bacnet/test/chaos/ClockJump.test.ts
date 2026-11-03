@@ -15,6 +15,7 @@ const analogInput = (id: string, property: string): BacnetPoint => ({
   id,
   name: id,
   writable: false,
+  priority: 8,
   objectType: "analog-input",
   instance: 1,
   property

@@ -14,6 +14,7 @@ export const FunctionCode = {
   ReadDiscreteInputs: 0x02,
   ReadHoldingRegisters: 0x03,
   ReadInputRegisters: 0x04,
+  WriteSingleCoil: 0x05,
   WriteSingleRegister: 0x06,
   WriteMultipleRegisters: 0x10
 } as const
@@ -100,6 +101,76 @@ export const encodeReadRequest = (req: ReadRequest): Uint8Array => {
   return buf
 }
 
+/**
+ * A write (v0.4): one coil (FC 05, spec §6.5), one holding register (FC 06,
+ * §6.6), or several consecutive holding registers (FC 16, §6.12) for 32-bit
+ * values, which must change in one request so no reader sees half of one.
+ */
+export type WriteRequest =
+  | { readonly functionCode: typeof FunctionCode.WriteSingleCoil; readonly address: number; readonly value: boolean }
+  | { readonly functionCode: typeof FunctionCode.WriteSingleRegister; readonly address: number; readonly value: number }
+  | {
+      readonly functionCode: typeof FunctionCode.WriteMultipleRegisters
+      readonly address: number
+      readonly values: ReadonlyArray<number>
+    }
+
+/** The PDU of a write request after the function code. */
+const writeData = (req: WriteRequest): Uint8Array => {
+  switch (req.functionCode) {
+    case FunctionCode.WriteSingleCoil:
+      // ON is 0xFF00 and OFF 0x0000; any other value is illegal (§6.5).
+      return Uint8Array.of(req.address >> 8, req.address & 0xff, req.value ? 0xff : 0x00, 0x00)
+    case FunctionCode.WriteSingleRegister:
+      return Uint8Array.of(req.address >> 8, req.address & 0xff, (req.value >> 8) & 0xff, req.value & 0xff)
+    case FunctionCode.WriteMultipleRegisters: {
+      const data = new Uint8Array(5 + 2 * req.values.length)
+      const view = new DataView(data.buffer)
+      view.setUint16(0, req.address)
+      view.setUint16(2, req.values.length)
+      view.setUint8(4, 2 * req.values.length)
+      req.values.forEach((value, index) => view.setUint16(5 + 2 * index, value & 0xffff))
+      return data
+    }
+  }
+}
+
+/** MBAP header (length counts the unit id, function code and data) and PDU. */
+const frameWith = (transactionId: number, unitId: number, functionCode: number, data: Uint8Array) => {
+  const buf = new Uint8Array(8 + data.length)
+  const view = new DataView(buf.buffer)
+  view.setUint16(0, transactionId & 0xffff)
+  view.setUint16(2, 0)
+  view.setUint16(4, 2 + data.length)
+  view.setUint8(6, unitId)
+  view.setUint8(7, functionCode)
+  buf.set(data, 8)
+  return buf
+}
+
+export const encodeWriteRequest = (transactionId: number, unitId: number, req: WriteRequest): Uint8Array =>
+  frameWith(transactionId, unitId, req.functionCode, writeData(req))
+
+/**
+ * Decode a write response. FC 05 and 06 echo the request (§6.5, §6.6); FC 16
+ * echoes the address and quantity (§6.12). An echo that differs answers some
+ * other write, or the device changed what it wrote: both are frame errors.
+ */
+export const decodeWriteResponse = (
+  frame: Uint8Array,
+  unitId: number,
+  req: WriteRequest
+): Effect.Effect<void, ModbusFrameError | ModbusException> =>
+  Effect.gen(function* () {
+    yield* decodeHeader(frame, { unitId, functionCode: req.functionCode })
+    const expected =
+      req.functionCode === FunctionCode.WriteMultipleRegisters ? writeData(req).subarray(0, 4) : writeData(req)
+    const echo = frame.subarray(8)
+    if (echo.length !== expected.length || echo.some((byte, index) => byte !== expected[index])) {
+      return yield* new ModbusFrameError({ message: "write response does not echo the request" })
+    }
+  })
+
 const encoder = new TextEncoder()
 
 /** Append socket chunks to a receive buffer (a socket may deliver strings; Modbus is bytes). */
@@ -172,6 +243,23 @@ const decodeReadBody = (
   expected: ExpectedResponse
 ): Effect.Effect<ResponseHeader, ModbusFrameError | ModbusException> =>
   Effect.gen(function* () {
+    const header = yield* decodeHeader(frame, expected)
+    const byteCount = frame[8] ?? 0
+    if (frame.length !== 9 + byteCount) {
+      return yield* new ModbusFrameError({ message: `invalid byte count ${byteCount}` })
+    }
+    return { ...header, data: frame.subarray(9) }
+  })
+
+/**
+ * The checks every response shares: MBAP header, the unit, and the function
+ * code, or an exception for it. Fails with the exception or a frame error.
+ */
+const decodeHeader = (
+  frame: Uint8Array,
+  expected: Omit<ExpectedResponse, "quantity">
+): Effect.Effect<Omit<ResponseHeader, "data">, ModbusFrameError | ModbusException> =>
+  Effect.gen(function* () {
     if (frame.length < 9) {
       return yield* new ModbusFrameError({ message: `frame too short: ${frame.length} bytes` })
     }
@@ -205,11 +293,7 @@ const decodeReadBody = (
         message: `response function code ${functionCode} does not answer request ${expected.functionCode}`
       })
     }
-    const byteCount = view.getUint8(8)
-    if (frame.length !== 9 + byteCount) {
-      return yield* new ModbusFrameError({ message: `invalid byte count ${byteCount}` })
-    }
-    return { transactionId, unitId, functionCode, data: frame.subarray(9) }
+    return { transactionId, unitId, functionCode }
   })
 
 export interface ReadResponse {
@@ -267,9 +351,10 @@ export const decodeBitResponse = (
     return { ...header, bits }
   })
 
-/** A request as a server sees it: a read it can answer, or a function it does not support. */
+/** A request as a server sees it: a read or a write it can answer, or a function it does not support. */
 export type DecodedRequest =
   | { readonly _tag: "Read"; readonly request: ReadRequest }
+  | { readonly _tag: "Write"; readonly transactionId: number; readonly unitId: number; readonly request: WriteRequest }
   | {
       readonly _tag: "Unsupported"
       readonly transactionId: number
@@ -304,6 +389,39 @@ export const decodeRequest = (frame: Uint8Array): Effect.Effect<DecodedRequest, 
         }
         return { _tag: "Read", request } as const
       }
+      case FunctionCode.WriteSingleCoil:
+      case FunctionCode.WriteSingleRegister: {
+        if (frame.length !== 12) {
+          return yield* new ModbusFrameError({ message: `write request must be 12 bytes, got ${frame.length}` })
+        }
+        const address = view.getUint16(8)
+        const raw = view.getUint16(10)
+        if (functionCode === FunctionCode.WriteSingleRegister) {
+          return { _tag: "Write", transactionId, unitId, request: { functionCode, address, value: raw } } as const
+        }
+        if (raw !== 0xff00 && raw !== 0x0000) {
+          return yield* new ModbusFrameError({ message: `coil value must be 0xFF00 or 0x0000, got ${raw}` })
+        }
+        return {
+          _tag: "Write",
+          transactionId,
+          unitId,
+          request: { functionCode, address, value: raw === 0xff00 }
+        } as const
+      }
+      case FunctionCode.WriteMultipleRegisters: {
+        const quantity = frame.length >= 13 ? view.getUint16(10) : 0
+        if (frame.length !== 13 + 2 * quantity || view.getUint8(12) !== 2 * quantity || quantity === 0) {
+          return yield* new ModbusFrameError({ message: "malformed write multiple registers request" })
+        }
+        const values = Array.from({ length: quantity }, (_, index) => view.getUint16(13 + 2 * index))
+        return {
+          _tag: "Write",
+          transactionId,
+          unitId,
+          request: { functionCode, address: view.getUint16(8), values }
+        } as const
+      }
       default:
         return { _tag: "Unsupported", transactionId, unitId, functionCode } as const
     }
@@ -322,6 +440,15 @@ const encodeResponse = (transactionId: number, unitId: number, functionCode: num
   buf.set(data, 9)
   return buf
 }
+
+/** Encode the response to a write: the echo of FC 05/06, or address and quantity for FC 16. */
+export const encodeWriteResponse = (transactionId: number, unitId: number, req: WriteRequest): Uint8Array =>
+  frameWith(
+    transactionId,
+    unitId,
+    req.functionCode,
+    req.functionCode === FunctionCode.WriteMultipleRegisters ? writeData(req).subarray(0, 4) : writeData(req)
+  )
 
 /** Encode a register read response (FC 03/04). */
 export const encodeRegisterResponse = (req: ReadRequest, registers: ReadonlyArray<number>): Uint8Array => {
