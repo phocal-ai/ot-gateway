@@ -19,6 +19,7 @@ pnpm gateway          # run apps/gateway with examples/gateway.json
 pnpm --filter @plenum/core test   # one package
 pnpm --filter @plenum/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
+scripts/interop.sh [mqtt|bacnet|modbus]   # against Mosquitto, EMQX, the BACnet Stack server and pymodbus (Docker, Python)
 ```
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.

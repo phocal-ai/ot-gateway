@@ -31,6 +31,10 @@ CI runs `pnpm check` on every pull request into `dev` or `main` and on every pus
 
 Use short, imperative subjects, such as `modbus: group adjacent registers into one read`. Prefix with the package name when a change is scoped to one package.
 
+## Interop
+
+The unit tests and the simulation talk to our own test broker and device simulators, so a spec misread the same way on both sides would pass them. `scripts/interop.sh` runs `apps/gateway/test/interop` against implementations that are not ours: Mosquitto 2 and EMQX 5 (the client, and the whole gateway with commands), the BACnet Stack demo server (discovery, ReadPropertyMultiple, WriteProperty with priority, change of value) and a pymodbus server (every table and type, writes). It needs Docker and Python 3; `scripts/interop.sh mqtt` runs one peer. The `Interop` workflow runs it on pull requests that touch the code.
+
 ## Simulation
 
 `apps/gateway/test/Simulation.test.ts` runs the whole gateway (pipelines, outbox, MQTT client, Modbus and BACnet drivers) against the test broker and device simulators on an in-memory network (`MemoryNetwork` in `@plenum/core`) under the test clock. A seeded schedule crashes and partitions the broker, the devices and the gateway's host, loses datagrams, restarts the gateway, fills the outbox's disk under it and steps its wall clock (as NTP does on a Pi, backwards too). At the end it checks that no accepted value was lost, values arrived in order (except values that skipped a full disk's outbox), duplicates stayed within the in-flight window, the outbox drained, no point went quiet while nothing on its path was failing, every device is ok, no socket leaked and warnings stayed within the log budget. `pnpm test` runs three seeds of six hours (about 30 seconds); a week per seed takes about four minutes:
