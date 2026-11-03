@@ -33,13 +33,19 @@ Use short, imperative subjects, such as `modbus: group adjacent registers into o
 
 ## Soak testing
 
-Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run before a release:
+Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run. What a soak finds depends on how many events happen (poll cycles, outages, COV renewals, buffer fills and drains), not on how many hours pass, so run it accelerated:
 
 ```bash
-scripts/soak.sh 24
+SOAK_SPEED=60 SOAK_DEVICES=4 scripts/soak.sh 30m
 ```
 
-It runs the gateway against the bench from `examples/gateway.json` (BACnet with change of value), stops the broker every two hours and the devices every four, and records memory, CPU, open files and buffer size. `SOAK_DISK_FAULT=1` (macOS) also fills the buffer's disk. The script header lists every setting.
+That packs roughly a day of outages and renewals into half an hour: every interval in `examples/gateway.json` is divided by 60 (polls at least 100 ms apart, COV lifetimes at least 30 s), the broker stops every two minutes and the devices every four, and every device runs four times on its own ports. `SOAK_DISK_FAULT=1` also fills the buffer's disk (a disk image on macOS, a tmpfs on Linux, which needs root or passwordless sudo). The run ends without outages so the buffer can drain, and fails if the gateway exits or logs FATAL, a device is not ok in the last health message, rows are left in the buffer, or memory or open files grow from the first half of the run to the second. The script header lists every setting. The `Soak` workflow runs the same thing every night and on demand.
+
+Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi:
+
+```bash
+scripts/soak.sh 24h
+```
 
 ## Reporting device quirks
 

@@ -36,4 +36,4 @@ The gateway runs unattended for months on a Raspberry Pi, next to devices that b
 - **Log transitions, not states.** A warning per point per cycle is millions of lines a day in Loki. Log when something starts failing and when it recovers, at the coarsest level that is true (device before point), and count the rest in a metric.
 - **Config typos fail loudly.** Unknown keys, duplicate ids and out-of-range values are decode errors, not silent defaults.
 
-To try a change against these faults, run `scripts/soak.sh` (broker and device outages, a full disk with `SOAK_DISK_FAULT=1`) and the `test/chaos` suites.
+To try a change against these faults, run the `test/chaos` suites and an accelerated soak, `SOAK_SPEED=60 scripts/soak.sh 30m` (broker and device outages, a full disk with `SOAK_DISK_FAULT=1`; see CONTRIBUTING.md).
