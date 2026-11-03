@@ -70,7 +70,8 @@ describe("chaos: codec fuzz", () => {
       }
     }
     expect(defects).toEqual([])
-  })
+    // 20,000 frames through every decoder: CPU-bound, so give it room when `pnpm check` runs the simulation beside it.
+  }, 60_000)
 })
 
 describe("chaos: planner fuzz", () => {
