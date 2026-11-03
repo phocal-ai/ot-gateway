@@ -5,7 +5,8 @@
  * fixed behaviour. The outbox file is locked while open, so tests inject
  * faults into it (triggers) between runs and observe it through metrics.
  */
-import { NodeServices, NodeSocketServer } from "@effect/platform-node"
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import {
   bufferBypassed,
@@ -21,7 +22,7 @@ import {
 import { makeBrokerControl, MqttPublisher, serveMqtt } from "@plenum/mqtt"
 import type { BrokerControl } from "@plenum/mqtt"
 import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope } from "effect"
-import { chmodSync, existsSync, readdirSync, rmSync, statSync } from "node:fs"
+import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { BufferedPublisher } from "../../src/index.ts"
 
@@ -295,8 +296,8 @@ describe("chaos: buffer", () => {
   it.live("runs unbuffered when no file can be opened, and says so", () =>
     Effect.gen(function* () {
       const directory = yield* tempDirectory
-      chmodSync(directory, 0o555)
-      yield* Effect.addFinalizer(() => Effect.sync(() => chmodSync(directory, 0o755)))
+      // A file where the buffer's directory goes: unopenable even for root, which ignores permissions.
+      writeFileSync(`${directory}/sub`, "")
       const inner = makeInner()
       const publisher = yield* openBuffer(`${directory}/sub/buffer.sqlite`, inner.publisher, yield* Effect.scope)
       expect(yield* gauge(bufferDisabled, { test: "unopenable" })).toBe(1)
@@ -304,8 +305,8 @@ describe("chaos: buffer", () => {
       yield* publisher.publish("s/b/d/p", "1")
       expect(inner.state.delivered).toEqual(["1"])
 
-      // Once the directory is writable again, the next check opens the file.
-      chmodSync(directory, 0o755)
+      // Once the file is gone, the next check creates the directory and opens the buffer.
+      rmSync(`${directory}/sub`)
       yield* eventually(() => existsSync(`${directory}/sub/buffer.sqlite`))
       yield* Effect.sleep("50 millis")
       expect(yield* gauge(bufferDisabled, { test: "unopenable" })).toBe(0)

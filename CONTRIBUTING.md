@@ -31,15 +31,29 @@ CI runs `pnpm check` on every pull request into `dev` or `main` and on every pus
 
 Use short, imperative subjects, such as `modbus: group adjacent registers into one read`. Prefix with the package name when a change is scoped to one package.
 
-## Soak testing
+## Simulation
 
-Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run before a release:
+`apps/gateway/test/Simulation.test.ts` runs the whole gateway (pipelines, outbox, MQTT client, Modbus and BACnet drivers) against the test broker and device simulators on an in-memory network (`MemoryNetwork` in `@plenum/core`) under the test clock. A seeded schedule crashes and partitions the broker, the devices and the gateway's host, loses datagrams and restarts the gateway. At the end it checks that no accepted value was lost, values arrived in order, duplicates stayed within the in-flight window, the outbox drained, every device is ok, no socket leaked and warnings stayed within the log budget. `pnpm test` runs three seeds of six hours (about 30 seconds); a week per seed takes about four minutes:
 
 ```bash
-scripts/soak.sh 24
+SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @plenum/gateway sim
 ```
 
-It runs the gateway against the bench from `examples/gateway.json` (BACnet with change of value), stops the broker every two hours and the devices every four, and records memory, CPU, open files and buffer size. `SOAK_DISK_FAULT=1` (macOS) also fills the buffer's disk. The script header lists every setting.
+A failing run prints its seed, and the same seed replays the same faults. The `Soak` workflow simulates a week for five new seeds every night. Write a regression as a seed and an assertion, not a sleep.
+
+Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run. What a soak finds depends on how many events happen (poll cycles, outages, COV renewals, buffer fills and drains), not on how many hours pass, so run it accelerated:
+
+```bash
+SOAK_SPEED=60 SOAK_DEVICES=4 scripts/soak.sh 30m
+```
+
+That packs roughly a day of outages and renewals into half an hour: every interval in `examples/gateway.json` is divided by 60 (polls at least 100 ms apart, COV lifetimes at least 30 s), the broker stops every two minutes and the devices every four, and every device runs four times on its own ports. `SOAK_DISK_FAULT=1` also fills the buffer's disk (a disk image on macOS, a tmpfs on Linux, which needs root or passwordless sudo). The run ends without outages so the buffer can drain, and fails if the gateway exits or logs FATAL, a device is not ok in the last health message, rows are left in the buffer, or memory or open files grow from the first half of the run to the second. The script header lists every setting. The `Soak` workflow runs the same thing every night and on demand.
+
+Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi:
+
+```bash
+scripts/soak.sh 24h
+```
 
 ## Reporting device quirks
 

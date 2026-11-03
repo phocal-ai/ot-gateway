@@ -25,7 +25,7 @@
  * Binary objects' present values (`inactive`/`active`) are published as
  * booleans; every other numeric value as a number.
  */
-import { NodeDatagramSocket } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import {
   type BacnetDevice,
   type BacnetSettings,
@@ -34,7 +34,7 @@ import {
   pointReadFailures,
   pushedPoints
 } from "@plenum/core"
-import type { BacnetPoint, Driver, PointValue, Reading } from "@plenum/core"
+import type { BacnetPoint, Driver, Network, PointValue, Reading } from "@plenum/core"
 import { Clock, Duration, Effect, Metric, Option, Queue, Result, Schedule, Schema, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { AbortReason, MAX_APDU_IP, RejectReason } from "./Apdu.ts"
@@ -259,6 +259,17 @@ const defaultCovTiming: CovTiming = {
   retryMaxMs: 600_000,
   refusedRetryMs: 3_600_000
 }
+
+/**
+ * COV timing for a configured lifetime (`bacnet.covLifetimeSeconds`): renew
+ * at half of it, and check at least ten times per lifetime (every 5 s at most),
+ * so a renewal is never late by more than a tenth of the lifetime.
+ */
+export const covTimingFor = (lifetimeSeconds: number): Partial<CovTiming> => ({
+  lifetimeSeconds,
+  renewMs: lifetimeSeconds * 500,
+  checkMs: Math.min(defaultCovTiming.checkMs, lifetimeSeconds * 100)
+})
 
 const logDefect = (message: string) => (defect: unknown) =>
   Effect.logError(message).pipe(Effect.annotateLogs({ error: String(defect) }))
@@ -1196,13 +1207,16 @@ const parseSetting = (text: string) =>
  * The gateway's BACnet/IP endpoint: one UDP socket on `settings.port` with
  * broadcast enabled, shared by every `bacnet-ip` device. Closed with the scope.
  */
-export const makeBacnetNetwork = Effect.fn("makeBacnetNetwork")(function* (settings: BacnetSettings) {
+export const makeBacnetNetwork = Effect.fn("makeBacnetNetwork")(function* (
+  settings: BacnetSettings,
+  /** Bind through this network instead of Node's (a simulation). */
+  network?: Pick<Network, "udp">
+) {
   const broadcastAddress = yield* parseSetting(settings.broadcastAddress)
   const bbmdAddress = settings.bbmdAddress === undefined ? undefined : yield* parseSetting(settings.bbmdAddress)
-  const socket = yield* NodeDatagramSocket.make({
-    bind: { address: settings.bindAddress, port: settings.port },
-    broadcast: true
-  })
+  const socket = yield* network
+    ? network.udp({ address: settings.bindAddress, port: settings.port })
+    : NodeDatagramSocket.make({ bind: { address: settings.bindAddress, port: settings.port }, broadcast: true })
   return yield* makeBacnetClient(socket, {
     broadcastAddress,
     requestTimeout: Duration.millis(settings.requestTimeoutMs),

@@ -2,7 +2,7 @@
  * Store-and-forward against a controllable inner publisher, on a real SQLite
  * file in a temporary directory.
  */
-import { NodeServices } from "@effect/platform-node"
+import * as NodeServices from "@effect/platform-node/NodeServices"
 import { SqliteClient } from "@effect/sql-sqlite-node"
 import { describe, expect, it } from "@effect/vitest"
 import {

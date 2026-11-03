@@ -173,6 +173,16 @@ export const BacnetSettings = Schema.Struct({
   retries: Schema.Int.pipe(
     Schema.check(Schema.isBetween({ minimum: 0, maximum: 10 })),
     Schema.withDecodingDefaultKey(Effect.succeed(2))
+  ),
+  /**
+   * Lifetime requested for change-of-value subscriptions (default 300 s,
+   * clause 13.14.1.1.4). Each one is renewed at half its lifetime, so a
+   * device that restarts and forgets its subscriptions is pushing again
+   * within that half. Shorter lifetimes mean more renewal traffic.
+   */
+  covLifetimeSeconds: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 10, maximum: 86_400 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(300))
   )
 })
 export type BacnetSettings = typeof BacnetSettings.Type

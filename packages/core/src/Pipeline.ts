@@ -130,14 +130,6 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
             Effect.annotateLogs({ topic: error.topic, error: error.message })
           )
         })
-  const publishPoint = Effect.fnUntraced(function* (
-    topic: string,
-    payload: string,
-    options?: { readonly retain: boolean }
-  ) {
-    yield* publisher.publish(topic, payload, options)
-    refusedTopics.delete(topic)
-  })
 
   /**
    * A device or broker that stays down fails every cycle. Each failure is
@@ -145,7 +137,8 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
    * ends, so a gateway with many devices and no broker does not flood its log.
    * `deviceProblem` follows the health status: the reason the device is
    * failing, until a cycle completes again. `publishFailing` is set by a
-   * failed value or metadata publish, until a cycle publishes again.
+   * failed value or metadata publish, polled or pushed, until a message gets
+   * through again.
    */
   let deviceProblem: HealthReason | undefined
   let publishFailing = false
@@ -161,16 +154,27 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     deviceProblem = undefined
     return Effect.logInfo("device works again").pipe(Effect.annotateLogs({ after: was }))
   })
-  const publishFailed = (message: string, error: PublishError) =>
+  const publishFailed = (message: string, annotations: Record<string, unknown>) =>
     Effect.suspend(() => {
       if (publishFailing) return Effect.void
       publishFailing = true
-      return Effect.logWarning(message).pipe(Effect.annotateLogs({ topic: error.topic, error: error.message }))
+      return Effect.logWarning(message).pipe(Effect.annotateLogs(annotations))
     })
   const publishRecovered = Effect.suspend(() => {
     if (!publishFailing) return Effect.void
     publishFailing = false
     return Effect.logInfo("publishing works again")
+  })
+  // Only a message the broker took ends an outage: a cycle whose values all stayed inside their deadband publishes
+  // nothing, so it proves nothing and must not reset the log state (or the next failure is logged again).
+  const publishPoint = Effect.fnUntraced(function* (
+    topic: string,
+    payload: string,
+    options?: { readonly retain: boolean }
+  ) {
+    yield* publisher.publish(topic, payload, options)
+    refusedTopics.delete(topic)
+    yield* publishRecovered
   })
 
   // Metadata goes out once per point, retained. It is retried at the start of
@@ -189,7 +193,10 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   ).pipe(
     // The device is still read: its health is independent of the broker's.
     Effect.catchTag("PublishError", (error) =>
-      Effect.all([publishFailed("metadata publish failed", error), Metric.update(publishFailures, 1)])
+      Effect.all([
+        publishFailed("metadata publish failed", { topic: error.topic, error: error.message }),
+        Metric.update(publishFailures, 1)
+      ])
     )
   )
 
@@ -284,7 +291,6 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* deviceRecovered
     if (Result.isFailure(published)) return yield* published.failure
-    yield* publishRecovered
     yield* countCycle("ok")
   }).pipe(
     deadline("poll-cycle"),
@@ -299,7 +305,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         ]),
       PublishError: (error) =>
         Effect.all([
-          publishFailed("publish failed", error),
+          publishFailed("publish failed", { topic: error.topic, error: error.message }),
           Effect.annotateCurrentSpan({ "plenum.outcome": "publish_failed" }),
           Metric.update(publishFailures, 1),
           countCycle("publish_failed")
@@ -333,16 +339,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   })
 
   const polling = tracedCycle.pipe(Effect.repeat(Schedule.spaced(ctx.pollIntervalMs)))
-  // A broker outage fails every pushed value; it is counted each time but logged once until a push gets out.
-  let pushFailing = false
+  // A broker outage fails every pushed value: each is counted, and logged only if publishing was not failing yet.
   const pushLost = (message: string, annotations: Record<string, unknown>) =>
-    Effect.all([
-      pushFailing ? Effect.void : Effect.logWarning(message).pipe(Effect.annotateLogs(annotations)),
-      Effect.sync(() => {
-        pushFailing = true
-      }),
-      Metric.update(publishFailures, 1)
-    ])
+    Effect.all([publishFailed(message, annotations), Metric.update(publishFailures, 1)])
   const pushed =
     driver.changes === undefined
       ? Effect.void
@@ -350,11 +349,6 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
           Metric.update(pushedReadings, 1).pipe(
             // Under the deadline, so a hung publish cannot keep the permit from the polling cycle forever.
             Effect.andThen(handling.withPermit(handleReading(reading)).pipe(deadline("pushed-value"))),
-            Effect.andThen(
-              Effect.sync(() => {
-                pushFailing = false
-              })
-            ),
             // The value is lost; the next change, renewal notification or poll brings the point's value again.
             Effect.catchTags({
               PublishError: (error) =>

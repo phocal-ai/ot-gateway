@@ -3,7 +3,7 @@
  * third host that forges BBMD-forwarded answers and notifications, floods
  * I-Am, or crowds out the invoke IDs.
  */
-import { NodeDatagramSocket } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetSettings } from "@plenum/core"
 import { Effect, Fiber, Result, Schedule, Stream } from "effect"
@@ -268,7 +268,8 @@ describe("chaos: client over UDP", () => {
         port: holder.address.port,
         broadcastAddress: "127.0.0.255",
         requestTimeoutMs: 500,
-        retries: 0
+        retries: 0,
+        covLifetimeSeconds: 300
       }
       const inUse = yield* Effect.flip(Effect.scoped(makeBacnetNetwork(settings)))
       const unassigned = yield* Effect.flip(

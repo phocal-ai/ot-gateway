@@ -1,0 +1,85 @@
+name: Soak
+
+# An accelerated soak (scripts/soak.sh): about a day of broker and device
+# outages, full disks and COV renewals in half an hour, against the bench.
+# Telemetry is off (no OTEL_* variables), so it costs nothing on Grafana Cloud.
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+    inputs:
+      duration:
+        description: "How long to run: 30m, 2h, ..."
+        default: "30m"
+      speed:
+        description: "SOAK_SPEED: how many times faster than real time"
+        default: "60"
+      devices:
+        description: "SOAK_DEVICES: copies of every device"
+        default: "4"
+
+jobs:
+  # The whole gateway on an in-memory network under virtual time (apps/gateway/test/Simulation.test.ts):
+  # a simulated week per seed in a few minutes, with new seeds every night. A failure names its seed.
+  simulate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Simulate
+        run: |
+          base=$((GITHUB_RUN_NUMBER * 10))
+          export SIM_SEEDS=$(seq -s, "$base" "$((base + 4))")
+          echo "seeds $SIM_SEEDS" | tee -a "$GITHUB_STEP_SUMMARY"
+          pnpm --filter @plenum/gateway sim
+        env:
+          SIM_HOURS: "168"
+
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The nightly run soaks dev; a manual run soaks the branch it was started on.
+          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Soak
+        run: scripts/soak.sh "$DURATION"
+        env:
+          DURATION: ${{ inputs.duration || '30m' }}
+          SOAK_SPEED: ${{ inputs.speed || '60' }}
+          SOAK_DEVICES: ${{ inputs.devices || '4' }}
+          SOAK_DISK_FAULT: "1"
+          SOAK_DIR: ${{ runner.temp }}/soak
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo '```'
+            cat "$RUNNER_TEMP/soak/events.log" "$RUNNER_TEMP/soak/summary.txt" 2>/dev/null || true
+            echo '```'
+          } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: soak
+          path: |
+            ${{ runner.temp }}/soak/*.log
+            ${{ runner.temp }}/soak/*.csv
+            ${{ runner.temp }}/soak/*.txt
+            ${{ runner.temp }}/soak/gateway.json
+          retention-days: 7

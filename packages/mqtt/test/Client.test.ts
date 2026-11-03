@@ -1,7 +1,8 @@
 /**
  * The client and publisher over real TCP, against the in-process test broker.
  */
-import { NodeSocket, NodeSocketServer } from "@effect/platform-node"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@plenum/core"
 import { ConfigProvider, Context, Effect, Exit, Layer, Metric, Redacted, Scope } from "effect"

@@ -2,7 +2,8 @@
  * A scriptable MQTT broker for chaos tests: each test decides how the broker
  * answers CONNECT and every PUBLISH, and can write raw bytes after CONNACK.
  */
-import { NodeSocket, NodeSocketServer } from "@effect/platform-node"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { Effect, Result } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import type * as SocketServer from "effect/socket/SocketServer"

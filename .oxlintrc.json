@@ -41,7 +41,18 @@
         ]
       }
     ],
-    "oxc/no-map-spread": "off"
+    "oxc/no-map-spread": "off",
+    "eslint/no-restricted-imports": [
+      "error",
+      {
+        "paths": [
+          {
+            "name": "@effect/platform-node",
+            "message": "Import the module you need, e.g. @effect/platform-node/NodeSocket: the barrel loads every Node module (HTTP, workers, cluster) and costs the gateway about 30 MB of memory."
+          }
+        ]
+      }
+    ]
   },
   "overrides": [
     {

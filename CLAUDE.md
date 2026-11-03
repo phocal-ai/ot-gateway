@@ -17,7 +17,8 @@ pnpm typecheck
 pnpm test
 pnpm gateway          # run apps/gateway with examples/gateway.json
 pnpm --filter @plenum/core test   # one package
-scripts/soak.sh [hours]          # soak test with broker, device and disk faults (see the script header)
+pnpm --filter @plenum/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
+SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
 ```
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.

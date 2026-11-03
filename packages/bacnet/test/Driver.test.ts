@@ -1,7 +1,7 @@
 /**
  * The BACnet driver over real UDP on loopback, against simulated devices.
  */
-import { NodeDatagramSocket } from "@effect/platform-node"
+import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetPoint, Reading } from "@plenum/core"
 import { type Duration, Effect, Fiber, Result, Schedule, Stream } from "effect"

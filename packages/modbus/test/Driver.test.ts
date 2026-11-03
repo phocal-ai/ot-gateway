@@ -1,7 +1,8 @@
 /**
  * The client and driver over real TCP, against the in-memory simulator.
  */
-import { NodeSocket, NodeSocketServer } from "@effect/platform-node"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { driverConnects, driverRequests, withMetricAttributes } from "@plenum/core"
 import type { ModbusDevice, ModbusPoint } from "@plenum/core"
