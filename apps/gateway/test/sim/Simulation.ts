@@ -11,7 +11,13 @@
  * happened (see `checkInvariants`).
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
-import { serveSimulatedDevice, setPresentValue, simulatedDeviceFor, objectTypeNumber } from "@plenum/bacnet"
+import {
+  objectTypeNumber,
+  serveSimulatedDevice,
+  setPresentValue,
+  type SimulatedDevice,
+  simulatedDeviceFor
+} from "@plenum/bacnet"
 import {
   type BacnetDevice,
   type GatewayConfig,
@@ -20,8 +26,16 @@ import {
   type ModbusDevice,
   parseConfig
 } from "@plenum/core"
-import { makeRegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
-import { makeBrokerControl, serveMqtt } from "@plenum/mqtt"
+import {
+  decodeValue,
+  FunctionCode,
+  makeRegisterBank,
+  makeSimulatorControl,
+  serveModbus,
+  setPointValue,
+  type SimulatorControl
+} from "@plenum/modbus"
+import { type BrokerControl, makeBrokerControl, publishToSubscribers, serveMqtt } from "@plenum/mqtt"
 import { Clock, Effect, Exit, Fiber, Logger, Random, Schedule, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -44,6 +58,8 @@ export interface SimulationOptions {
   readonly devices?: number
   /** Mean time between faults (default 20 minutes). */
   readonly meanFaultGapMinutes?: number
+  /** Mean time between commands (default 10 minutes). */
+  readonly meanCommandGapMinutes?: number
 }
 
 /** A small, fast, seedable generator (mulberry32), so a schedule is the same for a seed on every machine. */
@@ -159,7 +175,16 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
           points: [
             { id: "power", name: "power", table: "holding", address: 100, dataType: "float32", deadband: 0.5 },
             { id: "energy", name: "energy", table: "input", address: 0, dataType: "uint32" },
-            { id: "tripped", name: "tripped", table: "discrete", address: 0, dataType: "bool" }
+            { id: "tripped", name: "tripped", table: "discrete", address: 0, dataType: "bool" },
+            {
+              id: "setpoint",
+              name: "setpoint",
+              table: "holding",
+              address: 200,
+              dataType: "float32",
+              writable: true,
+              limits: { min: 15, max: 25 }
+            }
           ]
         })),
         ...Array.from({ length: devices }, (_, index) => ({
@@ -171,7 +196,15 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
           points: [
             { id: "supply-temp", name: "supply-temp", objectType: "analog-input", instance: 1, deadband: 0.5 },
             { id: "valve", name: "valve", objectType: "analog-output", instance: 1, deadband: 1 },
-            { id: "fan", name: "fan", objectType: "binary-input", instance: 1 }
+            { id: "fan", name: "fan", objectType: "binary-input", instance: 1 },
+            {
+              id: "damper",
+              name: "damper",
+              objectType: "analog-output",
+              instance: 2,
+              writable: true,
+              limits: { min: 0, max: 100 }
+            }
           ]
         }))
       ]
@@ -181,27 +214,30 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
 /** Values that move like a building's: slow sines, a counter, and flags that flip. */
 const sine = (seconds: number, index: number) => 50 + 50 * Math.sin((2 * Math.PI * seconds) / 1800 + index)
 
-const runModbusDevice = (network: MemoryNetwork, device: ModbusDevice) =>
+const runModbusDevice = (network: MemoryNetwork, device: ModbusDevice, control: SimulatorControl) =>
   Effect.gen(function* () {
     const server = yield* network.listen(device.host, device.port)
     const bank = makeRegisterBank()
+    // Writable points start at 20 and then only change by command.
+    for (const point of device.points) if (point.writable) setPointValue(bank, point, 20)
     const update = Effect.gen(function* () {
       const seconds = (yield* Clock.currentTimeMillis) / 1000
       device.points.forEach((point, index) => {
+        if (point.writable) return
         if (point.dataType === "bool") return setPointValue(bank, point, Math.floor(seconds / 900) % 2 === 0)
         setPointValue(bank, point, point.dataType === "float32" ? sine(seconds, index) : Math.floor(seconds / 60))
       })
     })
     yield* update.pipe(Effect.repeat(Schedule.spaced("5 seconds")), Effect.forkScoped)
-    return yield* serveModbus(server, bank)
+    return yield* serveModbus(server, bank, control)
   }).pipe(Effect.scoped)
 
-const runBacnetDevice = (network: MemoryNetwork, device: BacnetDevice, host: string) =>
+const runBacnetDevice = (network: MemoryNetwork, device: BacnetDevice, host: string, simulated: SimulatedDevice) =>
   Effect.gen(function* () {
-    const simulated = simulatedDeviceFor(device)
     const update = Effect.gen(function* () {
       const seconds = (yield* Clock.currentTimeMillis) / 1000
       device.points.forEach((point, index) => {
+        if (point.writable) return
         const objectType = objectTypeNumber(point.objectType)
         if (objectType === undefined) return
         const object = { objectType, instance: point.instance }
@@ -223,6 +259,85 @@ export interface Received {
   readonly retain: boolean
   /** When it was accepted, on the simulation's clock (the gateway's wall clock may be stepped). */
   readonly at: number
+  readonly correlationData?: Uint8Array
+}
+
+/** What a command is meant to test; everything but `valid` must be refused before any device sees it. */
+export type CommandKind =
+  | "valid"
+  | "out-of-range"
+  | "wrong-type"
+  | "not-writable"
+  | "unknown-point"
+  | "invalid-payload"
+  | "retained"
+
+export interface SentCommand {
+  readonly id: number
+  readonly kind: CommandKind
+  readonly device: string
+  readonly point: string
+  /** The value asked for: unique per command, so a write at a device names its command. */
+  readonly value: number
+  readonly at: number
+  /** Whether the broker was up to take it. */
+  readonly delivered: boolean
+}
+
+/** A write a simulated device applied: the device, the object or register, and the value. */
+export interface DeviceWrite {
+  readonly device: string
+  readonly target: string
+  readonly value: number
+}
+
+export const RESPONSES = "sim/responses"
+
+const commandKinds: ReadonlyArray<readonly [CommandKind, number]> = [
+  ["valid", 12],
+  ["out-of-range", 2],
+  ["wrong-type", 1],
+  ["not-writable", 1],
+  ["unknown-point", 1],
+  ["invalid-payload", 1],
+  ["retained", 1]
+]
+
+/** Commands at random times (about every `meanGapMs`), with values no two commands share. */
+export const commandSchedule = (
+  random: () => number,
+  config: GatewayConfig,
+  totalMs: number,
+  quietMs: number,
+  meanGapMs: number
+): ReadonlyArray<Omit<SentCommand, "delivered">> => {
+  const total = commandKinds.reduce((sum, [, weight]) => sum + weight, 0)
+  const meters = config.devices.filter((device) => device.protocol === "modbus-tcp").map((device) => device.id)
+  const ahus = config.devices.filter((device) => device.protocol === "bacnet-ip").map((device) => device.id)
+  const commands: Array<Omit<SentCommand, "delivered">> = []
+  let at = 5 * 60_000
+  for (let id = 1; ; id++) {
+    at += Math.round(-Math.log(1 - random()) * meanGapMs)
+    if (at > totalMs - quietMs) return commands
+    let roll = random() * total
+    const kind = commandKinds.find(([, weight]) => (roll -= weight) < 0)?.[0] ?? "valid"
+    const onMeter = kind === "unknown-point" || random() < 0.5
+    const device = (onMeter ? meters : ahus)[Math.floor(random() * (onMeter ? meters.length : ahus.length))] ?? ""
+    // Valid values are unique: 15 + id/1000 for a setpoint (15 to 25), id/100 for a damper (0 to 100).
+    const valid = onMeter ? 15 + (id % 10_000) / 1000 : (id % 10_000) / 100
+    const point =
+      kind === "unknown-point"
+        ? "nothing"
+        : kind === "not-writable"
+          ? onMeter
+            ? "power"
+            : "valve"
+          : onMeter
+            ? "setpoint"
+            : "damper"
+    const value = kind === "out-of-range" ? 1000 + id : valid
+    commands.push({ id, kind, device, point, value, at })
+  }
 }
 
 export interface SimulationRun {
@@ -240,6 +355,9 @@ export interface SimulationRun {
   readonly gatewayEnds: { readonly running: number; readonly stopped: number }
   readonly udpEndpointsAfterStop: number
   readonly datagramsLost: number
+  readonly commands: ReadonlyArray<SentCommand>
+  /** Every write the simulated devices applied, across their restarts. */
+  readonly deviceWrites: ReadonlyArray<DeviceWrite>
 }
 
 /** What SQLite raises when the disk is full: SQLITE_FULL (13), as `node:sqlite` reports it. */
@@ -340,6 +458,8 @@ export const simulate = (options: SimulationOptions) =>
         Effect.map((fiber) => ({ fiber }))
       )
 
+    // The running broker's control, to send commands through; undefined while it is down.
+    let brokerControl: BrokerControl | undefined
     const startBroker = Effect.gen(function* () {
       const control = makeBrokerControl()
       control.onMessage = (message) =>
@@ -347,17 +467,30 @@ export const simulate = (options: SimulationOptions) =>
           topic: message.topic,
           payload: message.payload,
           retain: message.retain,
-          at: clock.currentTimeMillisUnsafe()
+          at: clock.currentTimeMillisUnsafe(),
+          ...(message.correlationData === undefined ? {} : { correlationData: message.correlationData })
         })
+      brokerControl = control
       return yield* start(
         Effect.scoped(Effect.flatMap(network.listen(BROKER, 1883), (server) => serveMqtt(server, control)))
       )
     })
+    // Every incarnation of every device, so the writes they applied can be read at the end.
+    const modbusControls: Array<{ readonly device: string; readonly control: SimulatorControl }> = []
+    const bacnetDevices: Array<{ readonly device: string; readonly simulated: SimulatedDevice }> = []
     const startDevice = (id: string) => {
       const index = config.devices.findIndex((device) => device.id === id)
       const device = config.devices[index]
-      if (device?.protocol === "modbus-tcp") return start(runModbusDevice(network, device))
-      if (device?.protocol === "bacnet-ip") return start(runBacnetDevice(network, device, device.address ?? ""))
+      if (device?.protocol === "modbus-tcp") {
+        const control = makeSimulatorControl()
+        modbusControls.push({ device: id, control })
+        return start(runModbusDevice(network, device, control))
+      }
+      if (device?.protocol === "bacnet-ip") {
+        const simulated = simulatedDeviceFor(device)
+        bacnetDevices.push({ device: id, simulated })
+        return start(runBacnetDevice(network, device, device.address ?? "", simulated))
+      }
       return Effect.die(new Error(`no simulated device ${id}`))
     }
     const hostOf = (id: string) => {
@@ -371,7 +504,8 @@ export const simulate = (options: SimulationOptions) =>
         network: network.host(GATEWAY),
         buffer: { openDatabase: outboxOnDisk(disk) },
         onAccepted: (topic, payload, publishOptions) => {
-          if (publishOptions?.retain !== true) {
+          // Values only: retained metadata and health, and transient command results, are not buffered.
+          if (publishOptions?.retain !== true && publishOptions?.transient !== true) {
             accepted.push({ topic, payload, retain: false, at: clock.currentTimeMillisUnsafe() })
           }
         }
@@ -405,8 +539,10 @@ export const simulate = (options: SimulationOptions) =>
         const starting = phase === "start"
         switch (fault.kind) {
           case "broker-crash":
-            if (starting) yield* Fiber.interrupt(broker.fiber)
-            else broker = yield* startBroker
+            if (starting) {
+              brokerControl = undefined
+              yield* Fiber.interrupt(broker.fiber)
+            } else broker = yield* startBroker
             break
           case "device-crash": {
             const device = devices.get(fault.target)
@@ -436,6 +572,36 @@ export const simulate = (options: SimulationOptions) =>
     })
     yield* runFaults.pipe(Effect.forkIn(world))
 
+    // Commands, sent like an application would: QoS 1, a response topic, the command's id as correlation data.
+    const schedule = commandSchedule(random, config, totalMs, quietMs, (options.meanCommandGapMinutes ?? 10) * 60_000)
+    const commands: Array<SentCommand> = []
+    const runCommands = Effect.gen(function* () {
+      for (const command of schedule) {
+        yield* Effect.sleep(Math.max(0, command.at - (yield* Clock.currentTimeMillis)))
+        const control = brokerControl
+        commands.push({ ...command, delivered: control !== undefined })
+        if (control === undefined) continue
+        const topic = `${config.site}/${config.building}/${command.device}/${command.point}/$set`
+        const value = command.kind === "wrong-type" ? true : command.value
+        publishToSubscribers(control, {
+          topic,
+          payload: command.kind === "invalid-payload" ? "{not json" : JSON.stringify({ value }),
+          qos: 1,
+          retain: command.kind === "retained",
+          responseTopic: RESPONSES,
+          correlationData: new Uint8Array(new Uint32Array([command.id]).buffer)
+        })
+        // A retained command is cleared after a while, as an operator would once it was refused.
+        if (command.kind === "retained") {
+          yield* Effect.sleep("5 minutes")
+          if (brokerControl === control) {
+            publishToSubscribers(control, { topic, payload: "", qos: 1, retain: true })
+          }
+        }
+      }
+    })
+    yield* runCommands.pipe(Effect.forkIn(world))
+
     for (let elapsed = 0; elapsed < totalMs; elapsed += 1000) {
       yield* TestClock.adjust("1 second")
       if (elapsed % 60_000 === 0) yield* realTick
@@ -456,6 +622,28 @@ export const simulate = (options: SimulationOptions) =>
       backlog,
       gatewayEnds: { running, stopped: stopped.openEnds.get(GATEWAY) ?? 0 },
       udpEndpointsAfterStop: stopped.udpEndpoints,
-      datagramsLost: stopped.datagramsLost
+      datagramsLost: stopped.datagramsLost,
+      commands,
+      deviceWrites: [
+        ...modbusControls.flatMap(({ device, control }) =>
+          control.writes.map((write): DeviceWrite => {
+            if (write.functionCode === FunctionCode.WriteMultipleRegisters) {
+              return {
+                device,
+                target: `register ${write.address}`,
+                value: Number(decodeValue(write.values, "float32"))
+              }
+            }
+            return { device, target: `${write.functionCode} ${write.address}`, value: Number(write.value) }
+          })
+        ),
+        ...bacnetDevices.flatMap(({ device, simulated }) =>
+          simulated.writes.map((write): DeviceWrite => ({
+            device,
+            target: `object ${write.object.objectType}:${write.object.instance}`,
+            value: write.value.type === "real" ? write.value.value : Number.NaN
+          }))
+        )
+      ]
     } satisfies SimulationRun
   }).pipe(Effect.scoped)
