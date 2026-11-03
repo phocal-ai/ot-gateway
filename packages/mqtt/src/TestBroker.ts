@@ -43,6 +43,8 @@ export interface ReceivedMessage {
 
 /** A connected client's subscriptions and its outgoing packets. */
 interface Subscriber {
+  /** Set once CONNECT arrives; No Local compares it with a message's sender. */
+  clientId: string | undefined
   readonly subscriptions: Array<Subscription>
   readonly outgoing: Queue.Queue<Uint8Array>
   nextPacketId: number
@@ -108,7 +110,11 @@ const encoder = new TextEncoder()
  * a live one keeps its flag only for Retain As Published (§3.3.1.3).
  */
 const deliver = (subscriber: Subscriber, message: ReceivedMessage, onSubscribe: boolean) => {
-  const matching = subscriber.subscriptions.filter((subscription) => topicMatches(subscription.filter, message.topic))
+  const matching = subscriber.subscriptions.filter(
+    (subscription) =>
+      topicMatches(subscription.filter, message.topic) &&
+      !(subscription.noLocal === true && subscriber.clientId === message.clientId)
+  )
   if (matching.length === 0) return
   const retain =
     onSubscribe || (message.retain && matching.some((subscription) => subscription.retainAsPublished === true))
@@ -160,6 +166,7 @@ const serveConnection = (control: BrokerControl) =>
       let clientId: string | undefined
       let will: Will | undefined
       const subscriber: Subscriber = {
+        clientId: undefined,
         subscriptions: [],
         outgoing: yield* Queue.unbounded<Uint8Array>(),
         nextPacketId: 1
@@ -194,6 +201,7 @@ const serveConnection = (control: BrokerControl) =>
               // A refused client is disconnected right after its CONNACK (§3.2.2.2).
               if (control.connackReason >= 0x80) return
               clientId = connect.success.clientId
+              subscriber.clientId = clientId
               will = connect.success.will
               control.subscribers.add(subscriber)
               break

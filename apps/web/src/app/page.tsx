@@ -76,6 +76,7 @@ const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
 
 const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly stale: boolean }) => {
   const failing = status.devices.filter((device) => device.status === "failing").length
+  const ok = status.devices.filter((device) => device.status === "ok").length
   return (
     <div className="grid gap-4 sm:grid-cols-3">
       <Card>
@@ -95,9 +96,15 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
         <CardHeader>
           <CardDescription>Devices</CardDescription>
           <CardTitle className="text-2xl tabular-nums">
-            {status.devices.length - failing}/{status.devices.length} ok
+            {ok}/{status.devices.length} ok
           </CardTitle>
-          <CardDescription>{failing === 0 ? "every device answers" : `${failing} failing`}</CardDescription>
+          <CardDescription>
+            {failing > 0
+              ? `${failing} failing`
+              : ok === status.devices.length
+                ? "every device answers"
+                : `${status.devices.length - ok} starting`}
+          </CardDescription>
         </CardHeader>
       </Card>
       <Card>
@@ -167,20 +174,29 @@ const StatusPage = () => {
   const [load, setLoad] = useState<Load>({ _tag: "loading" })
   useEffect(() => {
     let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // The next request only once this one has settled: a slow gateway never gets them piled up.
     const poll = () =>
       Effect.runPromise(Effect.result(fetchStatus)).then((result) => {
         if (cancelled) return
         setLoad((previous) =>
           result._tag === "Success"
             ? { _tag: "ok", status: result.success }
-            : { _tag: "unreachable", ...(previous._tag === "ok" ? { last: previous.status } : {}) }
+            : {
+                _tag: "unreachable",
+                ...(previous._tag === "ok"
+                  ? { last: previous.status }
+                  : previous._tag === "unreachable" && previous.last !== undefined
+                    ? { last: previous.last }
+                    : {})
+              }
         )
+        timer = setTimeout(() => void poll(), POLL_MS)
       })
     void poll()
-    const timer = setInterval(() => void poll(), POLL_MS)
     return () => {
       cancelled = true
-      clearInterval(timer)
+      if (timer !== undefined) clearTimeout(timer)
     }
   }, [])
 

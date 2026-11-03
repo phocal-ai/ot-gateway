@@ -83,12 +83,18 @@ export const draftDevices = (
   })
 }
 
+/**
+ * A device-supplied name as it may be printed to a terminal: anyone on the
+ * LAN can answer Who-Is with any name, escape sequences included.
+ */
+export const printable = (name: string) => name.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, 120)
+
 /** Describe one device, or say on stderr why not and leave it out. */
 const describeOne = (client: BacnetClient, device: DiscoveredDevice) =>
   Effect.gen(function* () {
     const described = yield* describeDevice(client, device, device.instance)
     yield* Console.error(
-      `  device ${device.instance} at ${NetAddress.formatInet(device.address)}: "${described.name}", ${described.objects.length} point(s)` +
+      `  device ${device.instance} at ${NetAddress.formatInet(device.address)}: "${printable(described.name)}", ${described.objects.length} point(s)` +
         (described.listed > MAX_OBJECTS ? ` (only the first ${MAX_OBJECTS} of ${described.listed} objects read)` : "")
     )
     return [{ device, described }]
@@ -124,7 +130,8 @@ export const discover = (config: GatewayConfig) =>
         ? Effect.succeed(true)
         : Console.error(`  device ${device.instance}: already in the config as ${id}`).pipe(Effect.as(false))
     })
-    const described = yield* Effect.forEach(fresh, (device) => describeOne(client, device))
+    // A few devices at once; the client keeps the requests within its invoke IDs and deadlines.
+    const described = yield* Effect.forEach(fresh, (device) => describeOne(client, device), { concurrency: 4 })
     const existing = config.devices.map((device) => device.id)
     yield* Console.log(JSON.stringify({ devices: draftDevices(described.flat(), existing) }, null, 2))
   }).pipe(Effect.scoped)

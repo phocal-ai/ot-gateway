@@ -3,16 +3,31 @@
  * schema the gateway encodes with decodes the answer here.
  */
 import { type GatewayStatus, PlenumApi } from "@plenum/api"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 
-/** The page is served by the gateway, so the API is on the same origin. */
-export const fetchStatus: Effect.Effect<GatewayStatus, unknown> = HttpApiClient.make(PlenumApi, {
+/** The gateway did not answer, not in time, or not with a status: for the page, all the same. */
+export class StatusUnavailable extends Schema.TaggedError<StatusUnavailable>()("StatusUnavailable", {
+  message: Schema.String
+}) {}
+
+/**
+ * The status, within three seconds. The page is served by the gateway, so
+ * the API is on the same origin. Every way of not getting it (unreachable,
+ * a timeout, an answer that does not decode) means one thing here.
+ */
+export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = HttpApiClient.make(PlenumApi, {
   baseUrl: typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin
 }).pipe(
   Effect.flatMap((client) => client.status.status()),
-  Effect.provide(FetchHttpClient.layer)
+  Effect.provide(FetchHttpClient.layer),
+  // The client's failures (transport, status, decoding) all mean one thing to the page.
+  Effect.mapError((error) => new StatusUnavailable({ message: error.message })),
+  Effect.timeoutOrElse({
+    duration: "3 seconds",
+    orElse: () => Effect.fail(new StatusUnavailable({ message: "no answer within 3 s" }))
+  })
 )
 
 /** QUDT unit names (`unit:DEG_C`) as people write them. */

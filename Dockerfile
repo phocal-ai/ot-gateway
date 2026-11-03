@@ -19,7 +19,7 @@ FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS web
 WORKDIR /opt/plenum
 RUN corepack enable
 ENV NEXT_TELEMETRY_DISABLED=1
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/api/package.json packages/api/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@plenum/web..."
@@ -31,7 +31,8 @@ RUN pnpm --filter @plenum/web build
 FROM node:${NODE_VERSION}-bookworm-slim AS install
 WORKDIR /opt/plenum
 RUN corepack enable
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
+# No .npmrc: a developer's registry token would ship in the image (the final stage copies this one whole).
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/gateway/package.json apps/gateway/
 COPY packages/api/package.json packages/api/
 COPY packages/core/package.json packages/core/

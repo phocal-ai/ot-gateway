@@ -25,11 +25,18 @@ fail() {
 
 [[ $(id -u) == 0 ]] || fail "run as root (sudo)"
 command -v systemctl >/dev/null || fail "systemd is needed"
+command -v runuser >/dev/null || fail "runuser (util-linux) is needed"
 command -v node >/dev/null || fail "Node.js 22.18 or later is needed: https://nodejs.org/en/download"
 node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 18) ? 0 : 1)' ||
   fail "Node.js $(node --version) is too old: 22.18 or later runs the TypeScript sources directly"
 
 id plenum >/dev/null 2>&1 || useradd --system --home-dir /var/lib/plenum --shell /usr/sbin/nologin plenum
+
+# Root copies the checkout: a symlink in it (say apps/web/out/env -> /etc/plenum/gateway.env) would end up
+# where the service reads or serves files. node_modules is pnpm's own links, and is not copied.
+links=$(cd "$repo" && find package.json pnpm-lock.yaml pnpm-workspace.yaml packages apps/gateway apps/web/out \
+  -name node_modules -prune -o -type l -print 2>/dev/null | head -5)
+[[ -z $links ]] || fail "the checkout has symlinks where only files belong, nothing was installed:"$'\n'"$links"
 
 echo "Installing the gateway to $prefix"
 mkdir -p "$prefix"
@@ -64,11 +71,13 @@ if [[ -f /etc/plenum/gateway.json.new ]]; then
     if (config.buffer !== undefined) config.buffer.path = "/var/lib/plenum/buffer.sqlite"
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n")
   '
-  (cd "$prefix" && node apps/gateway/src/main.ts --check /etc/plenum/gateway.json.new) ||
+  # As the service user: checking loads the gateway's dependencies, and root has no business running them.
+  (cd "$prefix" && runuser -u plenum -- node apps/gateway/src/main.ts --check /etc/plenum/gateway.json.new) ||
     { rm -f /etc/plenum/gateway.json.new; fail "the config is not valid; nothing was changed"; }
   mv /etc/plenum/gateway.json.new /etc/plenum/gateway.json
 else
-  (cd "$prefix" && node apps/gateway/src/main.ts --check /etc/plenum/gateway.json) || fail "/etc/plenum/gateway.json is not valid"
+  (cd "$prefix" && runuser -u plenum -- node apps/gateway/src/main.ts --check /etc/plenum/gateway.json) ||
+    fail "/etc/plenum/gateway.json is not valid"
 fi
 touch /etc/plenum/gateway.env
 chmod 640 /etc/plenum/gateway.env

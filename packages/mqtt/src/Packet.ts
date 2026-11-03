@@ -613,6 +613,12 @@ export interface Subscription {
    * shows it as retained.
    */
   readonly retainAsPublished?: boolean
+  /**
+   * No Local (§3.8.3.1): the broker does not send the client its own
+   * publishes on this filter. A gateway answering on topics near the ones it
+   * takes commands on must never read its own answers as commands.
+   */
+  readonly noLocal?: boolean
 }
 
 export interface Subscribe {
@@ -622,14 +628,14 @@ export interface Subscribe {
 
 /**
  * Encode a SUBSCRIBE. Options per filter (§3.8.3.1): the maximum QoS, No
- * Local off, Retain As Published as asked, and Retain Handling 0 (send
+ * Local and Retain As Published as asked, and Retain Handling 0 (send
  * retained messages on subscribe), so a retained message on a filter is
  * seen, flagged as retained, and can be refused.
  */
 export const encodeSubscribe = (subscribe: Subscribe): Uint8Array => {
   const body = new Writer().u16(subscribe.packetId).bytes(encodeProperties(() => {}))
-  for (const { filter, qos, retainAsPublished } of subscribe.subscriptions) {
-    body.string(filter).byte(qos | (retainAsPublished === true ? 0x08 : 0))
+  for (const { filter, qos, retainAsPublished, noLocal } of subscribe.subscriptions) {
+    body.string(filter).byte(qos | (noLocal === true ? 0x04 : 0) | (retainAsPublished === true ? 0x08 : 0))
   }
   // The fixed header flags of SUBSCRIBE are reserved as 0b0010 (§3.8.1).
   return packet(PacketType.SUBSCRIBE, 0b0010, body.toBytes())
@@ -648,6 +654,7 @@ export const decodeSubscribe = (body: Uint8Array): Result.Result<Subscribe, Mqtt
       subscriptions.push({
         filter,
         qos: qos === 1 ? 1 : 0,
+        ...((options & 0x04) === 0 ? {} : { noLocal: true }),
         ...((options & 0x08) === 0 ? {} : { retainAsPublished: true })
       })
     }

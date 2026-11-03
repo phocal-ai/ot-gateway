@@ -15,13 +15,16 @@ import {
   type StatusSettings
 } from "@plenum/core"
 import { Clock, Effect, FileSystem, Layer, Metric, Option, Schema } from "effect"
-import { HttpMiddleware, HttpRouter, HttpServerResponse, HttpStaticServer } from "effect/http"
+import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse, HttpStaticServer } from "effect/http"
 import { HttpApiBuilder } from "effect/http-api"
 import { createServer } from "node:http"
 import { fileURLToPath } from "node:url"
 
 /** Commands kept for the page, newest first. */
 const RECENT_COMMANDS = 50
+
+/** Connections the server holds at once: a page polls with one; more is someone else's problem, not the gateway's memory. */
+const MAX_CONNECTIONS = 32
 
 /** A value message as the pipeline publishes it; read back from what the gateway itself sent. */
 const ValueMessage = Schema.fromJsonString(
@@ -33,7 +36,11 @@ const decodeValue = Schema.decodeUnknownOption(ValueMessage)
 export const defaultWebRoot = fileURLToPath(new URL("../../web/out", import.meta.url))
 
 export interface StatusState {
-  /** Note a message the gateway published; values (`site/building/device/point`) are kept, the rest ignored. */
+  /**
+   * Note a message the gateway is publishing; values (`site/building/device/point`)
+   * are kept, the rest ignored. Called before the publish, so the page shows
+   * what the devices read even while the broker is down.
+   */
   readonly recordPublish: (topic: string, payload: string) => void
   readonly recordCommand: (
     at: number,
@@ -45,16 +52,17 @@ export interface StatusState {
 
 export const makeStatusState = (config: GatewayConfig, health: HealthRegistry, since: number): StatusState => {
   const prefix = `${config.site}/${config.building}/`
-  const values = new Map<string, { readonly value: number | boolean; readonly ts: number }>()
+  // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
+  const payloads = new Map<string, string>()
   const commands: Array<CommandStatus> = []
   const attributes = { site: config.site, building: config.building }
   return {
     recordPublish: (topic, payload) => {
       if (!topic.startsWith(prefix)) return
-      const levels = topic.slice(prefix.length).split("/")
-      if (levels.length !== 2) return
-      const decoded = decodeValue(payload)
-      if (Option.isSome(decoded)) values.set(levels.join("/"), decoded.value)
+      const rest = topic.slice(prefix.length)
+      const slash = rest.indexOf("/")
+      if (slash <= 0 || rest.indexOf("/", slash + 1) !== -1) return
+      payloads.set(rest, payload)
     },
     recordCommand: (at, command, outcome) => {
       commands.unshift({
@@ -79,7 +87,9 @@ export const makeStatusState = (config: GatewayConfig, health: HealthRegistry, s
           ...(state.reason === undefined ? {} : { reason: state.reason }),
           ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
           points: device.points.map((point) => {
-            const last = values.get(`${device.id}/${point.id}`)
+            const payload = payloads.get(`${device.id}/${point.id}`)
+            const decoded = payload === undefined ? Option.none() : decodeValue(payload)
+            const last = Option.getOrUndefined(decoded)
             return {
               id: point.id,
               name: point.name,
@@ -130,8 +140,21 @@ export const serveStatus = (settings: StatusSettings, state: StatusState) =>
           )
         )
     // An open page asks every two seconds: neither a log line nor a trace per request (the edge log budget).
-    const server = HttpRouter.serve(Layer.mergeAll(api, web), { disableLogger: true, disableListenLog: true }).pipe(
-      Layer.provide(NodeHttpServer.layer(createServer, { port: settings.port, host: settings.bindAddress })),
+    const server = HttpRouter.serve(Layer.mergeAll(api, web, hostCheck(settings)), {
+      disableLogger: true,
+      disableListenLog: true
+    }).pipe(
+      Layer.provide(
+        NodeHttpServer.layer(
+          () => {
+            // Slow or idle clients cannot pile up: few connections, and short header and request deadlines.
+            const node = createServer({ headersTimeout: 10_000, requestTimeout: 30_000, keepAliveTimeout: 5_000 })
+            node.maxConnections = MAX_CONNECTIONS
+            return node
+          },
+          { port: settings.port, host: settings.bindAddress }
+        )
+      ),
       Layer.provide(Layer.succeed(HttpMiddleware.TracerDisabledWhen)(() => true))
     )
     yield* Effect.logInfo("status page").pipe(
@@ -142,9 +165,35 @@ export const serveStatus = (settings: StatusSettings, state: StatusState) =>
     )
     return yield* Layer.launch(server)
   }).pipe(
-    Effect.catch((error) =>
+    Effect.catchTag("ServeError", (error) =>
       Effect.logError("status page not served; the gateway runs on without it").pipe(
-        Effect.annotateLogs({ port: settings.port, error: String(error) })
+        Effect.annotateLogs({ port: settings.port, error: String(error.cause) })
       )
     )
   )
+
+/** Loopback addresses a page served on this machine is reached at. */
+const isLoopback = (address: string) => address === "localhost" || address === "::1" || address.startsWith("127.")
+
+/**
+ * On a loopback address, answer only requests for a loopback host name. A
+ * web page in a browser on the gateway's machine could otherwise point a DNS
+ * name of its own at 127.0.0.1 and read the API (DNS rebinding). Bound to
+ * another address, the page is meant for the network, and any host goes.
+ */
+const hostCheck = (settings: StatusSettings) => {
+  if (!isLoopback(settings.bindAddress)) return Layer.empty
+  const port = String(settings.port)
+  const allowed = new Set(
+    ["localhost", "127.0.0.1", "[::1]", settings.bindAddress].flatMap((host) => [host, `${host}:${port}`])
+  )
+  return HttpRouter.middleware(
+    (httpEffect) =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        if (allowed.has(request.headers.host ?? "")) return yield* httpEffect
+        return HttpServerResponse.text("Misdirected request: use a loopback address", { status: 421 })
+      }),
+    { global: true }
+  )
+}

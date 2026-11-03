@@ -382,7 +382,7 @@ timeseries(
     w: 12,
     stack: true,
     description:
-      "Commands received on site/building/device/point/$set. written reached the device; rejected was refused by the command guard (not writable, out of range, wrong type, retained) and never reached it; failed could not be written (device down, refused, no answer)."
+      "Commands received on site/building/device/point/$set. written reached the device; rejected was refused by the command guard (not writable, out of range, wrong type, retained, expired after waiting too long) and never reached it; failed could not be written (device down, refused, no answer); dropped arrived while too many were already waiting (a flood) and got no result."
   }
 )
 timeseries(

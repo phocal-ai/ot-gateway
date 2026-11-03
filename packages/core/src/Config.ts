@@ -94,7 +94,18 @@ export const BacnetDevice = Schema.Struct({
   pollIntervalMs,
   cycleTimeoutMs: cycleTimeoutMsField,
   points: pointsOf(BacnetPoint)
-})
+}).check(
+  // Found by broadcast, a device is wherever an I-Am says it is, and anyone on the LAN can send one.
+  // Reads from the wrong host are wrong values; writes to it are commands to someone else's equipment.
+  Schema.makeFilter(
+    (device) =>
+      device.address !== undefined ||
+      !device.points.some((point) => point.writable) || {
+        path: ["address"],
+        issue: "a device with writable points needs a fixed address, so a spoofed I-Am cannot redirect its writes"
+      }
+  )
+)
 export type BacnetDevice = typeof BacnetDevice.Type
 
 export const SimulatorDevice = Schema.Struct({
@@ -113,7 +124,16 @@ export type Device = typeof Device.Type
 const ConnectString = Schema.NonEmptyString.pipe(Schema.check(Schema.isMaxLength(1_024)))
 
 export const MqttSettings = Schema.Struct({
-  url: Schema.NonEmptyString,
+  /** `mqtt://` or `mqtts://host:port`, without credentials (they would be printed and logged with it). */
+  url: Schema.NonEmptyString.pipe(
+    Schema.check(
+      Schema.makeFilter(
+        (url) =>
+          !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(url) ||
+          "must not contain credentials; use mqtt.username and mqtt.passwordEnv"
+      )
+    )
+  ),
   clientId: Schema.optionalKey(ConnectString),
   username: Schema.optionalKey(ConnectString),
   /** Name of the environment variable holding the password. Never inline secrets. */
