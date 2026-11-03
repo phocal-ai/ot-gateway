@@ -41,7 +41,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @plenum/web build`) that the gateway serves; no Next server at runtime
 - `examples/`: sample configs
 - `packaging/`: the systemd unit and `install.sh`; the container image is the root `Dockerfile`
-- `docs/`: vision and design notes
+- `docs/`: vision, the configuration reference (`configuration.md`, kept in step with the schema by `packages/core/test/ConfigDocs.test.ts`), operations and troubleshooting
 - `observability/`: Grafana dashboards as code and the telemetry setup for the gateway and for Claude Code (see `observability/README.md`)
 - `repos/`: read-only reference subtrees (see below)
 
