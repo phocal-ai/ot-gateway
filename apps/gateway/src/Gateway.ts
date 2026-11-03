@@ -5,7 +5,7 @@
  * composition on an in-memory network under the test clock.
  */
 import { type BacnetClient, covTimingFor, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
-import { BufferedPublisher } from "@plenum/buffer"
+import { BufferedPublisher, type BufferedPublisherOptions } from "@plenum/buffer"
 import {
   cycleTimeoutMs,
   type Device,
@@ -32,6 +32,8 @@ import { traceSampleRatio } from "./Telemetry.ts"
 export interface GatewayOptions {
   /** Reach devices and the broker through this network instead of Node's. */
   readonly network?: Network
+  /** Options for the outbox (a simulation injects disk faults through them). */
+  readonly buffer?: BufferedPublisherOptions
   /** Told about every message the publisher accepted (stored or sent), after it did. */
   readonly onAccepted?: (topic: string, payload: string, options: PublishOptions | undefined) => void
 }
@@ -166,7 +168,8 @@ const northbound = (config: GatewayConfig, health: GatewayHealth, options: Gatew
     waitForConnection: config.buffer === undefined,
     ...(options.network === undefined ? {} : { network: options.network })
   })
-  const publisher = config.buffer === undefined ? mqtt : BufferedPublisher(config.buffer).pipe(Layer.provide(mqtt))
+  const publisher =
+    config.buffer === undefined ? mqtt : BufferedPublisher(config.buffer, options.buffer).pipe(Layer.provide(mqtt))
   const onAccepted = options.onAccepted
   if (onAccepted === undefined) return publisher
   return Layer.effect(

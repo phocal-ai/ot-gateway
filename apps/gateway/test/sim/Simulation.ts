@@ -3,8 +3,9 @@
  * client, Modbus and BACnet drivers, against the real test broker and device
  * simulators, all on an in-memory network (`MemoryNetwork`) and the test
  * clock. A seeded schedule crashes and partitions the broker, the devices and
- * the gateway's own host, loses datagrams and restarts the gateway; a day of
- * that takes seconds, and a seed replays the same faults.
+ * the gateway's own host, loses datagrams, restarts the gateway, fills the
+ * outbox's disk and steps the gateway's wall clock; a day of that takes
+ * seconds, and a seed replays the same faults.
  *
  * At the end, after a quiet spell, the run checks what must hold whatever
  * happened (see `checkInvariants`).
@@ -27,6 +28,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { openDatabase } from "@plenum/buffer"
+import { classifySqliteError, SqlError } from "effect/sql/SqlError"
 import { runGateway } from "../../src/Gateway.ts"
 
 export const GATEWAY = "10.0.0.1"
@@ -63,13 +66,17 @@ export type FaultKind =
   | "datagram-loss"
   | "gateway-partition"
   | "gateway-restart"
+  | "disk-full"
+  | "clock-step"
 
 export interface Fault {
   readonly at: number
   readonly kind: FaultKind
-  /** The device id for device faults, else the host. */
+  /** The device id for device faults, `disk` or `clock`, else the host. */
   readonly target: string
   readonly durationMs: number
+  /** How far a clock step moves the gateway's wall clock (NTP; a Pi has no real-time clock), in either direction. */
+  readonly stepMs?: number
 }
 
 const weights: ReadonlyArray<readonly [FaultKind, number]> = [
@@ -79,7 +86,9 @@ const weights: ReadonlyArray<readonly [FaultKind, number]> = [
   ["device-partition", 2],
   ["datagram-loss", 2],
   ["gateway-partition", 1],
-  ["gateway-restart", 2]
+  ["gateway-restart", 2],
+  ["disk-full", 2],
+  ["clock-step", 2]
 ]
 
 /** The faults of a run: none in the first 5 minutes or the last `quietMs`, at most one at a time per target. */
@@ -110,10 +119,20 @@ export const faultSchedule = (
           ? pick(bacnet)
           : kind === "broker-crash" || kind === "broker-partition"
             ? BROKER
-            : GATEWAY
+            : kind === "disk-full"
+              ? "disk"
+              : kind === "clock-step"
+                ? "clock"
+                : GATEWAY
     if (at + durationMs > totalMs - quietMs) break
     if (target === undefined || (busyUntil.get(target) ?? 0) > at) continue
     busyUntil.set(target, at + durationMs)
+    if (kind === "clock-step") {
+      // A step stays: the wall clock is wrong from here on, by 10 s to 2 h, ahead or behind.
+      const stepMs = Math.round((random() < 0.5 ? -1 : 1) * (10_000 + random() * 7_190_000))
+      faults.push({ at, kind, target, durationMs: 0, stepMs })
+      continue
+    }
     faults.push({
       at,
       kind,
@@ -202,6 +221,8 @@ export interface Received {
   readonly topic: string
   readonly payload: string
   readonly retain: boolean
+  /** When it was accepted, on the simulation's clock (the gateway's wall clock may be stepped). */
+  readonly at: number
 }
 
 export interface SimulationRun {
@@ -220,6 +241,57 @@ export interface SimulationRun {
   readonly udpEndpointsAfterStop: number
   readonly datagramsLost: number
 }
+
+/** What SQLite raises when the disk is full: SQLITE_FULL (13), as `node:sqlite` reports it. */
+const diskFull = () =>
+  new SqlError({
+    reason: classifySqliteError(
+      Object.assign(new Error("database or disk is full"), { code: "ERR_SQLITE_ERROR", errcode: 13 }),
+      { message: "Failed to execute statement", operation: "execute" }
+    )
+  })
+
+/**
+ * The real outbox, except that every write fails with SQLITE_FULL while
+ * `disk.full` is set, as on an SD card that filled up under the running
+ * gateway. Reads still work, as they do on a full disk.
+ */
+const outboxOnDisk = (disk: { full: boolean }): typeof openDatabase => {
+  const write =
+    <Args extends ReadonlyArray<unknown>, A, E>(operation: (...args: Args) => Effect.Effect<A, E>) =>
+    (...args: Args) =>
+      Effect.suspend((): Effect.Effect<A, E | SqlError> => (disk.full ? Effect.fail(diskFull()) : operation(...args)))
+  return (path) =>
+    Effect.map(openDatabase(path), (database) => {
+      const outbox = database.outbox
+      return {
+        ...database,
+        outbox: {
+          ...outbox,
+          append: write(outbox.append),
+          remove: write(outbox.remove),
+          removeThrough: write(outbox.removeThrough),
+          dropOldest: write(outbox.dropOldest),
+          vacuum: Effect.suspend(() => (disk.full ? Effect.fail(diskFull()) : outbox.vacuum))
+        }
+      }
+    })
+}
+
+/**
+ * The simulation's clock with the wall clock moved by `offset()`: what NTP
+ * does to a Raspberry Pi, which has no real-time clock. Monotonic time and
+ * sleeps are untouched, as they are on Linux.
+ */
+const steppedClock = (clock: Clock.Clock, offset: () => number): Clock.Clock => ({
+  currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe() + offset(),
+  currentTimeMillis: Effect.sync(() => clock.currentTimeMillisUnsafe() + offset()),
+  currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe() + BigInt(offset()) * 1_000_000n,
+  currentTimeNanos: Effect.sync(() => clock.currentTimeNanosUnsafe() + BigInt(offset()) * 1_000_000n),
+  monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),
+  monotonicTimeNanos: clock.monotonicTimeNanos,
+  sleep: (duration) => clock.sleep(duration)
+})
 
 /** Let real I/O (the outbox's file checks) finish between steps of virtual time. */
 const realTick = Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)))
@@ -246,6 +318,9 @@ export const simulate = (options: SimulationOptions) =>
     const faults = faultSchedule(random, config, totalMs, quietMs, (options.meanFaultGapMinutes ?? 20) * 60_000)
 
     const network = makeMemoryNetwork(random)
+    const clock = yield* Clock.clockWith(Effect.succeed)
+    const disk = { full: false }
+    let wallOffset = 0
     const world = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(world, Exit.void))
 
@@ -268,7 +343,12 @@ export const simulate = (options: SimulationOptions) =>
     const startBroker = Effect.gen(function* () {
       const control = makeBrokerControl()
       control.onMessage = (message) =>
-        received.push({ topic: message.topic, payload: message.payload, retain: message.retain })
+        received.push({
+          topic: message.topic,
+          payload: message.payload,
+          retain: message.retain,
+          at: clock.currentTimeMillisUnsafe()
+        })
       return yield* start(
         Effect.scoped(Effect.flatMap(network.listen(BROKER, 1883), (server) => serveMqtt(server, control)))
       )
@@ -289,10 +369,20 @@ export const simulate = (options: SimulationOptions) =>
     const startGateway = start(
       runGateway(config, {
         network: network.host(GATEWAY),
+        buffer: { openDatabase: outboxOnDisk(disk) },
         onAccepted: (topic, payload, publishOptions) => {
-          if (publishOptions?.retain !== true) accepted.push({ topic, payload, retain: false })
+          if (publishOptions?.retain !== true) {
+            accepted.push({ topic, payload, retain: false, at: clock.currentTimeMillisUnsafe() })
+          }
         }
-      }).pipe(Effect.provide(NodeServices.layer), Random.withSeed(options.seed))
+      }).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.provideService(
+          Clock.Clock,
+          steppedClock(clock, () => wallOffset)
+        ),
+        Random.withSeed(options.seed)
+      )
     )
 
     let broker = yield* startBroker
@@ -330,6 +420,12 @@ export const simulate = (options: SimulationOptions) =>
             break
           case "datagram-loss":
             network.setLoss(hostOf(fault.target), starting ? 0.3 : 0)
+            break
+          case "disk-full":
+            disk.full = starting
+            break
+          case "clock-step":
+            if (starting) wallOffset += fault.stepMs ?? 0
             break
           case "broker-partition":
           case "device-partition":

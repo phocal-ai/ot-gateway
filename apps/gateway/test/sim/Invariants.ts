@@ -16,7 +16,7 @@ const reconnectingFaults = new Set(["broker-crash", "broker-partition", "gateway
 const PROBLEMS_PER_FAULT = 12
 const PROBLEMS_BASELINE = 10
 
-/** The parts of a health message and of a value message the checks read; MQTT payloads are decoded, not trusted. */
+/** The parts of a health message the checks read; MQTT payloads are decoded, not trusted. */
 const HealthMessage = Schema.fromJsonString(
   Schema.Struct({
     status: Schema.String,
@@ -24,11 +24,21 @@ const HealthMessage = Schema.fromJsonString(
     devices: Schema.optionalKey(Schema.Record(Schema.String, Schema.Struct({ status: Schema.String })))
   })
 )
-const ValueMessage = Schema.fromJsonString(Schema.Struct({ ts: Schema.Number }))
 const decodeHealth = Schema.decodeUnknownSync(HealthMessage)
-const decodeValue = Schema.decodeUnknownSync(ValueMessage)
+
+/** The longest a device may deliver nothing while nothing on its path is failing or recovering. */
+const MAX_SILENCE_MS = 5 * 60_000
+/** How long after a fault ends its path may still be recovering (reconnect backoff, rediscovery, resubscribing). */
+const RECOVERY_MS = 3 * 60_000
 
 const keyOf = (message: { readonly topic: string; readonly payload: string }) => `${message.topic} ${message.payload}`
+
+/** The faults under way at `at`, for a violation's message. */
+const activeAt = (run: SimulationRun, at: number) =>
+  run.faults
+    .filter((fault) => fault.at <= at && at <= fault.at + fault.durationMs + 60_000)
+    .map((fault) => `${fault.kind} ${fault.target} ${fault.at}+${fault.durationMs}`)
+    .join(", ") || "none"
 
 export interface Verdict {
   readonly violations: ReadonlyArray<string>
@@ -50,6 +60,16 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
   }
 
   // 2. Per topic, values first arrive in the order they were accepted (resends may repeat older ones later).
+  // A value accepted while the disk was full skips the outbox by design (BufferedPublisher.ts: publishing it
+  // directly beats losing it), so it may overtake older rows; it carries its own `ts`.
+  const diskFull = run.faults.filter((fault) => fault.kind === "disk-full")
+  const bypassed = new Set(
+    run.accepted
+      .filter((message) =>
+        diskFull.some((fault) => fault.at <= message.at && message.at <= fault.at + fault.durationMs)
+      )
+      .map(keyOf)
+  )
   const acceptedOrder = new Map<string, Map<string, number>>()
   for (const message of run.accepted) {
     const order = acceptedOrder.get(message.topic) ?? new Map<string, number>()
@@ -61,13 +81,13 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
   let outOfOrder = 0
   let firstOutOfOrder = ""
   for (const message of values) {
-    if (seen.has(keyOf(message))) continue
+    if (seen.has(keyOf(message)) || bypassed.has(keyOf(message))) continue
     seen.add(keyOf(message))
     const index = acceptedOrder.get(message.topic)?.get(message.payload)
     if (index === undefined) continue
     if (index < (lastIndex.get(message.topic) ?? -1)) {
       outOfOrder++
-      firstOutOfOrder ||= keyOf(message)
+      firstOutOfOrder ||= `${keyOf(message)} at ${message.at} (faults then: ${activeAt(run, message.at)})`
     }
     lastIndex.set(message.topic, index)
   }
@@ -83,18 +103,21 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
   // 4. The outbox drained.
   if (run.backlog !== 0) violations.push(`${run.backlog} row(s) left in the outbox`)
 
-  // 5. The last health message says online, every device ok, and is current.
+  // 5. The last health message says online, every device ok, and is current. Times are when the broker got
+  // a message, not its `ts`: the gateway's wall clock may have been stepped.
   const topic = healthTopic(run.config.site, run.config.building, run.config.id)
-  const health = run.received
+  const last = run.received
     .filter((message) => message.topic === topic)
-    .map((message) => decodeHealth(message.payload))
-    .findLast((message) => message.status === "online")
-  if (health === undefined) violations.push("no online health message")
+    .map((message) => ({ at: message.at, health: decodeHealth(message.payload) }))
+    .findLast(({ health }) => health.status === "online")
+  if (last === undefined) violations.push("no online health message")
   else {
-    const notOk = run.config.devices.map((device) => device.id).filter((id) => health.devices?.[id]?.status !== "ok")
+    const notOk = run.config.devices
+      .map((device) => device.id)
+      .filter((id) => last.health.devices?.[id]?.status !== "ok")
     if (notOk.length > 0) violations.push(`not ok in the last health message: ${notOk.join(", ")}`)
-    if ((health.ts ?? 0) < totalMs - 3 * run.config.healthIntervalMs) {
-      violations.push(`the last health message is from ${health.ts}, the run ended at ${totalMs}`)
+    if (last.at < totalMs - 3 * run.config.healthIntervalMs) {
+      violations.push(`the last health message arrived at ${last.at}, the run ended at ${totalMs}`)
     }
   }
 
@@ -102,10 +125,49 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
   const recentFrom = totalMs - 5 * 60_000
   for (const device of run.config.devices) {
     const prefix = `${run.config.site}/${run.config.building}/${device.id}/`
-    const recent = values.some(
-      (message) => message.topic.startsWith(prefix) && decodeValue(message.payload).ts >= recentFrom
-    )
+    const recent = values.some((message) => message.topic.startsWith(prefix) && message.at >= recentFrom)
     if (!recent) violations.push(`${device.id} delivered nothing in the last 5 minutes`)
+  }
+
+  // 6b. No point goes quiet without a reason. Measurements change at least every minute or so, so a silence
+  // longer than MAX_SILENCE_MS (or twice the point's usual gap) while nothing on its path (the device, the broker, the gateway's host) failed or
+  // was recovering is a stall: a wall-clock step that froze a timer, a lost renewal that nobody noticed.
+  const blocking = (device: string) =>
+    run.faults.filter(
+      (fault) =>
+        fault.target === device ||
+        fault.kind === "broker-crash" ||
+        fault.kind === "broker-partition" ||
+        fault.kind === "gateway-partition" ||
+        fault.kind === "gateway-restart"
+    )
+  for (const device of run.config.devices) {
+    const prefix = `${run.config.site}/${run.config.building}/${device.id}/`
+    const faults = blocking(device.id)
+    const byTopic = new Map<string, Array<number>>()
+    for (const message of values) {
+      if (!message.topic.startsWith(prefix)) continue
+      const times = byTopic.get(message.topic) ?? []
+      times.push(message.at)
+      byTopic.set(message.topic, times)
+    }
+    let stalls = 0
+    let first = ""
+    for (const [pointTopic, times] of byTopic) {
+      // A point that only changes every quarter of an hour (a flag) gets a longer leash than a measurement.
+      const gaps = times.slice(1).map((time, index) => time - (times[index] ?? time))
+      const typical = gaps.toSorted((a, b) => a - b)[Math.floor(gaps.length / 2)] ?? 0
+      const limit = Math.max(MAX_SILENCE_MS, 2 * typical)
+      for (let index = 1; index < times.length; index++) {
+        const from = times[index - 1] ?? 0
+        const to = times[index] ?? 0
+        if (to - from <= limit) continue
+        if (faults.some((fault) => fault.at <= to && from <= fault.at + fault.durationMs + RECOVERY_MS)) continue
+        stalls++
+        first ||= `${pointTopic} quiet ${Math.round((to - from) / 1000)} s from ${from} (faults then: ${activeAt(run, from)})`
+      }
+    }
+    if (stalls > 0) violations.push(`${device.id}: ${stalls} silence(s) with no fault on its path, first ${first}`)
   }
 
   // 7. No sockets leak: while running, one connection per Modbus device and the broker; none once stopped.
@@ -133,6 +195,10 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
   return {
     violations,
     summary: {
+      ...run.faults.reduce<Record<string, number>>((counts, fault) => {
+        counts[fault.kind] = (counts[fault.kind] ?? 0) + 1
+        return counts
+      }, {}),
       faults: run.faults.length,
       accepted: run.accepted.length,
       delivered: values.length,
