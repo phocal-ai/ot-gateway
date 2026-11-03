@@ -291,4 +291,33 @@ describe("chaos: a device or broker that stays down", () => {
       expect(yield* countOf(publishFailures, { device: "no-broker" })).toBeGreaterThanOrEqual(20)
     })
   )
+
+  it.effect("does not take a cycle that published nothing for the end of a broker outage", () =>
+    Effect.gen(function* () {
+      const logs = recordLogs()
+      let brokerDown = false
+      const publisher = Layer.succeed(Publisher, {
+        publish: (topic) =>
+          brokerDown ? Effect.fail(new PublishError({ topic, reason: "unavailable", message: "down" })) : Effect.void
+      })
+      // 1 goes out; then the broker goes down while the value alternates: 1 stays inside the deadband
+      // (nothing to publish, so the cycle succeeds) and 2 fails to publish.
+      const values = Array.from({ length: 20 }, (_, index): ReadonlyArray<readonly [string, PointValue]> => [
+        ["temp", index % 2 === 0 ? 1 : 2]
+      ])
+      const driver = scripted("flapping", [pointNamed("temp")], values)
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(publisher),
+        Effect.provide(logs.layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("500 millis")
+      brokerDown = true
+      yield* TestClock.adjust("10 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(logs.lines.filter((line) => line.startsWith("Warn"))).toEqual(["Warn: publish failed"])
+      expect(logs.lines.filter((line) => line.includes("publishing works again"))).toEqual([])
+    })
+  )
 })
