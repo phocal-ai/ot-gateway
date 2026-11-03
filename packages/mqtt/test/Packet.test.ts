@@ -10,6 +10,8 @@ import {
   decodeDisconnect,
   decodePuback,
   decodePublish,
+  decodeSuback,
+  decodeSubscribe,
   encodeConnack,
   encodeConnect,
   encodeDisconnect,
@@ -17,11 +19,14 @@ import {
   encodePingresp,
   encodePuback,
   encodePublish,
+  encodeSuback,
+  encodeSubscribe,
   makeFrameReader,
   PacketType,
   Property,
   pubackRefusesMessage,
-  takePacket
+  takePacket,
+  topicMatches
 } from "../src/index.ts"
 
 const bytes = (...values: Array<number>) => Uint8Array.from(values)
@@ -229,5 +234,83 @@ describe("PUBACK", () => {
 
   it("reads the short form, where a missing reason means success (§3.4.2.1)", () => {
     expect(decodePuback(bytes(0x00, 0x07))).toEqual(Result.succeed({ packetId: 7, reasonCode: 0 }))
+  })
+})
+
+describe("PUBLISH request/response properties (§3.3.2.3)", () => {
+  it("round-trips message expiry, response topic and correlation data", () => {
+    const encoded = encodePublish({
+      topic: "s/b/ahu-1/setpoint/$set",
+      payload: new TextEncoder().encode('{"value":21.5}'),
+      qos: 1,
+      retain: false,
+      packetId: 7,
+      messageExpirySeconds: 30,
+      responseTopic: "app/responses",
+      correlationData: Uint8Array.of(1, 2, 3)
+    })
+    const split = bodyOf(encoded, PacketType.PUBLISH)
+    expect(Result.getOrThrow(decodePublish(split.flags, split.body))).toMatchObject({
+      topic: "s/b/ahu-1/setpoint/$set",
+      packetId: 7,
+      messageExpirySeconds: 30,
+      responseTopic: "app/responses",
+      correlationData: Uint8Array.of(1, 2, 3)
+    })
+  })
+})
+
+describe("SUBSCRIBE and SUBACK (§3.8, §3.9)", () => {
+  it("encodes SUBSCRIBE with the reserved flags 0b0010 and round-trips its filters", () => {
+    const encoded = encodeSubscribe({
+      packetId: 1,
+      subscriptions: [
+        { filter: "s/b/+/+/$set", qos: 1 },
+        { filter: "s/#", qos: 0 }
+      ]
+    })
+    expect(encoded[0]).toBe((PacketType.SUBSCRIBE << 4) | 0b0010)
+    const split = bodyOf(encoded, PacketType.SUBSCRIBE)
+    expect(Result.getOrThrow(decodeSubscribe(split.body))).toEqual({
+      packetId: 1,
+      subscriptions: [
+        { filter: "s/b/+/+/$set", qos: 1 },
+        { filter: "s/#", qos: 0 }
+      ]
+    })
+  })
+
+  it("refuses a SUBSCRIBE without filters (§3.8.3)", () => {
+    expect(Result.isFailure(decodeSubscribe(Uint8Array.of(0, 1, 0)))).toBe(true)
+  })
+
+  it("round-trips a SUBACK's reason codes", () => {
+    const split = bodyOf(encodeSuback({ packetId: 9, reasonCodes: [0x01, 0x87] }), PacketType.SUBACK)
+    expect(Result.getOrThrow(decodeSuback(split.body))).toEqual({ packetId: 9, reasonCodes: [0x01, 0x87] })
+  })
+})
+
+describe("topicMatches (§4.7)", () => {
+  it.each([
+    // The examples of §4.7.1.2 and §4.7.1.3.
+    ["sport/tennis/player1/#", "sport/tennis/player1", true],
+    ["sport/tennis/player1/#", "sport/tennis/player1/ranking", true],
+    ["sport/tennis/player1/#", "sport/tennis/player1/score/wimbledon", true],
+    ["sport/#", "sport", true],
+    ["sport/tennis/+", "sport/tennis/player1", true],
+    ["sport/tennis/+", "sport/tennis/player1/ranking", false],
+    ["sport/+", "sport", false],
+    ["sport/+", "sport/", true],
+    ["+/+", "/finance", true],
+    ["/+", "/finance", true],
+    ["+", "/finance", false],
+    // §4.7.2: wildcards at the first level do not match $ topics; a $ deeper down is an ordinary level.
+    ["#", "$SYS/broker", false],
+    ["+/monitor/Clients", "$SYS/monitor/Clients", false],
+    ["$SYS/#", "$SYS/broker", true],
+    ["s/b/+/+/$set", "s/b/ahu-1/setpoint/$set", true],
+    ["s/b/+/+/$set", "s/b/ahu-1/setpoint/$meta", false]
+  ])("%s against %s is %s", (filter, topic, matches) => {
+    expect(topicMatches(filter, topic)).toBe(matches)
   })
 })

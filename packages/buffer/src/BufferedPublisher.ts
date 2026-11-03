@@ -6,7 +6,8 @@
  *
  * - Only values are buffered. Retained messages (`$meta`, health) pass
  *   straight through: the pipeline retries `$meta` and the MQTT publisher
- *   replays retained state after a reconnect.
+ *   replays retained state after a reconnect. So do transient ones (command
+ *   results), which would mislead if delivered late.
  * - Once anything is waiting, new values queue behind it, so delivery keeps
  *   the order values were read in. The drainer pipelines up to 16 messages
  *   at a time for throughput, starts no new ones after the first failure,
@@ -513,7 +514,10 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
     publish: (topic, payload, publishOptions) => {
       const qos = publishOptions?.qos
       // Retained state is restored by the pipeline and the MQTT publisher; QoS 2 is refused downstream.
-      if (publishOptions?.retain === true || qos === 2) return inner.publish(topic, payload, publishOptions)
+      // Retained and transient messages are not stored: see the module comment.
+      if (publishOptions?.retain === true || publishOptions?.transient === true || qos === 2) {
+        return inner.publish(topic, payload, publishOptions)
+      }
       return publishOrStore(topic, payload, qos === 0 ? 0 : 1)
     }
   })

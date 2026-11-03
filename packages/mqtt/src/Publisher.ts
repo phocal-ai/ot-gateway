@@ -47,7 +47,13 @@ export const parseBrokerUrl = (url: string): Effect.Effect<BrokerAddress, MqttSe
 
 export interface MqttPublisherOptions extends Pick<
   MqttClientOptions,
-  "keepAliveSeconds" | "connectTimeout" | "publishTimeout" | "waitForConnection" | "reconnectDelay"
+  | "keepAliveSeconds"
+  | "connectTimeout"
+  | "publishTimeout"
+  | "waitForConnection"
+  | "reconnectDelay"
+  | "subscriptions"
+  | "onMessage"
 > {
   /**
    * Announce the gateway on its health topic: `online` (rendered fresh by
@@ -189,9 +195,11 @@ export const MqttPublisher = (
           if (publishOptions?.qos === 2)
             return Effect.fail(new PublishError({ topic, reason: "rejected", message: "QoS 2 is not supported" }))
           const qos = publishOptions?.qos === undefined ? {} : { qos: publishOptions.qos }
+          const correlation =
+            publishOptions?.correlationData === undefined ? {} : { correlationData: publishOptions.correlationData }
           return publishOptions?.retain === true
             ? translate(publishRetained(client, topic, payload))
-            : translate(client.publish(topic, payload, qos))
+            : translate(client.publish(topic, payload, { ...qos, ...correlation }))
         }
       })
     })

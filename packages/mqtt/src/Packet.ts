@@ -4,8 +4,8 @@
  * DISCONNECT encoders and the CONNACK/PUBACK/PINGRESP/DISCONNECT decoders; the
  * test broker uses the opposite directions.
  *
- * Only what publishing needs is here: no SUBSCRIBE yet (v0.4, commands), no
- * QoS 2, no AUTH exchange.
+ * Publishing, and subscribing for commands (v0.4): no QoS 2, no AUTH
+ * exchange, no shared subscriptions.
  */
 import { Result } from "effect"
 import {
@@ -22,6 +22,9 @@ const decoder = new TextDecoder("utf-8", { fatal: true })
 /** Property identifiers used here (§2.2.2.2). */
 export const Property = {
   PayloadFormatIndicator: 0x01,
+  MessageExpiryInterval: 0x02,
+  ResponseTopic: 0x08,
+  CorrelationData: 0x09,
   ContentType: 0x03,
   SessionExpiryInterval: 0x11,
   AssignedClientIdentifier: 0x12,
@@ -65,8 +68,8 @@ const propertyKinds: Record<number, "byte" | "u16" | "u32" | "vbi" | "string" | 
   0x2a: "byte"
 }
 
-/** Numeric and string properties by identifier. User properties and binary data are skipped. */
-export type Properties = ReadonlyMap<number, number | string>
+/** Properties by identifier: numbers, strings and binary data (a copy). User properties are skipped. */
+export type Properties = ReadonlyMap<number, number | string | Uint8Array>
 
 // ---------------------------------------------------------------------------
 // Byte writing
@@ -176,7 +179,7 @@ class Reader {
   }
   properties(): Properties {
     const end = this.vbi() + this.offset
-    const props = new Map<number, number | string>()
+    const props = new Map<number, number | string | Uint8Array>()
     while (this.offset < end) {
       const id = this.vbi()
       switch (propertyKinds[id]) {
@@ -196,7 +199,7 @@ class Reader {
           props.set(id, this.string())
           break
         case "binary":
-          this.binary()
+          props.set(id, this.binary().slice())
           break
         case "pair":
           this.string()
@@ -511,30 +514,53 @@ export interface Publish {
   readonly retain: boolean
   /** Required for QoS 1, absent for QoS 0. */
   readonly packetId?: number
+  /** Seconds the message stays deliverable (§3.3.2.3.3); the broker discards it after. */
+  readonly messageExpirySeconds?: number
+  /** Where the receiver should answer (§3.3.2.3.5, request/response). */
+  readonly responseTopic?: string
+  /** Echoed in the answer so the requester can match it (§3.3.2.3.6). */
+  readonly correlationData?: Uint8Array
 }
 
 /** Encode a PUBLISH. Payloads are marked UTF-8 (payload format indicator 1): Plenum publishes JSON. */
 export const encodePublish = (publish: Publish): Uint8Array => {
   const body = new Writer().string(publish.topic)
   if (publish.qos > 0) body.u16(publish.packetId ?? 0)
-  body.bytes(encodeProperties((w) => w.byte(Property.PayloadFormatIndicator).byte(1))).bytes(publish.payload)
+  body
+    .bytes(
+      encodeProperties((w) => {
+        w.byte(Property.PayloadFormatIndicator).byte(1)
+        if (publish.messageExpirySeconds !== undefined) {
+          w.byte(Property.MessageExpiryInterval).u32(publish.messageExpirySeconds)
+        }
+        if (publish.responseTopic !== undefined) w.byte(Property.ResponseTopic).string(publish.responseTopic)
+        if (publish.correlationData !== undefined) w.byte(Property.CorrelationData).binary(publish.correlationData)
+      })
+    )
+    .bytes(publish.payload)
   return packet(PacketType.PUBLISH, (publish.qos << 1) | (publish.retain ? 1 : 0), body.toBytes())
 }
 
-/** Decode a PUBLISH body with its fixed-header flags (broker side). */
+/** Decode a PUBLISH body with its fixed-header flags (the broker, and a client receiving commands). */
 export const decodePublish = (flags: number, body: Uint8Array): Result.Result<Publish, MqttCodecError> =>
   decodeWith(body, (r) => {
     const qos = (flags >> 1) & 0x03
     if (qos > 1) throw new MqttCodecError({ message: `QoS ${qos} is not supported` })
     const topic = r.string()
     const packetId = qos > 0 ? r.u16() : undefined
-    r.properties()
+    const properties = r.properties()
+    const expiry = properties.get(Property.MessageExpiryInterval)
+    const responseTopic = properties.get(Property.ResponseTopic)
+    const correlationData = properties.get(Property.CorrelationData)
     return {
       topic,
-      payload: r.rest(),
+      payload: r.rest().slice(),
       qos: qos === 1 ? 1 : 0,
       retain: (flags & 0x01) !== 0,
-      ...(packetId === undefined ? {} : { packetId })
+      ...(packetId === undefined ? {} : { packetId }),
+      ...(typeof expiry === "number" ? { messageExpirySeconds: expiry } : {}),
+      ...(typeof responseTopic === "string" ? { responseTopic } : {}),
+      ...(correlationData instanceof Uint8Array ? { correlationData } : {})
     }
   })
 
@@ -572,6 +598,90 @@ export const encodePuback = (packetId: number, reasonCode = 0): Uint8Array =>
       .bytes(encodeProperties(() => {}))
       .toBytes()
   )
+
+// ---------------------------------------------------------------------------
+// SUBSCRIBE (§3.8) and SUBACK (§3.9)
+
+export interface Subscription {
+  readonly filter: string
+  readonly qos: 0 | 1
+}
+
+export interface Subscribe {
+  readonly packetId: number
+  readonly subscriptions: ReadonlyArray<Subscription>
+}
+
+/**
+ * Encode a SUBSCRIBE. Options per filter (§3.8.3.1): the maximum QoS, No
+ * Local and Retain As Published off, and Retain Handling 0 (send retained
+ * messages on subscribe), so a retained message on a filter is seen, flagged
+ * as retained, and can be refused.
+ */
+export const encodeSubscribe = (subscribe: Subscribe): Uint8Array => {
+  const body = new Writer().u16(subscribe.packetId).bytes(encodeProperties(() => {}))
+  for (const { filter, qos } of subscribe.subscriptions) body.string(filter).byte(qos)
+  // The fixed header flags of SUBSCRIBE are reserved as 0b0010 (§3.8.1).
+  return packet(PacketType.SUBSCRIBE, 0b0010, body.toBytes())
+}
+
+export const decodeSubscribe = (body: Uint8Array): Result.Result<Subscribe, MqttCodecError> =>
+  decodeWith(body, (r) => {
+    const packetId = r.u16()
+    r.properties()
+    const subscriptions: Array<Subscription> = []
+    while (r.remaining > 0) {
+      const filter = r.string()
+      const qos = r.byte() & 0x03
+      if (qos > 1) throw new MqttCodecError({ message: `QoS ${qos} is not supported` })
+      subscriptions.push({ filter, qos: qos === 1 ? 1 : 0 })
+    }
+    // A SUBSCRIBE with no filter is a protocol error (§3.8.3).
+    if (subscriptions.length === 0) throw new MqttCodecError({ message: "SUBSCRIBE without a topic filter" })
+    return { packetId, subscriptions }
+  })
+
+export interface Suback {
+  readonly packetId: number
+  /** One per filter, in order: the granted QoS (0x00, 0x01), or 0x80 and above for a refusal (§3.9.3). */
+  readonly reasonCodes: ReadonlyArray<number>
+}
+
+export const encodeSuback = (suback: Suback): Uint8Array =>
+  packet(
+    PacketType.SUBACK,
+    0,
+    new Writer()
+      .u16(suback.packetId)
+      .bytes(encodeProperties(() => {}))
+      .bytes(Uint8Array.from(suback.reasonCodes))
+      .toBytes()
+  )
+
+export const decodeSuback = (body: Uint8Array): Result.Result<Suback, MqttCodecError> =>
+  decodeWith(body, (r) => {
+    const packetId = r.u16()
+    r.properties()
+    return { packetId, reasonCodes: [...r.rest()] }
+  })
+
+/**
+ * Whether `topic` matches the subscription `filter` (§4.7): `+` matches one
+ * level, `#` (last) the rest. Wildcards at the first level do not match
+ * topics starting with `$` (§4.7.2).
+ */
+export const topicMatches = (filter: string, topic: string): boolean => {
+  const filterLevels = filter.split("/")
+  const topicLevels = topic.split("/")
+  if (topic.startsWith("$") && (filterLevels[0] === "+" || filterLevels[0] === "#")) return false
+  for (let index = 0; index < filterLevels.length; index++) {
+    const level = filterLevels[index]
+    if (level === "#") return true
+    if (index >= topicLevels.length) return false
+    if (level !== "+" && level !== topicLevels[index]) return false
+  }
+  return filterLevels.length === topicLevels.length
+}
 
 // ---------------------------------------------------------------------------
 // PINGREQ, PINGRESP (§3.12, §3.13) and DISCONNECT (§3.14)
