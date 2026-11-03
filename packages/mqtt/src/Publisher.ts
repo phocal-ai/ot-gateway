@@ -6,7 +6,7 @@
  * down at startup delays publishing but does not stop the gateway.
  */
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { type MqttSettings, offlinePayload, Publisher, PublishError } from "@plenum/core"
+import { type MqttSettings, type Network, offlinePayload, Publisher, PublishError } from "@plenum/core"
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"
 import { makeMqttClient, MqttPublishError } from "./Client.ts"
@@ -55,6 +55,8 @@ export interface MqttPublisherOptions extends Pick<
    * shutdown.
    */
   readonly health?: { readonly topic: string; readonly online: Effect.Effect<string> }
+  /** Connect through this network instead of Node's (a simulation); TLS is then the network's business. */
+  readonly network?: Pick<Network, "tcp">
 }
 
 /** Client errors become the core `PublishError`. */
@@ -92,10 +94,12 @@ export const MqttPublisher = (
       const address = yield* parseBrokerUrl(settings.url)
       const password = settings.passwordEnv === undefined ? undefined : yield* Config.Redacted(settings.passwordEnv)
       const openTimeout = options.connectTimeout ?? "10 seconds"
-      const socket = address.tls
-        ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
-        : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
-      const { health, ...clientOptions } = options
+      const socket = options.network
+        ? yield* options.network.tcp({ host: address.host, port: address.port, openTimeout })
+        : address.tls
+          ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
+          : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
+      const { health, network: _network, ...clientOptions } = options
       // The latest retained payload per topic, tagged with the connection it went out on.
       const retained = new Map<string, { readonly payload: string; readonly connection: number }>()
       let connection = 0

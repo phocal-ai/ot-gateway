@@ -13,7 +13,7 @@
  */
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { DriverError, driverRefusals } from "@plenum/core"
-import type { Driver, ModbusDevice, Reading } from "@plenum/core"
+import type { Driver, ModbusDevice, Network, Reading } from "@plenum/core"
 import { Clock, Effect, Metric, Schedule } from "effect"
 import type { Duration } from "effect"
 import { makeModbusClient } from "./Client.ts"
@@ -28,6 +28,8 @@ export interface ModbusDriverOptions extends PlanOptions {
   readonly connectTimeout?: Duration.Input
   /** Time allowed for one request (default 2 s). */
   readonly requestTimeout?: Duration.Input
+  /** Connect through this network instead of Node's (a simulation). */
+  readonly network?: Pick<Network, "tcp">
 }
 
 /**
@@ -156,11 +158,8 @@ export const makeModbusDriver = Effect.fn("makeModbusDriver")(function* (
   device: ModbusDevice,
   options: ModbusDriverOptions = {}
 ) {
-  const socket = yield* NodeSocket.makeNet({
-    host: device.host,
-    port: device.port,
-    openTimeout: options.connectTimeout ?? "3 seconds"
-  })
+  const target = { host: device.host, port: device.port, openTimeout: options.connectTimeout ?? "3 seconds" }
+  const socket = yield* options.network ? options.network.tcp(target) : NodeSocket.makeNet(target)
   const client = yield* makeModbusClient(socket, {
     unitId: device.unitId,
     ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
