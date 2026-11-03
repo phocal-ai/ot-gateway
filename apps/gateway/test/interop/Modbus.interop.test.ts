@@ -93,6 +93,7 @@ describe.runIf(enabled)("interop: Modbus TCP against pymodbus", () => {
             {
               id: "nowhere",
               name: "Nowhere",
+              byteOrder: "ABCD",
               table: "holding",
               address: 5000,
               dataType: "uint16",

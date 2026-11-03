@@ -93,6 +93,43 @@ describe("decodeValue", () => {
     // 21.5 = 0x41AC0000
     expect(decodeValue([0x41ac, 0x0000], "float32")).toBeCloseTo(21.5)
   })
+  // The registers as each byte order sends a value (ByteOrder in @plenum/core).
+  it.each([
+    ["ABCD", [0x1234, 0x5678]],
+    ["CDAB", [0x5678, 0x1234]],
+    ["BADC", [0x3412, 0x7856]],
+    ["DCBA", [0x7856, 0x3412]]
+  ] as const)("reads uint32 0x12345678 sent as %s", (order, registers) => {
+    expect(decodeValue(registers, "uint32", order)).toBe(0x12345678)
+    expect(encodeValue(0x12345678, "uint32", order)).toEqual(registers)
+  })
+  it.each([
+    ["ABCD", [0x41ac, 0x0000]],
+    ["CDAB", [0x0000, 0x41ac]],
+    ["BADC", [0xac41, 0x0000]],
+    ["DCBA", [0x0000, 0xac41]]
+  ] as const)("reads float32 21.5 sent as %s", (order, registers) => {
+    expect(decodeValue(registers, "float32", order)).toBe(21.5)
+  })
+  it("only byte-swaps a single register (a word order means nothing in one word)", () => {
+    expect(decodeValue([0x1234], "uint16", "CDAB")).toBe(0x1234)
+    expect(decodeValue([0x3412], "uint16", "BADC")).toBe(0x1234)
+    expect(decodeValue([0x3412], "uint16", "DCBA")).toBe(0x1234)
+  })
+  it.each([
+    ["ABCD", [0x0001, 0x0203, 0x0405, 0x0607]],
+    ["CDAB", [0x0607, 0x0405, 0x0203, 0x0001]],
+    ["BADC", [0x0100, 0x0302, 0x0504, 0x0706]],
+    ["DCBA", [0x0706, 0x0504, 0x0302, 0x0100]]
+  ] as const)("reads uint64 0x0001020304050607 from four registers sent as %s", (order, registers) => {
+    expect(decodeValue(registers, "uint64", order)).toBe(0x0001_0203_0405_0607)
+    expect(encodeValue(0x0001_0203_0405_0607, "uint64", order)).toEqual(registers)
+  })
+  it("reads float64 and int64", () => {
+    // 1.0 = 0x3FF0000000000000; -2 = 0xFFFFFFFFFFFFFFFE
+    expect(decodeValue([0x3ff0, 0, 0, 0], "float64")).toBe(1)
+    expect(decodeValue([0xffff, 0xffff, 0xffff, 0xfffe], "int64")).toBe(-2)
+  })
 })
 
 describe("takeFrame", () => {
@@ -229,9 +266,14 @@ describe("encodeValue", () => {
     ["int32", -70000],
     ["uint32", 4_000_000_000],
     ["float32", 21.5],
+    ["int64", -9_000_000_000_000],
+    ["uint64", 9_000_000_000_000_000],
+    ["float64", 0.1],
     ["bool", true]
-  ] as const)("round-trips %s", (dataType, value) => {
-    expect(decodeValue(encodeValue(value, dataType), dataType)).toBe(value)
+  ] as const)("round-trips %s in every byte order", (dataType, value) => {
+    for (const order of ["ABCD", "CDAB", "BADC", "DCBA"] as const) {
+      expect(decodeValue(encodeValue(value, dataType, order), dataType, order)).toBe(value)
+    }
   })
 })
 

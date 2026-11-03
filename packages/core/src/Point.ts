@@ -63,29 +63,72 @@ export const PointFields = {
 } as const
 
 /** Value types a register-based protocol can decode. */
-export const DataType = Schema.Literals(["int16", "uint16", "int32", "uint32", "float32", "bool"])
+export const DataType = Schema.Literals([
+  "int16",
+  "uint16",
+  "int32",
+  "uint32",
+  "float32",
+  "int64",
+  "uint64",
+  "float64",
+  "bool"
+])
 export type DataType = typeof DataType.Type
+
+/** How many 16-bit registers a value of `dataType` takes. */
+export const registerWidth = (dataType: DataType): 1 | 2 | 4 => {
+  switch (dataType) {
+    case "int32":
+    case "uint32":
+    case "float32":
+      return 2
+    case "int64":
+    case "uint64":
+    case "float64":
+      return 4
+    case "int16":
+    case "uint16":
+    case "bool":
+      return 1
+  }
+}
+
+/**
+ * The order of a value's bytes across its registers, naming the bytes of a
+ * 32-bit value A (most significant) to D as the device sends them (Modbus
+ * itself only fixes big-endian within one register, §4.2):
+ *
+ * - `ABCD`: big-endian, high word first (the default, and most devices);
+ * - `CDAB`: words swapped, low word first (common on meters and PLCs);
+ * - `BADC`: bytes swapped within each register;
+ * - `DCBA`: little-endian.
+ *
+ * Wider values follow the same two rules (word order reversed, bytes swapped
+ * within each register); a single register is only byte-swapped (`BADC`, `DCBA`).
+ */
+export const ByteOrder = Schema.Literals(["ABCD", "CDAB", "BADC", "DCBA"])
+export type ByteOrder = typeof ByteOrder.Type
 
 /**
  * A point on a Modbus TCP device. Addresses are 0 to 65535 (Modbus
- * Application Protocol §4.4), and a 32-bit value in two registers must end
+ * Application Protocol §4.4), and a value of several registers must end
  * there too: a read cannot run past the last address.
  */
 export const ModbusPoint = Schema.Struct({
   ...PointFields,
   table: Schema.Literals(["holding", "input", "coil", "discrete"]),
   address: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))),
-  dataType: DataType
+  dataType: DataType,
+  byteOrder: ByteOrder.pipe(Schema.withDecodingDefaultKey(Effect.succeed("ABCD")))
 }).check(
   Schema.makeFilter((point) => {
-    const wide =
-      (point.table === "holding" || point.table === "input") &&
-      (point.dataType === "int32" || point.dataType === "uint32" || point.dataType === "float32")
+    if (point.table !== "holding" && point.table !== "input") return true
+    const width = registerWidth(point.dataType)
     return (
-      !wide ||
-      point.address < 65535 || {
+      point.address + width - 1 <= 65535 || {
         path: ["address"],
-        issue: `a ${point.dataType} takes two registers, so its address must be at most 65534`
+        issue: `a ${point.dataType} takes ${width} registers, so its address must be at most ${65536 - width}`
       }
     )
   }),

@@ -13,7 +13,8 @@ const point = (
   writable: false,
   table,
   address,
-  dataType
+  dataType,
+  byteOrder: "ABCD"
 })
 
 const shape = (points: ReadonlyArray<ModbusPoint>, maxGap?: number) =>

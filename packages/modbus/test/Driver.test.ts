@@ -33,7 +33,8 @@ const point = (
   writable: false,
   table,
   address,
-  dataType
+  dataType,
+  byteOrder: "ABCD"
 })
 
 const supplyTemp = point("supply-temp", "holding", 100, "float32")
@@ -88,6 +89,30 @@ describe("Modbus driver over TCP", () => {
       expect(yield* countOf(driverRequests, "read-all", "ok")).toBe(4)
       expect(yield* countOf(driverConnects, "read-all", "ok")).toBe(1)
     }).pipe(withMetricAttributes({ device: "read-all" }))
+  )
+
+  it.live("reads values sent in other byte orders, 64-bit ones included", () =>
+    Effect.gen(function* () {
+      const { port, bank } = yield* startSimulator
+      // Registers as such devices send them, set by hand rather than through the codec under test.
+      const swappedFloat = { ...point("swapped", "holding", 200, "float32"), byteOrder: "CDAB" as const }
+      const littleCounter = { ...point("counter", "holding", 210, "uint64"), byteOrder: "DCBA" as const }
+      const swappedBytes = { ...point("bytes", "holding", 220, "int16"), byteOrder: "BADC" as const }
+      for (const [address, register] of [
+        [200, 0x0000],
+        [201, 0x41ac],
+        [210, 0x0706],
+        [211, 0x0504],
+        [212, 0x0302],
+        [213, 0x0100],
+        [220, 0xfeff]
+      ] as const) {
+        bank.holding.set(address, register)
+      }
+      const driver = yield* makeModbusDriver(deviceOn(port, [swappedFloat, littleCounter, swappedBytes]))
+      const values = Object.fromEntries((yield* driver.readAll).map((reading) => [reading.pointId, reading.value]))
+      expect(values).toEqual({ swapped: 21.5, counter: 0x0001_0203_0405_0607, bytes: -2 })
+    })
   )
 
   it.live("keeps the other blocks when the device refuses one", () =>

@@ -81,7 +81,7 @@ const runSimulator = Effect.fn("runSimulator")(function* (device: ModbusDevice, 
       if (point.dataType === "bool") return setPointValue(bank, point, Math.floor(seconds / 30) % 2 === 0)
       // Integers count up like a meter; floats follow a sine between 0 and 100, phase-shifted so points differ.
       const value =
-        point.dataType === "float32"
+        point.dataType === "float32" || point.dataType === "float64"
           ? 50 + 50 * Math.sin((2 * Math.PI * seconds) / 120 + index)
           : Math.floor(seconds / 10) % 32_768
       setPointValue(bank, point, value)

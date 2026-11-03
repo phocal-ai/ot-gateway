@@ -95,7 +95,7 @@ export const valueFromRegisters = (
   registers: ReadonlyArray<number>
 ): number | boolean => {
   const offset = point.address - blockAddress
-  return decodeValue(registers.slice(offset, offset + registerCount(point.dataType)), point.dataType)
+  return decodeValue(registers.slice(offset, offset + registerCount(point.dataType)), point.dataType, point.byteOrder)
 }
 
 /** The value of `point` inside a bit block read starting at `blockAddress`. */

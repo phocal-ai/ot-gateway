@@ -81,6 +81,37 @@ describe("parseConfig", () => {
       expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(at(65534)))))).toBe(true)
       // A bit occupies one address whatever its data type.
       expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(at(65535, "coil")))))).toBe(true)
+      // A 64-bit value takes four registers.
+      const wide = (address: number) => ({
+        ...minimal,
+        devices: [
+          {
+            ...device,
+            points: device?.points.map((point) => ({ ...point, address, dataType: "uint64", byteOrder: "CDAB" }))
+          }
+        ]
+      })
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(wide(65533)))))).toBe(true)
+      expect(Exit.isSuccess(yield* Effect.exit(parseConfig(JSON.stringify(wide(65532)))))).toBe(true)
+    })
+  )
+
+  it.effect("reads 32-bit values high word first unless byteOrder says otherwise, and refuses unknown orders", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const ordered = (byteOrder?: string) => ({
+        ...minimal,
+        devices: [
+          {
+            ...device,
+            points: device?.points.map((point) => ({ ...point, ...(byteOrder === undefined ? {} : { byteOrder }) }))
+          }
+        ]
+      })
+      const parsed = yield* parseConfig(JSON.stringify(ordered()))
+      const [first] = parsed.devices
+      expect(first?.protocol === "modbus-tcp" ? first.points[0]?.byteOrder : undefined).toBe("ABCD")
+      expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(ordered("little")))))).toBe(true)
     })
   )
 

@@ -51,7 +51,9 @@ export const setPointValue = (bank: RegisterBank, point: ModbusPoint, value: num
     case "holding":
     case "input": {
       const table = bank[point.table]
-      encodeValue(value, point.dataType).forEach((register, i) => table.set(point.address + i, register))
+      encodeValue(value, point.dataType, point.byteOrder).forEach((register, i) =>
+        table.set(point.address + i, register)
+      )
     }
   }
 }

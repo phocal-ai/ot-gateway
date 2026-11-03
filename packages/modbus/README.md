@@ -6,7 +6,7 @@ Effect-native Modbus TCP, implemented in-house.
   - Reads: FC 01–04, coils, discrete inputs, holding and input registers.
   - Exception responses.
   - Stream framing: `takeFrame` splits a TCP byte stream into frames.
-  - Values: `int16` to `float32`, high word first.
+  - Values: 16-, 32- and 64-bit integers, `float32`, `float64` and `bool`, in the point's `byteOrder` (`ABCD`, high word first, by default; `CDAB`, `BADC`, `DCBA`). One function reorders registers both ways (`reorderRegisters`), since word reversal and byte swapping each undo themselves.
 - **Planner** (`Plan.ts`): groups a device's points into as few requests as the protocol allows (125 registers or 2,000 bits per request). It only merges adjacent addresses unless `maxGap` allows more.
 - **Client** (`Client.ts`): one connection per device, opened on first use.
   - Requests go out one at a time, with a request timeout (default 2 s).
@@ -22,8 +22,6 @@ Effect-native Modbus TCP, implemented in-house.
 
 Metrics: `plenum_driver_requests_total{outcome}`, `plenum_driver_connects_total{outcome}` and `plenum_driver_refusals_total{exception}`. The driver adds no span per request; the cycle span carries `plenum.requests` and `plenum.refused`.
 
-- **Writes** (`Driver.write`, behind the command guard in `@plenum/core`): FC 05 for coils, FC 06 for one-register values and FC 16 for 32-bit ones, so both halves change in one request. The client never resends a write, not even on a connection it finds closed, since a device that took it would apply it twice. Values that do not fit their type, and input registers or discrete inputs, are refused before anything is sent. The simulator applies writes and records them in `SimulatorControl.writes`; `refuseWrites` makes it answer with an exception.
-
-Not yet: word-swapped 32-bit values.
+- **Writes** (`Driver.write`, behind the command guard in `@plenum/core`): FC 05 for coils, FC 06 for one-register values and FC 16 for wider ones, so every register of a value changes in one request, in the point's byte order. The client never resends a write, not even on a connection it finds closed, since a device that took it would apply it twice. Values that do not fit their type, and input registers or discrete inputs, are refused before anything is sent. The simulator applies writes and records them in `SimulatorControl.writes`; `refuseWrites` makes it answer with an exception.
 
 Part of [Plenum](../../README.md).

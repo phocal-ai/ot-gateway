@@ -87,7 +87,8 @@ export const point = (id: string, table: ModbusPoint["table"], address: number):
   writable: false,
   table,
   address,
-  dataType: "uint16"
+  dataType: "uint16",
+  byteOrder: "ABCD"
 })
 
 export const deviceOn = (port: number, points: ReadonlyArray<ModbusPoint>): ModbusDevice => ({

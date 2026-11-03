@@ -75,7 +75,7 @@ describe("chaos: codec fuzz", () => {
 })
 
 describe("chaos: planner fuzz", () => {
-  const dataTypes = ["int16", "uint16", "int32", "uint32", "float32", "bool"] as const
+  const dataTypes = ["int16", "uint16", "int32", "uint32", "float32", "int64", "uint64", "float64", "bool"] as const
   const tables = ["holding", "input", "coil", "discrete"] as const
 
   it("plans legal requests for any valid point set, including the top of the address range", () => {
@@ -89,9 +89,9 @@ describe("chaos: planner fuzz", () => {
           dataType: dataTypes[random.int(dataTypes.length)] ?? "uint16"
         }
         // The config schema keeps every point inside the address range.
-        const width = pointWidth({ id: "w", name: "w", writable: false, address: 0, ...shape })
+        const width = pointWidth({ id: "w", name: "w", writable: false, address: 0, byteOrder: "ABCD", ...shape })
         const address = Math.min(65536 - width, Math.max(0, base + random.int(300) - 150))
-        return { id: `p${i}`, name: `p${i}`, writable: false, address, ...shape }
+        return { id: `p${i}`, name: `p${i}`, writable: false, address, byteOrder: "ABCD" as const, ...shape }
       })
       const blocks = planReads(points, { maxGap: random.int(3) === 0 ? random.int(20) : 0 })
       const planned = new Set<ModbusPoint>()
