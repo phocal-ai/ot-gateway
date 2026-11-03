@@ -243,7 +243,7 @@ describe("chaos: client over UDP", () => {
   it.live("a request that finds no free invoke ID fails within its timeout instead of queueing", () =>
     Effect.gen(function* () {
       const silent = yield* peer()
-      const client = yield* startClient({ requestTimeout: "500 millis", retries: 0 })
+      const client = yield* startClient({ requestTimeout: "1 second", retries: 0 })
       const started = Date.now()
       // Four times the 256 invoke IDs, all to a device that never answers.
       const timed = yield* Effect.forEach(
@@ -263,11 +263,12 @@ describe("chaos: client over UDP", () => {
       )
       const elapsed = Date.now() - started
       const results = timed.map(({ result }) => result)
-      // Queued, the last quarter would wait three timeouts first and end after two seconds.
-      expect(elapsed).toBeLessThan(1600)
-      // Each request, its wait for an invoke ID included, ends near its 500 ms deadline: one that gets an
-      // ID freed just before its deadline must not start a fresh 500 ms exchange on top (a second in all).
-      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(800)
+      // Queued, the last quarter would wait three timeouts first and end after four seconds.
+      expect(elapsed).toBeLessThan(3000)
+      // Each request, its wait for an invoke ID included, ends near its 1 s deadline: one that gets an ID
+      // freed just before its deadline must not start a fresh 1 s exchange on top (two seconds in all).
+      // The bound sits midway: a CI runner busy with every package's tests delays timers by ~350 ms.
+      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(1600)
       expect(
         results.some(
           (result) => Result.isFailure(result) && result.failure.message.startsWith("no free invoke ID within")

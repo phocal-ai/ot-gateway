@@ -4,9 +4,12 @@
  *
  *   node apps/gateway/src/main.ts path/to/gateway.json
  *   node apps/gateway/src/main.ts --check path/to/gateway.json
+ *   node apps/gateway/src/main.ts --discover path/to/gateway.json
  *
  * `--check` validates the config and prints what it would run, without
  * connecting to anything: exit 0 when it is valid, 1 with the problem when not.
+ * `--discover` finds the BACnet devices through the config's `bacnet`
+ * settings and prints a draft of their `devices` entries (see Discover.ts).
  *
  * Polls simulator, Modbus TCP and BACnet/IP devices and publishes to the MQTT
  * broker in `mqtt`, with the gateway's status on its retained health topic.
@@ -19,6 +22,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { type GatewayConfig, parseConfig } from "@plenum/core"
 import { Console, Effect, FileSystem } from "effect"
+import { discover } from "./Discover.ts"
 import { runGateway } from "./Gateway.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 import { telemetryLayer } from "./Telemetry.ts"
@@ -44,11 +48,12 @@ const describe = (config: GatewayConfig) =>
 
 const program = Effect.gen(function* () {
   const args = process.argv.slice(2)
-  const check = args.includes("--check")
-  const path = args.find((arg) => arg !== "--check") ?? "plenum.json"
+  const flags = new Set(["--check", "--discover"])
+  const path = args.find((arg) => !flags.has(arg)) ?? "plenum.json"
   const fs = yield* FileSystem.FileSystem
   const config = yield* parseConfig(yield* fs.readFileString(path))
-  if (check) return yield* Console.log(describe(config))
+  if (args.includes("--check")) return yield* Console.log(describe(config))
+  if (args.includes("--discover")) return yield* discover(config)
   yield* runGateway(config).pipe(Effect.provide(telemetryLayer(config)))
 })
 

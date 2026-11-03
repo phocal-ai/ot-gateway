@@ -63,6 +63,31 @@ To check a config without connecting to anything:
 node apps/gateway/src/main.ts --check path/to/gateway.json
 ```
 
+## Set it up with AI
+
+The fastest way to your own building is to let a coding agent do it. In [Claude Code](https://claude.com/claude-code), from the checkout:
+
+```text
+/setup
+```
+
+The skill checks Node and pnpm, shows the demo, then asks about your devices and broker in one round. It discovers BACnet devices on the network and drafts Modbus points from a register list or datasheet you give it. Then it writes `plenum.json` and validates it, runs the gateway until values flow, and on request installs it as a service or container. It never makes a point writable unless you ask.
+
+With any other agent that can run commands (Cursor, Codex, Gemini CLI, …), paste:
+
+```text
+Set up a Plenum gateway for my building. Clone https://github.com/phocal-ai/plenum if this is not
+already a checkout of it, then read .claude/skills/setup/SKILL.md and follow it step by step: run the
+commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out
+of the JSON config. Stop when values from my devices reach the broker.
+```
+
+To draft BACnet points yourself, `--discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
+
+```bash
+node apps/gateway/src/main.ts --discover path/to/gateway.json
+```
+
 ## Running it for real
 
 On a Raspberry Pi (64-bit OS) or any Linux machine with systemd and Node.js 22.18 or newer, from a checkout:
