@@ -13,13 +13,13 @@
  */
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { DriverError, driverRefusals } from "@plenum/core"
-import type { Driver, ModbusDevice, Network, Reading } from "@plenum/core"
+import type { Driver, ModbusDevice, ModbusPoint, Network, Reading, WriteValue } from "@plenum/core"
 import { Clock, Effect, Metric, Schedule } from "effect"
 import type { Duration } from "effect"
 import { makeModbusClient } from "./Client.ts"
 import type { ModbusClient, ModbusClientError } from "./Client.ts"
-import { exceptionName, FunctionCode, isTransientException } from "./Frame.ts"
-import type { ModbusException } from "./Frame.ts"
+import { encodeValue, exceptionName, FunctionCode, isTransientException } from "./Frame.ts"
+import type { ModbusException, WriteRequest } from "./Frame.ts"
 import { planReads, valueFromBits, valueFromRegisters } from "./Plan.ts"
 import type { PlanOptions, ReadBlock } from "./Plan.ts"
 
@@ -145,9 +145,62 @@ export const makeModbusDriverFromClient = (
     deviceId: device.id,
     points: device.points,
     readAll,
-    // Write-back is v0.4 (docs/VISION.md): it lands with the command guard, not before.
-    write: (pointId) => fail("not-implemented", `writing ${pointId} is not supported yet`)
+    write: (pointId, value) =>
+      Effect.gen(function* () {
+        const point = device.points.find((candidate) => candidate.id === pointId)
+        if (point === undefined) return yield* fail("configuration", `no point ${pointId}`)
+        const request = writeRequestFor(point, value)
+        if (typeof request === "string") return yield* fail("configuration", `${pointId}: ${request}`)
+        yield* client.write(request)
+      }).pipe(
+        Effect.catchTags({
+          ModbusException: (error) =>
+            fail("protocol", `device refused the write: ${exceptionName(error.exceptionCode)}`),
+          ModbusTimeout: (error) => fail("timeout", error.message),
+          ModbusConnectionError: (error) => fail("connection", error.message),
+          ModbusFrameError: (error) => fail("invalid-response", error.message)
+        })
+      )
   }
+}
+
+/** Integer ranges of the register types; float32 takes any finite number. */
+const integerRange = {
+  int16: [-32_768, 32_767],
+  uint16: [0, 65_535],
+  int32: [-(2 ** 31), 2 ** 31 - 1],
+  uint32: [0, 2 ** 32 - 1]
+} as const
+
+/**
+ * The request that writes `value` to `point`, or why it cannot: a coil takes
+ * FC 05; a one-register holding value FC 06; a 32-bit one FC 16, so both
+ * halves change together. Integers must be whole and fit their type: a
+ * truncated or wrapped value would be a different command than the one given.
+ */
+export const writeRequestFor = (point: ModbusPoint, value: WriteValue): WriteRequest | string => {
+  if (value === null) return "Modbus has nothing to release; write a value"
+  if (point.table === "coil") {
+    if (typeof value !== "boolean") return "a coil takes true or false"
+    return { functionCode: FunctionCode.WriteSingleCoil, address: point.address, value }
+  }
+  if (point.table !== "holding")
+    return `${point.table} ${point.table === "input" ? "registers" : "inputs"} are read-only`
+  if (point.dataType === "bool") {
+    if (typeof value !== "boolean") return "a bool register takes true or false"
+    return { functionCode: FunctionCode.WriteSingleRegister, address: point.address, value: value ? 1 : 0 }
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) return `a ${point.dataType} takes a finite number`
+  if (point.dataType !== "float32") {
+    const [minimum, maximum] = integerRange[point.dataType]
+    if (!Number.isInteger(value)) return `${value} is not a whole number, as a ${point.dataType} needs`
+    if (value < minimum || value > maximum) return `${value} does not fit a ${point.dataType}`
+  }
+  const registers = encodeValue(value, point.dataType)
+  const [first] = registers
+  return registers.length === 1 && first !== undefined
+    ? { functionCode: FunctionCode.WriteSingleRegister, address: point.address, value: first }
+    : { functionCode: FunctionCode.WriteMultipleRegisters, address: point.address, values: registers }
 }
 
 /**

@@ -25,12 +25,15 @@ import {
   appendChunks,
   decodeBitResponse,
   decodeReadResponse,
+  decodeWriteResponse,
   encodeReadRequest,
+  encodeWriteRequest,
   frameTransactionId,
+  FunctionCode,
   ModbusFrameError,
   takeFrame
 } from "./Frame.ts"
-import type { BitReadCode, ModbusException, RegisterReadCode } from "./Frame.ts"
+import type { BitReadCode, ModbusException, RegisterReadCode, WriteRequest } from "./Frame.ts"
 
 /** No complete response arrived within the request timeout. */
 export class ModbusTimeout extends Schema.TaggedError<ModbusTimeout>()("ModbusTimeout", {
@@ -63,6 +66,12 @@ export interface ModbusClient {
     address: number,
     quantity: number
   ) => Effect.Effect<ReadonlyArray<boolean>, ModbusClientError>
+  /**
+   * Write a coil (FC 05) or holding registers (FC 06, FC 16). Sent at most
+   * once: never repeated on a fresh connection, since a device that took it
+   * and then dropped the connection would apply it twice.
+   */
+  readonly write: (request: WriteRequest) => Effect.Effect<void, ModbusClientError>
 }
 
 /** A request waiting for its response. */
@@ -218,7 +227,7 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
    * Send a request and return its response frame. A reused connection the
    * peer closed before any byte of the response arrived is replaced and the
    * request sent once more (`resend`): the device never saw it, or dropped it
-   * unanswered. That is safe for reads; writes (v0.4) need their own rule.
+   * unanswered. That is safe for reads only: writes pass `resend: false`.
    */
   const send: (
     quantity: number,
@@ -262,9 +271,10 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
   const request = <A>(
     quantity: number,
     encode: (transactionId: number) => Uint8Array,
-    decode: (frame: Uint8Array) => Effect.Effect<A, ModbusFrameError | ModbusException>
+    decode: (frame: Uint8Array) => Effect.Effect<A, ModbusFrameError | ModbusException>,
+    resend = true
   ): Effect.Effect<A, ModbusClientError> =>
-    send(quantity, encode, true).pipe(
+    send(quantity, encode, resend).pipe(
       Effect.flatMap(decode),
       Effect.tap(() => countRequest("ok")),
       Effect.catchTags({
@@ -296,6 +306,13 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
             decodeBitResponse(frame, { unitId: options.unitId, functionCode, quantity }),
             (response) => response.bits
           )
+      ),
+    write: (writeRequest) =>
+      request(
+        writeRequest.functionCode === FunctionCode.WriteMultipleRegisters ? writeRequest.values.length : 1,
+        (id) => encodeWriteRequest(id, options.unitId, writeRequest),
+        (frame) => decodeWriteResponse(frame, options.unitId, writeRequest),
+        false
       )
   }
   return client

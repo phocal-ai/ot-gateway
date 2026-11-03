@@ -13,7 +13,11 @@ import {
   exceptionName,
   FunctionCode,
   isTransientException,
-  takeFrame
+  takeFrame,
+  encodeWriteRequest,
+  encodeWriteResponse,
+  decodeWriteResponse,
+  ExceptionCode
 } from "../src/index.ts"
 
 describe("encodeReadRequest", () => {
@@ -229,4 +233,51 @@ describe("encodeValue", () => {
   ] as const)("round-trips %s", (dataType, value) => {
     expect(decodeValue(encodeValue(value, dataType), dataType)).toBe(value)
   })
+})
+
+/** The PDU of a frame: everything after the 7-byte MBAP header. */
+const pdu = (frame: Uint8Array) => [...frame.subarray(7)]
+
+describe("writes (spec §6.5, §6.6, §6.12)", () => {
+  it("encodes the spec's write single coil example: coil 173 ON", () => {
+    const frame = encodeWriteRequest(1, 1, { functionCode: FunctionCode.WriteSingleCoil, address: 172, value: true })
+    expect(pdu(frame)).toEqual([0x05, 0x00, 0xac, 0xff, 0x00])
+  })
+
+  it("encodes the spec's write single register example: register 2 to 3", () => {
+    const frame = encodeWriteRequest(1, 1, { functionCode: FunctionCode.WriteSingleRegister, address: 1, value: 3 })
+    expect(pdu(frame)).toEqual([0x06, 0x00, 0x01, 0x00, 0x03])
+  })
+
+  it("encodes the spec's write multiple registers example, and its response", () => {
+    const request = { functionCode: FunctionCode.WriteMultipleRegisters, address: 1, values: [0x000a, 0x0102] } as const
+    expect(pdu(encodeWriteRequest(1, 1, request))).toEqual([0x10, 0x00, 0x01, 0x00, 0x02, 0x04, 0x00, 0x0a, 0x01, 0x02])
+    expect(pdu(encodeWriteResponse(1, 1, request))).toEqual([0x10, 0x00, 0x01, 0x00, 0x02])
+  })
+
+  it.effect("accepts the echo, and refuses an echo of another write or an exception", () =>
+    Effect.gen(function* () {
+      const request = { functionCode: FunctionCode.WriteSingleRegister, address: 1, value: 3 } as const
+      yield* decodeWriteResponse(encodeWriteResponse(7, 1, request), 1, request)
+      const other = encodeWriteResponse(7, 1, { ...request, value: 4 })
+      expect((yield* Effect.flip(decodeWriteResponse(other, 1, request)))._tag).toBe("ModbusFrameError")
+      const refused = encodeExceptionResponse(7, 1, FunctionCode.WriteSingleRegister, ExceptionCode.IllegalDataAddress)
+      const error = yield* Effect.flip(decodeWriteResponse(refused, 1, request))
+      expect(error._tag === "ModbusException" && error.exceptionCode).toBe(ExceptionCode.IllegalDataAddress)
+    })
+  )
+
+  it.effect("round-trips every write through the server-side decoder", () =>
+    Effect.gen(function* () {
+      const requests = [
+        { functionCode: FunctionCode.WriteSingleCoil, address: 3, value: false },
+        { functionCode: FunctionCode.WriteSingleRegister, address: 9, value: 0xbeef },
+        { functionCode: FunctionCode.WriteMultipleRegisters, address: 100, values: [1, 2] }
+      ] as const
+      for (const request of requests) {
+        const decoded = yield* decodeRequest(encodeWriteRequest(5, 2, request))
+        expect(decoded).toEqual({ _tag: "Write", transactionId: 5, unitId: 2, request })
+      }
+    })
+  )
 })

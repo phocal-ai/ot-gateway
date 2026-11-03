@@ -1,0 +1,107 @@
+/**
+ * Writing through the driver (v0.4) to the simulator, on an in-memory
+ * network: the right function code per table and type, values that do not
+ * fit refused before anything is sent, and device refusals reported.
+ */
+import { describe, expect, it } from "@effect/vitest"
+import { makeMemoryNetwork, type ModbusDevice, type ModbusPoint } from "@plenum/core"
+import { Effect } from "effect"
+import {
+  ExceptionCode,
+  FunctionCode,
+  makeModbusDriver,
+  makeRegisterBank,
+  makeSimulatorControl,
+  serveModbus,
+  setPointValue,
+  writeRequestFor
+} from "../src/index.ts"
+
+const point = (id: string, table: ModbusPoint["table"], address: number, dataType: ModbusPoint["dataType"]) =>
+  ({ id, name: id, writable: true, table, address, dataType }) satisfies ModbusPoint
+
+const points = [
+  point("setpoint", "holding", 100, "float32"),
+  point("mode", "holding", 10, "uint16"),
+  point("enable", "coil", 0, "bool"),
+  point("energy", "input", 0, "uint32")
+]
+
+const device: ModbusDevice = {
+  protocol: "modbus-tcp",
+  id: "meter",
+  host: "10.0.1.1",
+  port: 502,
+  unitId: 1,
+  pollIntervalMs: 5_000,
+  points
+}
+
+const setup = Effect.fnUntraced(function* () {
+  const network = makeMemoryNetwork()
+  const bank = makeRegisterBank()
+  for (const each of points) setPointValue(bank, each, each.dataType === "bool" ? false : 0)
+  const control = makeSimulatorControl()
+  yield* serveModbus(yield* network.listen(device.host, device.port), bank, control).pipe(Effect.forkScoped)
+  const driver = yield* makeModbusDriver(device, { network: network.host("10.0.0.1") })
+  return { bank, control, driver }
+})
+
+describe("Modbus writes", () => {
+  it.effect("writes a float32 in one FC 16, a uint16 with FC 06 and a coil with FC 05, and reads them back", () =>
+    Effect.gen(function* () {
+      const { control, driver } = yield* setup()
+      yield* driver.write("setpoint", 21.5)
+      yield* driver.write("mode", 3)
+      yield* driver.write("enable", true)
+      expect(control.writes.map((write) => write.functionCode)).toEqual([
+        FunctionCode.WriteMultipleRegisters,
+        FunctionCode.WriteSingleRegister,
+        FunctionCode.WriteSingleCoil
+      ])
+      const readings = yield* driver.readAll
+      expect(Object.fromEntries(readings.map((reading) => [reading.pointId, reading.value]))).toEqual({
+        setpoint: 21.5,
+        mode: 3,
+        enable: true,
+        energy: 0
+      })
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("refuses values that do not fit before sending anything, and reports a device's refusal", () =>
+    Effect.gen(function* () {
+      const { control, driver } = yield* setup()
+      for (const [id, value] of [
+        ["mode", 70_000],
+        ["mode", 1.5],
+        ["mode", true],
+        ["enable", 1],
+        ["energy", 5],
+        ["setpoint", null]
+      ] as const) {
+        const error = yield* Effect.flip(driver.write(id, value))
+        expect(error.reason).toBe("configuration")
+      }
+      expect(control.writes).toEqual([])
+
+      control.refuseWrites = ExceptionCode.ServerDeviceFailure
+      const refused = yield* Effect.flip(driver.write("mode", 2))
+      expect([refused.reason, refused.message]).toEqual(["protocol", "device refused the write: server_device_failure"])
+    }).pipe(Effect.scoped)
+  )
+
+  it("maps each table and type to its request", () => {
+    expect(writeRequestFor(point("p", "holding", 7, "int16"), -2)).toEqual({
+      functionCode: FunctionCode.WriteSingleRegister,
+      address: 7,
+      value: 0xfffe
+    })
+    expect(writeRequestFor(point("p", "holding", 7, "bool"), true)).toEqual({
+      functionCode: FunctionCode.WriteSingleRegister,
+      address: 7,
+      value: 1
+    })
+    expect(writeRequestFor(point("p", "discrete", 7, "bool"), true)).toBe("discrete inputs are read-only")
+  })
+})

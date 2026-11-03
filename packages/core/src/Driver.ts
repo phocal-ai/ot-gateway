@@ -10,6 +10,9 @@ import type { AnyPoint } from "./Point.ts"
 
 export type PointValue = number | boolean
 
+/** A value to write: in the device's units (the core has undone the point's scaling), or `null` to release it. */
+export type WriteValue = PointValue | null
+
 /** One raw value read from a device, before scaling. */
 export interface Reading {
   readonly pointId: string
@@ -37,6 +40,12 @@ export interface Driver {
    * stay polled.
    */
   readonly changes?: Stream.Stream<Reading>
-  /** Write a value to a writable point. The core enforces safety before calling this. */
-  readonly write: (pointId: string, value: PointValue) => Effect.Effect<void, DriverError>
+  /**
+   * Write a value to a writable point, once: never retried, since a device
+   * that took it and lost the answer would apply it twice. The command guard
+   * (`Command.ts`) has checked the point, the type and the range before.
+   * `null` releases the gateway's command (BACnet relinquish); a driver
+   * without that notion refuses it.
+   */
+  readonly write: (pointId: string, value: WriteValue) => Effect.Effect<void, DriverError>
 }
