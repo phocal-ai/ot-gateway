@@ -106,9 +106,9 @@ docker run -d --name plenum --network host --restart unless-stopped \
   ghcr.io/phocal-ai/plenum-gateway:latest
 ```
 
-Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. The image includes the status page.
+Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. Secrets go in `/etc/plenum/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env`. The image includes the status page.
 
-The status page listens on `127.0.0.1` only, by default. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page is read-only, but it has no login.
+The status page listens on `127.0.0.1` only, by default, and then answers only requests addressed to a loopback name, so a web page cannot reach it through DNS rebinding. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page is read-only, but it has no login.
 
 ## Configuration
 
@@ -171,22 +171,23 @@ IDs must be lowercase slugs of at most 64 characters, so they are always valid M
 | `site/building/device/point/$meta`       | yes      | name, unit, writability and Brick/Haystack semantics                                             |
 | `site/building/$gateway/<id>/health`     | yes      | `online` with per-device status, or `offline` (see below)                                        |
 | `site/building/device/point/$set`        | never    | a command to the gateway: `{"value":21.5}` (see Commands)                                        |
-| `site/building/device/point/$set/result` | no       | the command's result, unless the command named an MQTT 5 response topic                          |
+| `site/building/device/point/$set/result` | no       | the command's result, with the command's correlation data                                        |
 
 The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`: the driver's `timeout`, `connection`, `protocol`, …, `cycle-timeout` when a polling cycle hung past its deadline, or `crashed` when the device's pipeline hit a bug and is being restarted). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back.
 
 ## Commands
 
-A point with `"writable": true` takes commands on `site/building/device/point/$set`, as `{"value": 21.5}` (a number, `true`/`false` for a coil, bool register or binary object, or `null` to release a BACnet point). The gateway subscribes only when some point is writable. A command is written only if all of these hold, and otherwise refused without touching the device:
+A point with `"writable": true` takes commands on `site/building/device/point/$set`, as `{"value": 21.5}` and nothing else beside it (a number, `true`/`false` for a coil, bool register or binary object, a whole number from 1 for a BACnet multi-state object, or `null` to release a BACnet point). The gateway subscribes only when some point is writable, with No Local, so nothing it publishes itself is ever taken for a command. A command is written only if all of these hold, and otherwise refused without touching the device:
 
 - it is live: a retained command is refused every time it is seen (the gateway subscribes with Retain As Published, so it sees the flag even when it is online), since it would otherwise be applied again after every reconnect;
-- the point exists and is writable;
+- the point exists and is writable (a BACnet device with writable points needs a fixed `address`, so a spoofed I-Am cannot redirect its writes);
 - the value has the point's type, and a number lies within the point's `limits` (`{"min": 15, "max": 25}`, in engineering units, required on every writable numeric point);
-- the session is clean: a command sent while the gateway was offline is never delivered later.
+- the session is clean: a command sent while the gateway was offline is never delivered later;
+- it is fresh: a command that waited more than 10 s for its turn (or longer than its MQTT message expiry) is refused as `expired` rather than applied late. Each device has its own queue, so a device that stops answering delays only its own commands. Up to 16 commands wait per device; more are dropped and counted.
 
-The value is unscaled into device units and written once, with a 10 s deadline: Modbus with FC 05 (coil), FC 06 (one register) or FC 16 (32-bit values, both halves in one request), never resent; BACnet with WriteProperty at the point's `priority` (default 8, manual operator; 1 to 16, not 6). A BACnet client resends a request whose answer was lost, as the standard has it, so a device may apply the same value at the same priority twice in a row, which leaves the same state; another BACnet client writing the same priority slot within those seconds could be overwritten.
+The value is unscaled into device units (19.9 at a scaling factor of 0.1 is register value 199) and written once, with a 10 s deadline: Modbus with FC 05 (coil), FC 06 (one register) or FC 16 (32-bit values, both halves in one request), never resent; BACnet with WriteProperty at the point's `priority` (default 8, manual operator; 1 to 16, not 6). A BACnet client resends a request whose answer was lost, as the standard has it, so a device may apply the same value at the same priority twice in a row, which leaves the same state; another BACnet client writing the same priority slot within those seconds could be overwritten.
 
-Every command gets one result, `{"status":"written","value":21.5,"ts":…}`, or `rejected` / `failed` with a `reason` (`retained`, `unknown-point`, `not-writable`, `invalid-payload`, `wrong-type`, `out-of-range`; `device-unavailable`, `timeout`, or the driver's reason) and a `message`. It goes to the MQTT 5 Response Topic the command named, with its Correlation Data, or to `…/$set/result`. Results are not buffered: delivered now or not at all. Every command is logged and counted in `plenum_commands_total{outcome,reason}`. Who may publish to `$set` topics is the broker's business: restrict it with the broker's ACLs.
+Every command gets one result, `{"status":"written","value":21.5,"ts":…}`, or `rejected` / `failed` with a `reason` (`retained`, `unknown-point`, `not-writable`, `invalid-payload`, `wrong-type`, `out-of-range`, `expired`; `device-unavailable`, `timeout`, or the driver's reason) and a `message`. It goes to `…/$set/result`, with the command's MQTT 5 Correlation Data. A Response Topic in the command is ignored: answering wherever a sender asks would let it make the gateway publish on topics it may not publish on itself. Results are not buffered: delivered now or not at all. Every command is logged and counted in `plenum_commands_total{outcome,reason}`, dropped ones as `outcome="dropped"`. Who may publish to `$set` topics is the broker's business: restrict it with the broker's ACLs.
 
 ## Observability
 

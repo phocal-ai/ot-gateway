@@ -18,6 +18,9 @@ on:
         description: "SOAK_DEVICES: copies of every device"
         default: "4"
 
+permissions:
+  contents: read
+
 jobs:
   # The whole gateway on an in-memory network under virtual time (apps/gateway/test/Simulation.test.ts):
   # a simulated week per seed in a few minutes, with new seeds every night. A failure names its seed.

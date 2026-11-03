@@ -49,6 +49,7 @@ const config = parseConfig(
         protocol: "bacnet-ip",
         id: "ahu",
         deviceInstance: 2001,
+        address: "10.0.1.2",
         points: [
           {
             id: "valve",
@@ -98,6 +99,27 @@ const modbusConfig = (point: Record<string, unknown>) =>
     mqtt: { url: "mqtt://broker" },
     devices: [{ protocol: "modbus-tcp", id: "m", host: "h", points: [{ id: "p", name: "p", ...point }] }]
   })
+
+/** A config with one BACnet device with a writable point, at `address` if given. */
+const bacnetConfig = (address?: string) =>
+  JSON.stringify({
+    site: "s",
+    building: "b",
+    mqtt: { url: "mqtt://broker" },
+    devices: [
+      {
+        protocol: "bacnet-ip",
+        id: "ahu",
+        deviceInstance: 1,
+        ...(address === undefined ? {} : { address }),
+        points: [{ id: "fan", name: "Fan", objectType: "binary-output", instance: 1, writable: true }]
+      }
+    ]
+  })
+
+/** Decode a config whose broker is at `url`. */
+const withBrokerUrl = (url: string) =>
+  Effect.exit(parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url }, devices: [] })))
 
 /** A driver that records writes, and fails or hangs when told to. */
 const recordingDriver = (device: Device) => {
@@ -307,6 +329,23 @@ describe("config for writable points", () => {
         (point) => Effect.exit(parseConfig(modbusConfig(point)))
       )
       expect(outcomes.map((exit) => exit._tag)).toEqual(["Failure", "Failure", "Failure", "Success", "Success"])
+    })
+  )
+
+  it.effect("needs a fixed address for a BACnet device with writable points", () =>
+    Effect.gen(function* () {
+      expect((yield* Effect.exit(parseConfig(bacnetConfig())))._tag).toBe("Failure")
+      expect((yield* Effect.exit(parseConfig(bacnetConfig("10.0.0.5"))))._tag).toBe("Success")
+    })
+  )
+})
+
+describe("broker URL", () => {
+  it.effect("refuses credentials in it, which would be printed and logged with it", () =>
+    Effect.gen(function* () {
+      expect((yield* withBrokerUrl("mqtt://user:secret@broker:1883"))._tag).toBe("Failure")
+      expect((yield* withBrokerUrl("mqtts://token@broker"))._tag).toBe("Failure")
+      expect((yield* withBrokerUrl("mqtt://broker:1883"))._tag).toBe("Success")
     })
   )
 })

@@ -17,9 +17,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Read-only by default: only the publish job, which runs for release tags alone, may write packages.
 permissions:
   contents: read
-  packages: write
 
 jobs:
   image:
@@ -77,8 +77,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  publish:
+    needs: image
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
       - name: Log in to GitHub Container Registry
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -86,7 +98,6 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Publish both architectures
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/build-push-action@v7
         with:
           context: .

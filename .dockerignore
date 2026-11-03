@@ -12,3 +12,12 @@ observability
 test
 apps/web/.next
 apps/web/out
+# Secrets and local state that must never reach an image
+.npmrc
+**/.npmrc
+.env
+.env.*
+plenum.env
+plenum.json
+*.sqlite
+*.sqlite-*
