@@ -125,7 +125,8 @@ export interface MemoryNetwork {
 }
 
 const encoder = new TextEncoder()
-const bytesOf = (chunk: Uint8Array | string) => (typeof chunk === "string" ? encoder.encode(chunk) : chunk.slice())
+const bytesOf = (chunk: Uint8Array | string) =>
+  typeof chunk === "string" ? encoder.encode(chunk) : new Uint8Array(chunk)
 const keyOf = (ip: string, port: number) => `${ip}:${port}`
 
 const closeError = (code: 1000 | 1006) => new Socket.SocketError({ reason: new Socket.SocketCloseError({ code }) })
@@ -320,7 +321,7 @@ export const makeMemoryNetwork = (random: () => number = Math.random): MemoryNet
         continue
       }
       datagramsDelivered++
-      target.inbox.push({ payload: payload.slice(), address: from.address })
+      target.inbox.push({ payload: new Uint8Array(payload), address: from.address })
     }
   }
 

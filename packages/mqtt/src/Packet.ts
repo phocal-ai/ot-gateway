@@ -199,7 +199,8 @@ class Reader {
           props.set(id, this.string())
           break
         case "binary":
-          props.set(id, this.binary().slice())
+          // A copy as a plain Uint8Array: on a Node Buffer, slice() returns a view of the socket chunk.
+          props.set(id, new Uint8Array(this.binary()))
           break
         case "pair":
           this.string()
@@ -554,7 +555,7 @@ export const decodePublish = (flags: number, body: Uint8Array): Result.Result<Pu
     const correlationData = properties.get(Property.CorrelationData)
     return {
       topic,
-      payload: r.rest().slice(),
+      payload: new Uint8Array(r.rest()),
       qos: qos === 1 ? 1 : 0,
       retain: (flags & 0x01) !== 0,
       ...(packetId === undefined ? {} : { packetId }),
