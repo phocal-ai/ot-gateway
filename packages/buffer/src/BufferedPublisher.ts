@@ -12,7 +12,9 @@
  *   the order values were read in. The drainer pipelines up to 16 messages
  *   at a time for throughput, starts no new ones after the first failure,
  *   and removes rows as they are acknowledged, so a shutdown mid-drain
- *   resends at most a handful. Every message carries its own `ts`.
+ *   resends at most a handful. A message the broker refuses for now (quota
+ *   exceeded) while later ones are already on their way is resent after
+ *   them: it arrives at most 15 places late. Every message carries its own `ts`.
  * - `unavailable` failures are stored; `rejected` ones (too large, not
  *   authorized) are not, because retrying them cannot help. A rejected
  *   message already in the outbox is dropped and counted, so it never blocks

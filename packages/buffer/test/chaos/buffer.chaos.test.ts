@@ -183,7 +183,12 @@ describe("chaos: buffer", () => {
       expect(control.messages).toEqual([])
       control.pubackReason = 0
       yield* eventually(() => control.messages.length === 50)
-      expect(control.messages.map((message) => message.payload)).toEqual(range(50))
+      const payloads = control.messages.map((message) => message.payload)
+      // Every row once, none dropped.
+      expect(payloads.toSorted((a, b) => Number(a) - Number(b))).toEqual(range(50))
+      // In order, as far as pipelining allows: a row refused while up to 15 later ones were already on their
+      // way (the refusal can end mid-batch) is resent after them, never further back.
+      payloads.forEach((payload, index) => expect(Math.abs(Number(payload) - index)).toBeLessThanOrEqual(15))
       expect(yield* counter(bufferDropped, { test: "quota", reason: "rejected" })).toBe(0)
     }).pipe(withMetricAttributes({ test: "quota" }))
   )
