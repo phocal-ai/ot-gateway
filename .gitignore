@@ -18,3 +18,7 @@ coverage/
 .next/
 out/
 next-env.d.ts
+
+# A local gateway config and its secrets (/setup writes these)
+/plenum.json
+/plenum.env
