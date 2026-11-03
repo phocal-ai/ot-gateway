@@ -59,6 +59,9 @@ jobs:
           docker logs bench 2>&1 | grep -E "demo-site/b1/(main-meter|ahu-2)/" | head -5
           docker logs bench 2>&1 | grep -q "demo-site/b1/main-meter/active-power"
           docker logs bench 2>&1 | grep -q "demo-site/b1/ahu-2/supply-air-temp"
+          # The status page and its API, from the image's built web app.
+          curl -sf http://127.0.0.1:8080/ | grep -q "<html"
+          curl -sf http://127.0.0.1:8080/api/status | grep -q '"id":"main-meter"'
 
       - name: Container logs
         if: failure()

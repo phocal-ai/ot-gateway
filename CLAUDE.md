@@ -34,7 +34,9 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/simulator`: simulated devices
 - `packages/modbus`, `packages/mqtt`, `packages/bacnet`: in-house protocol stacks
 - `packages/buffer`: SQLite store-and-forward, a `Publisher` that wraps the MQTT one
+- `packages/api`: the local HTTP API's contract (`HttpApi`), shared by the gateway and the status page
 - `apps/gateway`: the runnable gateway
+- `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @plenum/web build`) that the gateway serves; no Next server at runtime
 - `examples/`: sample configs
 - `packaging/`: the systemd unit and `install.sh`; the container image is the root `Dockerfile`
 - `docs/`: vision and design notes

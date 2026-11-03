@@ -8,6 +8,7 @@
 # - Creates the system user `plenum`, and /etc/plenum/gateway.json from the
 #   config given (or keeps the one already there; the example config on a
 #   first install). The outbox goes to /var/lib/plenum/buffer.sqlite.
+# - Copies the built status page (apps/web/out) when there is one.
 # - Validates the config with `main.ts --check` before touching the running
 #   service, then installs packaging/systemd/plenum-gateway.service and
 #   (re)starts it. Running it again upgrades in place.
@@ -38,6 +39,14 @@ for path in package.json pnpm-lock.yaml pnpm-workspace.yaml packages apps/gatewa
   cp -R "$repo/$path" "$prefix/$path"
 done
 find "$prefix" -name node_modules -prune -exec rm -rf {} +
+# The status page, when it is built (pnpm --filter @plenum/web build, on any machine: it is static files).
+rm -rf "$prefix/apps/web"
+if [[ -f $repo/apps/web/out/index.html ]]; then
+  mkdir -p "$prefix/apps/web"
+  cp -R "$repo/apps/web/out" "$prefix/apps/web/out"
+else
+  echo "The status page is not built (pnpm --filter @plenum/web build); the gateway serves its API only."
+fi
 (cd "$prefix" && corepack pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@plenum/gateway...")
 
 mkdir -p /etc/plenum
