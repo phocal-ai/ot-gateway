@@ -246,20 +246,28 @@ describe("chaos: client over UDP", () => {
       const client = yield* startClient({ requestTimeout: "250 millis", retries: 0 })
       const started = Date.now()
       // Four times the 256 invoke IDs, all to a device that never answers.
-      const results = yield* Effect.forEach(
+      const timed = yield* Effect.forEach(
         Array.from({ length: 1024 }, (_, index) => index),
         () =>
-          Effect.result(
-            client.readProperty(
-              { address: silent.address },
-              { object: analogInput1, property: PropertyId["present-value"] }
+          Effect.gen(function* () {
+            const begun = Date.now()
+            const result = yield* Effect.result(
+              client.readProperty(
+                { address: silent.address },
+                { object: analogInput1, property: PropertyId["present-value"] }
+              )
             )
-          ),
+            return { result, took: Date.now() - begun }
+          }),
         { concurrency: "unbounded" }
       )
       const elapsed = Date.now() - started
+      const results = timed.map(({ result }) => result)
       // Queued, the last quarter would wait three timeouts first and end after a second.
       expect(elapsed).toBeLessThan(800)
+      // Each request, its wait for an invoke ID included, ends near its 250 ms deadline: one that gets
+      // an ID freed just before its deadline must not start a fresh 250 ms exchange on top of the wait.
+      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(400)
       expect(
         results.some(
           (result) => Result.isFailure(result) && result.failure.message.startsWith("no free invoke ID within")
