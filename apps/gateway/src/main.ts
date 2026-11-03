@@ -8,7 +8,7 @@
  * broker in `mqtt`, with the gateway's status on its retained health topic.
  */
 import { NodeRuntime, NodeServices } from "@effect/platform-node"
-import { type BacnetClient, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
+import { type BacnetClient, covTimingFor, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
 import {
   cycleTimeoutMs,
   type Device,
@@ -95,7 +95,9 @@ const runOne = (
       if (bacnet === undefined) return Effect.void
       // All BACnet devices share the gateway's one UDP socket, once it is open.
       return Deferred.await(bacnet).pipe(
-        Effect.flatMap((client) => makeBacnetDriverFromClient(device, client)),
+        Effect.flatMap((client) =>
+          makeBacnetDriverFromClient(device, client, { cov: covTimingFor(config.bacnet.covLifetimeSeconds) })
+        ),
         Effect.flatMap((driver) => runDevice(ctx, driver)),
         Effect.catchTag("DriverError", (error) => {
           health.recordFailure(device.id, error.reason)

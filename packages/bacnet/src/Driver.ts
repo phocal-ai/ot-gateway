@@ -260,6 +260,17 @@ const defaultCovTiming: CovTiming = {
   refusedRetryMs: 3_600_000
 }
 
+/**
+ * COV timing for a configured lifetime (`bacnet.covLifetimeSeconds`): renew
+ * at half of it, and check at least ten times per lifetime (every 5 s at most),
+ * so a renewal is never late by more than a tenth of the lifetime.
+ */
+export const covTimingFor = (lifetimeSeconds: number): Partial<CovTiming> => ({
+  lifetimeSeconds,
+  renewMs: lifetimeSeconds * 500,
+  checkMs: Math.min(defaultCovTiming.checkMs, lifetimeSeconds * 100)
+})
+
 const logDefect = (message: string) => (defect: unknown) =>
   Effect.logError(message).pipe(Effect.annotateLogs({ error: String(defect) }))
 

@@ -10,6 +10,7 @@ import { TestClock } from "effect/testing"
 import {
   type BacnetClient,
   BacnetTimeout,
+  covTimingFor,
   type DeviceAddress,
   ErrorClass,
   ErrorCode,
@@ -135,9 +136,13 @@ const ids = (readings: ReadonlyArray<Reading>) => readings.map((reading) => read
 /** Let forked fibers run without moving the clock. */
 const settle = TestClock.adjust("1 millis")
 
-const start = Effect.fnUntraced(function* (points: ReadonlyArray<BacnetPoint>, address?: string) {
+const start = Effect.fnUntraced(function* (
+  points: ReadonlyArray<BacnetPoint>,
+  address?: string,
+  cov: Partial<typeof timing> = timing
+) {
   const scripted = scriptedClient()
-  const driver = yield* makeBacnetDriverFromClient(deviceConfig(points, address), scripted.client, { cov: timing })
+  const driver = yield* makeBacnetDriverFromClient(deviceConfig(points, address), scripted.client, { cov })
   const pushed: Array<number | boolean> = []
   const poll = Effect.map(driver.readAll, ids)
   // Nothing is subscribed before the device has been found by the first cycle.
@@ -166,6 +171,22 @@ describe("change of value, over time", () => {
       expect(subscribed()).toHaveLength(2)
       // The device acknowledged the renewal but sent nothing since: after a lifetime it is polled again.
       yield* TestClock.adjust("150 seconds")
+      expect(yield* poll).toEqual(["supply-temp", "ai-type"])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("renews at half a configured lifetime, and polls again once a lifetime passes in silence", () =>
+    Effect.gen(function* () {
+      const { notify, poll, subscribed } = yield* start([supplyTemp, objectType], "10.0.0.5", covTimingFor(30))
+      notify(21)
+      yield* settle
+      expect(yield* poll).toEqual(["ai-type"])
+      yield* TestClock.adjust("14 seconds")
+      expect(subscribed()).toHaveLength(1)
+      // Checked every 3 s, so the renewal due at 15 s goes out by 18 s.
+      yield* TestClock.adjust("4 seconds")
+      expect(subscribed()).toHaveLength(2)
+      yield* TestClock.adjust("12 seconds")
       expect(yield* poll).toEqual(["supply-temp", "ai-type"])
     }).pipe(Effect.scoped)
   )

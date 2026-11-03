@@ -101,7 +101,8 @@ describe("parseConfig", () => {
         port: 47_808,
         broadcastAddress: "255.255.255.255",
         requestTimeoutMs: 3_000,
-        retries: 2
+        retries: 2,
+        covLifetimeSeconds: 300
       })
       const device = config.devices[0]
       expect(device?.protocol === "bacnet-ip" && device.points[0]?.property).toBe("present-value")
@@ -113,6 +114,10 @@ describe("parseConfig", () => {
       expect((yield* parseConfig(JSON.stringify(withPort))).bacnet.broadcastAddress).toBe("192.168.1.255:47809")
       const badBroadcast = { ...minimal, bacnet: { broadcastAddress: "192.168.1.255:99999" } }
       expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(badBroadcast))))).toBe(true)
+      for (const covLifetimeSeconds of [0, 9, 86_401, 30.5]) {
+        const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, bacnet: { covLifetimeSeconds } })))
+        expect(Exit.isFailure(exit)).toBe(true)
+      }
     })
   )
 

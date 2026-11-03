@@ -268,7 +268,8 @@ describe("chaos: client over UDP", () => {
         port: holder.address.port,
         broadcastAddress: "127.0.0.255",
         requestTimeoutMs: 500,
-        retries: 0
+        retries: 0,
+        covLifetimeSeconds: 300
       }
       const inUse = yield* Effect.flip(Effect.scoped(makeBacnetNetwork(settings)))
       const unassigned = yield* Effect.flip(
