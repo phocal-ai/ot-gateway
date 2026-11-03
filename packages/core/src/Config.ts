@@ -187,6 +187,22 @@ export const BacnetSettings = Schema.Struct({
 })
 export type BacnetSettings = typeof BacnetSettings.Type
 
+/**
+ * The local status page and its read-only API (`GET /api/status`). Off unless
+ * the block is present. It listens on this machine only by default; set
+ * `bindAddress` to `0.0.0.0` to open it to the LAN. It never takes commands.
+ */
+export const StatusSettings = Schema.Struct({
+  bindAddress: Ipv4Address.pipe(Schema.withDecodingDefaultKey(Effect.succeed("127.0.0.1"))),
+  port: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(8080))
+  ),
+  /** The built web app (`apps/web/out`, the default). Without it only the API is served. */
+  webRoot: Schema.optionalKey(Schema.NonEmptyString)
+})
+export type StatusSettings = typeof StatusSettings.Type
+
 export const GatewayConfig = Schema.Struct({
   site: Slug,
   building: Slug,
@@ -199,6 +215,7 @@ export const GatewayConfig = Schema.Struct({
   ),
   mqtt: MqttSettings,
   buffer: Schema.optionalKey(BufferSettings),
+  status: Schema.optionalKey(StatusSettings),
   bacnet: BacnetSettings.pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
   devices: Schema.Array(Device).pipe(Schema.check(uniqueIds("device")))
 })

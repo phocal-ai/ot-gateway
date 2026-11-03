@@ -10,3 +10,5 @@ repos
 docs
 observability
 test
+apps/web/.next
+apps/web/out

@@ -102,6 +102,8 @@ export interface CommandGuardOptions {
   readonly drivers: DriverRegistry
   /** How long one write may take before it counts as failed (default 10 s). */
   readonly writeTimeout?: Duration.Input
+  /** Told what became of every command on this gateway's topics (the status page lists them). */
+  readonly onOutcome?: (command: { readonly device: string; readonly point: string }, outcome: CommandOutcome) => void
 }
 
 export const makeCommandGuard = (options: CommandGuardOptions) => {
@@ -163,6 +165,7 @@ export const makeCommandGuard = (options: CommandGuardOptions) => {
     const device = options.devices.find((candidate) => candidate.id === deviceId)
     yield* Effect.annotateCurrentSpan({ "plenum.device": deviceId, "plenum.point": pointId })
     const outcome = yield* decide(command, device, pointId)
+    options.onOutcome?.({ device: deviceId, point: pointId }, outcome)
     const annotations = { device: deviceId, point: pointId, payload: command.payload.slice(0, 200) }
     yield* Metric.update(
       Metric.withAttributes(commands, {

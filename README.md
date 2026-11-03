@@ -51,6 +51,8 @@ demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
+The gateway also serves a status page at <http://127.0.0.1:8080>: broker and buffer, every device with its health and latest values, and the recent commands. Build it once with `pnpm --filter @plenum/web build`; until then the gateway serves only its JSON API, `GET /api/status`.
+
 Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
 
 Plenum runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
@@ -69,7 +71,7 @@ On a Raspberry Pi (64-bit OS) or any Linux machine with systemd and Node.js 22.1
 sudo packaging/install.sh path/to/gateway.json
 ```
 
-It installs the gateway to `/opt/plenum` with its production dependencies, creates the `plenum` user, validates the config into `/etc/plenum/gateway.json` (with the outbox in `/var/lib/plenum`), and starts the `plenum-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u plenum-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/plenum/gateway.env`.
+It installs the gateway to `/opt/plenum` with its production dependencies, creates the `plenum` user, validates the config into `/etc/plenum/gateway.json` (with the outbox in `/var/lib/plenum`), and starts the `plenum-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u plenum-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/plenum/gateway.env`. Build the status page first (`pnpm --filter @plenum/web build`, on any machine) and the script installs it too.
 
 Or as a container, for amd64 and arm64 (published for releases as `ghcr.io/phocal-ai/plenum-gateway`):
 
@@ -79,7 +81,9 @@ docker run -d --name plenum --network host --restart unless-stopped \
   ghcr.io/phocal-ai/plenum-gateway:latest
 ```
 
-Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container.
+Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. The image includes the status page.
+
+The status page listens on `127.0.0.1` only, by default. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page is read-only, but it has no login.
 
 ## Configuration
 
@@ -128,6 +132,8 @@ With `buffer`, values read while the broker is unreachable are kept in that SQLi
 
 BACnet devices are found by `deviceInstance` with Who-Is, or reached directly at `address` (`ip` or `ip:port`). A point reads `present-value` of its object unless it names another `property`. With `cov` (default `true`) the gateway subscribes to change-of-value notifications for present values and polls only what they do not cover. Every BACnet device shares one UDP socket, set in the optional `bacnet` block: `bindAddress` (default `0.0.0.0`; on Linux, binding one address stops broadcasts from arriving), `port` (47808; devices broadcast I-Am there), `broadcastAddress` (`255.255.255.255`, port 47808 unless given; set your subnet's, since the default leaves through one interface only), `requestTimeoutMs` (3000), `retries` (2), `covLifetimeSeconds` (300, the lifetime requested for change-of-value subscriptions, renewed at half of it) and `bbmdAddress` (`ip` or `ip:port` of the subnet's BBMD; only it may forward answers to the gateway, and without it only the device itself may). See [`@plenum/bacnet`](packages/bacnet).
 
+With `status`, the gateway serves its local status page and `GET /api/status` on `bindAddress` (default `127.0.0.1`) and `port` (default `8080`). `webRoot` points at another build of the page; by default it is `apps/web/out`. The page is read-only: commands reach devices only over MQTT and the command guard. If the port is taken, the gateway logs it and runs on without the page. Leave `status` out to serve nothing.
+
 Every device has an optional `cycleTimeoutMs`: how long one polling cycle (the read with its retries, and publishing the values) may take before it is abandoned as hung, counted as `timed_out` and reported as `cycle-timeout` in the health topic. It defaults to twice `pollIntervalMs` and at least `pollIntervalMs` plus 30 seconds; raise it for a slow device with many points.
 
 IDs must be lowercase slugs of at most 64 characters, so they are always valid MQTT topic segments. Device ids are unique within the gateway and point ids within their device, since each names a topic. The config is checked strictly: a key the schema does not know (a typo such as `intervall`) fails the start with its path instead of being ignored, every device needs at least one point, `host` and the broker `url` must not be empty, a `deadband` cannot be negative and a scaling `factor` cannot be 0. A JSON syntax error reports its position. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
@@ -171,7 +177,9 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | [`@plenum/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order  | Working |
 | [`@plenum/mqtt`](packages/mqtt)           | MQTT 5: codecs, client with reconnect, keep alive and subscriptions, `Publisher` layer, test broker  | Working |
 | [`@plenum/bacnet`](packages/bacnet)       | BACnet/IP: codecs, Who-Is discovery, ReadProperty(Multiple), COV and WriteProperty, simulator server | Working |
+| [`@plenum/api`](packages/api)             | The local HTTP API's contract (Effect `HttpApi`), shared by the gateway and the status page          | Working |
 | [`@plenum/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                 | Working |
+| [`@plenum/web`](apps/web)                 | The local status page: Next.js and shadcn/ui, a static export the gateway serves                     | Working |
 
 ## Architecture
 

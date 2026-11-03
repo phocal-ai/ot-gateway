@@ -33,6 +33,7 @@ import { MqttPublisher } from "@plenum/mqtt"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, Layer, Queue, Schedule, Scope } from "effect"
 import { keepRunning } from "./KeepRunning.ts"
+import { makeStatusState, serveStatus, type StatusState } from "./Status.ts"
 import { traceSampleRatio } from "./Telemetry.ts"
 
 export interface GatewayOptions {
@@ -151,7 +152,8 @@ const runDevices = Effect.fn("runGateway")(function* (
   config: GatewayConfig,
   health: GatewayHealth,
   network: Network | undefined,
-  commands: Commands
+  commands: Commands,
+  status: StatusState | undefined
 ) {
   const sampleRatio = yield* traceSampleRatio
   yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
@@ -162,6 +164,9 @@ const runDevices = Effect.fn("runGateway")(function* (
     bacnet = yield* Deferred.make<BacnetClient>()
     yield* openBacnet(config, health.registry, bacnet, network).pipe(Effect.forkScoped)
   }
+  if (config.status !== undefined && status !== undefined)
+    yield* serveStatus(config.status, status).pipe(Effect.forkScoped)
+  const clock = yield* Clock.clockWith(Effect.succeed)
   yield* Effect.all(
     [
       keepRunning(
@@ -188,7 +193,13 @@ const runDevices = Effect.fn("runGateway")(function* (
                     site: config.site,
                     building: config.building,
                     devices: config.devices,
-                    drivers: commands.drivers
+                    drivers: commands.drivers,
+                    ...(status === undefined
+                      ? {}
+                      : {
+                          onOutcome: (command, outcome) =>
+                            status.recordCommand(clock.currentTimeMillisUnsafe(), command, outcome)
+                        })
                   }).handle
                 )
               )
@@ -204,7 +215,8 @@ const northbound = (
   config: GatewayConfig,
   health: GatewayHealth,
   options: GatewayOptions,
-  inbox: Queue.Queue<InboundCommand> | undefined
+  inbox: Queue.Queue<InboundCommand> | undefined,
+  status: StatusState | undefined
 ) => {
   const mqtt = MqttPublisher(config.mqtt, {
     health: { topic: health.topic, online: health.online },
@@ -229,16 +241,21 @@ const northbound = (
   const publisher =
     config.buffer === undefined ? mqtt : BufferedPublisher(config.buffer, options.buffer).pipe(Layer.provide(mqtt))
   const onAccepted = options.onAccepted
-  if (onAccepted === undefined) return publisher
+  if (onAccepted === undefined && status === undefined) return publisher
   return Layer.effect(
     Publisher,
     Effect.gen(function* () {
       const inner = yield* Publisher
       return Publisher.of({
         publish: (topic, payload, publishOptions) =>
-          inner
-            .publish(topic, payload, publishOptions)
-            .pipe(Effect.tap(() => Effect.sync(() => onAccepted(topic, payload, publishOptions))))
+          inner.publish(topic, payload, publishOptions).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                onAccepted?.(topic, payload, publishOptions)
+                status?.recordPublish(topic, payload)
+              })
+            )
+          )
       })
     })
   ).pipe(Layer.provide(publisher))
@@ -258,11 +275,12 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     drivers: makeDriverRegistry(),
     inbox: writable ? yield* Queue.dropping<InboundCommand>(COMMAND_BACKLOG) : undefined
   }
-  return yield* runDevices(config, health, options.network, commands).pipe(
+  const status = config.status === undefined ? undefined : makeStatusState(config, registry, startedAt)
+  return yield* runDevices(config, health, options.network, commands, status).pipe(
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
-    Effect.provide(northbound(config, health, options, commands.inbox)),
+    Effect.provide(northbound(config, health, options, commands.inbox, status)),
     withMetricAttributes({ site: config.site, building: config.building })
   )
 })

@@ -11,14 +11,29 @@
 # BACnet discovery hear broadcast I-Ams. There is no build step: Node runs the
 # TypeScript sources directly, so the image keeps the workspace layout (Node
 # does not strip types under node_modules, and workspace packages are
-# symlinks out of it).
+# symlinks out of it). The status page (apps/web) is a static export, built
+# once on the build host and copied in.
 ARG NODE_VERSION=24
+
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS web
+WORKDIR /opt/plenum
+RUN corepack enable
+ENV NEXT_TELEMETRY_DISABLED=1
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
+COPY packages/api/package.json packages/api/
+COPY apps/web/package.json apps/web/
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@plenum/web..."
+COPY tsconfig.base.json ./
+COPY packages/api packages/api
+COPY apps/web apps/web
+RUN pnpm --filter @plenum/web build
 
 FROM node:${NODE_VERSION}-bookworm-slim AS install
 WORKDIR /opt/plenum
 RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc* ./
 COPY apps/gateway/package.json apps/gateway/
+COPY packages/api/package.json packages/api/
 COPY packages/core/package.json packages/core/
 COPY packages/simulator/package.json packages/simulator/
 COPY packages/modbus/package.json packages/modbus/
@@ -34,6 +49,7 @@ COPY --from=install /opt/plenum ./
 COPY packages packages
 COPY apps/gateway/src apps/gateway/src
 COPY apps/gateway/package.json apps/gateway/
+COPY --from=web /opt/plenum/apps/web/out apps/web/out
 COPY examples examples
 COPY scripts/soak.sh scripts/soak.sh
 RUN mkdir -p /etc/plenum /var/lib/plenum && chown node:node /var/lib/plenum
