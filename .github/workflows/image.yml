@@ -47,18 +47,24 @@ jobs:
           sed 's#"path": "./plenum-buffer.sqlite"#"path": "/var/lib/plenum/buffer.sqlite"#' examples/gateway.json > "$work/gateway.json"
           docker run --rm -v "$work/gateway.json:/etc/plenum/gateway.json:ro" plenum-gateway:smoke --check /etc/plenum/gateway.json
           # The bench (broker and simulated devices) from the image, the gateway in a second container.
-          docker run -d --name bench --network host --entrypoint node -v "$work:/work" plenum-gateway:smoke \
-            apps/gateway/src/bench.ts /work/gateway.json
+          # The file, not its mktemp directory (mode 0700, another user's): the image runs as `node`.
+          docker run -d --name bench --network host --entrypoint node \
+            -v "$work/gateway.json:/work/gateway.json:ro" plenum-gateway:smoke apps/gateway/src/bench.ts /work/gateway.json
           sleep 3
           docker run -d --name gateway --network host -v "$work/gateway.json:/etc/plenum/gateway.json:ro" plenum-gateway:smoke
           for _ in $(seq 30); do
             if docker logs bench 2>&1 | grep -q "demo-site/b1/main-meter/active-power"; then break; fi
             sleep 1
           done
-          docker logs gateway 2>&1 | tail -20
           docker logs bench 2>&1 | grep -E "demo-site/b1/(main-meter|ahu-2)/" | head -5
           docker logs bench 2>&1 | grep -q "demo-site/b1/main-meter/active-power"
           docker logs bench 2>&1 | grep -q "demo-site/b1/ahu-2/supply-air-temp"
+
+      - name: Container logs
+        if: failure()
+        run: |
+          echo "--- bench"; docker logs bench 2>&1 | tail -40 || true
+          echo "--- gateway"; docker logs gateway 2>&1 | tail -40 || true
 
       - name: Build for arm64 (Raspberry Pi 4 and 5)
         uses: docker/build-push-action@v7
