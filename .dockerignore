@@ -1,0 +1,12 @@
+# Only what the gateway runs: sources, manifests and the lockfile.
+**/node_modules
+**/test
+**/*.test.ts
+.git
+.github
+.claude
+.turbo
+repos
+docs
+observability
+test
