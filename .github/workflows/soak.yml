@@ -79,6 +79,18 @@ jobs:
             cat "$RUNNER_TEMP/soak/events.log" "$RUNNER_TEMP/soak/summary.txt" 2>/dev/null || true
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
+      - name: Logs
+        if: failure()
+        # In the job log too, not only the artifact: the gateway's, the broker's and the devices' last lines.
+        run: |
+          echo "--- gateway.log, first 60 lines"
+          head -n 60 "$RUNNER_TEMP/soak/gateway.log" 2>/dev/null || echo "(none)"
+          echo "--- gateway.log, MQTT lines"
+          grep -i -A4 "mqtt" "$RUNNER_TEMP/soak/gateway.log" 2>/dev/null | head -n 80 || true
+          for name in gateway broker devices; do
+            echo "--- $name.log, last 80 lines"
+            tail -n 80 "$RUNNER_TEMP/soak/$name.log" 2>/dev/null || echo "(none)"
+          done
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
@@ -119,6 +131,14 @@ jobs:
             cat "$RUNNER_TEMP/soak/events.log" "$RUNNER_TEMP/soak/summary.txt" 2>/dev/null || true
             echo '```'
           } >>"$GITHUB_STEP_SUMMARY"
+      - name: Logs
+        if: failure()
+        # In the job log too, not only the artifact: the gateway's, the broker's and the devices' last lines.
+        run: |
+          for name in gateway broker devices; do
+            echo "--- $name.log, last 80 lines"
+            tail -n 80 "$RUNNER_TEMP/soak/$name.log" 2>/dev/null || echo "(none)"
+          done
       - uses: actions/upload-artifact@v7
         if: failure()
         with:

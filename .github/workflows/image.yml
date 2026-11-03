@@ -69,13 +69,42 @@ jobs:
           echo "--- bench"; docker logs bench 2>&1 | tail -40 || true
           echo "--- gateway"; docker logs gateway 2>&1 | tail -40 || true
 
-      - name: Build for arm64 (Raspberry Pi 4 and 5)
+      - name: Build for arm64 (Raspberry Pi 4 and 5), and load it for its smoke test
         uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/arm64
+          load: true
+          tags: plenum-gateway:arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The arm64 image under QEMU, bench and gateway in one container on Docker's default network,
+      # as the arm64 soak runs them: values must reach the broker within four minutes of emulation.
+      - name: Smoke test on arm64
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          sed 's#"path": "./plenum-buffer.sqlite"#"path": "/var/lib/plenum/buffer.sqlite"#' examples/gateway.json > "$work/gateway.json"
+          docker run -d --name arm64 --platform linux/arm64 -v "$work/gateway.json:/work/gateway.json:ro" \
+            --entrypoint bash plenum-gateway:arm64 -c '
+              node apps/gateway/src/bench.ts /work/gateway.json >/tmp/bench.log 2>&1 &
+              sleep 20
+              node apps/gateway/src/main.ts /work/gateway.json >/tmp/gateway.log 2>&1 &
+              sleep infinity'
+          for _ in $(seq 240); do
+            if docker exec arm64 grep -q "demo-site/b1/main-meter/active-power" /tmp/bench.log 2>/dev/null; then break; fi
+            sleep 1
+          done
+          docker exec arm64 grep -E "demo-site/b1/(main-meter|ahu-2)/" /tmp/bench.log | head -5
+          docker exec arm64 grep -q "demo-site/b1/main-meter/active-power" /tmp/bench.log
+
+      - name: arm64 container logs
+        if: failure()
+        run: |
+          echo "--- /etc/hosts"; docker exec arm64 cat /etc/hosts || true
+          echo "--- bench"; docker exec arm64 head -40 /tmp/bench.log || true
+          echo "--- gateway"; docker exec arm64 head -80 /tmp/gateway.log || true
 
   publish:
     needs: image
