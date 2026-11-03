@@ -7,7 +7,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { type DescribedDevice, type DiscoveredDevice, parseDeviceAddress } from "@plenum/bacnet"
 import { parseConfig } from "@plenum/core"
 import { Effect, Result } from "effect"
-import { draftDevices, slugify } from "../src/Discover.ts"
+import { draftDevices, printable, slugify } from "../src/Discover.ts"
 
 const found = (instance: number, at: string, described: DescribedDevice, routed = false) => {
   const device: DiscoveredDevice = {
@@ -29,6 +29,14 @@ describe("slugify", () => {
     expect(slugify("°C")).toBe("c")
     expect(slugify("★")).toBe("")
     expect(slugify("x".repeat(80))).toHaveLength(64)
+  })
+})
+
+describe("printable", () => {
+  it("keeps escape sequences a device put in its name off the terminal", () => {
+    expect(printable("AHU 2\u001b]0;pwned\u0007\u001b[2J")).toBe("AHU 2?]0;pwned??[2J")
+    expect(printable("Kühler\u200e")).toBe("Kühler?")
+    expect(printable("x".repeat(500))).toHaveLength(120)
   })
 })
 

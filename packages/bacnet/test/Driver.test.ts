@@ -303,7 +303,10 @@ describe("BACnet driver over UDP", () => {
       expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
         _tag: "DriverError",
         reason: "timeout",
-        message: expect.stringMatching(/^no answer from 127\.0\.0\.1:\d+ within 150ms$/)
+        // The last attempt gets 150 ms, or what is left of the request's 300 ms when the first ran late.
+        message: expect.stringMatching(
+          /^no answer from 127\.0\.0\.1:\d+ within (150ms$|\d+ms, what was left of its 300ms)/
+        )
       })
     })
   )

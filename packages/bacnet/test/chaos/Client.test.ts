@@ -274,6 +274,14 @@ describe("chaos: client over UDP", () => {
           (result) => Result.isFailure(result) && result.failure.message.startsWith("no free invoke ID within")
         )
       ).toBe(true)
+      // Every failure says which it was: no invoke ID in time, or the device that did not answer.
+      const unexplained = results.filter(
+        (result) =>
+          Result.isFailure(result) &&
+          !result.failure.message.startsWith("no free invoke ID within") &&
+          !result.failure.message.startsWith(`no answer from 127.0.0.1:${silent.address.port} within`)
+      )
+      expect(unexplained).toEqual([])
     }).pipe(Effect.scoped)
   )
 

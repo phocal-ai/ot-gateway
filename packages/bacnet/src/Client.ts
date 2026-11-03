@@ -180,13 +180,6 @@ export interface BacnetClient {
 
 const keyOf = (address: NetAddress.InetAddress) => NetAddress.formatInet(address)
 
-/**
- * How far past its deadline a request that waited for an invoke ID may run.
- * A wait shorter than this cannot cut the last attempt short, so its own
- * timeout (with the device's address) ends the request.
- */
-const DEADLINE_GRACE_MS = 50
-
 /** Of the 256 invoke IDs, how many COV subscriptions may hold at once, across every device. */
 const COV_REQUESTS = 64
 
@@ -365,7 +358,8 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   // a late answer to it cannot be taken for the answer to a new request.
   const quarantineMillis = Math.max(10_000, 2 * Duration.toMillis(requestTimeout))
   // How long a whole request may take, every attempt included; waiting for an invoke ID counts against it.
-  const requestDeadline = Duration.millis(Duration.toMillis(Duration.fromInputUnsafe(requestTimeout)) * (retries + 1))
+  const requestTimeoutMillis = Duration.toMillis(Duration.fromInputUnsafe(requestTimeout))
+  const requestDeadline = Duration.millis(requestTimeoutMillis * (retries + 1))
   const bbmd = options.bbmdAddress === undefined ? undefined : keyOf(options.bbmdAddress)
   const pending = new Map<number, Pending>()
   const quarantined = new Map<number, number>()
@@ -537,44 +531,45 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   /**
    * Run `use` holding a permit of each of `semaphores`. Waiting for them
    * counts against the request's deadline, so a gateway with too many
-   * requests in flight fails requests as timeouts instead of stalling them;
-   * `use` gets only what the wait left of it, plus `DEADLINE_GRACE_MS`, so
-   * the whole request ends by its deadline (and that grace) however late its
-   * permit came. The grace lets a request that barely waited end through its
-   * own last attempt, whose timeout names the device, instead of racing it.
+   * requests in flight fails requests as timeouts instead of stalling them.
+   * `use` is handed the request's deadline (monotonic milliseconds), so its
+   * attempts end by it however late the permits came.
    */
-  const withPermits = <A, E>(semaphores: ReadonlyArray<Semaphore.Semaphore>, use: Effect.Effect<A, E>) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const started = yield* monotonicMillis
-        yield* Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
-          Effect.timeoutOrElse({
-            duration: requestDeadline,
-            orElse: () =>
-              Effect.fail(
-                new BacnetTimeout({
-                  message: `no free invoke ID within ${Duration.format(requestDeadline)}, too many requests in flight`
-                })
-              )
-          })
-        )
-        const waited = (yield* monotonicMillis) - started
-        return yield* use.pipe(
-          Effect.timeoutOrElse({
-            duration: Duration.millis(Math.max(0, Duration.toMillis(requestDeadline) - waited) + DEADLINE_GRACE_MS),
-            orElse: () =>
-              Effect.fail(
-                new BacnetTimeout({
-                  message: `no answer within ${Duration.format(requestDeadline)}, ${waited} ms of it spent waiting for an invoke ID`
-                })
-              )
-          })
-        )
+  const noFreeInvokeId = () =>
+    Effect.fail(
+      new BacnetTimeout({
+        message: `no free invoke ID within ${Duration.format(requestDeadline)}, too many requests in flight`
       })
     )
 
-  /** Send one confirmed request, resending it after each timeout, and return the answer. */
-  const exchange = (target: DeviceAddress, service: number, body: Uint8Array) =>
+  const withPermits = <A, E>(
+    semaphores: ReadonlyArray<Semaphore.Semaphore>,
+    use: (deadlineAt: number) => Effect.Effect<A, E>
+  ) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* monotonicMillis
+        const deadlineAt = started + Duration.toMillis(requestDeadline)
+        yield* Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
+          Effect.timeoutOrElse({
+            duration: requestDeadline,
+            orElse: () => noFreeInvokeId()
+          })
+        )
+        // A permit that came only as the deadline passed is no better than none: nothing is sent.
+        if ((yield* monotonicMillis) >= deadlineAt) return yield* noFreeInvokeId()
+        return yield* use(deadlineAt)
+      })
+    )
+
+  /**
+   * Send one confirmed request, resending it after each timeout, and return
+   * the answer. Each attempt waits the request timeout or what is left until
+   * `deadlineAt`, whichever is shorter, and none starts after it: one timer
+   * per attempt, so the request ends by its deadline with the message of the
+   * attempt that ran out.
+   */
+  const exchange = (target: DeviceAddress, service: number, body: Uint8Array, deadlineAt: number) =>
     Effect.acquireUseRelease(
       // Registered uninterruptibly, so an interrupted request never leaves its invoke ID behind.
       Effect.flatMap(monotonicMillis, (now) =>
@@ -597,17 +592,23 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
           },
           routedTo(target)
         )
-        const attempt = writer.write({ payload, address: target.address }).pipe(
-          Effect.mapError(socketError),
-          Effect.andThen(Deferred.await(answer)),
-          Effect.timeoutOrElse({
-            duration: requestTimeout,
-            orElse: () =>
-              Effect.fail(
-                new BacnetTimeout({ message: `no answer from ${keyOf(target.address)} within ${timeoutText}` })
-              )
-          })
-        )
+        const attempt = Effect.gen(function* () {
+          const left = deadlineAt - (yield* monotonicMillis)
+          const budget = Math.min(requestTimeoutMillis, left)
+          const within =
+            budget === requestTimeoutMillis
+              ? timeoutText
+              : `${Math.max(0, budget)}ms, what was left of its ${Duration.format(requestDeadline)} (waiting for an invoke ID counts)`
+          const timedOut = new BacnetTimeout({ message: `no answer from ${keyOf(target.address)} within ${within}` })
+          if (budget <= 0) return yield* timedOut
+          return yield* writer
+            .write({ payload, address: target.address })
+            .pipe(
+              Effect.mapError(socketError),
+              Effect.andThen(Deferred.await(answer)),
+              Effect.timeoutOrElse({ duration: Duration.millis(budget), orElse: () => Effect.fail(timedOut) })
+            )
+        })
         // Resent with the same invoke ID, so a late answer to an earlier attempt still counts (clause 5.4.4.1).
         return attempt.pipe(
           Effect.retry({ times: retries, while: (error) => error._tag === "BacnetTimeout" }),
@@ -639,7 +640,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
     Effect.flatMap(
       Effect.suspend(() => Effect.fromResult(tryEncode(encode))),
       (body) =>
-        withPermits(pools, exchange(target, service, body)).pipe(
+        withPermits(pools, (deadlineAt) => exchange(target, service, body, deadlineAt)).pipe(
           Effect.flatMap((answer) => Effect.fromResult(Result.flatMap(interpretAnswer(service, answer), decode))),
           Effect.tap(() => countRequest("ok")),
           Effect.tapError((error) => {
