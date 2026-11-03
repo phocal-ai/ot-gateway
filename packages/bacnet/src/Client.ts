@@ -50,6 +50,7 @@ import {
   encodeReadProperty,
   encodeReadPropertyMultiple,
   encodeSubscribeCov,
+  encodeWriteProperty,
   encodeWhoIs,
   type IAm,
   type PropertyReference,
@@ -58,6 +59,7 @@ import {
   type ReadPropertyAck,
   type ReadPropertyRequest,
   type SubscribeCovRequest,
+  type WritePropertyRequest,
   type WhoIs,
   whoIsMatches
 } from "./Services.ts"
@@ -157,6 +159,15 @@ export interface BacnetClient {
   readonly subscribeCov: (
     target: DeviceAddress,
     request: SubscribeCovRequest
+  ) => Effect.Effect<void, BacnetRequestError>
+  /**
+   * Write one property (clause 15.9). Resent with the same invoke ID after a
+   * timeout like every confirmed request, which is safe: writing the same
+   * value at the same priority again leaves the same state.
+   */
+  readonly writeProperty: (
+    target: DeviceAddress,
+    request: WritePropertyRequest
   ) => Effect.Effect<void, BacnetRequestError>
   /** A random subscriber process identifier that no other caller of this client gets. */
   readonly newProcessId: Effect.Effect<number>
@@ -675,6 +686,16 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
           )
         ).pipe(Effect.map(() => [...found.values()]))
       }),
+    writeProperty: (target, writeRequest) =>
+      request(
+        target,
+        ConfirmedService.WriteProperty,
+        () => encodeWriteProperty(writeRequest),
+        (body) =>
+          body.length === 0
+            ? Result.succeed(undefined)
+            : Result.fail(new BacnetCodecError({ message: "WriteProperty was answered with data, not a simple ack" }))
+      ),
     subscribeCov: (target, subscription) =>
       request(
         target,

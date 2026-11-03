@@ -37,6 +37,7 @@ const point = (id: string, objectType: string, instance: number, property?: stri
   id,
   name: id,
   writable: false,
+  priority: 8,
   objectType,
   instance,
   property: property ?? "present-value"

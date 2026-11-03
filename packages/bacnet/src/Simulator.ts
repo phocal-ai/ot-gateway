@@ -22,6 +22,7 @@ import {
   decodeReadProperty,
   decodeReadPropertyMultiple,
   decodeSubscribeCov,
+  decodeWriteProperty,
   decodeWhoIs,
   encodeCovNotification,
   encodeErrorBody,
@@ -73,6 +74,8 @@ export interface SimulatedDevice {
   readonly subscriptions: Map<string, CovSubscription>
   /** Called with the object whenever its present value or status flags change. */
   readonly onChange: Set<(object: ObjectId) => void>
+  /** WriteProperty requests applied, in order. */
+  readonly writes: Array<{ readonly object: ObjectId; readonly value: BacnetValue; readonly priority?: number }>
 }
 
 /** Who sent a request, and when, for the services that remember the requester. */
@@ -157,7 +160,15 @@ export const makeSimulatedDevice = (config: SimulatedDeviceConfig): SimulatedDev
     }
     objects.set(keyOf(id), properties)
   })
-  return { instance: config.instance, vendorId, maxApdu, objects, subscriptions: new Map(), onChange: new Set() }
+  return {
+    instance: config.instance,
+    vendorId,
+    maxApdu,
+    objects,
+    subscriptions: new Map(),
+    onChange: new Set(),
+    writes: []
+  }
 }
 
 /** Change a property, as a sensor or an operator would. Returns false if the object does not exist. */
@@ -370,9 +381,79 @@ export const answer = (
       }
       return { _tag: "SimpleAck", invokeId, service }
     }
+    case ConfirmedService.WriteProperty: {
+      const decoded = decodeWriteProperty(request.body)
+      if (Result.isFailure(decoded)) return reject(RejectReason.InvalidTag)
+      const refused = writeOne(device, decoded.success)
+      if (refused !== undefined) {
+        return { _tag: "Error", invokeId, service, body: encodeErrorBody(refused) }
+      }
+      device.writes.push({
+        object: decoded.success.object,
+        value: decoded.success.value,
+        ...(decoded.success.priority === undefined ? {} : { priority: decoded.success.priority })
+      })
+      return { _tag: "SimpleAck", invokeId, service }
+    }
     default:
       return reject(RejectReason.UnrecognizedService)
   }
+}
+
+/** Priority 6 is reserved for minimum on/off time (clause 19.2.1.1). */
+const MINIMUM_ON_OFF_PRIORITY = 6
+
+/**
+ * Apply a WriteProperty to the present value, as clause 19.2 commands it:
+ * an output takes the value into its priority array slot (16 when no
+ * priority is given) and presents the highest-priority non-null slot, or
+ * its relinquish default once every slot is null. A value object without a
+ * priority array takes the value as it is; an input refuses while in
+ * service (clause 12.2.4). The value must have the object's type.
+ */
+const writeOne = (
+  device: SimulatedDevice,
+  request: {
+    readonly object: ObjectId
+    readonly property: number
+    readonly value: BacnetValue
+    readonly priority?: number
+  }
+): { readonly errorClass: number; readonly errorCode: number } | undefined => {
+  const properties = device.objects.get(keyOf(request.object))
+  if (properties === undefined) return { errorClass: ErrorClass.object, errorCode: ErrorCode["unknown-object"] }
+  if (request.property !== PropertyId["present-value"]) {
+    return { errorClass: ErrorClass.property, errorCode: ErrorCode["write-access-denied"] }
+  }
+  const objectTypeName = Object.entries(ObjectType).find(([, number]) => number === request.object.objectType)?.[0]
+  if (objectTypeName?.endsWith("-input") === true) {
+    return { errorClass: ErrorClass.property, errorCode: ErrorCode["write-access-denied"] }
+  }
+  const binary = objectTypeName?.startsWith("binary-") === true
+  const { value } = request
+  const typeMatches = binary
+    ? value.type === "enumerated" && (value.value === 0 || value.value === 1)
+    : value.type === "real"
+  const priorities = properties.get(PropertyId["priority-array"])
+  if (priorities === undefined) {
+    if (!typeMatches) return { errorClass: ErrorClass.property, errorCode: ErrorCode["invalid-data-type"] }
+    setProperty(device, request.object, PropertyId["present-value"], value)
+    return undefined
+  }
+  const priority = request.priority ?? 16
+  if (priority === MINIMUM_ON_OFF_PRIORITY) {
+    return { errorClass: ErrorClass.property, errorCode: ErrorCode["write-access-denied"] }
+  }
+  if (value.type !== "null" && !typeMatches) {
+    return { errorClass: ErrorClass.property, errorCode: ErrorCode["invalid-data-type"] }
+  }
+  const slots = [...priorities]
+  slots[priority - 1] = value
+  properties.set(PropertyId["priority-array"], slots)
+  const commanded = slots.find((slot) => slot.type !== "null")
+  const presented = commanded ?? properties.get(PropertyId["relinquish-default"])?.[0]
+  if (presented !== undefined) setProperty(device, request.object, PropertyId["present-value"], presented)
+  return undefined
 }
 
 const binaryObjectTypes = new Set<string>(["binary-input", "binary-output", "binary-value"])

@@ -132,7 +132,15 @@ describe("chaos: client over UDP", () => {
         pollIntervalMs: 1000,
         address: NetAddress.formatInet(deviceAddress),
         points: [
-          { id: "t", name: "t", writable: false, objectType: "analog-input", instance: 1, property: "present-value" }
+          {
+            id: "t",
+            name: "t",
+            writable: false,
+            objectType: "analog-input",
+            instance: 1,
+            property: "present-value",
+            priority: 8
+          }
         ]
       }
       const driver = yield* makeBacnetDriverFromClient(config, client, { cov: { checkMs: 50 } })

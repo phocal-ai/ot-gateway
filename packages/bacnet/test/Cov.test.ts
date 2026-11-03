@@ -28,6 +28,7 @@ const point = (id: string, instance: number, property = "present-value"): Bacnet
   id,
   name: id,
   writable: false,
+  priority: 8,
   objectType: "analog-input",
   instance,
   property
@@ -65,6 +66,7 @@ const scriptedClient = () => {
   const timeout = new BacnetTimeout({ message: "no answer" })
   const client: BacnetClient = {
     confirmed: () => Effect.die("not scripted"),
+    writeProperty: () => Effect.die("not scripted"),
     readProperty: () => Effect.die("not scripted"),
     readPropertyMultiple: (_target, specifications) =>
       Effect.suspend(() =>

@@ -266,7 +266,7 @@ describe("rejects", () => {
   })
 
   it("rejects services it does not implement", () => {
-    expect(answer(makeDevice(), confirmed(ConfirmedService.WriteProperty, new Uint8Array(0)))).toEqual({
+    expect(answer(makeDevice(), confirmed(ConfirmedService.WritePropertyMultiple, new Uint8Array(0)))).toEqual({
       _tag: "Reject",
       invokeId: 7,
       reason: RejectReason.UnrecognizedService

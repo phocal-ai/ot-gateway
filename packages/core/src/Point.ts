@@ -89,7 +89,18 @@ export const BacnetPoint = Schema.Struct({
   /** 22 bits on the wire (clause 20.2.14). */
   instance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
   /** Property by its ASHRAE 135 name or number (default `present-value`). */
-  property: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("present-value")))
+  property: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed("present-value"))),
+  /**
+   * The priority array slot writes use (clause 19.2), 1 (highest) to 16;
+   * default 8, manual operator. 6 is reserved for minimum on/off time.
+   */
+  priority: Schema.Int.pipe(
+    Schema.check(
+      Schema.isBetween({ minimum: 1, maximum: 16 }),
+      Schema.makeFilter((priority) => priority !== 6 || "priority 6 is reserved for minimum on/off time")
+    ),
+    Schema.withDecodingDefaultKey(Effect.succeed(8))
+  )
 })
 export type BacnetPoint = typeof BacnetPoint.Type
 
