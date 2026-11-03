@@ -530,12 +530,15 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   /**
    * Run `use` holding a permit of each of `semaphores`. Waiting for them
    * counts against the request's deadline, so a gateway with too many
-   * requests in flight fails requests as timeouts instead of stalling them.
+   * requests in flight fails requests as timeouts instead of stalling them;
+   * `use` gets only what the wait left of it, so the whole request ends by
+   * its deadline however late its permit came.
    */
   const withPermits = <A, E>(semaphores: ReadonlyArray<Semaphore.Semaphore>, use: Effect.Effect<A, E>) =>
     Effect.scoped(
-      Effect.andThen(
-        Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
+      Effect.gen(function* () {
+        const started = yield* monotonicMillis
+        yield* Effect.forEach(semaphores, (semaphore) => Semaphore.takeScoped(semaphore, 1), { discard: true }).pipe(
           Effect.timeoutOrElse({
             duration: requestDeadline,
             orElse: () =>
@@ -545,9 +548,22 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
                 })
               )
           })
-        ),
-        use
-      )
+        )
+        const waited = (yield* monotonicMillis) - started
+        // Without a wait the attempts end by the deadline on their own, with their own, more telling message.
+        if (waited <= 0) return yield* use
+        return yield* use.pipe(
+          Effect.timeoutOrElse({
+            duration: Duration.millis(Math.max(0, Duration.toMillis(requestDeadline) - waited)),
+            orElse: () =>
+              Effect.fail(
+                new BacnetTimeout({
+                  message: `no answer within ${Duration.format(requestDeadline)}, ${waited} ms of it spent waiting for an invoke ID`
+                })
+              )
+          })
+        )
+      })
     )
 
   /** Send one confirmed request, resending it after each timeout, and return the answer. */

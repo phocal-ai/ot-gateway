@@ -243,23 +243,31 @@ describe("chaos: client over UDP", () => {
   it.live("a request that finds no free invoke ID fails within its timeout instead of queueing", () =>
     Effect.gen(function* () {
       const silent = yield* peer()
-      const client = yield* startClient({ requestTimeout: "250 millis", retries: 0 })
+      const client = yield* startClient({ requestTimeout: "500 millis", retries: 0 })
       const started = Date.now()
       // Four times the 256 invoke IDs, all to a device that never answers.
-      const results = yield* Effect.forEach(
+      const timed = yield* Effect.forEach(
         Array.from({ length: 1024 }, (_, index) => index),
         () =>
-          Effect.result(
-            client.readProperty(
-              { address: silent.address },
-              { object: analogInput1, property: PropertyId["present-value"] }
+          Effect.gen(function* () {
+            const begun = Date.now()
+            const result = yield* Effect.result(
+              client.readProperty(
+                { address: silent.address },
+                { object: analogInput1, property: PropertyId["present-value"] }
+              )
             )
-          ),
+            return { result, took: Date.now() - begun }
+          }),
         { concurrency: "unbounded" }
       )
       const elapsed = Date.now() - started
-      // Queued, the last quarter would wait three timeouts first and end after a second.
-      expect(elapsed).toBeLessThan(800)
+      const results = timed.map(({ result }) => result)
+      // Queued, the last quarter would wait three timeouts first and end after two seconds.
+      expect(elapsed).toBeLessThan(1600)
+      // Each request, its wait for an invoke ID included, ends near its 500 ms deadline: one that gets an
+      // ID freed just before its deadline must not start a fresh 500 ms exchange on top (a second in all).
+      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(800)
       expect(
         results.some(
           (result) => Result.isFailure(result) && result.failure.message.startsWith("no free invoke ID within")

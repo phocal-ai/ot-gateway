@@ -36,6 +36,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/buffer`: SQLite store-and-forward, a `Publisher` that wraps the MQTT one
 - `apps/gateway`: the runnable gateway
 - `examples/`: sample configs
+- `packaging/`: the systemd unit and `install.sh`; the container image is the root `Dockerfile`
 - `docs/`: vision and design notes
 - `observability/`: Grafana dashboards as code and the telemetry setup for the gateway and for Claude Code (see `observability/README.md`)
 - `repos/`: read-only reference subtrees (see below)

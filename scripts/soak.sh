@@ -204,8 +204,13 @@ buffer_rows() {
 }
 sample() {
   local rss cpu files bytes
-  rss=$(ps -o rss= -p "$gateway" | tr -d ' ' || true)
-  cpu=$(ps -o %cpu= -p "$gateway" | tr -d ' ' || true)
+  # /proc where there is one (slim container images have no ps), ps on macOS.
+  if [[ -r /proc/$gateway/status ]]; then
+    rss=$(awk '/^VmRSS:/ {print $2}' "/proc/$gateway/status" 2>/dev/null || true)
+  else
+    rss=$(ps -o rss= -p "$gateway" | tr -d ' ' || true)
+  fi
+  cpu=$( (ps -o %cpu= -p "$gateway" 2>/dev/null || true) | tr -d ' ')
   if [[ -d /proc/$gateway/fd ]]; then
     files=$( (ls "/proc/$gateway/fd" 2>/dev/null || true) | wc -l | tr -d ' ')
   else

@@ -55,6 +55,32 @@ Point `mqtt.url` at your own broker to publish there instead; the gateway keeps 
 
 Plenum runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
 
+To check a config without connecting to anything:
+
+```bash
+node apps/gateway/src/main.ts --check path/to/gateway.json
+```
+
+## Running it for real
+
+On a Raspberry Pi (64-bit OS) or any Linux machine with systemd and Node.js 22.18 or newer, from a checkout:
+
+```bash
+sudo packaging/install.sh path/to/gateway.json
+```
+
+It installs the gateway to `/opt/plenum` with its production dependencies, creates the `plenum` user, validates the config into `/etc/plenum/gateway.json` (with the outbox in `/var/lib/plenum`), and starts the `plenum-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u plenum-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/plenum/gateway.env`.
+
+Or as a container, for amd64 and arm64 (published for releases as `ghcr.io/phocal-ai/plenum-gateway`):
+
+```bash
+docker run -d --name plenum --network host --restart unless-stopped \
+  -v /etc/plenum:/etc/plenum:ro -v /var/lib/plenum:/var/lib/plenum \
+  ghcr.io/phocal-ai/plenum-gateway:latest
+```
+
+Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container.
+
 ## Configuration
 
 A gateway is described by one JSON document:
