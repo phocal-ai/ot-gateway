@@ -11,21 +11,53 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
-import { makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
+import {
+  type BacnetClient,
+  type DeviceAddress,
+  makeBacnetDriverFromClient,
+  makeBacnetNetwork,
+  ObjectType,
+  parseDeviceAddress,
+  PropertyId
+} from "@plenum/bacnet"
 import { parseConfig, type Reading } from "@plenum/core"
-import { Effect, Stream } from "effect"
+import { Effect, Result, Stream } from "effect"
 
 const device = process.env["PLENUM_INTEROP_BACNET"]
 const broadcast = process.env["PLENUM_INTEROP_BACNET_BROADCAST"] ?? "255.255.255.255"
 const enabled = process.env["PLENUM_INTEROP"] === "1" && device !== undefined
 
+/** The first instance of `objectType` in the device's object list, read element by element (always fits unsegmented). */
+const firstInstance = Effect.fnUntraced(function* (client: BacnetClient, target: DeviceAddress, objectType: number) {
+  const deviceObject = { objectType: ObjectType.device, instance: 2002 }
+  const property = PropertyId["object-list"]
+  const [count] = yield* client.readProperty(target, { object: deviceObject, property, arrayIndex: 0 })
+  const length = count?.type === "unsigned" ? count.value : 0
+  for (let index = 1; index <= length; index++) {
+    const [entry] = yield* client.readProperty(target, { object: deviceObject, property, arrayIndex: index })
+    if (entry?.type === "object-identifier" && entry.value.objectType === objectType) return entry.value.instance
+  }
+  return yield* Effect.die(new Error(`bacserv has no object of type ${objectType}`))
+})
+
 const setup = Effect.gen(function* () {
-  const config = yield* parseConfig(
+  const settings = yield* parseConfig(
     JSON.stringify({
       site: "s",
       building: "b",
       mqtt: { url: "mqtt://unused" },
       bacnet: { broadcastAddress: broadcast, requestTimeoutMs: 1_000 },
+      devices: []
+    })
+  )
+  const client = yield* makeBacnetNetwork(settings.bacnet)
+  const target = { address: Result.getOrThrow(parseDeviceAddress(device ?? "")) }
+  // The demo server's objects vary between releases: use the ones it has.
+  const input = yield* firstInstance(client, target, ObjectType["analog-input"])
+  const output = yield* firstInstance(client, target, ObjectType["analog-output"])
+  const config = yield* parseConfig(
+    JSON.stringify({
+      ...settings,
       devices: [
         {
           protocol: "bacnet-ip",
@@ -33,12 +65,12 @@ const setup = Effect.gen(function* () {
           deviceInstance: 2002,
           address: device,
           points: [
-            { id: "input", name: "Input", objectType: "analog-input", instance: 0 },
+            { id: "input", name: "Input", objectType: "analog-input", instance: input },
             {
               id: "output",
               name: "Output",
               objectType: "analog-output",
-              instance: 0,
+              instance: output,
               writable: true,
               limits: { min: 0, max: 100 },
               priority: 8
@@ -50,11 +82,9 @@ const setup = Effect.gen(function* () {
   )
   const [bacnetDevice] = config.devices
   if (bacnetDevice?.protocol !== "bacnet-ip") return yield* Effect.die(new Error("no BACnet device"))
-  const client = yield* makeBacnetNetwork(config.bacnet)
-  const driver = yield* makeBacnetDriverFromClient(bacnetDevice, client, {
+  return yield* makeBacnetDriverFromClient(bacnetDevice, client, {
     cov: { lifetimeSeconds: 60, renewMs: 30_000, checkMs: 200 }
   })
-  return driver
 })
 
 const valueOf = (readings: ReadonlyArray<Reading>, id: string) =>
