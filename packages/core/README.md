@@ -11,6 +11,8 @@ The protocol-neutral heart of Plenum.
 - `superviseDevice`: runs one device's pipeline and restarts it with exponential backoff (up to 5 minutes) when it dies on a defect, so a bug in one driver never stops the other devices; counted in `plenum_device_restarts_total` and reported as `crashed` in the health registry
 - Lasting failures are logged on transition: a device's read failure or hang when it starts or its reason changes, a broker outage once per device, and one line each when they end; every failed cycle is still counted
 - Health (`Health.ts`): `HealthRegistry` (per-device status, written by `runDevice`), online/offline payloads, and `runHealthReporter`, which refreshes the retained health message
+- The command guard (`Command.ts`): checks a command from `…/$set` (live, writable, type, `limits`), unscales it, writes it once with a deadline and answers it; `DriverRegistry` holds the drivers of the running devices
+- `MemoryNetwork`: an in-memory TCP and UDP network implementing Effect's sockets, with crashes, partitions and datagram loss, for whole-gateway simulations; `Network` is how drivers and the MQTT publisher take one
 - `describeSocketError` for readable socket failures in protocol clients
 
 Part of [Plenum](../../README.md).

@@ -64,8 +64,8 @@ Values pushed between polls are counted in `plenum_pushed_readings`, and the poi
 
 The gateway opens the shared socket in the background and keeps trying, from every 5 s up to every 5 minutes, if the port is taken or the bind address is not assigned yet; until then its BACnet devices report `connection`.
 
-## Next
+## Writes
 
-Write-back (WriteProperty with a priority) lands with the command guard in v0.4.
+`Driver.write`, behind the command guard in `@plenum/core`, sends WriteProperty (clause 15.9) for the point's property at the point's `priority` (default 8; 1 to 16, never 6, which belongs to minimum on/off time): a REAL for analog objects, the enumeration 0 or 1 for binary ones, and Null to relinquish the gateway's slot. Like every confirmed request it is resent with the same invoke ID when no answer comes, which is safe: the same value at the same priority leaves the same state. The simulated device applies writes as clause 19.2 commands outputs (the highest-priority non-null slot wins, the relinquish default when all are null), refuses inputs in service and values of the wrong type, and records them in `SimulatedDevice.writes`.
 
 Part of [Plenum](../../README.md).
