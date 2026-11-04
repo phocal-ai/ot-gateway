@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import type { SimulatedPoint } from "@plenum/core"
+import type { SimulatedPoint } from "@ot-gateway/core"
 import { waveformValue } from "../src/index.ts"
 
 const base: SimulatedPoint = {

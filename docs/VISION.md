@@ -1,12 +1,12 @@
-# Plenum — Vision
+# OT Gateway — Vision
 
 As of 2026-11-02. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
 
 ## Elevator pitch
 
-Plenum is an open-source, type-safe edge gateway for buildings. It runs on small Linux devices like a Raspberry Pi, reads building protocols such as Modbus TCP and BACnet/IP, and publishes clean, normalized data to MQTT. It also carries commands back safely.
+OT Gateway is an open-source, type-safe edge gateway for buildings. It runs on small Linux devices like a Raspberry Pi, reads building protocols such as Modbus TCP and BACnet/IP, and publishes clean, normalized data to MQTT. It also carries commands back safely.
 
-It is built on Effect for TypeScript, and it is Effect-native throughout. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable. Plenum is both a library you compose in code and a ready-to-run gateway you configure with one file.
+It is built on Effect for TypeScript, and it is Effect-native throughout. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable. OT Gateway is both a library you compose in code and a ready-to-run gateway you configure with one file.
 
 ## Problem
 
@@ -20,13 +20,13 @@ Getting data out of a building is still harder than it should be. Field devices 
 
 ## Vision statement
 
-**Plenum makes building data boring, in the best sense: predictable, observable and correct, from the field bus to the broker.**
+**OT Gateway makes building data boring, in the best sense: predictable, observable and correct, from the field bus to the broker.**
 
 An integrator should be able to drop a Pi into a plant room, point it at a config file, and trust it to run unattended for months. When something goes wrong, the gateway should say exactly what, where and since when. A developer should be able to add a protocol driver without understanding the whole codebase, and test it against a simulated device on a laptop.
 
 ## Users and use cases
 
-| User                             | What they need from Plenum                                                                         |
+| User                             | What they need from OT Gateway                                                                     |
 | -------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Building automation integrator   | Meter, HVAC and plant data in MQTT quickly, configured from a file, with clear diagnostics on site |
 | Developer                        | A typed library to build a custom gateway or add a protocol driver                                 |
@@ -87,9 +87,9 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 
 ## Positioning
 
-Plenum aims at the gap between visual flow tools and closed vendor gateways: code-first, typed and testable, yet usable from a config file.
+OT Gateway aims at the gap between visual flow tools and closed vendor gateways: code-first, typed and testable, yet usable from a config file.
 
-| Tool                    | Strength                               | Where Plenum differs                                                 |
+| Tool                    | Strength                               | Where OT Gateway differs                                             |
 | ----------------------- | -------------------------------------- | -------------------------------------------------------------------- |
 | Node-RED                | Fast visual prototyping, big ecosystem | Typed, version-controlled config and code; testable without hardware |
 | EMQX Neuron             | Many industrial protocols              | Open, small, library-first; focused on building automation           |
@@ -111,7 +111,7 @@ Modbus TCP to MQTT ships end to end first, because it is the simplest protocol a
 
 ## Success criteria
 
-- A Pi running Plenum stays up for 30 days with no manual intervention, through broker and network outages.
+- A Pi running OT Gateway stays up for 30 days with no manual intervention, through broker and network outages.
 - No data loss during an outage that fits in the local buffer.
 - A new user gets Modbus readings into MQTT in under 15 minutes from the README.
 - Every driver has a simulator, and CI runs end-to-end tests without hardware.
@@ -147,7 +147,7 @@ The core stays ontology-neutral, and each point can carry an optional Brick clas
 
 The three are moving toward each other: Haystack 5 exports to RDF and its Xeto tool translates Haystack to Brick, and Brick aligns with 223P. The likely end state is 223P for detailed engineering models, Brick as the lighter query layer, and Haystack tags as the vocabulary people use in the field.
 
-What Plenum does:
+What OT Gateway does:
 
 1. The core point model stays neutral: id, name, unit, data type, writable, plus device context.
 2. Each point can carry an optional `semantics` block with a Brick class (primary) and Haystack tags.

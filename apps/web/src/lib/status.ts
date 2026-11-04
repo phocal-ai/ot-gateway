@@ -1,8 +1,8 @@
 /**
- * The gateway's status, through the typed client for `PlenumApi`: the same
+ * The gateway's status, through the typed client for `OtGatewayApi`: the same
  * schema the gateway encodes with decodes the answer here.
  */
-import { type GatewayStatus, PlenumApi } from "@plenum/api"
+import { type GatewayStatus, OtGatewayApi } from "@ot-gateway/api"
 import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -17,7 +17,7 @@ export class StatusUnavailable extends Schema.TaggedError<StatusUnavailable>()("
  * the API is on the same origin. Every way of not getting it (unreachable,
  * a timeout, an answer that does not decode) means one thing here.
  */
-export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = HttpApiClient.make(PlenumApi, {
+export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = HttpApiClient.make(OtGatewayApi, {
   baseUrl: typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin
 }).pipe(
   Effect.flatMap((client) => client.status.status()),

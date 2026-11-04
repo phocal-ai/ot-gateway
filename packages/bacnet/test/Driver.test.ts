@@ -3,7 +3,7 @@
  */
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
-import type { BacnetDevice, BacnetPoint, Reading } from "@plenum/core"
+import type { BacnetDevice, BacnetPoint, Reading } from "@ot-gateway/core"
 import { type Duration, Effect, Fiber, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"

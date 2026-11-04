@@ -1,11 +1,11 @@
 /**
- * The local status page: `GET /api/status` (the `PlenumApi` contract from
- * `@plenum/api`) and the built web app (`apps/web/out`), served by the
+ * The local status page: `GET /api/status` (the `OtGatewayApi` contract from
+ * `@ot-gateway/api`) and the built web app (`apps/web/out`), served by the
  * gateway itself on `status.bindAddress:status.port`. Read-only: commands
  * reach devices only through MQTT and the command guard.
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
-import { type CommandStatus, type DeviceStatus, type GatewayStatus, PlenumApi } from "@plenum/api"
+import { type CommandStatus, type DeviceStatus, type GatewayStatus, OtGatewayApi } from "@ot-gateway/api"
 import type { HostSnapshot } from "./Host.ts"
 import {
   bufferRows,
@@ -14,7 +14,7 @@ import {
   type HealthRegistry,
   mqttConnected,
   type StatusSettings
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import { Clock, Effect, FileSystem, Layer, Metric, Option, Schema } from "effect"
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse, HttpStaticServer } from "effect/http"
 import { HttpApiBuilder } from "effect/http-api"
@@ -141,9 +141,9 @@ export const serveStatus = (settings: StatusSettings, state: StatusState) =>
     const fs = yield* FileSystem.FileSystem
     const webRoot = settings.webRoot ?? defaultWebRoot
     const hasWeb = yield* fs.exists(`${webRoot}/index.html`).pipe(Effect.orElseSucceed(() => false))
-    const api = HttpApiBuilder.layer(PlenumApi).pipe(
+    const api = HttpApiBuilder.layer(OtGatewayApi).pipe(
       Layer.provide(
-        HttpApiBuilder.group(PlenumApi, "status", (handlers) => handlers.handle("status", () => state.snapshot))
+        HttpApiBuilder.group(OtGatewayApi, "status", (handlers) => handlers.handle("status", () => state.snapshot))
       )
     )
     const web = hasWeb
@@ -152,7 +152,7 @@ export const serveStatus = (settings: StatusSettings, state: StatusState) =>
           "GET",
           "/",
           HttpServerResponse.text(
-            "Plenum gateway: the status page is not built (pnpm --filter @plenum/web build). The API is at /api/status."
+            "OT Gateway: the status page is not built (pnpm --filter @ot-gateway/web build). The API is at /api/status."
           )
         )
     // An open page asks every two seconds: neither a log line nor a trace per request (the edge log budget).

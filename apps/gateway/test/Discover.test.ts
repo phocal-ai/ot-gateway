@@ -4,8 +4,8 @@
  * and a draft that the config schema accepts as it is.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { type DescribedDevice, type DiscoveredDevice, parseDeviceAddress } from "@plenum/bacnet"
-import { parseConfig } from "@plenum/core"
+import { type DescribedDevice, type DiscoveredDevice, parseDeviceAddress } from "@ot-gateway/bacnet"
+import { parseConfig } from "@ot-gateway/core"
 import { Effect, Result } from "effect"
 import { draftDevices, printable, slugify } from "../src/Discover.ts"
 

@@ -59,8 +59,13 @@ export interface HostHealth {
   /** Wall-clock steps (NTP setting the time) since the gateway started. */
   readonly clockSteps: number
   readonly temperatureC?: number
-  /** Power or thermal conditions the Raspberry Pi firmware reports right now; empty when there are none. */
+  /** Power or thermal conditions the Raspberry Pi reported in the last four samples (about a minute); empty when there were none. */
   readonly throttled?: ReadonlyArray<string>
+  /**
+   * The conditions the Pi lets the gateway see, with `throttled`: all four before kernel 6.18,
+   * `under_voltage` alone from 6.18 on. An empty `throttled` is only "fine" for these.
+   */
+  readonly throttledWatched?: ReadonlyArray<string>
   /** Free space on the outbox's filesystem. */
   readonly diskFreeBytes?: number
 }

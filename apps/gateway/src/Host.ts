@@ -26,7 +26,7 @@ import {
   processMemory,
   processOpenFds,
   processStart
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import { Clock, Effect, FileSystem, Metric, Schedule } from "effect"
 import type { Scope } from "effect"
 import { statfs } from "node:fs/promises"
@@ -53,8 +53,12 @@ export const THROTTLE_CONDITIONS = ["under_voltage", "frequency_capped", "thrott
 export type ThrottleCondition = (typeof THROTTLE_CONDITIONS)[number]
 
 export interface Throttling {
+  /** Conditions now; from the kernel's sensor, any seen since the previous read; in a snapshot, any in the last four samples (about a minute). */
   readonly now: ReadonlyArray<ThrottleCondition>
-  readonly sinceBoot: ReadonlyArray<ThrottleCondition>
+  /** What the firmware remembers since boot; absent when the source cannot tell. */
+  readonly sinceBoot?: ReadonlyArray<ThrottleCondition>
+  /** The conditions the source can see at all: all four from the firmware's mask, under-voltage alone from the kernel's sensor. */
+  readonly watched: ReadonlyArray<ThrottleCondition>
 }
 
 /**
@@ -68,8 +72,22 @@ export const parseThrottled = (text: string): Throttling | undefined => {
   const mask = Number.parseInt(match[1] ?? "", 16)
   return {
     now: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << bit)) !== 0),
-    sinceBoot: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << (bit + 16))) !== 0)
+    sinceBoot: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << (bit + 16))) !== 0),
+    watched: THROTTLE_CONDITIONS
   }
+}
+
+/**
+ * The kernel's `rpi_volt` sensor, `in0_lcrit_alarm`: `1` when the firmware
+ * reported under-voltage at the driver's last poll. The driver polls every
+ * 2 seconds and clears the firmware's sticky bits each time, so this is
+ * under-voltage now, nothing since boot, and none of the other conditions.
+ * Anything but `0` or `1` gives `undefined`.
+ */
+export const parseUnderVoltageAlarm = (text: string): Throttling | undefined => {
+  const value = text.trim()
+  if (value !== "0" && value !== "1") return undefined
+  return { now: value === "1" ? ["under_voltage"] : [], watched: ["under_voltage"] }
 }
 
 /** A thermal zone's `temp`: millidegrees Celsius, as degrees to one decimal; `undefined` if it is not plausible. */
@@ -116,7 +134,98 @@ export interface HostSources {
 }
 
 const THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
-const GET_THROTTLED = "/sys/devices/platform/soc/soc:firmware/get_throttled"
+
+/** How often the `rpi_volt` alarm is read: half the driver's 2 s poll, so no value it reports goes unread. */
+export const UNDER_VOLTAGE_POLL_MS = 1_000
+
+/** Where the Raspberry Pi's power and thermal flags come from, and an effect that reads them. */
+export interface ThrottlingSource {
+  /** What was found at startup. With `none` the reader keeps looking, in case the sensor's driver loads later. */
+  readonly kind: "firmware-mask" | "rpi-volt-sensor" | "none"
+  readonly read: Effect.Effect<Throttling | undefined>
+}
+
+/**
+ * Where the Raspberry Pi's power and thermal flags can be read. Kernels before
+ * 6.18 expose the firmware's whole mask as `get_throttled`. Later ones only
+ * the under-voltage alarm of the `rpi_volt` hwmon sensor, which shows the
+ * last 2 seconds: it is polled every `UNDER_VOLTAGE_POLL_MS` until the scope
+ * closes, and a read reports under-voltage if any poll since the previous
+ * read saw it, so a dip between two 15 s samples is not missed. Neither on a
+ * machine that is not a Pi: the reader gives `undefined`, and looks again at
+ * every read (a directory listing), since a service can start before udev has
+ * loaded the sensor's driver. `sysfs` and `pollMs` are for tests.
+ */
+export const throttlingSource = Effect.fnUntraced(function* (
+  fs: FileSystem.FileSystem,
+  options: { readonly sysfs?: string; readonly pollMs?: number } = {}
+): Effect.fn.Return<ThrottlingSource, never, Scope.Scope> {
+  const scope = yield* Effect.scope
+  const sysfs = options.sysfs ?? "/sys"
+  const readText = (path: string) =>
+    fs.readFileString(path).pipe(Effect.orElseSucceed((): string | undefined => undefined))
+  const parsedFrom = (path: string, parse: (text: string) => Throttling | undefined) =>
+    Effect.map(readText(path), (text) => (text === undefined ? undefined : parse(text)))
+
+  const mask = `${sysfs}/devices/platform/soc/soc:firmware/get_throttled`
+  const hwmon = `${sysfs}/class/hwmon`
+  const fromSensor = (sensor: string) =>
+    Effect.gen(function* () {
+      const alarm = parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm)
+      let seenSinceRead = false
+      // Every read looks at the alarm itself; the poller covers the time between reads, from one interval on.
+      yield* Effect.sleep(options.pollMs ?? UNDER_VOLTAGE_POLL_MS).pipe(
+        Effect.andThen(alarm),
+        Effect.tap((alarmNow) =>
+          Effect.sync(() => {
+            if (alarmNow !== undefined && alarmNow.now.length > 0) seenSinceRead = true
+          })
+        ),
+        Effect.forever,
+        Effect.forkIn(scope)
+      )
+      yield* Effect.logInfo(
+        "power conditions from the kernel's rpi_volt sensor: under-voltage only; this kernel does not show throttling"
+      )
+      return {
+        kind: "rpi-volt-sensor",
+        read: Effect.map(alarm, (alarmNow): Throttling | undefined => {
+          if (alarmNow === undefined) return undefined
+          const underVoltage = seenSinceRead || alarmNow.now.length > 0
+          seenSinceRead = false
+          return { now: underVoltage ? ["under_voltage"] : [], watched: alarmNow.watched }
+        })
+      } satisfies ThrottlingSource
+    })
+  const detect = Effect.gen(function* () {
+    const maskText = yield* readText(mask)
+    if (maskText !== undefined && parseThrottled(maskText) !== undefined) {
+      yield* Effect.logInfo("power and thermal conditions from the firmware's mask")
+      return { kind: "firmware-mask", read: parsedFrom(mask, parseThrottled) } satisfies ThrottlingSource
+    }
+    const sensors = yield* fs.readDirectory(hwmon).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+    for (const sensor of sensors) {
+      if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() === "rpi_volt") return yield* fromSensor(sensor)
+    }
+    return undefined
+  })
+
+  const found = yield* detect
+  if (found !== undefined) return found
+  yield* Effect.logDebug("no Raspberry Pi power or thermal flags here; looking again at every sample")
+  let late: ThrottlingSource | undefined
+  return {
+    kind: "none",
+    read: Effect.suspend(() =>
+      late !== undefined
+        ? late.read
+        : Effect.flatMap(detect, (source) => {
+            late = source
+            return source === undefined ? Effect.sync((): Throttling | undefined => undefined) : source.read
+          })
+    )
+  }
+})
 
 /**
  * The real machine. The event-loop histogram runs until the scope closes.
@@ -136,6 +245,7 @@ export const liveHostSources: Effect.Effect<HostSources, never, FileSystem.FileS
     )
     const readText = (path: string) =>
       fs.readFileString(path).pipe(Effect.orElseSucceed((): string | undefined => undefined))
+    const throttling = yield* throttlingSource(fs)
     return {
       memory: Effect.sync(() => {
         const usage = process.memoryUsage()
@@ -168,9 +278,7 @@ export const liveHostSources: Effect.Effect<HostSources, never, FileSystem.FileS
       temperatureC: Effect.map(readText(THERMAL_ZONE), (text) =>
         text === undefined ? undefined : parseMillidegrees(text)
       ),
-      throttling: Effect.map(readText(GET_THROTTLED), (text) =>
-        text === undefined ? undefined : parseThrottled(text)
-      ),
+      throttling: throttling.read,
       diskFreeBytes: (path) =>
         Effect.tryPromise(() => statfs(dirname(resolve(path)))).pipe(
           Effect.map((stats) => stats.bavail * stats.bsize),
@@ -201,14 +309,16 @@ export const hostHealth = (snapshot: HostSnapshot): HostHealth => ({
   eventLoopLagMs: Math.round(snapshot.eventLoopLagMs.max),
   clockSteps: snapshot.clockSteps,
   ...(snapshot.temperatureC === undefined ? {} : { temperatureC: snapshot.temperatureC }),
-  ...(snapshot.throttled === undefined ? {} : { throttled: snapshot.throttled.now }),
+  ...(snapshot.throttled === undefined
+    ? {}
+    : { throttled: snapshot.throttled.now, throttledWatched: snapshot.throttled.watched }),
   ...(snapshot.diskFreeBytes === undefined ? {} : { diskFreeBytes: snapshot.diskFreeBytes })
 })
 
 export interface HostMonitorOptions {
   /** The outbox's file: its filesystem's free space is reported. */
   readonly bufferPath?: string
-  /** The gateway's version, for `plenum_process_start_time_seconds`. */
+  /** The gateway's version, for `ot_gateway_process_start_time_seconds`. */
   readonly version: string
   readonly intervalMs?: number
 }
@@ -243,6 +353,7 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
   let hot = false
   let lowDisk = false
   let conditions: ReadonlyArray<ThrottleCondition> = []
+  const throttleWindows: Array<ReadonlyArray<ThrottleCondition>> = []
   let reportedSinceBoot = false
 
   const sample = Effect.gen(function* () {
@@ -307,26 +418,36 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
       }
     }
 
+    // Power and thermal conditions: what any of the last minute's samples saw, like the event-loop gauges, so a
+    // dip between two exports still shows, and a supply that keeps dipping is one warning, cleared after a clean minute.
+    let recentlyThrottled: Throttling | undefined
+    // A sample the source could not read leaves the window as it was, so it cannot clear a condition early.
     if (throttled !== undefined) {
-      for (const condition of THROTTLE_CONDITIONS)
-        yield* gauge(hostThrottled, { condition }, throttled.now.includes(condition) ? 1 : 0)
-      const started = throttled.now.filter((condition) => !conditions.includes(condition))
+      throttleWindows.push(throttled.now)
+      if (throttleWindows.length > LAG_WINDOWS) throttleWindows.shift()
+      const recent = throttled.watched.filter((condition) => throttleWindows.some((now) => now.includes(condition)))
+      recentlyThrottled = { ...throttled, now: recent }
+      // Only what the source can see: a 0 for a condition it cannot see would read as "fine".
+      for (const condition of throttled.watched)
+        yield* gauge(hostThrottled, { condition }, recent.includes(condition) ? 1 : 0)
+      const started = recent.filter((condition) => !conditions.includes(condition))
       if (started.length > 0) {
         yield* Effect.logWarning("host reports a power or thermal condition").pipe(
-          Effect.annotateLogs({ conditions: throttled.now.join(",") })
+          Effect.annotateLogs({ conditions: recent.join(",") })
         )
-      } else if (conditions.length > 0 && throttled.now.length === 0) {
+      } else if (conditions.length > 0 && recent.length === 0) {
         yield* Effect.logInfo("host conditions cleared").pipe(Effect.annotateLogs({ was: conditions.join(",") }))
       }
       // Something before the gateway started, or between two samples: the firmware remembers it until reboot.
-      if (!reportedSinceBoot && started.length === 0 && throttled.sinceBoot.length > 0) {
+      const sinceBoot = throttled.sinceBoot ?? []
+      if (!reportedSinceBoot && started.length === 0 && sinceBoot.length > 0) {
         reportedSinceBoot = true
         yield* Effect.logWarning("host has reported power or thermal conditions since boot").pipe(
-          Effect.annotateLogs({ conditions: throttled.sinceBoot.join(",") })
+          Effect.annotateLogs({ conditions: sinceBoot.join(",") })
         )
       }
       if (started.length > 0) reportedSinceBoot = true
-      conditions = throttled.now
+      conditions = recent
     }
 
     if (diskFreeBytes !== undefined) {
@@ -353,7 +474,7 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
       clockSteps: steps,
       ...(openFds === undefined ? {} : { openFds }),
       ...(temperatureC === undefined ? {} : { temperatureC }),
-      ...(throttled === undefined ? {} : { throttled }),
+      ...(recentlyThrottled === undefined ? {} : { throttled: recentlyThrottled }),
       ...(diskFreeBytes === undefined ? {} : { diskFreeBytes })
     }
     previous = { at, cpu, offset, written }

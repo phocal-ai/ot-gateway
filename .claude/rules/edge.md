@@ -9,7 +9,7 @@ The gateway runs unattended for months on a Raspberry Pi, next to devices that b
 
 ## Time
 
-- **No real-time clock.** The wall clock starts wrong and NTP steps it, backwards too. Timers, timeouts, ordering, backoff and "heard from within N" use `monotonicMillis` from `@plenum/core` (or `Clock.monotonicTimeNanos`). Wall time is only for the `ts` of a message.
+- **No real-time clock.** The wall clock starts wrong and NTP steps it, backwards too. Timers, timeouts, ordering, backoff and "heard from within N" use `monotonicMillis` from `@ot-gateway/core` (or `Clock.monotonicTimeNanos`). Wall time is only for the `ts` of a message.
 - **Every wait has a deadline.** Waiting for a slot, a permit, a reply or a whole poll cycle is covered by the timeout, not just the I/O inside it. A hung peer must turn into a typed error and a stale health status.
 
 ## Peers that misbehave
@@ -36,4 +36,4 @@ The gateway runs unattended for months on a Raspberry Pi, next to devices that b
 - **Log transitions, not states.** A warning per point per cycle is millions of lines a day in Loki. Log when something starts failing and when it recovers, at the coarsest level that is true (device before point), and count the rest in a metric.
 - **Config typos fail loudly.** Unknown keys, duplicate ids and out-of-range values are decode errors, not silent defaults.
 
-To try a change against these faults, run the `test/chaos` suites, the simulation (`pnpm --filter @plenum/gateway sim`, a simulated week per seed with `SIM_HOURS=168`) and an accelerated soak, `SOAK_SPEED=60 scripts/soak.sh 30m` (broker and device outages, a full disk with `SOAK_DISK_FAULT=1`; see CONTRIBUTING.md).
+To try a change against these faults, run the `test/chaos` suites, the simulation (`pnpm --filter @ot-gateway/gateway sim`, a simulated week per seed with `SIM_HOURS=168`) and an accelerated soak, `SOAK_SPEED=60 scripts/soak.sh 30m` (broker and device outages, a full disk with `SOAK_DISK_FAULT=1`; see CONTRIBUTING.md).

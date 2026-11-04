@@ -4,7 +4,7 @@
  * for good nor floods the device or the logs.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { makeMemoryPublisher, runDevice } from "@plenum/core"
+import { makeMemoryPublisher, runDevice } from "@ot-gateway/core"
 import { Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 import { makeBacnetDriverFromClient } from "../../src/index.ts"

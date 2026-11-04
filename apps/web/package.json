@@ -1,5 +1,5 @@
 {
-  "name": "@plenum/web",
+  "name": "@ot-gateway/web",
   "version": "0.0.0",
   "private": true,
   "description": "The gateway's local status page: a Next.js static export the gateway serves.",
@@ -11,7 +11,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@plenum/api": "workspace:*",
+    "@ot-gateway/api": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "effect": "4.1.2",

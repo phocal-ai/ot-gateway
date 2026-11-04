@@ -1,7 +1,7 @@
 {
-  "name": "@plenum/core",
+  "name": "@ot-gateway/core",
   "version": "0.0.0",
-  "description": "Core of Plenum: point model, config schema, normalization, topics and the polling pipeline.",
+  "description": "Core of OT Gateway: point model, config schema, normalization, topics and the polling pipeline.",
   "license": "MIT",
   "type": "module",
   "exports": {

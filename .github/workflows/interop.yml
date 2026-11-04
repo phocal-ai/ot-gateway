@@ -1,6 +1,6 @@
 name: Interop
 
-# Plenum against implementations that are not ours (scripts/interop.sh):
+# OT Gateway against implementations that are not ours (scripts/interop.sh):
 # Mosquitto and EMQX, the BACnet Stack demo server, and a pymodbus server.
 # Our unit tests talk to our own test broker and simulators, so a spec
 # misread the same way on both sides only shows up here.

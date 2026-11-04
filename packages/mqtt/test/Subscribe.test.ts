@@ -4,7 +4,7 @@
  * Client and test broker run on an in-memory network under the test clock.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { makeMemoryNetwork } from "@plenum/core"
+import { makeMemoryNetwork } from "@ot-gateway/core"
 import { Effect, Exit, Fiber, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { makeMqttClient } from "../src/Client.ts"

@@ -135,7 +135,7 @@ describe("CONNECT", () => {
 
   it("round-trips credentials and a will", () => {
     const connect = {
-      clientId: "plenum-pi",
+      clientId: "ot-gateway-pi",
       keepAliveSeconds: 60,
       cleanStart: true,
       sessionExpirySeconds: 0,

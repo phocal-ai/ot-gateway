@@ -1,11 +1,11 @@
 # Configuration reference
 
-A gateway is one JSON document, by default `plenum.json` (the path is `main.ts`'s argument). The schema is [`packages/core/src/Config.ts`](../packages/core/src/Config.ts) and [`Point.ts`](../packages/core/src/Point.ts); this page lists every key, and a test (`packages/core/test/ConfigDocs.test.ts`) fails when a key is added to the schema without a row here, or a row outlives its key.
+A gateway is one JSON document, by default `ot-gateway.json` (the path is `main.ts`'s argument). The schema is [`packages/core/src/Config.ts`](../packages/core/src/Config.ts) and [`Point.ts`](../packages/core/src/Point.ts); this page lists every key, and a test (`packages/core/test/ConfigDocs.test.ts`) fails when a key is added to the schema without a row here, or a row outlives its key.
 
 Decoding is strict. A key the schema does not know (a typo) fails the start with its path, as do duplicate ids, values out of range and a JSON syntax error (with its position). Check a config without connecting to anything:
 
 ```bash
-node apps/gateway/src/main.ts --check plenum.json
+node apps/gateway/src/main.ts --check ot-gateway.json
 ```
 
 Ids (`site`, `building`, gateway, device and point ids) are slugs: lowercase letters, digits, `-` and `_`, starting with a letter or digit, at most 64 characters. They become MQTT topic levels, `site/building/device/point`.
@@ -30,21 +30,21 @@ The top level of the document.
 
 ## mqtt
 
-| Key           | Type           | Default             | Meaning                                                                                                                       |
-| ------------- | -------------- | ------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `url`         | string         | required            | `mqtt://host:port` or `mqtts://host:port` (TLS). No credentials in it: they would be printed and logged with it.              |
-| `clientId`    | string, ≤ 1024 | `plenum-<hostname>` | The MQTT client identifier. Two gateways with the same one keep disconnecting each other.                                     |
-| `username`    | string, ≤ 1024 | none                | Broker username.                                                                                                              |
-| `passwordEnv` | string         | none                | Name of the environment variable holding the password (`/etc/plenum/gateway.env` under systemd). Never put the password here. |
+| Key           | Type           | Default                 | Meaning                                                                                                                           |
+| ------------- | -------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `url`         | string         | required                | `mqtt://host:port` or `mqtts://host:port` (TLS). No credentials in it: they would be printed and logged with it.                  |
+| `clientId`    | string, ≤ 1024 | `ot-gateway-<hostname>` | The MQTT client identifier. Two gateways with the same one keep disconnecting each other.                                         |
+| `username`    | string, ≤ 1024 | none                    | Broker username.                                                                                                                  |
+| `passwordEnv` | string         | none                    | Name of the environment variable holding the password (`/etc/ot-gateway/gateway.env` under systemd). Never put the password here. |
 
 The session is clean: nothing sent while the gateway was offline is delivered later, commands included.
 
 ## buffer
 
-| Key       | Type   | Default  | Meaning                                                                                                               |
-| --------- | ------ | -------- | --------------------------------------------------------------------------------------------------------------------- |
-| `path`    | string | required | The SQLite file. Its directory is created if missing. Put it on persistent storage (`/var/lib/plenum` under systemd). |
-| `maxRows` | ≥ 1    | 1000000  | Rows kept while the broker is away; beyond that the oldest are dropped and counted in `plenum_buffer_dropped`.        |
+| Key       | Type   | Default  | Meaning                                                                                                                   |
+| --------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `path`    | string | required | The SQLite file. Its directory is created if missing. Put it on persistent storage (`/var/lib/ot-gateway` under systemd). |
+| `maxRows` | ≥ 1    | 1000000  | Rows kept while the broker is away; beyond that the oldest are dropped and counted in `ot_gateway_buffer_dropped`.        |
 
 ## status
 
@@ -105,7 +105,7 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 | `cycleTimeoutMs` | 1000–86400000     | see above |                                                                                                                                                      |
 | `points`         | array             | required  | [BACnet points](#bacnet-points).                                                                                                                     |
 
-`node apps/gateway/src/main.ts --discover plenum.json` finds the devices on the network and prints their entries, read-only.
+`node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only.
 
 ## Simulated devices
 

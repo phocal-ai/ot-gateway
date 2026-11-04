@@ -22,7 +22,7 @@ export class Publisher extends Context.Service<
   {
     readonly publish: (topic: string, payload: string, options?: PublishOptions) => Effect.Effect<void, PublishError>
   }
->()("@plenum/core/Publisher") {}
+>()("@ot-gateway/core/Publisher") {}
 
 /** Prints every message to stdout. */
 export const ConsolePublisher: Layer.Layer<Publisher> = Layer.succeed(Publisher, {

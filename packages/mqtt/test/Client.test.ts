@@ -4,7 +4,7 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
-import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@plenum/core"
+import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@ot-gateway/core"
 import { ConfigProvider, Context, Effect, Exit, Layer, Metric, Redacted, Scope } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { makeBrokerControl, makeMqttClient, MqttPublisher, parseBrokerUrl, Property, serveMqtt } from "../src/index.ts"

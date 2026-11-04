@@ -1,15 +1,15 @@
 {
-  "name": "@plenum/gateway",
+  "name": "@ot-gateway/gateway",
   "version": "0.0.0",
   "private": true,
-  "description": "Ready-to-run Plenum gateway.",
+  "description": "Ready-to-run OT Gateway.",
   "license": "MIT",
   "bin": {
-    "plenum": "./src/main.ts"
+    "ot-gateway": "./src/main.ts"
   },
   "type": "module",
   "scripts": {
-    "start": "node --max-semi-space-size=4 --env-file-if-exists=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env} src/main.ts ../../examples/gateway.json",
+    "start": "node --max-semi-space-size=4 --env-file-if-exists=${OT_GATEWAY_ENV_FILE:-$HOME/.config/phocal/ot-gateway.env} src/main.ts ../../examples/gateway.json",
     "bench": "node src/bench.ts ../../examples/gateway.json",
     "sim": "vitest run test/Simulation.test.ts --silent=false",
     "typecheck": "tsc -p tsconfig.json",
@@ -17,13 +17,13 @@
   },
   "dependencies": {
     "@effect/platform-node": "4.1.2",
-    "@plenum/api": "workspace:*",
-    "@plenum/bacnet": "workspace:*",
-    "@plenum/buffer": "workspace:*",
-    "@plenum/core": "workspace:*",
-    "@plenum/modbus": "workspace:*",
-    "@plenum/mqtt": "workspace:*",
-    "@plenum/simulator": "workspace:*",
+    "@ot-gateway/api": "workspace:*",
+    "@ot-gateway/bacnet": "workspace:*",
+    "@ot-gateway/buffer": "workspace:*",
+    "@ot-gateway/core": "workspace:*",
+    "@ot-gateway/modbus": "workspace:*",
+    "@ot-gateway/mqtt": "workspace:*",
+    "@ot-gateway/simulator": "workspace:*",
     "effect": "4.1.2"
   }
 }

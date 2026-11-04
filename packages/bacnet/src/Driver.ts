@@ -33,8 +33,8 @@ import {
   monotonicMillis,
   pointReadFailures,
   pushedPoints
-} from "@plenum/core"
-import type { BacnetPoint, Driver, Network, PointValue, Reading, WriteValue } from "@plenum/core"
+} from "@ot-gateway/core"
+import type { BacnetPoint, Driver, Network, PointValue, Reading, WriteValue } from "@ot-gateway/core"
 import { Clock, Duration, Effect, Metric, Option, Queue, Result, Schedule, Schema, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { AbortReason, MAX_APDU_IP, RejectReason } from "./Apdu.ts"
@@ -123,7 +123,7 @@ export const parseDeviceAddress = (text: string): Result.Result<NetAddress.InetA
   return Result.mapError(address, () => `invalid address "${text}"`)
 }
 
-/** The point's value from the property's values, or why it has none Plenum can publish. */
+/** The point's value from the property's values, or why it has none OT Gateway can publish. */
 export const toPointValue = (
   resolved: Pick<ResolvedPoint, "binary">,
   values: ReadonlyArray<BacnetValue>
@@ -249,7 +249,7 @@ const specificationsOf = (points: ReadonlyArray<ResolvedPoint>): ReadonlyArray<R
 
 type PointOutcome =
   | { readonly _tag: "Value"; readonly point: ResolvedPoint; readonly value: PointValue; readonly timestamp: number }
-  /** The device answered, but with no value Plenum can publish. */
+  /** The device answered, but with no value OT Gateway can publish. */
   | { readonly _tag: "Failed"; readonly point: ResolvedPoint; readonly reason: string }
   /** Not asked this cycle: the device stopped answering or was busy before it got there, or the budget ran out. */
   | { readonly _tag: "NotRead"; readonly point: ResolvedPoint }
@@ -1181,7 +1181,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     )
     const failedPoints = outcomes.filter((outcome) => outcome._tag === "Failed").length
     const notReadPoints = outcomes.filter((outcome) => outcome._tag === "NotRead").length
-    yield* Effect.annotateCurrentSpan({ "plenum.requests": requests, "plenum.failed_points": failedPoints })
+    yield* Effect.annotateCurrentSpan({ "ot_gateway.requests": requests, "ot_gateway.failed_points": failedPoints })
     yield* countPointFailures("refused", failedPoints)
     if (busy === undefined) yield* notBusy
     const waitSeconds = busy === undefined ? 0 : yield* backOff(busy)

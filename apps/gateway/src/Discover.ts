@@ -15,8 +15,8 @@ import {
   describeDevice,
   makeBacnetNetwork,
   MAX_OBJECTS
-} from "@plenum/bacnet"
-import type { GatewayConfig } from "@plenum/core"
+} from "@ot-gateway/bacnet"
+import type { GatewayConfig } from "@ot-gateway/core"
 import { Console, Effect } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 

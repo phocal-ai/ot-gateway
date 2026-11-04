@@ -87,7 +87,7 @@ describe("APDU", () => {
     expect(decodeApdu(encodeApdu(apdu))).toMatchObject(Result.succeed({ maxApdu: 1476 }))
   })
 
-  it("rejects a segmented request, which Plenum does not reassemble", () => {
+  it("rejects a segmented request, which OT Gateway does not reassemble", () => {
     expect(Result.isFailure(decodeApdu(Uint8Array.of(0x08, 0x05, 0x01, 0x00, 0x04, 0x0c)))).toBe(true)
   })
 })

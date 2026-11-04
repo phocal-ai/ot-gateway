@@ -3,8 +3,8 @@
  * these, so CI never needs hardware.
  */
 import { Clock, Effect } from "effect"
-import type { Driver, Reading, SimulatedPoint, SimulatorDevice } from "@plenum/core"
-import { DriverError } from "@plenum/core"
+import type { Driver, Reading, SimulatedPoint, SimulatorDevice } from "@ot-gateway/core"
+import { DriverError } from "@ot-gateway/core"
 
 /** The value of a simulated point at a given time. Pure, so it is easy to test. */
 export const waveformValue = (point: SimulatedPoint, timeMs: number): number => {

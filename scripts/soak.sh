@@ -37,7 +37,9 @@
 #
 # - SOAK_STRICT_HOST=1 (for a run on the target hardware) also fails the run when
 #   the event loop stalled for a second or more, or the host reported under-voltage,
-#   throttling or the soft temperature limit. The summary reports both either way.
+#   throttling or the soft temperature limit (on Raspberry Pi kernels 6.18 and later,
+#   under-voltage only: check `journalctl -k -g voltage` for the rest of the history).
+#   The summary reports both either way.
 #
 # The run fails (exit 1) when the gateway exits or logs FATAL, when the last
 # health message does not show every device ok, when more than SOAK_MAX_BACKLOG
@@ -46,7 +48,7 @@
 # SOAK_MAX_RSS_GROWTH (default 1.5 times) or SOAK_MAX_FD_GROWTH (default 16).
 #
 # Processes are tracked by PID and only those are stopped. Results go to
-# SOAK_DIR (default $TMPDIR/plenum-soak-<time>). The gateway loads the same env
+# SOAK_DIR (default $TMPDIR/ot-gateway-soak-<time>). The gateway loads the same env
 # file as `pnpm gateway`, so its telemetry reaches the configured backend.
 set -euo pipefail
 
@@ -72,12 +74,12 @@ at_least() { echo $(($1 > $2 ? $1 : $2)); }
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 source_config=${SOAK_CONFIG:-$repo/examples/gateway.json}
-dir=${SOAK_DIR:-${TMPDIR:-/tmp}/plenum-soak-$(date +%Y%m%dT%H%M%S)}
+dir=${SOAK_DIR:-${TMPDIR:-/tmp}/ot-gateway-soak-$(date +%Y%m%dT%H%M%S)}
 outage_every=${OUTAGE_EVERY:-$((7200 / speed))}
 outage_for=${OUTAGE_FOR:-$(at_least $((60 / speed)) 10)}
 sample_every=${SAMPLE_EVERY:-$(at_least $((600 / speed)) 5)}
 drain=${SOAK_DRAIN:-$(at_least $((180 / speed)) 60)}
-env_file=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env}
+env_file=${OT_GATEWAY_ENV_FILE:-$HOME/.config/phocal/ot-gateway.env}
 mkdir -p "$dir"
 log() { echo "$(date +%FT%T) $*" | tee -a "$dir/events.log"; }
 
@@ -88,13 +90,13 @@ volume=""
 if [[ ${SOAK_DISK_FAULT:-0} == 1 ]]; then
   case $(uname) in
     Darwin)
-      hdiutil create -quiet -size 16m -fs HFS+ -volname plenum-soak "$dir/disk.dmg"
-      volume=$(hdiutil attach -nobrowse "$dir/disk.dmg" | awk -F'\t' '/plenum-soak/ {print $NF}')
+      hdiutil create -quiet -size 16m -fs HFS+ -volname ot-gateway-soak "$dir/disk.dmg"
+      volume=$(hdiutil attach -nobrowse "$dir/disk.dmg" | awk -F'\t' '/ot-gateway-soak/ {print $NF}')
       ;;
     Linux)
       volume=$dir/disk
       mkdir -p "$volume"
-      if ! $as_root mount -t tmpfs -o size=16m,mode=1777 plenum-soak "$volume"; then
+      if ! $as_root mount -t tmpfs -o size=16m,mode=1777 ot-gateway-soak "$volume"; then
         echo "SOAK_DISK_FAULT on Linux mounts a tmpfs: run as root or with passwordless sudo" >&2
         exit 1
       fi
@@ -272,7 +274,8 @@ check() {
     if (host !== undefined) {
       const extra = [
         host.temperatureC === undefined ? "" : `, ${host.temperatureC} °C`,
-        host.throttled === undefined ? "" : `, conditions now: ${host.throttled.join(",") || "none"}`
+        host.throttled === undefined ? "" : `, conditions now: ${host.throttled.join(",") || "none"}`,
+        host.throttledWatched === undefined ? "" : ` (watched: ${host.throttledWatched.join(",")})`
       ].join("")
       lines.push(`host:     ${Math.round(host.memoryBytes / 1e6)} MB, event loop max ${host.eventLoopLagMs} ms in the last minute, ${host.clockSteps} clock step(s)${extra}`)
     }

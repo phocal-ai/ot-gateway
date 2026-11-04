@@ -3,7 +3,7 @@
  * shared by the chaos tests: they put the driver through outages, busy
  * devices, clock steps and storms that real hardware produces rarely.
  */
-import type { BacnetDevice, BacnetPoint } from "@plenum/core"
+import type { BacnetDevice, BacnetPoint } from "@ot-gateway/core"
 import type { Clock } from "effect"
 import { Effect, Logger, Result } from "effect"
 import * as NetAddress from "effect/net/NetAddress"

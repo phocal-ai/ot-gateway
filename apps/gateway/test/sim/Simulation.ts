@@ -17,7 +17,7 @@ import {
   setPresentValue,
   type SimulatedDevice,
   simulatedDeviceFor
-} from "@plenum/bacnet"
+} from "@ot-gateway/bacnet"
 import {
   type BacnetDevice,
   type GatewayConfig,
@@ -25,7 +25,7 @@ import {
   type MemoryNetwork,
   type ModbusDevice,
   parseConfig
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import {
   decodeValue,
   FunctionCode,
@@ -34,15 +34,15 @@ import {
   serveModbus,
   setPointValue,
   type SimulatorControl
-} from "@plenum/modbus"
-import { type BrokerControl, makeBrokerControl, publishToSubscribers, serveMqtt } from "@plenum/mqtt"
+} from "@ot-gateway/modbus"
+import { type BrokerControl, makeBrokerControl, publishToSubscribers, serveMqtt } from "@ot-gateway/mqtt"
 import { Clock, Effect, Exit, Fiber, Logger, Random, Schedule, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { mkdtempSync, rmSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { openDatabase } from "@plenum/buffer"
+import { openDatabase } from "@ot-gateway/buffer"
 import { classifySqliteError, SqlError } from "effect/sql/SqlError"
 import { runGateway } from "../../src/Gateway.ts"
 
@@ -164,7 +164,7 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
     JSON.stringify({
       site: "sim",
       building: "b1",
-      mqtt: { url: `mqtt://${BROKER}:1883`, clientId: "plenum-sim" },
+      mqtt: { url: `mqtt://${BROKER}:1883`, clientId: "ot-gateway-sim" },
       buffer: { path: bufferPath },
       devices: [
         ...Array.from({ length: devices }, (_, index) => ({
@@ -427,7 +427,7 @@ const advanceUntilDone = <A, E>(fiber: Fiber.Fiber<A, E>) =>
 export const simulate = (options: SimulationOptions) =>
   Effect.gen(function* () {
     const random = seeded(options.seed)
-    const directory = mkdtempSync(join(tmpdir(), "plenum-sim-"))
+    const directory = mkdtempSync(join(tmpdir(), "ot-gateway-sim-"))
     yield* Effect.addFinalizer(() => Effect.sync(() => rmSync(directory, { recursive: true, force: true })))
     const bufferPath = join(directory, "buffer.sqlite")
     const config = yield* simulationConfig(options.devices ?? 2, bufferPath)

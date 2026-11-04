@@ -2,7 +2,7 @@
  * What must hold after a simulated run, whatever faults it went through. Each
  * check returns the violations it found, as sentences a failing test prints.
  */
-import { healthTopic } from "@plenum/core"
+import { healthTopic } from "@ot-gateway/core"
 import { Schema } from "effect"
 import { type CommandKind, RESPONSES, type SimulationRun } from "./Simulation.ts"
 

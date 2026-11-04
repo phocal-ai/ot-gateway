@@ -22,6 +22,6 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - name: Build the status page
-        run: pnpm --filter @plenum/web build
+        run: pnpm --filter @ot-gateway/web build
         env:
           NEXT_TELEMETRY_DISABLED: "1"

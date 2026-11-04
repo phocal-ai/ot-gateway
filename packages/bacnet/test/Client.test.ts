@@ -4,7 +4,7 @@
  */
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
-import { driverRequests, withMetricAttributes } from "@plenum/core"
+import { driverRequests, withMetricAttributes } from "@ot-gateway/core"
 import { Effect, Exit, Metric, Queue, Result, Schedule } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"

@@ -2,7 +2,7 @@
  * The whole gateway, simulated (see `sim/Simulation.ts`). Each seed is a
  * different, reproducible run of faults:
  *
- *   SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @plenum/gateway sim
+ *   SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @ot-gateway/gateway sim
  *
  * runs a simulated week per seed. A failing run prints its seed; run that
  * seed alone to replay it.

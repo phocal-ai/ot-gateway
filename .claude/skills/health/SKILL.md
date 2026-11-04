@@ -1,6 +1,6 @@
 ---
 name: health
-description: Check Plenum's observability through the Grafana MCP. Covers gateway health (stale devices, failing reads or publishes, warnings), Claude Code sessions in this repo (token usage, failing tools and hooks), and a projection of Grafana Cloud free-plan usage against its quotas. Use for "/health", "is everything healthy", "check the dashboards", "are we within the free tier", "grafana usage".
+description: Check OT Gateway's observability through the Grafana MCP. Covers gateway health (stale devices, failing reads or publishes, warnings), Claude Code sessions in this repo (token usage, failing tools and hooks), and a projection of Grafana Cloud free-plan usage against its quotas. Use for "/health", "is everything healthy", "check the dashboards", "are we within the free tier", "grafana usage".
 allowed-tools: mcp__grafana__query_prometheus, mcp__grafana__query_loki_logs, mcp__grafana__query_tempo_metrics, mcp__grafana__search_tempo_traces, mcp__grafana__list_prometheus_metric_names, mcp__grafana__list_prometheus_label_values
 ---
 
@@ -49,31 +49,31 @@ Fixes, cheapest first:
 
 ## 2. Gateway health
 
-Metrics are `plenum_*` on `grafanacloud-prom`, labelled `site`, `building`, `device` and `deployment_environment`. Instant queries:
+Metrics are `ot_gateway_*` on `grafanacloud-prom`, labelled `site`, `building`, `device` and `deployment_environment`. Instant queries:
 
-- **Running gateways:** `count by (instance, deployment_environment) (plenum_device_last_success_timestamp_seconds)`. Empty means no gateway has exported in the last ~5 min; then report "not running" (normal on a dev laptop), not "unhealthy". Then check `max_over_time(plenum_device_last_success_timestamp_seconds[$W])` to say when it was last seen.
-- **Stale devices** (no successful read for over 2 min): `time() - max by (site, building, device) (plenum_device_last_success_timestamp_seconds) > 120`
-- **Cycle outcomes:** `sum by (device, outcome) (increase(plenum_poll_cycles_total[$W]))`. Any non-`ok` outcome is a finding; give its share of the device's cycles.
-- **Read failures by reason:** `sum by (device, reason) (increase(plenum_read_failures_total[$W]))`
-- **Publish failures:** `sum by (device) (increase(plenum_publish_failures_total[$W]))`
-- **Slow polls:** `histogram_quantile(0.95, sum by (device, le) (rate(plenum_poll_duration_seconds_bucket[$W])))`. Flag p95 above half the poll interval.
+- **Running gateways:** `count by (instance, deployment_environment) (ot_gateway_device_last_success_timestamp_seconds)`. Empty means no gateway has exported in the last ~5 min; then report "not running" (normal on a dev laptop), not "unhealthy". Then check `max_over_time(ot_gateway_device_last_success_timestamp_seconds[$W])` to say when it was last seen.
+- **Stale devices** (no successful read for over 2 min): `time() - max by (site, building, device) (ot_gateway_device_last_success_timestamp_seconds) > 120`
+- **Cycle outcomes:** `sum by (device, outcome) (increase(ot_gateway_poll_cycles_total[$W]))`. Any non-`ok` outcome is a finding; give its share of the device's cycles.
+- **Read failures by reason:** `sum by (device, reason) (increase(ot_gateway_read_failures_total[$W]))`
+- **Publish failures:** `sum by (device) (increase(ot_gateway_publish_failures_total[$W]))`
+- **Slow polls:** `histogram_quantile(0.95, sum by (device, le) (rate(ot_gateway_poll_duration_seconds_bucket[$W])))`. Flag p95 above half the poll interval.
 
-Logs on `grafanacloud-logs` (`service_name="plenum-gateway"`; `device`, `reason` and `error` are structured metadata):
+Logs on `grafanacloud-logs` (`service_name="ot-gateway"`; `device`, `reason` and `error` are structured metadata):
 
-- **Warning counts:** `sum by (detected_level) (count_over_time({service_name="plenum-gateway"} [$W]))`
-- **The latest warnings**, limit 10: `{service_name="plenum-gateway"} | detected_level=~"warn|error"`
+- **Warning counts:** `sum by (detected_level) (count_over_time({service_name="ot-gateway"} [$W]))`
+- **The latest warnings**, limit 10: `{service_name="ot-gateway"} | detected_level=~"warn|error"`
 
-Traces on `grafanacloud-traces`: failed cycles carry `span.plenum.outcome`. To get an example trace ID for a finding, run `{resource.service.name="plenum-gateway" && span.plenum.outcome != nil}`. Traces are sampled, so a missing trace is not proof that nothing failed; use the metrics for that.
+Traces on `grafanacloud-traces`: failed cycles carry `span.ot_gateway.outcome`. To get an example trace ID for a finding, run `{resource.service.name="ot-gateway" && span.ot_gateway.outcome != nil}`. Traces are sampled, so a missing trace is not proof that nothing failed; use the metrics for that.
 
 ## 3. Claude Code in this repo
 
-Loki, `{service_name="claude-code"}`. The repo is structured metadata (`vcs_repository_name="plenum"`), so filter after the selector:
+Loki, `{service_name="claude-code"}`. The repo is structured metadata, so filter after the selector. It is `ot-gateway`, and `plenum` before the repo was renamed, hence `vcs_repository_name=~"ot-gateway|plenum"`:
 
-- **Failing tools:** `sum by (tool_name, success) (count_over_time({service_name="claude-code"} | event_name="tool_result" | vcs_repository_name="plenum" [$W]))`. Report the failure rate per tool. For failures, pull a few lines with `| success="false"` to show the error.
-- **Hooks:** `sum by (hook_name) (count_over_time({service_name="claude-code"} | event_name="hook_execution_complete" | vcs_repository_name="plenum" [$W]))`. A Stop hook that keeps blocking means `pnpm check` keeps failing at the end of turns.
-- **Usage by model:** `sum by (model) (sum_over_time({service_name="claude-code"} | event_name="api_request" | vcs_repository_name="plenum" | unwrap output_tokens [$W]))`. Swap in `input_tokens`, `cache_read_tokens` or `cache_creation_tokens` for the other token types.
+- **Failing tools:** `sum by (tool_name, success) (count_over_time({service_name="claude-code"} | event_name="tool_result" | vcs_repository_name=~"ot-gateway|plenum" [$W]))`. Report the failure rate per tool. For failures, pull a few lines with `| success="false"` to show the error.
+- **Hooks:** `sum by (hook_name) (count_over_time({service_name="claude-code"} | event_name="hook_execution_complete" | vcs_repository_name=~"ot-gateway|plenum" [$W]))`. A Stop hook that keeps blocking means `pnpm check` keeps failing at the end of turns.
+- **Usage by model:** `sum by (model) (sum_over_time({service_name="claude-code"} | event_name="api_request" | vcs_repository_name=~"ot-gateway|plenum" | unwrap output_tokens [$W]))`. Swap in `input_tokens`, `cache_read_tokens` or `cache_creation_tokens` for the other token types.
   We use Claude Code on an Anthropic subscription, so nothing is billed per token. What a subscription limits is usage per time window, which tokens measure. Each event's `cost_usd` is Claude Code's estimate at pay-as-you-go API prices. If you report it, label it "API-equivalent estimate, not billed", never as spend.
-- **API errors:** `count_over_time({service_name="claude-code"} | event_name="api_error" | vcs_repository_name="plenum" [$W])`
+- **API errors:** `count_over_time({service_name="claude-code"} | event_name="api_error" | vcs_repository_name=~"ot-gateway|plenum" [$W])`
 
 ## Report
 
