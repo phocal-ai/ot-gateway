@@ -35,9 +35,15 @@ node -e 'const [major, minor] = process.versions.node.split(".").map(Number); pr
 
 # Root copies the checkout: a symlink in it (say apps/web/out/env -> /etc/ot-gateway/gateway.env) would end up
 # where the service reads or serves files. node_modules is pnpm's own links, and is not copied.
-links=$(cd "$repo" && find package.json pnpm-lock.yaml pnpm-workspace.yaml packages apps/gateway apps/web/out \
-  packaging examples -name node_modules -prune -o -type l -print 2>/dev/null | head -5)
-[[ -z $links ]] || fail "the checkout has symlinks where only files belong, nothing was installed:"$'\n'"$links"
+# Only the paths that exist: apps/web/out is there only once the status page is built, and a missing path would
+# fail find, which set -e turns into an exit without a message.
+link_roots=()
+for path in package.json pnpm-lock.yaml pnpm-workspace.yaml packages apps/gateway apps/web/out packaging examples; do
+  if [[ -e $repo/$path || -L $repo/$path ]]; then link_roots+=("$path"); fi
+done
+links=$(cd "$repo" && find "${link_roots[@]}" -name node_modules -prune -o -type l -print) ||
+  fail "cannot look for symlinks in $repo, nothing was installed"
+[[ -z $links ]] || fail "the checkout has symlinks where only files belong, nothing was installed:"$'\n'"$(head -5 <<<"$links")"
 
 # Root installs what this checkout holds, so the checkout has to be under the control of root or of the user
 # running sudo. check_control reads "uid mode path" lines (stat -c '%u %a %n') and fails on the first path that
@@ -49,7 +55,8 @@ check_control() {
     [[ -n $path ]] || continue
     if [[ $uid != 0 && $uid != "${SUDO_UID:-0}" ]]; then
       if [[ $kind == parent ]]; then
-        fail "$path belongs to uid $uid, not $who; move the checkout under a directory you own, nothing was installed"
+        fail "$path belongs to uid $uid, not $who; nothing was installed." \
+          "Run install.sh with sudo from that account, or move the checkout under a directory root or you own"
       fi
       fail "$path belongs to uid $uid, not $who; nothing was installed." \
         "Run install.sh with sudo from the account that owns the checkout, or fix it with: sudo chown -R ${SUDO_USER:-root} $repo"
