@@ -50,6 +50,9 @@ for path in package.json pnpm-lock.yaml pnpm-workspace.yaml packages apps/gatewa
   cp -R "$repo/$path" "$staging/$path"
 done
 find "$staging" -name node_modules -prune -exec rm -rf {} +
+# Which build this is, for telemetry and the status page (the checkout may belong to another user, hence safe.directory).
+git -c safe.directory="$repo" -C "$repo" describe --tags --always --dirty >"$staging/VERSION" 2>/dev/null ||
+  echo dev >"$staging/VERSION"
 # The status page, when it is built (pnpm --filter @plenum/web build, on any machine: it is static files).
 if [[ -f $repo/apps/web/out/index.html ]]; then
   mkdir -p "$staging/apps/web"

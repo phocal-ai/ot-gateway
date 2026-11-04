@@ -53,7 +53,9 @@ COPY apps/gateway/package.json apps/gateway/
 COPY --from=web /opt/plenum/apps/web/out apps/web/out
 COPY examples examples
 COPY scripts/soak.sh scripts/soak.sh
-RUN mkdir -p /etc/plenum /var/lib/plenum && chown node:node /var/lib/plenum
+# The build, for telemetry and the status page: the release tag when the image is published.
+ARG PLENUM_VERSION=dev
+RUN mkdir -p /etc/plenum /var/lib/plenum && chown node:node /var/lib/plenum && echo "$PLENUM_VERSION" > VERSION
 USER node
 ENV NODE_ENV=production
 # A smaller young generation than V8's default: about 40 MB less resident, no measurable CPU cost.

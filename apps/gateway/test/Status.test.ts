@@ -11,6 +11,7 @@ import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
 import { createServer } from "node:net"
+import type { HostSnapshot } from "../src/Host.ts"
 import { makeStatusState, serveStatus } from "../src/Status.ts"
 
 const config = parseConfig(
@@ -114,6 +115,29 @@ describe("status", () => {
         reason: "out-of-range"
       })
       expect(snapshot.broker).toEqual({ url: "mqtt://broker", connected: false })
+      // No host monitor, no host section.
+      expect(snapshot).not.toHaveProperty("host")
+    })
+  )
+
+  it.effect("shows the host monitor's last sample with the gateway's version", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      let sample: HostSnapshot | undefined
+      const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500, {
+        latest: () => sample,
+        version: "v1.2.3"
+      })
+      expect(yield* state.snapshot).not.toHaveProperty("host")
+      sample = {
+        memoryBytes: 1e8,
+        heapBytes: 4e7,
+        cpuPercent: 2.5,
+        eventLoopLagMs: { p99: 3, max: 9 },
+        clockSteps: 0,
+        temperatureC: 55
+      }
+      expect((yield* state.snapshot).host).toEqual({ version: "v1.2.3", node: process.versions.node, ...sample })
     })
   )
 

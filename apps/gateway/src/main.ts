@@ -25,8 +25,10 @@ import { Console, Effect, FileSystem } from "effect"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { discover } from "./Discover.ts"
 import { runGateway } from "./Gateway.ts"
+import { liveHostSources } from "./Host.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 import { telemetryLayer } from "./Telemetry.ts"
+import { readVersion } from "./Version.ts"
 
 /** What `--check` prints: the gateway the config describes, one line per device. */
 const describe = (config: GatewayConfig) =>
@@ -61,7 +63,10 @@ const program = Effect.gen(function* () {
   const config = yield* parseConfig(yield* fs.readFileString(path))
   if (args.includes("--check")) return yield* Console.log(describe(config))
   if (args.includes("--discover")) return yield* discover(config)
-  yield* runGateway(config).pipe(Effect.provide(telemetryLayer(config)))
+  const version = yield* readVersion
+  yield* Effect.scoped(Effect.flatMap(liveHostSources, (host) => runGateway(config, { host, version }))).pipe(
+    Effect.provide(telemetryLayer(config, version))
+  )
 })
 
 program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain({ teardown: gatewayTeardown }))

@@ -85,6 +85,18 @@ Every command gets a result on `…/$set/result`. `rejected` never reached the d
 | Only the API, no page                                    | The page is not built. Run `pnpm --filter @plenum/web build` and reinstall; the image always includes it.                                  |
 | `status page not served; the gateway runs on without it` | The port is taken. Readings are unaffected; pick another `status.port`.                                                                    |
 
+## The machine
+
+| Symptom                                                          | Cause and fix                                                                                                                                                                                                |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `host reports a power or thermal condition` with `under_voltage` | The power supply or its cable is too weak. Use the official supply; this is the most common cause of SD-card corruption, so fix it before anything else.                                                     |
+| `throttled`, `soft_temperature_limit` or `host is hot`           | The Pi is too warm: a case with a heatsink or a fan, and space around it in the cabinet.                                                                                                                     |
+| `event loop stalled`                                             | Something blocked the gateway for a second or more. On a Pi: a slow SD card during a large outbox write, swapping (check memory), or another program hogging the CPU. Repeated stalls make devices time out. |
+| `wall clock stepped` more than once after boot                   | The time source is unreliable: check NTP (`timedatectl`). Deadlines are not affected; timestamps are.                                                                                                        |
+| `the outbox's disk is nearly full`                               | Free space, or move `buffer.path` to a larger disk. Until then an outage cannot be buffered.                                                                                                                 |
+
+[operations.md](operations.md#the-machine) explains each of these lines.
+
 ## Still stuck
 
 Run `/setup` in Claude Code against the same config: step 7 reads the status API and the logs and walks the symptoms above. Or open an issue with the device make and model, firmware version, the relevant log lines and, if you can, a packet capture (CONTRIBUTING.md, "Reporting device quirks").

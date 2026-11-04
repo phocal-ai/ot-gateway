@@ -31,7 +31,7 @@
  * the meantime time out. A datagram that cannot be handled is logged and
  * dropped, and never stops the receive loop.
  */
-import { describeDatagramSocketError, driverConnects, driverRequests, monotonicMillis } from "@plenum/core"
+import { describeDatagramSocketError, driverConnects, driverRequests, monotonicMillis, timeRequest } from "@plenum/core"
 import { Deferred, Duration, Effect, Exit, Metric, Random, Result, Schema, Scope, Semaphore } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
@@ -640,7 +640,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
     Effect.flatMap(
       Effect.suspend(() => Effect.fromResult(tryEncode(encode))),
       (body) =>
-        withPermits(pools, (deadlineAt) => exchange(target, service, body, deadlineAt)).pipe(
+        withPermits(pools, (deadlineAt) => timeRequest(exchange(target, service, body, deadlineAt))).pipe(
           Effect.flatMap((answer) => Effect.fromResult(Result.flatMap(interpretAnswer(service, answer), decode))),
           Effect.tap(() => countRequest("ok")),
           Effect.tapError((error) => {
