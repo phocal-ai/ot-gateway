@@ -216,7 +216,18 @@ sample() {
   else
     rss=$(ps -o rss= -p "$gateway" | tr -d ' ' || true)
   fi
-  cpu=$( (ps -o %cpu= -p "$gateway" 2>/dev/null || true) | tr -d ' ')
+  # CPU as ps reports it, the share of one core since the process started; from /proc where
+  # there is no ps. utime and stime are fields 14 and 15 of /proc/<pid>/stat, starttime 22, in
+  # clock ticks (100 a second on Linux; slim images have no getconf). The command name in field 2
+  # can hold spaces, so count from after its closing parenthesis.
+  if [[ -r /proc/$gateway/stat && -r /proc/uptime ]]; then
+    cpu=$(awk -v ticks="$(getconf CLK_TCK 2>/dev/null || echo 100)" '
+      NR == 1 { uptime = $1 }
+      NR == 2 { sub(/^.*\) /, ""); used = ($12 + $13) / ticks; alive = uptime - $20 / ticks
+                if (alive > 0) printf "%.1f", 100 * used / alive }' /proc/uptime "/proc/$gateway/stat" 2>/dev/null || true)
+  else
+    cpu=$( (ps -o %cpu= -p "$gateway" 2>/dev/null || true) | tr -d ' ')
+  fi
   if [[ -d /proc/$gateway/fd ]]; then
     files=$( (ls "/proc/$gateway/fd" 2>/dev/null || true) | wc -l | tr -d ' ')
   else
