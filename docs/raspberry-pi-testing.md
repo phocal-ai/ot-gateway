@@ -35,7 +35,7 @@ A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What run
    ```
 
 4. **Remote access** for a Pi that is not on your desk: Tailscale (or any VPN you already use) gives SSH and the status page through `ssh -L 8080:127.0.0.1:8080 pi@<name>`. Do not open the status page to the network.
-5. **Telemetry** (recommended for the long runs): put the `OTEL_*` variables from `observability/README.md` in `/etc/ot-gateway/gateway.env`, with `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=pi-test`, and filter the dashboard's Environment to it. A test gateway with a few devices adds about 100 series to the free plan's 10,000.
+5. **Telemetry** (recommended for the long runs): put the `OTEL_*` variables from `observability/README.md` in `/etc/ot-gateway/gateway.env`, with `OTEL_RESOURCE_ATTRIBUTES=service.namespace=ot-gateway,deployment.environment=pi-test` (the dashboard shows only `service.namespace=ot-gateway`), and filter the dashboard's Environment to it. A test gateway with a few devices adds about 100 series to the free plan's 10,000.
 6. **The image to test.** A release (`ghcr.io/phocal-ai/ot-gateway:<tag>`), or a build of the branch under test. Build on your laptop and copy it over, which is faster than building on the Pi:
 
    ```bash
