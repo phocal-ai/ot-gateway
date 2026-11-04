@@ -29,6 +29,7 @@ import {
   parseWriteBytes,
   SAMPLE_INTERVAL_MS,
   THROTTLE_CONDITIONS,
+  THROTTLE_POLL_MS,
   throttlingSource
 } from "../src/Host.ts"
 import { parseVersion, versionFile } from "../src/Version.ts"
@@ -261,6 +262,32 @@ const sysfs = (files: Record<string, string>) =>
     return { fs, root }
   })
 
+/**
+ * A /sys tree in memory: reads answer at once, so under the test clock a poll
+ * happens exactly when the test moves time, and never in between.
+ */
+const memorySysfs = (initial: Record<string, string>) => {
+  const files = new Map(Object.entries(initial).map(([path, text]) => [`/sys/${path}`, text]))
+  const missing = FileSystem.makeNoop({})
+  const fs = FileSystem.makeNoop({
+    // Lazy, as the real one is: the source builds its read once and runs it on every poll.
+    readFileString: (path) =>
+      Effect.suspend(() => {
+        const text = files.get(path)
+        return text === undefined ? missing.readFileString(path) : Effect.succeed(text)
+      }),
+    readDirectory: (path) =>
+      Effect.sync(() => [
+        ...new Set(
+          [...files.keys()]
+            .filter((file) => file.startsWith(`${path}/`))
+            .map((file) => file.slice(path.length + 1).split("/")[0] ?? "")
+        )
+      ])
+  })
+  return { files, fs }
+}
+
 describe("throttling source", () => {
   it.effect("reads the firmware's mask where the kernel still exposes it (6.6 and older)", () =>
     Effect.gen(function* () {
@@ -319,35 +346,54 @@ describe("throttling source", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
-  for (const { kind, path, dip, clean, seen } of [
+  for (const { kind, path, dip, seen } of [
     {
       kind: "rpi-volt-sensor",
       path: "class/hwmon/hwmon1/in0_lcrit_alarm",
       dip: "1\n",
-      clean: "0\n",
       seen: { now: ["under_voltage"], watched: ["under_voltage"] }
     },
     {
       kind: "firmware-mask",
       path: "devices/platform/soc/soc:firmware/get_throttled",
       dip: "50005\n",
-      clean: "0\n",
       seen: { now: ["under_voltage", "throttled"], watched: THROTTLE_CONDITIONS }
     }
   ]) {
-    it.live(`keeps a dip the ${kind} source showed between two reads until the next read`, () =>
+    it.effect(`keeps a dip the ${kind} source showed between two reads until the next read, and no longer`, () =>
       Effect.gen(function* () {
-        const { fs, root } = yield* sysfs({ "class/hwmon/hwmon1/name": "rpi_volt\n", [path]: clean })
-        const source = yield* throttlingSource(fs, { sysfs: root, pollMs: 5 })
+        const sys = memorySysfs({ "class/hwmon/hwmon1/name": "rpi_volt\n", [path]: "0\n" })
+        const source = yield* throttlingSource(sys.fs, { sysfs: "/sys" })
         expect(source.kind).toBe(kind)
-        yield* fs.writeFileString(`${root}/${path}`, dip)
-        yield* Effect.sleep("60 millis")
-        yield* fs.writeFileString(`${root}/${path}`, clean)
+        // A dip that only the poll in between sees: clean at both reads.
+        sys.files.set(`/sys/${path}`, dip)
+        yield* TestClock.adjust(THROTTLE_POLL_MS)
+        sys.files.set(`/sys/${path}`, "0\n")
         expect(yield* source.read).toEqual(seen)
         expect(yield* source.read).toEqual({ now: [], watched: seen.watched })
-      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+        // A poll that sees nothing adds nothing.
+        yield* TestClock.adjust(THROTTLE_POLL_MS)
+        expect(yield* source.read).toEqual({ now: [], watched: seen.watched })
+      }).pipe(Effect.scoped)
     )
   }
+
+  it.effect("polls a sensor that was found late like one found at start", () =>
+    Effect.gen(function* () {
+      const sys = memorySysfs({ "class/hwmon/hwmon0/name": "cpu_thermal\n" })
+      const source = yield* throttlingSource(sys.fs, { sysfs: "/sys" })
+      expect(source.kind).toBe("none")
+      expect(yield* source.read).toBeUndefined()
+      sys.files.set("/sys/class/hwmon/hwmon1/name", "rpi_volt\n")
+      sys.files.set("/sys/class/hwmon/hwmon1/in0_lcrit_alarm", "0\n")
+      expect(yield* source.read).toEqual({ now: [], watched: ["under_voltage"] })
+      sys.files.set("/sys/class/hwmon/hwmon1/in0_lcrit_alarm", "1\n")
+      yield* TestClock.adjust(THROTTLE_POLL_MS)
+      sys.files.set("/sys/class/hwmon/hwmon1/in0_lcrit_alarm", "0\n")
+      expect(yield* source.read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
+      expect(yield* source.read).toEqual({ now: [], watched: ["under_voltage"] })
+    }).pipe(Effect.scoped)
+  )
 
   it.effect("reads nothing off a Pi", () =>
     Effect.gen(function* () {
