@@ -175,6 +175,7 @@ describe("host monitor", () => {
         clockSteps: 1,
         temperatureC: 82.5,
         throttled: ["under_voltage", "throttled"],
+        throttledWatched: THROTTLE_CONDITIONS,
         diskFreeBytes: 10e6
       })
       expect(lines).toEqual([
@@ -261,8 +262,20 @@ describe("throttling source", () => {
         "class/hwmon/hwmon1/name": "rpi_volt\n",
         "class/hwmon/hwmon1/in0_lcrit_alarm": "0\n"
       })
-      const read = yield* throttlingSource(fs, root)
-      expect(yield* read).toEqual(parseThrottled("50005"))
+      const source = yield* throttlingSource(fs, { sysfs: root })
+      expect(source.kind).toBe("firmware-mask")
+      expect(yield* source.read).toEqual(parseThrottled("50005"))
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("passes over a mask that does not parse", () =>
+    Effect.gen(function* () {
+      const { fs, root } = yield* sysfs({
+        "devices/platform/soc/soc:firmware/get_throttled": "\n",
+        "class/hwmon/hwmon1/name": "rpi_volt\n",
+        "class/hwmon/hwmon1/in0_lcrit_alarm": "0\n"
+      })
+      expect((yield* throttlingSource(fs, { sysfs: root })).kind).toBe("rpi-volt-sensor")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -273,18 +286,40 @@ describe("throttling source", () => {
         "class/hwmon/hwmon1/name": "rpi_volt\n",
         "class/hwmon/hwmon1/in0_lcrit_alarm": "0\n"
       })
-      const read = yield* throttlingSource(fs, root)
+      const { kind, read } = yield* throttlingSource(fs, { sysfs: root })
+      expect(kind).toBe("rpi-volt-sensor")
       expect(yield* read).toEqual({ now: [], watched: ["under_voltage"] })
       yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/in0_lcrit_alarm`, "1\n")
       expect(yield* read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
+      yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/in0_lcrit_alarm`, "0\n")
+      expect(yield* read).toEqual({ now: [], watched: ["under_voltage"] })
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.live("keeps a dip the sensor showed between two reads until the next read", () =>
+    Effect.gen(function* () {
+      const { fs, root } = yield* sysfs({
+        "class/hwmon/hwmon1/name": "rpi_volt\n",
+        "class/hwmon/hwmon1/in0_lcrit_alarm": "0\n"
+      })
+      const alarm = `${root}/class/hwmon/hwmon1/in0_lcrit_alarm`
+      const { read } = yield* throttlingSource(fs, { sysfs: root, pollMs: 5 })
+      yield* fs.writeFileString(alarm, "1\n")
+      yield* Effect.sleep("60 millis")
+      yield* fs.writeFileString(alarm, "0\n")
+      expect(yield* read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
+      expect(yield* read).toEqual({ now: [], watched: ["under_voltage"] })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
   it.effect("reads nothing off a Pi", () =>
     Effect.gen(function* () {
       const { fs, root } = yield* sysfs({ "class/hwmon/hwmon0/name": "coretemp\n" })
-      expect(yield* yield* throttlingSource(fs, root)).toBeUndefined()
-      expect(yield* yield* throttlingSource(fs, `${root}/missing`)).toBeUndefined()
+      for (const path of [root, `${root}/missing`]) {
+        const source = yield* throttlingSource(fs, { sysfs: path })
+        expect(source.kind).toBe("none")
+        expect(yield* source.read).toBeUndefined()
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -310,6 +345,11 @@ describe("throttling source", () => {
       alarm = "0"
       yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(0)
+      // No series for what the sensor cannot see: a 0 would read as "not throttled".
+      const series = (yield* Metric.snapshot).filter(
+        (metric) => metric.id === "plenum_host_throttled" && metric.attributes?.["test"] === "host-alarm"
+      )
+      expect(series.map((metric) => metric.attributes?.["condition"])).toEqual(["under_voltage"])
       expect(lines).toEqual(["Warn: host reports a power or thermal condition", "Info: host conditions cleared"])
       yield* Fiber.interrupt(fiber)
     })

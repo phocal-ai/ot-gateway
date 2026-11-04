@@ -316,9 +316,10 @@ export const hostTemperature = Metric.gauge("plenum_host_temperature_celsius", {
 })
 
 /**
- * 1 while the Raspberry Pi firmware reports a `condition`, else 0:
- * `under_voltage`, `frequency_capped`, `throttled` or `soft_temperature_limit`.
- * Only on a Raspberry Pi kernel.
+ * 1 while the Raspberry Pi reports a `condition`, else 0: `under_voltage`,
+ * `frequency_capped`, `throttled` or `soft_temperature_limit`. Only on a
+ * Raspberry Pi kernel, and from 6.18 on only `under_voltage`: the other
+ * conditions have no series there, rather than a 0 that would read as fine.
  */
 export const hostThrottled = Metric.gauge("plenum_host_throttled", {
   description: "Whether the Raspberry Pi firmware reports a power or thermal condition",

@@ -274,7 +274,8 @@ check() {
     if (host !== undefined) {
       const extra = [
         host.temperatureC === undefined ? "" : `, ${host.temperatureC} °C`,
-        host.throttled === undefined ? "" : `, conditions now: ${host.throttled.join(",") || "none"}`
+        host.throttled === undefined ? "" : `, conditions now: ${host.throttled.join(",") || "none"}`,
+        host.throttledWatched === undefined ? "" : ` (watched: ${host.throttledWatched.join(",")})`
       ].join("")
       lines.push(`host:     ${Math.round(host.memoryBytes / 1e6)} MB, event loop max ${host.eventLoopLagMs} ms in the last minute, ${host.clockSteps} clock step(s)${extra}`)
     }

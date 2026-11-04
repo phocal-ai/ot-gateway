@@ -53,6 +53,7 @@ export const THROTTLE_CONDITIONS = ["under_voltage", "frequency_capped", "thrott
 export type ThrottleCondition = (typeof THROTTLE_CONDITIONS)[number]
 
 export interface Throttling {
+  /** Conditions now; from the kernel's sensor, any seen since the previous read. */
   readonly now: ReadonlyArray<ThrottleCondition>
   /** What the firmware remembers since boot; absent when the source cannot tell. */
   readonly sinceBoot?: ReadonlyArray<ThrottleCondition>
@@ -134,30 +135,70 @@ export interface HostSources {
 
 const THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
 
+/** How often the `rpi_volt` alarm is read: half the driver's 2 s poll, so no value it reports goes unread. */
+export const UNDER_VOLTAGE_POLL_MS = 1_000
+
+/** Where the Raspberry Pi's power and thermal flags come from, and an effect that reads them. */
+export interface ThrottlingSource {
+  readonly kind: "firmware-mask" | "rpi-volt-sensor" | "none"
+  readonly read: Effect.Effect<Throttling | undefined>
+}
+
 /**
- * Where the Raspberry Pi's power and thermal flags can be read, as an effect
- * that reads them. Kernels before 6.18 expose the firmware's whole mask as
- * `get_throttled`; later ones only the under-voltage alarm of the `rpi_volt`
- * hwmon sensor, which is found once, here. Neither on a machine that is not a
- * Pi: the reader then gives `undefined`. `sysfs` is `/sys` but for tests.
+ * Where the Raspberry Pi's power and thermal flags can be read. Kernels before
+ * 6.18 expose the firmware's whole mask as `get_throttled`, sticky since boot.
+ * Later ones only the under-voltage alarm of the `rpi_volt` hwmon sensor,
+ * which shows the last 2 seconds: it is polled every `UNDER_VOLTAGE_POLL_MS`
+ * until the scope closes, and a read reports under-voltage if any poll since
+ * the previous read saw it, so a dip between two 15 s samples is not missed.
+ * Neither on a machine that is not a Pi: the reader then gives `undefined`.
+ * `sysfs` and `pollMs` are for tests.
  */
 export const throttlingSource = Effect.fnUntraced(function* (
   fs: FileSystem.FileSystem,
-  sysfs = "/sys"
-): Effect.fn.Return<Effect.Effect<Throttling | undefined>> {
+  options: { readonly sysfs?: string; readonly pollMs?: number } = {}
+): Effect.fn.Return<ThrottlingSource, never, Scope.Scope> {
+  const sysfs = options.sysfs ?? "/sys"
   const readText = (path: string) =>
     fs.readFileString(path).pipe(Effect.orElseSucceed((): string | undefined => undefined))
   const parsedFrom = (path: string, parse: (text: string) => Throttling | undefined) =>
     Effect.map(readText(path), (text) => (text === undefined ? undefined : parse(text)))
+
   const mask = `${sysfs}/devices/platform/soc/soc:firmware/get_throttled`
-  if ((yield* readText(mask)) !== undefined) return parsedFrom(mask, parseThrottled)
+  const maskText = yield* readText(mask)
+  if (maskText !== undefined && parseThrottled(maskText) !== undefined) {
+    yield* Effect.logInfo("power and thermal conditions from the firmware's mask")
+    return { kind: "firmware-mask", read: parsedFrom(mask, parseThrottled) }
+  }
+
   const hwmon = `${sysfs}/class/hwmon`
   const sensors = yield* fs.readDirectory(hwmon).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
   for (const sensor of sensors) {
-    if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() === "rpi_volt")
-      return parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm)
+    if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() !== "rpi_volt") continue
+    const alarm = parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm)
+    let seenSinceRead = false
+    yield* Effect.forkScoped(
+      alarm.pipe(
+        Effect.tap((alarmNow) =>
+          Effect.sync(() => {
+            if (alarmNow !== undefined && alarmNow.now.length > 0) seenSinceRead = true
+          })
+        ),
+        Effect.repeat(Schedule.spaced(options.pollMs ?? UNDER_VOLTAGE_POLL_MS))
+      )
+    )
+    const read = Effect.map(alarm, (alarmNow): Throttling | undefined => {
+      if (alarmNow === undefined) return undefined
+      const underVoltage = seenSinceRead || alarmNow.now.length > 0
+      seenSinceRead = false
+      return { now: underVoltage ? ["under_voltage"] : [], watched: alarmNow.watched }
+    })
+    yield* Effect.logInfo(
+      "power conditions from the kernel's rpi_volt sensor: under-voltage only; this kernel does not show throttling"
+    )
+    return { kind: "rpi-volt-sensor", read }
   }
-  return Effect.sync((): Throttling | undefined => undefined)
+  return { kind: "none", read: Effect.sync((): Throttling | undefined => undefined) }
 })
 
 /**
@@ -211,7 +252,7 @@ export const liveHostSources: Effect.Effect<HostSources, never, FileSystem.FileS
       temperatureC: Effect.map(readText(THERMAL_ZONE), (text) =>
         text === undefined ? undefined : parseMillidegrees(text)
       ),
-      throttling,
+      throttling: throttling.read,
       diskFreeBytes: (path) =>
         Effect.tryPromise(() => statfs(dirname(resolve(path)))).pipe(
           Effect.map((stats) => stats.bavail * stats.bsize),
@@ -242,7 +283,9 @@ export const hostHealth = (snapshot: HostSnapshot): HostHealth => ({
   eventLoopLagMs: Math.round(snapshot.eventLoopLagMs.max),
   clockSteps: snapshot.clockSteps,
   ...(snapshot.temperatureC === undefined ? {} : { temperatureC: snapshot.temperatureC }),
-  ...(snapshot.throttled === undefined ? {} : { throttled: snapshot.throttled.now }),
+  ...(snapshot.throttled === undefined
+    ? {}
+    : { throttled: snapshot.throttled.now, throttledWatched: snapshot.throttled.watched }),
   ...(snapshot.diskFreeBytes === undefined ? {} : { diskFreeBytes: snapshot.diskFreeBytes })
 })
 
