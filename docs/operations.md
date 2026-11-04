@@ -26,7 +26,7 @@ sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env
 docker compose -f packaging/compose.yaml up -d
 ```
 
-[`packaging/compose.yaml`](../packaging/compose.yaml) pins a release tag, uses host networking (BACnet discovery and change of value need the building network's broadcasts, and the status page listens on the host's loopback), restarts the gateway after a crash and at boot, gives it 30 seconds to stop cleanly, caps Docker's own log files (it keeps them forever on the SD card otherwise) and holds the container to 768 MB.
+[`packaging/compose.yaml`](../packaging/compose.yaml) pins a release tag, uses host networking (BACnet discovery and change of value need the building network's broadcasts, and the status page listens on the host's loopback), restarts the gateway after a crash and at boot, gives it 30 seconds to stop cleanly, caps Docker's own log files (it keeps them forever on the SD card otherwise) and holds the container to 768 MB. Raspberry Pi OS boots with memory limits off, and Compose then warns `Your kernel does not support memory limit capabilities` and runs the gateway without one: add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt`, restart the Pi and recreate the container ([raspberry-pi-install.md](raspberry-pi-install.md), part 5). The systemd unit's 512 MB limit below needs the same.
 
 Without Compose, the same as one command:
 

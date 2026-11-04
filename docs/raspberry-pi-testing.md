@@ -11,13 +11,13 @@ A Raspberry Pi 4 on an SD card is the low end of where Plenum runs. What runs we
 - **The 64-bit Raspberry Pi OS Lite** (Bookworm or later). The image is arm64 only; it does not start on the 32-bit OS.
 - **Something to talk to.** In order of how much it proves:
   1. Nothing extra: the soak runs the broker and simulated devices on the Pi itself.
-  2. The bench on a second machine (`node apps/gateway/src/bench.ts` with your config), so requests cross a real network.
+  2. A broker on a second machine (Mosquitto, or the one you will use), so MQTT crosses a real network. The bench cannot stand in for it there: it serves only `localhost`.
   3. Real devices: a Modbus TCP meter; a Modbus RTU meter behind an RS-485-to-TCP gateway, which is what most buildings have and where `requestGapMs` and `maxRegistersPerRead` matter; a BACnet/IP controller, or the BACnet Stack server on another Pi (`scripts/interop.sh bacnet` shows how to run it).
 - **Optionally a smart plug** to cut power on a schedule for the power-loss test.
 
 ## Prepare the Pi
 
-1. Flash the 64-bit Lite image with Raspberry Pi Imager. Set a hostname, your SSH key and the time zone there; leave everything else at its default. Do not add a real-time clock: booting with the wrong time is part of the test.
+1. Flash the 64-bit Lite image with Raspberry Pi Imager. Set a hostname, your SSH key and the time zone there; leave everything else at its default. Do not add a real-time clock: booting with the wrong time is part of the test. [raspberry-pi-install.md](raspberry-pi-install.md) walks through this and steps 2 and 3 from a blank SD card, including turning on the memory limits Docker needs.
 2. Update and install Docker:
 
    ```bash
@@ -52,7 +52,20 @@ Stop at the first one that fails, fix it, and start that test again.
 
 ### 1. Smoke, 15 minutes
 
-Install with Compose as in [operations.md](operations.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config or `examples/gateway.json` against the bench on a second machine. On the status page:
+Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
+
+```bash
+IMAGE=ghcr.io/phocal-ai/plenum-gateway:v0.5.0      # or plenum-gateway:test
+docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
+  | sed 's#./plenum-buffer.sqlite#/var/lib/plenum/buffer.sqlite#' | sudo tee /etc/plenum/gateway.json >/dev/null
+docker run -d --name plenum-bench --network host --log-driver local \
+  -v /etc/plenum/gateway.json:/etc/plenum/gateway.json:ro \
+  --entrypoint node $IMAGE apps/gateway/src/bench.ts /etc/plenum/gateway.json
+```
+
+Remove it when the smoke test is done (`docker rm -f plenum-bench`): the soak brings its own broker and devices, on the same ports.
+
+On the status page:
 
 - every device `ok`, values moving;
 - the **Host** card shows the version you installed, a temperature and no conditions;

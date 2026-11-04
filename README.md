@@ -90,7 +90,7 @@ node apps/gateway/src/main.ts --discover path/to/gateway.json
 
 ## Running it for real
 
-[docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
+[docs/raspberry-pi-install.md](docs/raspberry-pi-install.md) takes a Raspberry Pi from a blank SD card to a running gateway. [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
 
 The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/plenum-gateway`, amd64 and arm64, published for releases) for a Raspberry Pi on the 64-bit OS as much as for an industrial PC.
 

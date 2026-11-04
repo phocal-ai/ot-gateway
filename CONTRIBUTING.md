@@ -22,7 +22,7 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 
 - `dev` is the integration branch. Branch off `dev` and open pull requests against `dev`.
 - `main` holds releases only. It moves forward when `dev` is merged into it for a release, and each release is tagged on `main` (`vX.Y.Z`).
-- A release also moves the default tag in `packaging/compose.yaml` (`PLENUM_TAG`) and the `docker run` example in `docs/operations.md` to the new tag.
+- A release also moves the default tag in `packaging/compose.yaml` (`PLENUM_TAG`), the `docker run` example in `docs/operations.md` and the tag in the commands of `docs/raspberry-pi-install.md` and `docs/raspberry-pi-testing.md` to the new tag.
 - Urgent fixes for a release branch off `main`, merge back into `main`, then get merged into `dev` so the two don't drift.
 - Name working branches by intent, e.g. `feat/modbus-batching`, `fix/mqtt-reconnect`, `docs/topics`.
 
