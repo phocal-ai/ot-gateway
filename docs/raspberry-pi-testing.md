@@ -17,7 +17,7 @@ A Raspberry Pi 4 on an SD card is the low end of where Plenum runs. What runs we
 
 ## Prepare the Pi
 
-1. Flash the 64-bit Lite image with Raspberry Pi Imager. Set a hostname, your SSH key and the time zone there; leave everything else at its default. Do not add a real-time clock: booting with the wrong time is part of the test.
+1. Flash the 64-bit Lite image with Raspberry Pi Imager. Set a hostname, your SSH key and the time zone there; leave everything else at its default. Do not add a real-time clock: booting with the wrong time is part of the test. [raspberry-pi-install.md](raspberry-pi-install.md) walks through this and steps 2 and 3 from a blank SD card, including turning on the memory limits Docker needs.
 2. Update and install Docker:
 
    ```bash
@@ -52,7 +52,15 @@ Stop at the first one that fails, fix it, and start that test again.
 
 ### 1. Smoke, 15 minutes
 
-Install with Compose as in [operations.md](operations.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config or `examples/gateway.json` against the bench on a second machine. On the status page:
+Install with Compose as in [operations.md](operations.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config or `examples/gateway.json` against the bench on a second machine. The bench simulates only devices on `localhost`, so without hardware run it on the Pi, from the same image, next to the gateway (with `examples/gateway.json` as the config, `buffer.path` under `/var/lib/plenum`):
+
+```bash
+docker run -d --name plenum-bench --network host --restart unless-stopped --log-driver local \
+  -v /etc/plenum/gateway.json:/etc/plenum/gateway.json:ro \
+  --entrypoint node ghcr.io/phocal-ai/plenum-gateway:v0.5.0 apps/gateway/src/bench.ts /etc/plenum/gateway.json
+```
+
+On the status page:
 
 - every device `ok`, values moving;
 - the **Host** card shows the version you installed, a temperature and no conditions;
