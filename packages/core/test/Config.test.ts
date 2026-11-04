@@ -253,6 +253,13 @@ describe("mqtt.url", () => {
       expect(yield* brokerUrlRejection("broker.local")).toContain("must be a URL")
     })
   )
+
+  it.effect("refuses what the publisher could not connect to: another scheme, or no host", () =>
+    Effect.gen(function* () {
+      expect(yield* brokerUrlRejection("http://broker.local")).toContain("must start with mqtts:// or mqtt://")
+      expect(yield* brokerUrlRejection("mqtt:broker.local")).toContain("must name the broker's host")
+    })
+  )
 })
 
 describe("mqttPasswordWarning", () => {

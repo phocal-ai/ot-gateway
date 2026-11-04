@@ -34,7 +34,7 @@ export interface BrokerAddress {
 export const parseBrokerUrl = (url: string): Effect.Effect<BrokerAddress, MqttSettingsError> =>
   Effect.gen(function* () {
     const parsed = URL.parse(url)
-    if (parsed === null) return yield* new MqttSettingsError({ message: `mqtt.url is not a URL: ${url}` })
+    if (parsed === null) return yield* new MqttSettingsError({ message: "mqtt.url is not a URL" })
     if (parsed.protocol !== "mqtt:" && parsed.protocol !== "mqtts:") {
       return yield* new MqttSettingsError({
         message: `mqtt.url must start with mqtt:// or mqtts://, got ${parsed.protocol}//`

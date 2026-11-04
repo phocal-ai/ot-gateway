@@ -154,6 +154,8 @@ export const MqttSettings = Schema.Struct({
       Schema.makeFilter((url) => {
         const parsed = URL.parse(url)
         if (parsed === null) return "must be a URL, such as mqtts://broker.local:8883"
+        if (parsed.protocol !== "mqtt:" && parsed.protocol !== "mqtts:") return "must start with mqtts:// or mqtt://"
+        if (parsed.hostname === "") return "must name the broker's host, such as mqtts://broker.local:8883"
         return (
           (parsed.username === "" && parsed.password === "") ||
           "must not contain credentials; use mqtt.username and mqtt.passwordEnv"
