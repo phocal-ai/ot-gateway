@@ -2,7 +2,7 @@
 
 The simulation and the accelerated soak find what a fault schedule can find, on a laptop or in CI. What they cannot find is the hardware: a slow SD card, an under-powered USB supply, heat in a closed cabinet, a clock that starts in 1970 and is set by NTP minutes later, the CPU of a small ARM board. This is how to test a gateway on a Pi before it goes into a building, and what has to be true to call it ready.
 
-A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What runs well there for a week runs well on an industrial PC.
+A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What runs well there runs well on an industrial PC.
 
 ## What you need
 
@@ -107,7 +107,7 @@ docker run -d --name soak --user root -v /var/tmp/soak-12h:/soak -e SOAK_DIR=/so
   --entrypoint bash ot-gateway:test scripts/soak.sh 12h
 ```
 
-Read `docker logs soak` and `/var/tmp/soak-12h/summary.txt` at the end. Before a Pi goes into its first building, also run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below; a release does not wait for that week.
+Read `docker logs soak` and `/var/tmp/soak-12h/summary.txt` at the end, then `docker rm soak` before the next run. Before a Pi goes into its first building, also run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below; a release does not wait for that week.
 
 ### 5. Power loss, 20 times
 

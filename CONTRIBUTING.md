@@ -63,7 +63,7 @@ Real time only matters on the target hardware (SD card, CPU, thermal throttling,
 SOAK_STRICT_HOST=1 scripts/soak.sh 12h
 ```
 
-Twelve hours is the gate: half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages (every second one with the devices), and 72 samples for the memory and open-file growth checks. A longer run is welcome before a first building, but a release does not wait for it.
+Twelve hours is the gate: half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages (the second and fourth stop the devices too), and a sample every ten minutes for the memory and open-file growth checks. A longer run is welcome before a first building, but a release does not wait for it.
 
 ## Reporting device quirks
 
