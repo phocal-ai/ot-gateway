@@ -4,7 +4,7 @@
  * relinquish with Null, and what a device refuses.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { type BacnetDevice, type BacnetPoint, makeMemoryNetwork, parseConfig } from "@plenum/core"
+import { type BacnetDevice, type BacnetPoint, makeMemoryNetwork, parseConfig } from "@ot-gateway/core"
 import { Effect, Result } from "effect"
 import {
   decodeWriteProperty,

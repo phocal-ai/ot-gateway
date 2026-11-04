@@ -7,7 +7,7 @@
  * - Modbus Messaging on TCP/IP Implementation Guide v1.0b (MBAP header, §3.1.3)
  */
 import { Effect, Schema } from "effect"
-import { type ByteOrder, type DataType, registerWidth } from "@plenum/core"
+import { type ByteOrder, type DataType, registerWidth } from "@ot-gateway/core"
 
 export const FunctionCode = {
   ReadCoils: 0x01,

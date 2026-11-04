@@ -94,4 +94,4 @@ export class StatusGroup extends HttpApiGroup.make("status").add(
   HttpApiEndpoint.get("status", "/api/status", { success: GatewayStatus })
 ) {}
 
-export class PlenumApi extends HttpApi.make("plenum").add(StatusGroup) {}
+export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup) {}

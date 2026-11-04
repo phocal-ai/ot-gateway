@@ -1,6 +1,6 @@
-# Contributing to Plenum
+# Contributing to OT Gateway
 
-Thanks for your interest! Plenum is early, so issues, design feedback and pull requests are all welcome.
+Thanks for your interest! OT Gateway is early, so issues, design feedback and pull requests are all welcome.
 
 ## Setup
 
@@ -14,7 +14,7 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 ## Ground rules
 
 - Read [docs/VISION.md](docs/VISION.md) and [CLAUDE.md](CLAUDE.md). CLAUDE.md lists the coding rules for humans and AI assistants alike.
-- Plenum is Effect-native. Please don't add runtime dependencies outside the Effect ecosystem without opening an issue first.
+- OT Gateway is Effect-native. Please don't add runtime dependencies outside the Effect ecosystem without opening an issue first.
 - Protocol code comes with tests built from spec examples or captured traffic, and a simulator where it makes sense.
 - Keep pull requests focused. Explain the field scenario a change addresses if there is one.
 
@@ -22,7 +22,8 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 
 - `dev` is the integration branch. Branch off `dev` and open pull requests against `dev`.
 - `main` holds releases only. It moves forward when `dev` is merged into it for a release, and each release is tagged on `main` (`vX.Y.Z`).
-- A release also moves the default tag in `packaging/compose.yaml` (`PLENUM_TAG`), the `docker run` example in `docs/operations.md` and the tag in the commands of `docs/raspberry-pi-install.md` and `docs/raspberry-pi-testing.md` to the new tag.
+- A release also moves the default tag in `packaging/compose.yaml` (`OT_GATEWAY_TAG`), the `docker run` example in `docs/operations.md` and the tag in the commands of `docs/raspberry-pi-install.md` and `docs/raspberry-pi-testing.md` to the new tag.
+- The first release under a new image name (v0.6.0, `ghcr.io/phocal-ai/ot-gateway`) creates a new, private package: make it public in the package's settings (the organization must allow public packages for that moment), then check `docker pull` without logging in.
 - Urgent fixes for a release branch off `main`, merge back into `main`, then get merged into `dev` so the two don't drift.
 - Name working branches by intent, e.g. `feat/modbus-batching`, `fix/mqtt-reconnect`, `docs/topics`.
 
@@ -38,10 +39,10 @@ The unit tests and the simulation talk to our own test broker and device simulat
 
 ## Simulation
 
-`apps/gateway/test/Simulation.test.ts` runs the whole gateway (pipelines, outbox, MQTT client, Modbus and BACnet drivers) against the test broker and device simulators on an in-memory network (`MemoryNetwork` in `@plenum/core`) under the test clock. A seeded schedule crashes and partitions the broker, the devices and the gateway's host, loses datagrams, restarts the gateway, fills the outbox's disk under it and steps its wall clock (as NTP does on a Pi, backwards too). At the end it checks that no accepted value was lost, values arrived in order (except values that skipped a full disk's outbox), duplicates stayed within the in-flight window, the outbox drained, no point went quiet while nothing on its path was failing, every device is ok, no socket leaked and warnings stayed within the log budget. `pnpm test` runs three seeds of six hours (about 30 seconds); a week per seed takes about four minutes:
+`apps/gateway/test/Simulation.test.ts` runs the whole gateway (pipelines, outbox, MQTT client, Modbus and BACnet drivers) against the test broker and device simulators on an in-memory network (`MemoryNetwork` in `@ot-gateway/core`) under the test clock. A seeded schedule crashes and partitions the broker, the devices and the gateway's host, loses datagrams, restarts the gateway, fills the outbox's disk under it and steps its wall clock (as NTP does on a Pi, backwards too). At the end it checks that no accepted value was lost, values arrived in order (except values that skipped a full disk's outbox), duplicates stayed within the in-flight window, the outbox drained, no point went quiet while nothing on its path was failing, every device is ok, no socket leaked and warnings stayed within the log budget. `pnpm test` runs three seeds of six hours (about 30 seconds); a week per seed takes about four minutes:
 
 ```bash
-SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @plenum/gateway sim
+SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @ot-gateway/gateway sim
 ```
 
 A failing run prints its seed, and the same seed replays the same faults. The `Soak` workflow simulates a week for five new seeds every night. Write a regression as a seed and an assertion, not a sleep.

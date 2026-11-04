@@ -22,5 +22,5 @@ out/
 next-env.d.ts
 
 # A local gateway config and its secrets (/setup writes these)
-/plenum.json
-/plenum.env
+/ot-gateway.json
+/ot-gateway.env

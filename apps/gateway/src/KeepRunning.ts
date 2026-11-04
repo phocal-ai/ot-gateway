@@ -1,6 +1,6 @@
 /**
  * Keeps a gateway-wide task (the health reporter) alive. Devices have their
- * own supervisor in `@plenum/core`; this is the same idea without the
+ * own supervisor in `@ot-gateway/core`; this is the same idea without the
  * per-device health and metrics.
  */
 import { Cause, type Duration, Effect } from "effect"

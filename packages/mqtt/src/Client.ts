@@ -6,7 +6,7 @@
  * waits up to `publishTimeout` for the connection and then fails (or, with
  * `waitForConnection: false`, fails as soon as the first dial is over), so
  * the caller decides what to
- * retry: the pipeline retries `$meta` on the next cycle, and `@plenum/buffer`
+ * retry: the pipeline retries `$meta` on the next cycle, and `@ot-gateway/buffer`
  * stores values for later. QoS 1 publishes complete on
  * PUBACK. The session is clean (no session state survives a reconnect), so
  * nothing unacknowledged is resent behind the caller's back.
@@ -16,7 +16,7 @@
  * has its wall clock stepped by NTP), two publishes in a row get no PUBACK,
  * or the broker breaks the protocol.
  */
-import { describeSocketError, monotonicMillis, mqttConnected, mqttConnects } from "@plenum/core"
+import { describeSocketError, monotonicMillis, mqttConnected, mqttConnects } from "@ot-gateway/core"
 import { Deferred, Duration, Effect, Exit, Latch, Metric, Random, Redacted, Result, Schema, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import { PacketType } from "./Codec.ts"
@@ -72,7 +72,7 @@ const stableConnectionMs = 30_000
 /** Publishes in a row whose PUBACK never came before the connection is presumed dead. */
 const maxPubackTimeouts = 2
 
-/** Default Maximum Packet Size announced in CONNECT: Plenum only receives small control packets. */
+/** Default Maximum Packet Size announced in CONNECT: OT Gateway only receives small control packets. */
 const defaultMaximumPacketSize = 1024 * 1024
 
 export interface MqttClientOptions {

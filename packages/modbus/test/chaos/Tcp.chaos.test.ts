@@ -3,8 +3,8 @@
  * break the client once; these pin the fixed behaviour.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { driverConnects, withMetricAttributes } from "@plenum/core"
-import type { DriverError, ModbusPoint, Reading } from "@plenum/core"
+import { driverConnects, withMetricAttributes } from "@ot-gateway/core"
+import type { DriverError, ModbusPoint, Reading } from "@ot-gateway/core"
 import { Clock, Effect, Exit, Metric, Option } from "effect"
 import type { Duration } from "effect"
 import { encodeExceptionResponse, makeModbusDriver } from "../../src/index.ts"

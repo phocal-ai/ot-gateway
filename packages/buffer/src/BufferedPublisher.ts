@@ -34,7 +34,7 @@
  *   it is logged once when it starts and once when it ends.
  * - An unusable file is moved aside (see `Database.ts`). If no file can be
  *   opened, the gateway runs unbuffered, says so loudly and in
- *   `plenum_buffer_disabled`, and tries again every `checkInterval`. The same
+ *   `ot_gateway_buffer_disabled`, and tries again every `checkInterval`. The same
  *   check notices the file being deleted under the running gateway and
  *   restores it from the open connection.
  */
@@ -49,7 +49,7 @@ import {
   bufferWritten,
   Publisher,
   PublishError
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import { Clock, type Duration, Effect, Latch, Layer, Metric, Result, Schedule, Semaphore } from "effect"
 import type { SqlError } from "effect/sql/SqlError"
 import { fileIdentity, isCorrupt, openDatabase } from "./Database.ts"

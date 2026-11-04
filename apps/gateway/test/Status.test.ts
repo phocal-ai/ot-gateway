@@ -4,8 +4,8 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
-import { PlenumApi } from "@plenum/api"
-import { makeHealthRegistry, parseConfig } from "@plenum/core"
+import { OtGatewayApi } from "@ot-gateway/api"
+import { makeHealthRegistry, parseConfig } from "@ot-gateway/core"
 import { Effect, Fiber } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -152,7 +152,7 @@ describe("status", () => {
         Effect.forkChild
       )
       yield* Effect.sleep("300 millis")
-      const client = yield* HttpApiClient.make(PlenumApi, { baseUrl: `http://127.0.0.1:${port}` })
+      const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
       const status = yield* client.status.status()
       expect(status.devices[0]?.points[0]?.value).toBe(3)
       // Without a built web app, the root says so instead of failing.

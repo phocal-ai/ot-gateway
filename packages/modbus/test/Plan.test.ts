@@ -1,4 +1,4 @@
-import type { ModbusPoint } from "@plenum/core"
+import type { ModbusPoint } from "@ot-gateway/core"
 import { describe, expect, it } from "@effect/vitest"
 import { planReads, valueFromBits, valueFromRegisters } from "../src/index.ts"
 

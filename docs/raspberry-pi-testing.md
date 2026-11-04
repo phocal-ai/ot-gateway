@@ -2,7 +2,7 @@
 
 The simulation and the accelerated soak find what a fault schedule can find, on a laptop or in CI. What they cannot find is the hardware: a slow SD card, an under-powered USB supply, heat in a closed cabinet, a clock that starts in 1970 and is set by NTP minutes later, the CPU of a small ARM board. This is how to test a gateway on a Pi before it goes into a building, and what has to be true to call it ready.
 
-A Raspberry Pi 4 on an SD card is the low end of where Plenum runs. What runs well there for a week runs well on an industrial PC.
+A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What runs well there for a week runs well on an industrial PC.
 
 ## What you need
 
@@ -35,15 +35,15 @@ A Raspberry Pi 4 on an SD card is the low end of where Plenum runs. What runs we
    ```
 
 4. **Remote access** for a Pi that is not on your desk: Tailscale (or any VPN you already use) gives SSH and the status page through `ssh -L 8080:127.0.0.1:8080 pi@<name>`. Do not open the status page to the network.
-5. **Telemetry** (recommended for the long runs): put the `OTEL_*` variables from `observability/README.md` in `/etc/plenum/gateway.env`, with `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=pi-test`, and filter the dashboard's Environment to it. A test gateway with a few devices adds about 100 series to the free plan's 10,000.
-6. **The image to test.** A release (`ghcr.io/phocal-ai/plenum-gateway:<tag>`), or a build of the branch under test. Build on your laptop and copy it over, which is faster than building on the Pi:
+5. **Telemetry** (recommended for the long runs): put the `OTEL_*` variables from `observability/README.md` in `/etc/ot-gateway/gateway.env`, with `OTEL_RESOURCE_ATTRIBUTES=deployment.environment=pi-test`, and filter the dashboard's Environment to it. A test gateway with a few devices adds about 100 series to the free plan's 10,000.
+6. **The image to test.** A release (`ghcr.io/phocal-ai/ot-gateway:<tag>`), or a build of the branch under test. Build on your laptop and copy it over, which is faster than building on the Pi:
 
    ```bash
-   docker buildx build --platform linux/arm64 --build-arg PLENUM_VERSION="$(git describe --tags --always --dirty)" -t plenum-gateway:test --load .
+   docker buildx build --platform linux/arm64 --build-arg OT_GATEWAY_VERSION="$(git describe --tags --always --dirty)" -t ot-gateway:test --load .
    ```
 
    ```bash
-   docker save plenum-gateway:test | ssh pi@<name> docker load
+   docker save ot-gateway:test | ssh pi@<name> docker load
    ```
 
 ## The tests, in order
@@ -52,24 +52,24 @@ Stop at the first one that fails, fix it, and start that test again.
 
 ### 1. Smoke, 15 minutes
 
-Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
+Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`OT_GATEWAY_TAG`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/plenum-gateway:v0.5.0      # or plenum-gateway:test
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.6.0      # or ot-gateway:test
 docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
-  | sed 's#./plenum-buffer.sqlite#/var/lib/plenum/buffer.sqlite#' | sudo tee /etc/plenum/gateway.json >/dev/null
-docker run -d --name plenum-bench --network host --log-driver local \
-  -v /etc/plenum/gateway.json:/etc/plenum/gateway.json:ro \
-  --entrypoint node $IMAGE apps/gateway/src/bench.ts /etc/plenum/gateway.json
+  | sed 's#./ot-gateway-buffer.sqlite#/var/lib/ot-gateway/buffer.sqlite#' | sudo tee /etc/ot-gateway/gateway.json >/dev/null
+docker run -d --name ot-gateway-bench --network host --log-driver local \
+  -v /etc/ot-gateway/gateway.json:/etc/ot-gateway/gateway.json:ro \
+  --entrypoint node $IMAGE apps/gateway/src/bench.ts /etc/ot-gateway/gateway.json
 ```
 
-Remove it when the smoke test is done (`docker rm -f plenum-bench`): the soak brings its own broker and devices, on the same ports.
+Remove it when the smoke test is done (`docker rm -f ot-gateway-bench`): the soak brings its own broker and devices, on the same ports.
 
 On the status page:
 
 - every device `ok`, values moving;
 - the **Host** card shows the version you installed, a temperature and no conditions;
-- `docker logs plenum` has no warnings.
+- `docker logs ot-gateway` has no warnings.
 
 ### 2. Accelerated soak on the Pi, 1 hour
 
@@ -82,7 +82,7 @@ docker compose -f packaging/compose.yaml down
 ```bash
 docker run --rm --user root -v /var/tmp/soak:/soak -e SOAK_DIR=/soak \
   -e SOAK_SPEED=20 -e SOAK_DEVICES=4 -e SOAK_STRICT_HOST=1 \
-  --entrypoint bash plenum-gateway:test scripts/soak.sh 1h
+  --entrypoint bash ot-gateway:test scripts/soak.sh 1h
 ```
 
 `/var/tmp/soak/summary.txt` must end in `verdict: PASS`. With `SOAK_STRICT_HOST=1` that includes no event-loop stall and no power or thermal condition.
@@ -94,7 +94,7 @@ The same with a 16 MB disk for the outbox that fills during every third outage. 
 ```bash
 docker run --rm --privileged --user root -v /var/tmp/soak-disk:/soak -e SOAK_DIR=/soak \
   -e SOAK_SPEED=20 -e SOAK_DISK_FAULT=1 -e SOAK_STRICT_HOST=1 \
-  --entrypoint bash plenum-gateway:test scripts/soak.sh 1h
+  --entrypoint bash ot-gateway:test scripts/soak.sh 1h
 ```
 
 ### 4. Real-time soak, 24 hours, then 7 days
@@ -104,7 +104,7 @@ The release gate: the soak at speed 1, so every timer, NTP correction and SD-car
 ```bash
 docker run -d --name soak --user root -v /var/tmp/soak-24h:/soak -e SOAK_DIR=/soak \
   -e SOAK_DEVICES=4 -e SOAK_STRICT_HOST=1 \
-  --entrypoint bash plenum-gateway:test scripts/soak.sh 24h
+  --entrypoint bash ot-gateway:test scripts/soak.sh 24h
 ```
 
 Read `docker logs soak` and `/var/tmp/soak-24h/summary.txt` at the end. Then run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below.
@@ -114,7 +114,7 @@ Read `docker logs soak` and `/var/tmp/soak-24h/summary.txt` at the end. Then run
 Pull the plug (or switch the smart plug) while the gateway is writing its outbox: stop the broker first so values are being buffered, wait a minute, cut power, wait ten seconds, restore it. Repeat 20 times, some during boot. After each:
 
 - the gateway is back within 60 seconds of boot, every device `ok` within two poll intervals;
-- `docker logs plenum` shows no crash loop. A `corrupt` outbox moved aside is acceptable but should be rare; a gateway that does not start is not;
+- `docker logs ot-gateway` shows no crash loop. A `corrupt` outbox moved aside is acceptable but should be rare; a gateway that does not start is not;
 - once the broker is back, the outbox drains.
 
 ### 6. Network and clock
@@ -129,18 +129,18 @@ An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cp
 
 ## Pass criteria
 
-| What            | Pass                                                                                                          | Where to read it                                                                                    |
-| --------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Memory          | Levels off within an hour; no growth over the 24 hours (the soak's growth check), well under the 768 MB limit | Status page, `plenum_process_memory_bytes`, soak summary                                            |
-| Event loop      | p99 under 50 ms; no `event loop stalled`                                                                      | `plenum_event_loop_lag_seconds`, soak summary                                                       |
-| CPU             | Under 10% of one core for a few devices polled every 5 s                                                      | `plenum_process_cpu_seconds_total`, status page                                                     |
-| Power and heat  | No conditions during tests 1–6, no `Undervoltage detected!` in the kernel log, under 70 °C in its case        | Status page, `plenum_host_throttled`, `plenum_host_temperature_celsius`, `journalctl -k -g voltage` |
-| Storage writes  | Near zero while the broker is up; bounded during outages                                                      | `plenum_process_disk_written_bytes_total`                                                           |
-| Outbox          | Drains after every outage; nothing lost (soak checks order and backlog)                                       | Soak summary, `plenum_buffer_rows`                                                                  |
-| Clock           | One step after a boot without network, none otherwise                                                         | `plenum_clock_steps_total`, the log                                                                 |
-| Open files      | Flat                                                                                                          | `plenum_process_open_fds`, soak summary                                                             |
-| Restarts        | None, other than the power cuts                                                                               | `plenum_process_start_time_seconds`                                                                 |
-| Device requests | Mean request time steady; no unexplained refusals                                                             | Dashboard "Mean request time by device"                                                             |
+| What            | Pass                                                                                                          | Where to read it                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Memory          | Levels off within an hour; no growth over the 24 hours (the soak's growth check), well under the 768 MB limit | Status page, `ot_gateway_process_memory_bytes`, soak summary                                                |
+| Event loop      | p99 under 50 ms; no `event loop stalled`                                                                      | `ot_gateway_event_loop_lag_seconds`, soak summary                                                           |
+| CPU             | Under 10% of one core for a few devices polled every 5 s                                                      | `ot_gateway_process_cpu_seconds_total`, status page                                                         |
+| Power and heat  | No conditions during tests 1–6, no `Undervoltage detected!` in the kernel log, under 70 °C in its case        | Status page, `ot_gateway_host_throttled`, `ot_gateway_host_temperature_celsius`, `journalctl -k -g voltage` |
+| Storage writes  | Near zero while the broker is up; bounded during outages                                                      | `ot_gateway_process_disk_written_bytes_total`                                                               |
+| Outbox          | Drains after every outage; nothing lost (soak checks order and backlog)                                       | Soak summary, `ot_gateway_buffer_rows`                                                                      |
+| Clock           | One step after a boot without network, none otherwise                                                         | `ot_gateway_clock_steps_total`, the log                                                                     |
+| Open files      | Flat                                                                                                          | `ot_gateway_process_open_fds`, soak summary                                                                 |
+| Restarts        | None, other than the power cuts                                                                               | `ot_gateway_process_start_time_seconds`                                                                     |
+| Device requests | Mean request time steady; no unexplained refusals                                                             | Dashboard "Mean request time by device"                                                                     |
 
 ## Reporting
 

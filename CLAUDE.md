@@ -2,7 +2,7 @@
 
 Guidance for AI coding assistants (and humans) working in this repo. Read [docs/VISION.md](docs/VISION.md) for the why; this file is the how.
 
-## What Plenum is
+## What OT Gateway is
 
 An Effect-native edge gateway for buildings: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back. It runs unattended on a Raspberry Pi, so reliability beats features.
 
@@ -16,10 +16,10 @@ pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
 pnpm test
 pnpm gateway          # run apps/gateway with examples/gateway.json
-node apps/gateway/src/main.ts --check plenum.json      # validate a config without connecting
-node apps/gateway/src/main.ts --discover plenum.json   # find BACnet devices, print a draft of their config
-pnpm --filter @plenum/core test   # one package
-pnpm --filter @plenum/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
+node apps/gateway/src/main.ts --check ot-gateway.json      # validate a config without connecting
+node apps/gateway/src/main.ts --discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm --filter @ot-gateway/core test   # one package
+pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
 scripts/interop.sh [mqtt|bacnet|modbus]   # against Mosquitto, EMQX, the BACnet Stack server and pymodbus (Docker, Python)
 ```
@@ -38,7 +38,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/buffer`: SQLite store-and-forward, a `Publisher` that wraps the MQTT one
 - `packages/api`: the local HTTP API's contract (`HttpApi`), shared by the gateway and the status page
 - `apps/gateway`: the runnable gateway
-- `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @plenum/web build`) that the gateway serves; no Next server at runtime
+- `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @ot-gateway/web build`) that the gateway serves; no Next server at runtime
 - `examples/`: sample configs
 - `packaging/`: `compose.yaml` (the recommended install), the systemd unit and `install.sh`; the container image is the root `Dockerfile`
 - `docs/`: vision, the configuration reference (`configuration.md`, kept in step with the schema by `packages/core/test/ConfigDocs.test.ts`), operations and troubleshooting
@@ -84,7 +84,7 @@ git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git e
 
 ## Effect 4 conventions
 
-- Services: `class X extends Context.Service<X, Shape>()("@plenum/pkg/X") {}`; provide them with `Layer.succeed` or `Layer.effect`.
+- Services: `class X extends Context.Service<X, Shape>()("@ot-gateway/pkg/X") {}`; provide them with `Layer.succeed` or `Layer.effect`.
 - Errors: `class E extends Schema.TaggedError<E>()("E", { ...fields }) {}`; inside a generator, fail with `return yield* new E({...})`.
 - Named, traced functions: `Effect.fn("name")(function*(...) { ... })`.
 - Retries: `Effect.retry({ schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered), times: 4 })`.
@@ -110,7 +110,7 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Quickstart
 
-`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from a fresh checkout to a running gateway: it writes `plenum.json` (git-ignored, with secrets in `plenum.env`). The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
+`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from a fresh checkout to a running gateway: it writes `ot-gateway.json` (git-ignored, with secrets in `ot-gateway.env`). The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
 
 ## Health and budget
 

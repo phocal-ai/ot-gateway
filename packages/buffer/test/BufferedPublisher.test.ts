@@ -13,7 +13,7 @@ import {
   Publisher,
   PublishError,
   withMetricAttributes
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope } from "effect"
 import { SqlClient } from "effect/sql"
 import { BufferedPublisher } from "../src/index.ts"
@@ -46,7 +46,7 @@ const openBuffer = (path: string, broker: ReturnType<typeof makeBroker>, scope: 
 
 const tempDatabase = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
-  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "plenum-buffer-" })
+  const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-buffer-" })
   // A subdirectory that does not exist yet, to check it is created.
   return `${directory}/nested/buffer.sqlite`
 }).pipe(Effect.provide(NodeServices.layer))

@@ -4,8 +4,8 @@
  * runs it on Node's network; the simulation (`test/sim`) runs the same
  * composition on an in-memory network under the test clock.
  */
-import { type BacnetClient, covTimingFor, makeBacnetDriverFromClient, makeBacnetNetwork } from "@plenum/bacnet"
-import { BufferedPublisher, type BufferedPublisherOptions } from "@plenum/buffer"
+import { type BacnetClient, covTimingFor, makeBacnetDriverFromClient, makeBacnetNetwork } from "@ot-gateway/bacnet"
+import { BufferedPublisher, type BufferedPublisherOptions } from "@ot-gateway/buffer"
 import {
   commandFilter,
   cycleTimeoutMs,
@@ -26,10 +26,10 @@ import {
   runHealthReporter,
   superviseDevice,
   withMetricAttributes
-} from "@plenum/core"
-import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@plenum/modbus"
-import { MqttPublisher } from "@plenum/mqtt"
-import { makeSimulatorDriver } from "@plenum/simulator"
+} from "@ot-gateway/core"
+import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@ot-gateway/modbus"
+import { MqttPublisher } from "@ot-gateway/mqtt"
+import { makeSimulatorDriver } from "@ot-gateway/simulator"
 import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { keepRunning } from "./KeepRunning.ts"
@@ -163,7 +163,7 @@ const runDevices = Effect.fn("runGateway")(function* (
   host: HostMonitor | undefined
 ) {
   const sampleRatio = yield* traceSampleRatio
-  yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
+  yield* Effect.log(`OT Gateway starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
     Effect.annotateLogs({ traceSampleRatio: sampleRatio, health: health.topic })
   )
   let bacnet: BacnetNetwork

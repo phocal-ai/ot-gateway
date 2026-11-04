@@ -1,5 +1,5 @@
 /**
- * BACnet enumerations Plenum needs, with the hyphenated names ASHRAE 135
+ * BACnet enumerations OT Gateway needs, with the hyphenated names ASHRAE 135
  * uses in clause 21 (`analog-input`, `present-value`). Config files name
  * objects and properties this way; the wire carries the numbers.
  */
@@ -117,7 +117,7 @@ export const ErrorCode = {
   "abort-segmentation-not-supported": 128
 } as const
 
-/** The name for `value` in `table`, or the number as text for values Plenum does not know. */
+/** The name for `value` in `table`, or the number as text for values OT Gateway does not know. */
 export const nameOf = (table: Readonly<Record<string, number>>, value: number): string =>
   Object.entries(table).find(([, number]) => number === value)?.[0] ?? String(value)
 

@@ -24,7 +24,7 @@ const describeDefect = (defect: unknown): string => (defect instanceof Error ? d
 
 /**
  * Run `device` and restart it whenever it dies on a defect: logged with the
- * device id and the cause, counted in `plenum_device_restarts_total` and
+ * device id and the cause, counted in `ot_gateway_device_restarts_total` and
  * recorded in the health registry. Restarts back off exponentially up to
  * `maxBackoff`, so a device that crashes on every start does not spin. Pass
  * the device as a lazy effect (`Effect.suspend`) so each restart builds its

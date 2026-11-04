@@ -12,7 +12,7 @@
  *
  * The UDP server that puts it on the network lives with the transport.
  */
-import type { BacnetDevice } from "@plenum/core"
+import type { BacnetDevice } from "@ot-gateway/core"
 import { Result } from "effect"
 import { AbortReason, type Apdu, ConfirmedService, encodeApdu, RejectReason, UnconfirmedService } from "./Apdu.ts"
 import type { BacnetValue, ObjectId } from "./Encoding.ts"
@@ -126,7 +126,7 @@ export const makeSimulatedDevice = (config: SimulatedDeviceConfig): SimulatedDev
       [PropertyId["object-name"], one({ type: "character-string", value: config.name })],
       [PropertyId["object-type"], one({ type: "enumerated", value: ObjectType.device })],
       [PropertyId["system-status"], one({ type: "enumerated", value: 0 })],
-      [PropertyId["vendor-name"], one({ type: "character-string", value: "Plenum simulator" })],
+      [PropertyId["vendor-name"], one({ type: "character-string", value: "OT Gateway simulator" })],
       [PropertyId["vendor-identifier"], one({ type: "unsigned", value: vendorId })],
       [PropertyId["model-name"], one({ type: "character-string", value: "simulated device" })],
       [PropertyId["protocol-version"], one({ type: "unsigned", value: 1 })],

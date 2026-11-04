@@ -6,8 +6,8 @@
  */
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
-import { driverRefusals, driverRequests, withMetricAttributes } from "@plenum/core"
-import type { ModbusPoint } from "@plenum/core"
+import { driverRefusals, driverRequests, withMetricAttributes } from "@ot-gateway/core"
+import type { ModbusPoint } from "@ot-gateway/core"
 import { Effect, Logger, Metric } from "effect"
 import {
   encodeExceptionResponse,

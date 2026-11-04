@@ -1,5 +1,5 @@
 {
-  "name": "@plenum/api",
+  "name": "@ot-gateway/api",
   "version": "0.0.0",
   "description": "The gateway's local HTTP API (Effect HttpApi), shared by the gateway and the web app.",
   "license": "MIT",

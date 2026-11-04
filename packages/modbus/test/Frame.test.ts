@@ -93,7 +93,7 @@ describe("decodeValue", () => {
     // 21.5 = 0x41AC0000
     expect(decodeValue([0x41ac, 0x0000], "float32")).toBeCloseTo(21.5)
   })
-  // The registers as each byte order sends a value (ByteOrder in @plenum/core).
+  // The registers as each byte order sends a value (ByteOrder in @ot-gateway/core).
   it.each([
     ["ABCD", [0x1234, 0x5678]],
     ["CDAB", [0x5678, 0x1234]],

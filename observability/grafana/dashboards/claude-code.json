@@ -6,7 +6,7 @@
     "claude-code",
     "devloop"
   ],
-  "description": "Claude Code telemetry for phocal-ai repos (OTLP -> Grafana Cloud). Source: plenum/observability/grafana/dashboards/claude-code.json",
+  "description": "Claude Code telemetry for phocal-ai repos (OTLP -> Grafana Cloud). Source: ot-gateway/observability/grafana/dashboards/claude-code.json",
   "timezone": "browser",
   "schemaVersion": 39,
   "editable": true,

@@ -1,12 +1,12 @@
 {
-  "uid": "phocal-plenum-gateway",
-  "title": "phocal / Plenum gateway",
+  "uid": "phocal-ot-gateway",
+  "title": "phocal / OT Gateway",
   "tags": [
     "phocal",
-    "plenum",
+    "ot-gateway",
     "gateway"
   ],
-  "description": "Plenum gateway telemetry (Effect OTLP -> Grafana Cloud). Source: plenum/observability/grafana/plenum-gateway.dashboard.ts",
+  "description": "OT Gateway telemetry (Effect OTLP -> Grafana Cloud). Source: ot-gateway/observability/grafana/ot-gateway.dashboard.ts",
   "timezone": "browser",
   "schemaVersion": 39,
   "editable": true,
@@ -26,7 +26,7 @@
           "uid": "grafanacloud-prom"
         },
         "query": {
-          "query": "label_values(plenum_poll_cycles_total{service_namespace=\"plenum\"}, deployment_environment)",
+          "query": "label_values(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\"}, deployment_environment)",
           "refId": "environment"
         },
         "includeAll": true,
@@ -48,7 +48,7 @@
           "uid": "grafanacloud-prom"
         },
         "query": {
-          "query": "label_values(plenum_poll_cycles_total{service_namespace=\"plenum\"}, site)",
+          "query": "label_values(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\"}, site)",
           "refId": "site"
         },
         "includeAll": true,
@@ -70,7 +70,7 @@
           "uid": "grafanacloud-prom"
         },
         "query": {
-          "query": "label_values(plenum_poll_cycles_total{service_namespace=\"plenum\", site=~\"$site\"}, building)",
+          "query": "label_values(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\", site=~\"$site\"}, building)",
           "refId": "building"
         },
         "includeAll": true,
@@ -92,7 +92,7 @@
           "uid": "grafanacloud-prom"
         },
         "query": {
-          "query": "label_values(plenum_poll_cycles_total{service_namespace=\"plenum\", site=~\"$site\", building=~\"$building\"}, device)",
+          "query": "label_values(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\", site=~\"$site\", building=~\"$building\"}, device)",
           "refId": "device"
         },
         "includeAll": true,
@@ -143,7 +143,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "count(max_over_time(plenum_device_last_success_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "count(max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
           "instant": true
         }
       ],
@@ -201,7 +201,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max(time() - max_over_time(plenum_device_last_success_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "max(time() - max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
           "instant": true
         }
       ],
@@ -267,7 +267,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(rate(plenum_poll_cycles_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\", outcome=\"ok\"}[$__range])) / sum(rate(plenum_poll_cycles_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "sum(rate(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\", outcome=\"ok\"}[$__range])) / sum(rate(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
           "instant": true
         }
       ],
@@ -333,7 +333,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(increase(plenum_read_failures_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(ot_gateway_read_failures_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])) or vector(0)",
           "instant": true
         }
       ],
@@ -391,7 +391,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(increase(plenum_publish_failures_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])) or vector(0)",
+          "expr": "sum(increase(ot_gateway_publish_failures_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])) or vector(0)",
           "instant": true
         }
       ],
@@ -449,7 +449,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(plenum_poll_duration_seconds_bucket{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ot_gateway_poll_duration_seconds_bucket{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])))",
           "instant": true
         }
       ],
@@ -520,7 +520,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (outcome) (rate(plenum_poll_cycles_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (outcome) (rate(ot_gateway_poll_cycles_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}"
         }
       ],
@@ -572,7 +572,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device, reason) (rate(plenum_read_failures_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device, reason) (rate(ot_gateway_read_failures_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}} {{reason}}"
         }
       ],
@@ -624,7 +624,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "histogram_quantile(0.5, sum by (device, le) (rate(plenum_poll_duration_seconds_bucket{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.5, sum by (device, le) (rate(ot_gateway_poll_duration_seconds_bucket{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval])))",
           "legendFormat": "p50 {{device}}"
         },
         {
@@ -633,7 +633,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "histogram_quantile(0.95, sum by (device, le) (rate(plenum_poll_duration_seconds_bucket{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (device, le) (rate(ot_gateway_poll_duration_seconds_bucket{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval])))",
           "legendFormat": "p95 {{device}}"
         }
       ],
@@ -685,7 +685,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(rate(plenum_values_published_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum(rate(ot_gateway_values_published_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "published"
         },
         {
@@ -694,7 +694,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(rate(plenum_values_suppressed_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum(rate(ot_gateway_values_suppressed_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "suppressed"
         }
       ],
@@ -746,7 +746,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "time() - max by (device) (plenum_device_last_success_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "time() - max by (device) (ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
           "legendFormat": "{{device}}"
         }
       ],
@@ -811,7 +811,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device, outcome) (rate(plenum_driver_requests_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device, outcome) (rate(ot_gateway_driver_requests_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}} {{outcome}}"
         }
       ],
@@ -863,7 +863,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device, outcome) (increase(plenum_driver_connects_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device, outcome) (increase(ot_gateway_driver_connects_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}} {{outcome}}"
         }
       ],
@@ -915,7 +915,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device) (increase(plenum_device_restarts_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device) (increase(ot_gateway_device_restarts_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}}"
         }
       ],
@@ -967,7 +967,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device, exception) (increase(plenum_driver_refusals_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device, exception) (increase(ot_gateway_driver_refusals_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}} {{exception}}"
         }
       ],
@@ -1019,7 +1019,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device) (rate(plenum_driver_request_seconds_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval])) / sum by (device) (rate(plenum_driver_requests_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device) (rate(ot_gateway_driver_request_seconds_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval])) / sum by (device) (rate(ot_gateway_driver_requests_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}}"
         }
       ],
@@ -1084,7 +1084,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (plenum_mqtt_connected{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_mqtt_connected{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -1136,7 +1136,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (outcome) (increase(plenum_mqtt_connects_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (outcome) (increase(ot_gateway_mqtt_connects_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}"
         }
       ],
@@ -1201,7 +1201,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (outcome) (increase(plenum_commands_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (outcome) (increase(ot_gateway_commands_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}"
         }
       ],
@@ -1253,7 +1253,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (outcome, reason) (increase(plenum_commands_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\", outcome!=\"written\"}[$__rate_interval]))",
+          "expr": "sum by (outcome, reason) (increase(ot_gateway_commands_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\", outcome!=\"written\"}[$__rate_interval]))",
           "legendFormat": "{{outcome}}: {{reason}}"
         }
       ],
@@ -1318,7 +1318,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (plenum_buffer_rows{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_buffer_rows{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -1370,7 +1370,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(increase(plenum_buffer_written_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum(increase(ot_gateway_buffer_written_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "stored"
         },
         {
@@ -1379,7 +1379,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(increase(plenum_buffer_drained_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum(increase(ot_gateway_buffer_drained_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "delivered"
         },
         {
@@ -1388,7 +1388,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (reason) (increase(plenum_buffer_dropped_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (reason) (increase(ot_gateway_buffer_dropped_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "dropped: {{reason}}"
         }
       ],
@@ -1440,7 +1440,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (operation) (increase(plenum_buffer_failures_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (operation) (increase(ot_gateway_buffer_failures_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{operation}}"
         },
         {
@@ -1449,7 +1449,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum(increase(plenum_buffer_bypassed_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum(increase(ot_gateway_buffer_bypassed_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "published past the buffer"
         }
       ],
@@ -1501,7 +1501,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (plenum_buffer_disabled{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_buffer_disabled{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -1566,7 +1566,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "time() - max by (device) (max_over_time(plenum_device_last_success_timestamp_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "time() - max by (device) (max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
           "instant": true,
           "format": "table"
         }
@@ -1653,7 +1653,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device, reason) (increase(plenum_point_read_failures_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device, reason) (increase(ot_gateway_point_read_failures_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}} {{reason}}"
         }
       ],
@@ -1705,7 +1705,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (device) (increase(plenum_pushed_readings_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "expr": "sum by (device) (increase(ot_gateway_pushed_readings_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
           "legendFormat": "{{device}}"
         }
       ],
@@ -1757,7 +1757,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (device) (plenum_pushed_points{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "max by (device) (ot_gateway_pushed_points{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
           "legendFormat": "{{device}}"
         }
       ],
@@ -1822,7 +1822,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id, kind) (plenum_process_memory_bytes{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
+          "expr": "max by (service_instance_id, kind) (ot_gateway_process_memory_bytes{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}} {{kind}}"
         }
       ],
@@ -1874,7 +1874,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id, quantile) (plenum_event_loop_lag_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
+          "expr": "max by (service_instance_id, quantile) (ot_gateway_event_loop_lag_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}} {{quantile}}"
         }
       ],
@@ -1926,7 +1926,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (service_instance_id) (rate(plenum_process_cpu_seconds_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
+          "expr": "sum by (service_instance_id) (rate(ot_gateway_process_cpu_seconds_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -1978,7 +1978,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (plenum_host_temperature_celsius{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_host_temperature_celsius{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -2030,7 +2030,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id, condition) (max_over_time(plenum_host_throttled{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
+          "expr": "max by (service_instance_id, condition) (max_over_time(ot_gateway_host_throttled{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
           "legendFormat": "{{service_instance_id}} {{condition}}"
         }
       ],
@@ -2082,7 +2082,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "min by (service_instance_id) (plenum_buffer_disk_free_bytes{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
+          "expr": "min by (service_instance_id) (ot_gateway_buffer_disk_free_bytes{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -2134,7 +2134,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (service_instance_id) (rate(plenum_process_disk_written_bytes_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
+          "expr": "sum by (service_instance_id) (rate(ot_gateway_process_disk_written_bytes_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -2186,7 +2186,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (plenum_process_open_fds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_process_open_fds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -2238,7 +2238,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "sum by (service_instance_id, direction) (increase(plenum_clock_steps_total{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
+          "expr": "sum by (service_instance_id, direction) (increase(ot_gateway_clock_steps_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}[$__rate_interval]))",
           "legendFormat": "{{service_instance_id}} {{direction}}"
         }
       ],
@@ -2290,7 +2290,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id, version, node) (plenum_process_start_time_seconds{service_namespace=\"plenum\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}) * 1000",
+          "expr": "max by (service_instance_id, version, node) (ot_gateway_process_start_time_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"}) * 1000",
           "instant": true,
           "format": "table"
         }
@@ -2352,7 +2352,7 @@
             "type": "loki",
             "uid": "grafanacloud-logs"
           },
-          "expr": "{service_name=\"plenum-gateway\", service_namespace=\"plenum\", deployment_environment=~\"$environment\"} | detected_level=~\"warn|error|fatal\""
+          "expr": "{service_name=\"ot-gateway\", service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\"} | detected_level=~\"warn|error|fatal\""
         }
       ],
       "options": {
@@ -2366,7 +2366,7 @@
       "id": 49,
       "type": "table",
       "title": "Failed polling cycles (traces)",
-      "description": "Device.pollCycle spans annotated with plenum.outcome. Click a trace ID for the span and its logs.",
+      "description": "Device.pollCycle spans annotated with ot_gateway.outcome. Click a trace ID for the span and its logs.",
       "datasource": {
         "type": "tempo",
         "uid": "grafanacloud-traces"
@@ -2387,7 +2387,7 @@
           "queryType": "traceql",
           "limit": 50,
           "tableType": "traces",
-          "query": "{resource.service.name=\"plenum-gateway\" && name=\"Device.pollCycle\" && span.plenum.outcome != nil}"
+          "query": "{resource.service.name=\"ot-gateway\" && name=\"Device.pollCycle\" && span.ot_gateway.outcome != nil}"
         }
       ],
       "fieldConfig": {

@@ -1,6 +1,6 @@
 # Scheduled health check
 
-You run unattended once a day in GitHub Actions for the public repository `phocal-ai/plenum`. **Everything you write is public**: this job's log, its step summary and every issue or comment.
+You run unattended once a day in GitHub Actions for the public repository `phocal-ai/ot-gateway`. **Everything you write is public**: this job's log, its step summary and every issue or comment.
 
 ## 1. Check
 

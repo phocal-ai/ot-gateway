@@ -136,32 +136,32 @@ cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 
 ## 6. The config and secrets
 
-Write the config as `plenum.json`: with `/setup` and an AI assistant in a clone of this repository (README, "Set it up with AI"), or by hand from [configuration.md](configuration.md) and `examples/gateway.json`. Three things matter on a Pi:
+Write the config as `ot-gateway.json`: with `/setup` and an AI assistant in a clone of this repository (README, "Set it up with AI"), or by hand from [configuration.md](configuration.md) and `examples/gateway.json`. Three things matter on a Pi:
 
 - `mqtt.url` and every device's address must be reachable from the Pi. `localhost` means the Pi itself, not your laptop.
-- `buffer.path` is `/var/lib/plenum/buffer.sqlite`, so the outbox outlives the container.
+- `buffer.path` is `/var/lib/ot-gateway/buffer.sqlite`, so the outbox outlives the container.
 - `"status": {}` is there, or the status page in part 8 stays off.
 
 Copy it to the Pi:
 
 ```bash
-scp plenum.json ot-gateway:
+scp ot-gateway.json ot-gateway:
 ```
 
 On the Pi, fetch the Compose file of the release you install, put the config in place, and check it with the gateway itself:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/plenum/v0.5.0/packaging/compose.yaml
-sudo install -d -m 755 /etc/plenum && sudo install -d -o 1000 -g 1000 /var/lib/plenum
-sudo install -m 644 ~/plenum.json /etc/plenum/gateway.json
-[ -e /etc/plenum/gateway.env ] || sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/plenum/gateway.env
-docker run --rm -v /etc/plenum:/etc/plenum:ro ghcr.io/phocal-ai/plenum-gateway:v0.5.0 --check /etc/plenum/gateway.json
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.0/packaging/compose.yaml
+sudo install -d -m 755 /etc/ot-gateway && sudo install -d -o 1000 -g 1000 /var/lib/ot-gateway
+sudo install -m 644 ~/ot-gateway.json /etc/ot-gateway/gateway.json
+[ -e /etc/ot-gateway/gateway.env ] || sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/ot-gateway/gateway.env
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.6.0 --check /etc/ot-gateway/gateway.json
 ```
 
-The check prints `config ok` and what it will poll; anything else names the field to fix. The fourth line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner), and leaves an existing one alone. If the config names a broker password or other secrets (`/setup` puts them in `plenum.env`), add those lines:
+The check prints `config ok` and what it will poll; anything else names the field to fix. The fourth line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner), and leaves an existing one alone. If the config names a broker password or other secrets (`/setup` puts them in `ot-gateway.env`), add those lines:
 
 ```bash
-sudo nano /etc/plenum/gateway.env
+sudo nano /etc/ot-gateway/gateway.env
 ```
 
 ## 7. Start it
@@ -177,7 +177,7 @@ The first start downloads the image, about a minute on Wi-Fi. The Compose file p
 After half a minute, the log should say it connected to the broker and found the devices, without warnings:
 
 ```bash
-docker logs plenum --tail 30
+docker logs ot-gateway --tail 30
 ```
 
 After a restart of the Pi you may see one expected warning, `wall clock stepped`: the Pi has no battery-backed clock, and the time jumps when it is set from the network a few seconds after boot. The gateway's deadlines do not jump with it.

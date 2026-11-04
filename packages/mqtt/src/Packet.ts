@@ -523,7 +523,7 @@ export interface Publish {
   readonly correlationData?: Uint8Array
 }
 
-/** Encode a PUBLISH. Payloads are marked UTF-8 (payload format indicator 1): Plenum publishes JSON. */
+/** Encode a PUBLISH. Payloads are marked UTF-8 (payload format indicator 1): OT Gateway publishes JSON. */
 export const encodePublish = (publish: Publish): Uint8Array => {
   const body = new Writer().string(publish.topic)
   if (publish.qos > 0) body.u16(publish.packetId ?? 0)

@@ -24,10 +24,10 @@ import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
-import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDeviceFor } from "@plenum/bacnet"
-import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
-import { endpointOf, makeRegisterBank, type RegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
-import { makeBrokerControl, parseBrokerUrl, serveMqtt } from "@plenum/mqtt"
+import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDeviceFor } from "@ot-gateway/bacnet"
+import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@ot-gateway/core"
+import { endpointOf, makeRegisterBank, type RegisterBank, serveModbus, setPointValue } from "@ot-gateway/modbus"
+import { makeBrokerControl, parseBrokerUrl, serveMqtt } from "@ot-gateway/mqtt"
 import { Clock, Console, Effect, FileSystem, Result, Schedule } from "effect"
 
 const localHosts = new Set(["localhost", "127.0.0.1", "::1"])
@@ -160,7 +160,7 @@ const program = Effect.gen(function* () {
     return yield* Effect.die(new Error("--speed takes a number of at least 1"))
   }
   const pace = paceOf(speed)
-  const path = args[0] ?? "plenum.json"
+  const path = args[0] ?? "ot-gateway.json"
   const fs = yield* FileSystem.FileSystem
   const config = yield* parseConfig(yield* fs.readFileString(path))
   const simulated = config.devices.filter(

@@ -5,21 +5,21 @@
  *
  *   scripts/interop.sh            # starts the brokers in Docker and runs this
  *
- * Runs only with PLENUM_INTEROP=1; the brokers are in PLENUM_INTEROP_BROKERS
+ * Runs only with OT_GATEWAY_INTEROP=1; the brokers are in OT_GATEWAY_INTEROP_BROKERS
  * (comma-separated mqtt:// URLs).
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
-import { parseConfig } from "@plenum/core"
-import { makeRegisterBank, makeSimulatorControl, serveModbus, setPointValue } from "@plenum/modbus"
-import { encodeConnect, type InboundMessage, makeMqttClient, parseBrokerUrl } from "@plenum/mqtt"
+import { parseConfig } from "@ot-gateway/core"
+import { makeRegisterBank, makeSimulatorControl, serveModbus, setPointValue } from "@ot-gateway/modbus"
+import { encodeConnect, type InboundMessage, makeMqttClient, parseBrokerUrl } from "@ot-gateway/mqtt"
 import { Effect, Fiber, Schema } from "effect"
 import { runGateway } from "../../src/Gateway.ts"
 
-const enabled = process.env["PLENUM_INTEROP"] === "1"
-const brokers = (process.env["PLENUM_INTEROP_BROKERS"] ?? "mqtt://127.0.0.1:1883").split(",")
+const enabled = process.env["OT_GATEWAY_INTEROP"] === "1"
+const brokers = (process.env["OT_GATEWAY_INTEROP_BROKERS"] ?? "mqtt://127.0.0.1:1883").split(",")
 
 /** Wait for `condition`, polling, up to `timeoutMs`. */
 const waitFor = (what: string, condition: () => boolean, timeoutMs = 10_000) =>
@@ -55,7 +55,7 @@ const appClient = Effect.fnUntraced(function* (
   return { client, received }
 })
 
-const unique = (name: string) => `plenum-interop/${name}/${Math.random().toString(36).slice(2, 8)}`
+const unique = (name: string) => `ot-gateway-interop/${name}/${Math.random().toString(36).slice(2, 8)}`
 
 const CommandResult = Schema.fromJsonString(
   Schema.Struct({ status: Schema.String, reason: Schema.optionalKey(Schema.String) })

@@ -4,8 +4,8 @@
  * renewals, backoffs and the order of values must not notice.
  */
 import { describe, expect, it } from "@effect/vitest"
-import type { BacnetPoint } from "@plenum/core"
-import { makeMemoryPublisher, runDevice } from "@plenum/core"
+import type { BacnetPoint } from "@ot-gateway/core"
+import { makeMemoryPublisher, runDevice } from "@ot-gateway/core"
 import { Clock, Effect, Fiber, Stream } from "effect"
 import { TestClock } from "effect/testing"
 import { makeBacnetDriverFromClient } from "../../src/index.ts"

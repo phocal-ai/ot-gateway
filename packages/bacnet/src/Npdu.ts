@@ -1,5 +1,5 @@
 /**
- * The BACnet network layer header, NPDU (ASHRAE 135, clause 6.2). Plenum
+ * The BACnet network layer header, NPDU (ASHRAE 135, clause 6.2). OT Gateway
  * talks to devices on its own IP network or through routers, so it reads
  * and writes destination/source specifiers and passes network layer
  * messages through undecoded.

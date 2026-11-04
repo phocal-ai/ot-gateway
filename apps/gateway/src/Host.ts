@@ -26,7 +26,7 @@ import {
   processMemory,
   processOpenFds,
   processStart
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import { Clock, Effect, FileSystem, Metric, Schedule } from "effect"
 import type { Scope } from "effect"
 import { statfs } from "node:fs/promises"
@@ -318,7 +318,7 @@ export const hostHealth = (snapshot: HostSnapshot): HostHealth => ({
 export interface HostMonitorOptions {
   /** The outbox's file: its filesystem's free space is reported. */
   readonly bufferPath?: string
-  /** The gateway's version, for `plenum_process_start_time_seconds`. */
+  /** The gateway's version, for `ot_gateway_process_start_time_seconds`. */
   readonly version: string
   readonly intervalMs?: number
 }

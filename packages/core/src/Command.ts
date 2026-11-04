@@ -17,7 +17,7 @@
  * The value is then unscaled into device units and written once, with a
  * deadline: never retried, so a command never happens twice or late. Every
  * command gets one result on `…/$set/result`, with its correlation data, is
- * logged and counted in `plenum_commands`. Results are transient: delivered
+ * logged and counted in `ot_gateway_commands`. Results are transient: delivered
  * now or not at all. A request's MQTT 5 Response Topic is ignored: answering
  * wherever a sender asks would let it make the gateway publish on topics it
  * may not publish on itself, another point's `$set` included.
@@ -207,7 +207,7 @@ export const makeCommandGuard = (options: CommandGuardOptions) => {
     const device = options.devices.find((candidate) => candidate.id === deviceId)
     // The levels come from the topic, so from whoever sent it: bounded before they reach logs or spans.
     const ids = { device: label(deviceId), point: label(pointId) }
-    yield* Effect.annotateCurrentSpan({ "plenum.device": ids.device, "plenum.point": ids.point })
+    yield* Effect.annotateCurrentSpan({ "ot_gateway.device": ids.device, "ot_gateway.point": ids.point })
     const outcome = yield* decide(command, device, pointId)
     options.onOutcome?.(ids, outcome)
     const annotations = { ...ids, payload: command.payload.slice(0, 200) }

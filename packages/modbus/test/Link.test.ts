@@ -7,7 +7,7 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
-import type { ModbusDevice, ModbusPoint } from "@plenum/core"
+import type { ModbusDevice, ModbusPoint } from "@ot-gateway/core"
 import { Duration, Effect } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import {

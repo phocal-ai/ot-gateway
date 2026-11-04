@@ -8,12 +8,12 @@
  * gateway runs exactly as before. See `observability/README.md`.
  */
 import { hostname } from "node:os"
-import type { GatewayConfig } from "@plenum/core"
+import type { GatewayConfig } from "@ot-gateway/core"
 import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import { Otlp, OtlpSerialization } from "effect/observability"
 
-export const serviceName = "plenum-gateway"
+export const serviceName = "ot-gateway"
 
 /**
  * Defaults that keep a gateway inside the Grafana Cloud free plan, which
@@ -75,8 +75,8 @@ export const telemetryLayer = (config: GatewayConfig, version: string) =>
           serviceName: envServiceName,
           serviceVersion: version,
           attributes: {
-            "plenum.site": config.site,
-            "plenum.building": config.building,
+            "ot_gateway.site": config.site,
+            "ot_gateway.building": config.building,
             // One cumulative series per running gateway; OTEL_RESOURCE_ATTRIBUTES can set its own.
             ...(envAttributes.includes("service.instance.id=") ? {} : { "service.instance.id": hostname() })
           }

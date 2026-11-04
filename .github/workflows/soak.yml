@@ -42,7 +42,7 @@ jobs:
           base=$((GITHUB_RUN_NUMBER * 10))
           export SIM_SEEDS=$(seq -s, "$base" "$((base + 4))")
           echo "seeds $SIM_SEEDS" | tee -a "$GITHUB_STEP_SUMMARY"
-          pnpm --filter @plenum/gateway sim
+          pnpm --filter @ot-gateway/gateway sim
         env:
           SIM_HOURS: "168"
 
@@ -63,13 +63,13 @@ jobs:
           context: .
           platforms: linux/arm64
           load: true
-          tags: plenum-gateway:arm64
+          tags: ot-gateway:arm64
       - name: Soak on arm64
         run: |
           mkdir -p "$RUNNER_TEMP/soak"
           docker run --rm --platform linux/arm64 --cpus 2 --memory 1g --user root \
             -v "$RUNNER_TEMP/soak:/soak" -e SOAK_DIR=/soak -e SOAK_SPEED=20 -e SOAK_DEVICES=2 \
-            --entrypoint bash plenum-gateway:arm64 scripts/soak.sh 40m
+            --entrypoint bash ot-gateway:arm64 scripts/soak.sh 40m
       - name: Summary
         if: always()
         run: |

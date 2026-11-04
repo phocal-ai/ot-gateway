@@ -4,7 +4,7 @@
  * fit refused before anything is sent, and device refusals reported.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { makeMemoryNetwork, type ModbusDevice, type ModbusPoint } from "@plenum/core"
+import { makeMemoryNetwork, type ModbusDevice, type ModbusPoint } from "@ot-gateway/core"
 import { Effect } from "effect"
 import {
   ExceptionCode,
