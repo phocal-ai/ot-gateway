@@ -33,7 +33,7 @@ Without Compose, the same as one command:
 ```bash
 docker run -d --name plenum --network host --restart unless-stopped --log-driver local \
   -v /etc/plenum:/etc/plenum:ro -v /var/lib/plenum:/var/lib/plenum \
-  ghcr.io/phocal-ai/plenum-gateway:v0.4.0
+  ghcr.io/phocal-ai/plenum-gateway:v0.5.0
 ```
 
 ### systemd, without Docker
@@ -92,7 +92,7 @@ Or run `install.sh` again with the new file: it checks it before replacing the o
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/plenum.new`, checks the config against it, and only then swaps it in for `/opt/plenum` and restarts the service; `/etc/plenum` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.4.0
+git fetch --tags && git checkout v0.5.0
 ```
 
 ```bash
@@ -108,7 +108,7 @@ Read the release notes for config changes first. If the new version refuses the 
 With Docker Compose, name the new tag; going back is the same with the old one. `/etc/plenum` and the outbox stay, and the container stops cleanly first:
 
 ```bash
-PLENUM_TAG=v0.5.0 docker compose -f packaging/compose.yaml up -d
+PLENUM_TAG=v0.6.0 docker compose -f packaging/compose.yaml up -d
 ```
 
 ## The outbox
