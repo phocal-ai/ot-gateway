@@ -6,7 +6,8 @@
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
 import { driverRequests, makeMemoryNetwork, type MemoryNetwork, withMetricAttributes } from "@ot-gateway/core"
-import { type Duration, Effect, Exit, Fiber, Metric, Queue, Result, Schedule } from "effect"
+import { Effect, Exit, Fiber, Metric, Queue, Result, Schedule } from "effect"
+import { TestClock } from "effect/testing"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 
@@ -17,10 +18,12 @@ import {
   type CovNotification,
   decodeFrame,
   type DeviceAddress,
+  type DiscoveredDevice,
   encodeIAm,
   encodeFrame,
   ErrorCode,
   makeBacnetClient,
+  makeDiscoveryCollector,
   makeSimulatedDevice,
   MAX_CONFLICTS,
   MAX_DEVICES,
@@ -531,17 +534,15 @@ const iAmFrame = (instance: number, source?: NetworkAddress) =>
 
 const routed = (network: number, mac: number): NetworkAddress => ({ network, address: new Uint8Array([mac]) })
 
+/** Sent after the test's frames: once the client has located it, it has read every frame before it. */
+const SENTINEL = 4_000_000
+
 /**
- * Discover from 10.0.0.1 on `network` while a peer at 10.0.2.9 (a device,
- * or a router for the devices behind it) sends the client `frames`. In real
- * time: under the test clock, the end of the window could come before the
- * client has read a few thousand datagrams.
+ * Discover from 10.0.0.1 on `network`, under the test clock, while a peer at
+ * 10.0.2.9 (a device, or a router for the devices behind it) sends the
+ * client `frames`. The window closes only after the client has read them.
  */
-const discoverHearing = Effect.fnUntraced(function* (
-  network: MemoryNetwork,
-  frames: ReadonlyArray<Uint8Array>,
-  within: Duration.Input = "300 millis"
-) {
+const discoverHearing = Effect.fnUntraced(function* (network: MemoryNetwork, frames: ReadonlyArray<Uint8Array>) {
   const peer = yield* network.host("10.0.2.9").udp({ address: "10.0.2.9", port: 47_808 })
   yield* peer.reader
   const peerWriter = yield* peer.writer
@@ -550,16 +551,22 @@ const discoverHearing = Effect.fnUntraced(function* (
     broadcastAddress: at("255.255.255.255"),
     requestTimeout: "1 second"
   })
-  const discovering = yield* client.discover({ within }).pipe(Effect.forkChild)
-  yield* Effect.sleep("20 millis")
-  yield* Effect.forEach(frames, (payload) => peerWriter.write({ payload, address: at("10.0.0.1") }), { discard: true })
-  return yield* Fiber.join(discovering)
+  const discovering = yield* client.discover({ within: "1 second" }).pipe(Effect.forkChild)
+  const located = yield* client.locate(SENTINEL).pipe(Effect.forkChild)
+  yield* TestClock.adjust("10 millis")
+  yield* Effect.forEach([...frames, iAmFrame(SENTINEL)], (payload) =>
+    peerWriter.write({ payload, address: at("10.0.0.1") })
+  )
+  yield* Fiber.join(located)
+  yield* TestClock.adjust("1 second")
+  const found = yield* Fiber.join(discovering)
+  return found.filter((device) => device.instance !== SENTINEL)
 })
 
 const sourceOf = (source: DeviceAddress) => ({ at: NetAddress.formatInet(source.address), network: source.network })
 
 describe("discover on an in-memory network", () => {
-  it.live("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
+  it.effect("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
     Effect.gen(function* () {
       const network = makeMemoryNetwork()
       const serve = (ip: string, instance: number) =>
@@ -585,7 +592,7 @@ describe("discover on an in-memory network", () => {
     }).pipe(Effect.scoped)
   )
 
-  it.live("tells sources behind one router apart by network and address there", () =>
+  it.effect("tells sources behind one router apart by network and address there", () =>
     Effect.gen(function* () {
       const found = yield* discoverHearing(makeMemoryNetwork(), [
         iAmFrame(5001, routed(5, 7)),
@@ -607,16 +614,39 @@ describe("discover on an in-memory network", () => {
       ])
     }).pipe(Effect.scoped)
   )
+})
 
-  it.live("keeps at most MAX_CONFLICTS other sources per instance and MAX_DEVICES instances", () =>
-    Effect.gen(function* () {
-      const network = makeMemoryNetwork()
-      const claims = Array.from({ length: MAX_CONFLICTS + 5 }, (_, mac) => iAmFrame(6001, routed(5, mac)))
-      const flood = Array.from({ length: MAX_DEVICES + 5 }, (_, index) => iAmFrame(10_000 + index))
-      const found = yield* discoverHearing(network, [...claims, ...flood], "2 seconds")
-      expect(found).toHaveLength(MAX_DEVICES)
-      expect(found.find((device) => device.instance === 6001)?.conflicts).toHaveLength(MAX_CONFLICTS)
-      expect(found.some((device) => device.instance === 10_000 + MAX_DEVICES)).toBe(false)
-    }).pipe(Effect.scoped)
-  )
+/** An I-Am as the client hands it to the collector: from 10.0.2.9, or from behind it as a router. */
+const answer = (instance: number, mac?: number): DiscoveredDevice => ({
+  instance,
+  address: at("10.0.2.9"),
+  ...(mac === undefined ? {} : { network: routed(5, mac) }),
+  maxApdu: 480,
+  segmentation: 3,
+  vendorId: 1
+})
+
+describe("makeDiscoveryCollector", () => {
+  it("keeps the first instances up to its device limit, and other sources up to its conflict limit", () => {
+    const collector = makeDiscoveryCollector({ maxDevices: 4, maxConflicts: 2 })
+    for (const mac of [1, 2, 3, 4]) collector.add(answer(6001, mac))
+    for (const instance of [7001, 7002, 7003, 7004, 7005]) collector.add(answer(instance))
+    // An instance already kept still collects sources once the device limit is reached.
+    collector.add(answer(7001, 9))
+    const devices = collector.devices()
+    expect(devices.map((device) => device.instance)).toEqual([6001, 7001, 7002, 7003])
+    expect(devices[0]?.network).toEqual(routed(5, 1))
+    expect(devices[0]?.conflicts.map((source) => source.network)).toEqual([routed(5, 2), routed(5, 3)])
+    expect(devices[1]?.conflicts.map((source) => source.network)).toEqual([routed(5, 9)])
+  })
+
+  it("defaults to MAX_DEVICES instances and MAX_CONFLICTS other sources", () => {
+    expect([MAX_DEVICES, MAX_CONFLICTS]).toEqual([4_096, 16])
+    const collector = makeDiscoveryCollector()
+    for (let mac = 0; mac < MAX_CONFLICTS + 3; mac++) collector.add(answer(6001, mac))
+    for (let instance = 0; instance < MAX_DEVICES + 3; instance++) collector.add(answer(10_000 + instance))
+    const devices = collector.devices()
+    expect(devices).toHaveLength(MAX_DEVICES)
+    expect(devices[0]?.conflicts).toHaveLength(MAX_CONFLICTS)
+  })
 })
