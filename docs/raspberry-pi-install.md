@@ -1,6 +1,11 @@
 # Install on a Raspberry Pi, from nothing
 
-From a blank SD card to a gateway publishing to MQTT, in about 45 minutes. You need a laptop (macOS, Linux or Windows), a Raspberry Pi 4 or 5 with its power supply, an SD card of 32 GB or more, an Ethernet cable to the same network as the laptop, and a card reader.
+From a blank SD card to a gateway publishing to MQTT, in about 45 minutes. You need:
+
+- a laptop (macOS, Linux or Windows) and a card reader;
+- a Raspberry Pi 4 or 5 with its power supply, and an SD card of 32 GB or more;
+- an Ethernet cable to the same network as the laptop;
+- an MQTT broker and the devices to read, both reachable from the Pi. To try it without either, see the smoke test in [raspberry-pi-testing.md](raspberry-pi-testing.md): it runs a test broker and simulated devices on the Pi.
 
 Nothing here needs a screen or keyboard on the Pi: you set everything up while writing the card, and log in over the network.
 
@@ -11,10 +16,11 @@ Nothing here needs a screen or keyboard on the Pi: you set everything up while w
 The Pi will let in only this key, not a password. Make one just for the Pi:
 
 ```bash
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
 ssh-keygen -t ed25519 -f ~/.ssh/ot_gateway -C "ot-gateway"
 ```
 
-It asks for a passphrase first. One protects the key if the laptop is lost, and on macOS the Keychain remembers it, so you type it once; for a Pi on your desk you can leave it empty. On Windows, run the same command in PowerShell, with `$HOME\.ssh\ot_gateway` as the path.
+It asks for a passphrase first. One protects the key if the laptop is lost, and on macOS the Keychain remembers it, so you type it once; for a Pi on your desk you can leave it empty. On Windows, run `mkdir $HOME\.ssh` and the same `ssh-keygen` in PowerShell, with `$HOME\.ssh\ot_gateway` as the path.
 
 Copy the public half, the one line in `~/.ssh/ot_gateway.pub`, to the clipboard. You paste it into the Imager in a moment.
 
@@ -65,10 +71,11 @@ ssh ot-gateway
 
 Answer `yes` to the question about the host's fingerprint (it is asked once), and type the key's passphrase if asked.
 
-**If `ot-gateway.local` is not found**, your network does not pass on the names the Pi announces (common with mesh Wi-Fi and some routers). Find the Pi's address in your router's list of devices, or look for a Raspberry Pi network card from the laptop:
+**If `ot-gateway.local` is not found**, your network does not pass on the names the Pi announces (common with mesh Wi-Fi and some routers). Find the Pi's address in your router's list of devices. On macOS or Linux you can also look for a Raspberry Pi network card, after pinging the network so the laptop has met every device (replace `192.168.0` with your network's):
 
 ```bash
-arp -a | grep -iE 'b8:27:eb|dc:a6:32|e4:5f:01|d8:3a:dd|2c:cf:67|28:cd:c1'
+for i in $(seq 1 254); do ping -c1 -W1 192.168.0.$i >/dev/null 2>&1 & done; wait
+arp -a | grep -iE 'b8:27:eb|dc:a6:32|e4:5f:0?1|d8:3a:dd|2c:cf:67|28:cd:c1'
 ```
 
 and put that address in `HostName` instead. Reserve the address for the Pi in the router, so it does not change.
@@ -86,13 +93,13 @@ vcgencmd get_throttled; vcgencmd measure_temp
 
 ### Optional: let an AI assistant do the rest
 
-An assistant such as Claude Code can run the remaining steps over SSH, but it cannot type your `sudo` password. To let it, allow `pi` to use `sudo` without a password, once, from the laptop:
+An assistant such as Claude Code can run the remaining steps over SSH, but it cannot type your `sudo` password. To let it, allow your user on the Pi to use `sudo` without a password, once, from the laptop:
 
 ```bash
-ssh -t ot-gateway 'echo "pi ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/090-ot-gateway >/dev/null && sudo chmod 440 /etc/sudoers.d/090-ot-gateway && sudo visudo -c'
+ssh -t ot-gateway 'echo "$USER ALL=(ALL) NOPASSWD: ALL" > /tmp/090-ot-gateway && sudo visudo -cf /tmp/090-ot-gateway && sudo install -m 440 -o root -g root /tmp/090-ot-gateway /etc/sudoers.d/ && rm /tmp/090-ot-gateway'
 ```
 
-It ends with `parsed OK` for each file. From then on, whoever holds the key in `~/.ssh/ot_gateway` is root on the Pi; once Docker is installed (next step) that is true anyway, since the `docker` group can do anything root can. On a gateway that goes into a building, take it back when the install is done:
+It checks the rule before putting it in place and prints `parsed OK`. From then on, whoever holds the key in `~/.ssh/ot_gateway` is root on the Pi; once Docker is installed (next step) that is true anyway, since the `docker` group can do anything root can. On a gateway that goes into a building, take it back when the install is done:
 
 ```bash
 ssh -t ot-gateway 'sudo rm /etc/sudoers.d/090-ot-gateway'
@@ -121,32 +128,34 @@ Wait a minute, log in again (`ssh ot-gateway`), and check that `docker` now work
 
 ```bash
 docker --version && docker compose version
-cat /sys/fs/cgroup/cgroup.controllers      # cpuset cpu io memory pids
+cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 ```
 
 ## 6. The config and secrets
 
-Write the config on your laptop: `/setup` with an AI assistant (see the README), or by hand from [configuration.md](configuration.md). Set `buffer.path` to `/var/lib/plenum/buffer.sqlite`, so the outbox outlives the container, and check it before it goes to the Pi:
+Write the config as `plenum.json`: with `/setup` and an AI assistant in a clone of this repository (README, "Set it up with AI"), or by hand from [configuration.md](configuration.md) and `examples/gateway.json`. Three things matter on a Pi:
+
+- `mqtt.url` and every device's address must be reachable from the Pi. `localhost` means the Pi itself, not your laptop.
+- `buffer.path` is `/var/lib/plenum/buffer.sqlite`, so the outbox outlives the container.
+- `"status": {}` is there, or the status page in part 8 stays off.
+
+Copy it to the Pi:
 
 ```bash
-node apps/gateway/src/main.ts --check plenum.json
+scp plenum.json ot-gateway:
 ```
 
-Copy it over, with the Compose file:
+On the Pi, fetch the Compose file of the release you install, put the config in place, and check it with the gateway itself:
 
 ```bash
-scp plenum.json packaging/compose.yaml ot-gateway:
-```
-
-On the Pi, put it in place:
-
-```bash
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/plenum/v0.5.0/packaging/compose.yaml
 sudo install -d -m 755 /etc/plenum && sudo install -d -o 1000 -g 1000 /var/lib/plenum
 sudo install -m 644 ~/plenum.json /etc/plenum/gateway.json
-sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/plenum/gateway.env
+[ -e /etc/plenum/gateway.env ] || sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/plenum/gateway.env
+docker run --rm -v /etc/plenum:/etc/plenum:ro ghcr.io/phocal-ai/plenum-gateway:v0.5.0 --check /etc/plenum/gateway.json
 ```
 
-The last line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner). If the config names a broker password or other secrets, add them:
+The check prints `config ok` and what it will poll; anything else names the field to fix. The fourth line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner), and leaves an existing one alone. If the config names a broker password or other secrets (`/setup` puts them in `plenum.env`), add those lines:
 
 ```bash
 sudo nano /etc/plenum/gateway.env
@@ -158,6 +167,8 @@ sudo nano /etc/plenum/gateway.env
 docker compose -f compose.yaml up -d
 ```
 
+This `compose.yaml` in your home folder is the one [operations.md](operations.md) calls `packaging/compose.yaml`: run its upgrade and log commands from your home folder, with `compose.yaml`.
+
 The first start downloads the image, about a minute on Wi-Fi. The Compose file pins the release, restarts the gateway after a crash and at boot, caps its memory at 768 MB and keeps Docker's logs from filling the SD card. If Compose says `Your kernel does not support memory limit capabilities`, the memory step in part 5 is missing: do it, then recreate the container with `docker compose -f compose.yaml up -d --force-recreate`.
 
 After half a minute, the log should say it connected to the broker and found the devices, without warnings:
@@ -166,7 +177,7 @@ After half a minute, the log should say it connected to the broker and found the
 docker logs plenum --tail 30
 ```
 
-After a restart of the Pi you will see one expected warning, `wall clock stepped`: the Pi has no battery-backed clock, and the time jumps when it is set from the network a few seconds after boot. The gateway's deadlines do not jump with it.
+After a restart of the Pi you may see one expected warning, `wall clock stepped`: the Pi has no battery-backed clock, and the time jumps when it is set from the network a few seconds after boot. The gateway's deadlines do not jump with it.
 
 ## 8. Check it
 

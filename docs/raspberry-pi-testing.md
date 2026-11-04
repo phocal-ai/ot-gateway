@@ -11,7 +11,7 @@ A Raspberry Pi 4 on an SD card is the low end of where Plenum runs. What runs we
 - **The 64-bit Raspberry Pi OS Lite** (Bookworm or later). The image is arm64 only; it does not start on the 32-bit OS.
 - **Something to talk to.** In order of how much it proves:
   1. Nothing extra: the soak runs the broker and simulated devices on the Pi itself.
-  2. The bench on a second machine (`node apps/gateway/src/bench.ts` with your config), so requests cross a real network.
+  2. A broker on a second machine (Mosquitto, or the one you will use), so MQTT crosses a real network. The bench cannot stand in for it there: it serves only `localhost`.
   3. Real devices: a Modbus TCP meter; a Modbus RTU meter behind an RS-485-to-TCP gateway, which is what most buildings have and where `requestGapMs` and `maxRegistersPerRead` matter; a BACnet/IP controller, or the BACnet Stack server on another Pi (`scripts/interop.sh bacnet` shows how to run it).
 - **Optionally a smart plug** to cut power on a schedule for the power-loss test.
 
@@ -52,13 +52,18 @@ Stop at the first one that fails, fix it, and start that test again.
 
 ### 1. Smoke, 15 minutes
 
-Install with Compose as in [operations.md](operations.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config or `examples/gateway.json` against the bench on a second machine. The bench simulates only devices on `localhost`, so without hardware run it on the Pi, from the same image, next to the gateway (with `examples/gateway.json` as the config, `buffer.path` under `/var/lib/plenum`):
+Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`PLENUM_TAG`, or `image:` set to `plenum-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-docker run -d --name plenum-bench --network host --restart unless-stopped --log-driver local \
+IMAGE=ghcr.io/phocal-ai/plenum-gateway:v0.5.0      # or plenum-gateway:test
+docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
+  | sed 's#./plenum-buffer.sqlite#/var/lib/plenum/buffer.sqlite#' | sudo tee /etc/plenum/gateway.json >/dev/null
+docker run -d --name plenum-bench --network host --log-driver local \
   -v /etc/plenum/gateway.json:/etc/plenum/gateway.json:ro \
-  --entrypoint node ghcr.io/phocal-ai/plenum-gateway:v0.5.0 apps/gateway/src/bench.ts /etc/plenum/gateway.json
+  --entrypoint node $IMAGE apps/gateway/src/bench.ts /etc/plenum/gateway.json
 ```
+
+Remove it when the smoke test is done (`docker rm -f plenum-bench`): the soak brings its own broker and devices, on the same ports.
 
 On the status page:
 
