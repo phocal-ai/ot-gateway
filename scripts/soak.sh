@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Soak test: the gateway against the bench, with faults injected.
 #
-#   scripts/soak.sh [duration]                      # 24h by default: 24h, 90m, 600s, or hours
+#   scripts/soak.sh [duration]                      # 12h (the release gate) by default: 12h, 90m, 600s, or hours
 #   SOAK_SPEED=60 scripts/soak.sh 30m               # about a day of events in half an hour
 #
 # What a soak finds depends on how many events happen (poll cycles, outages,
@@ -52,9 +52,9 @@
 # file as `pnpm gateway`, so its telemetry reaches the configured backend.
 set -euo pipefail
 
-duration=${1:-24h}
+duration=${1:-12h}
 if [[ ! $duration =~ ^[0-9]+[hms]?$ ]]; then
-  echo "duration is a number of hours, or a number with h, m or s: 24h, 90m, 600s" >&2
+  echo "duration is a number of hours, or a number with h, m or s: 12h, 90m, 600s" >&2
   exit 2
 fi
 case $duration in

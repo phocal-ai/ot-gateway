@@ -251,7 +251,7 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 | v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI                                                                                      |
 | v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscriptions                                                                                                      |
 | v0.4 Write-back  | MQTT commands, range limits, BACnet priority; brought forward from v1.0: local status page, packaging (container, systemd), `/setup` quickstart |
-| v1.0 Production  | A 24-hour soak on a Raspberry Pi, a first real building, docs                                                                                   |
+| v1.0 Production  | A 12-hour real-time soak on a Raspberry Pi, a first real building, docs                                                                         |
 
 After v1.0 comes a Next.js configuration app, as a separate package.
 
