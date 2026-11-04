@@ -319,7 +319,7 @@ export const hostTemperature = Metric.gauge("ot_gateway_host_temperature_celsius
  * 1 while the Raspberry Pi reported a `condition` in the last four samples (about a minute), else 0: `under_voltage`,
  * `frequency_capped`, `throttled` or `soft_temperature_limit`. Only on a
  * Raspberry Pi kernel, and only `under_voltage` on kernels without the
- * firmware's mask (dropped in March 2025): the other conditions have no
+ * firmware's mask (dropped in 6.12): the other conditions have no
  * series there, rather than a 0 that would read as fine.
  */
 export const hostThrottled = Metric.gauge("ot_gateway_host_throttled", {

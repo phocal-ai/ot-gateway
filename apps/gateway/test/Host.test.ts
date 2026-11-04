@@ -262,7 +262,7 @@ const sysfs = (files: Record<string, string>) =>
   })
 
 describe("throttling source", () => {
-  it.effect("reads the firmware's mask where the kernel still exposes it (before March 2025)", () =>
+  it.effect("reads the firmware's mask where the kernel still exposes it (6.6 and older)", () =>
     Effect.gen(function* () {
       const { fs, root } = yield* sysfs({
         "devices/platform/soc/soc:firmware/get_throttled": "50005\n",

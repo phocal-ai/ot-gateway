@@ -125,7 +125,7 @@ Pull the plug (or switch the smart plug) while the gateway is writing its outbox
 
 ### 7. Heat
 
-An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cpu 4` beside the gateway. This proves the warnings work: expect `host is hot` and a `soft_temperature_limit` or `throttled` condition on the status page, in the health message and on the dashboard. On Raspberry Pi OS 13 and other kernels built since March 2025 the gateway cannot see those two: expect `host is hot` and the temperature, and check `vcgencmd get_throttled` on the Pi while it is hot. The gateway itself should keep every device `ok`.
+An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cpu 4` beside the gateway. This proves the warnings work: expect `host is hot` and a `soft_temperature_limit` or `throttled` condition on the status page, in the health message and on the dashboard. On Raspberry Pi OS 13 and other kernels from 6.12 on the gateway cannot see those two: expect `host is hot` and the temperature, and check `vcgencmd get_throttled` on the Pi while it is hot. The gateway itself should keep every device `ok`.
 
 ## Pass criteria
 

@@ -58,7 +58,7 @@ export const HostStatus = Schema.Struct({
   /**
    * Raspberry Pi power and thermal conditions; absent off a Pi. `now` is any seen in the last four samples (about a
    * minute). `watched` is what the Pi lets the gateway see: all four conditions on kernels that still expose the
-   * firmware's mask, under-voltage alone on newer ones (the Raspberry Pi kernel dropped the mask in March 2025).
+   * firmware's mask, under-voltage alone on newer ones (the Raspberry Pi kernel dropped the mask in 6.12, in March 2025).
    */
   throttled: Schema.optionalKey(
     Schema.Struct({ now: Schema.Array(Schema.String), watched: Schema.Array(Schema.String) })

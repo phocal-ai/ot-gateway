@@ -49,15 +49,15 @@ export const LOW_DISK_BYTES = 64 * 1024 * 1024
 const ROOMY_BYTES = 128 * 1024 * 1024
 
 /**
- * The Raspberry Pi firmware's power and thermal flags, by bit: at this moment in bits 0–3, and in bits 16–19
- * since they were last cleared. The kernel's voltage driver clears those every 2 seconds (it has since 2018), so
+ * The Raspberry Pi firmware's power and thermal flags, by bit: at the kernel's last poll in bits 0–3, and in
+ * bits 16–19 since they were last cleared. The kernel's voltage driver clears those every 2 seconds (it has since 2018), so
  * they mean "in the last 2 seconds", never "since boot". The kernel log keeps under-voltage since boot.
  */
 export const THROTTLE_CONDITIONS = ["under_voltage", "frequency_capped", "throttled", "soft_temperature_limit"] as const
 export type ThrottleCondition = (typeof THROTTLE_CONDITIONS)[number]
 
 export interface Throttling {
-  /** Conditions now; from the kernel's sensor, any seen since the previous read; in a snapshot, any in the last four samples (about a minute). */
+  /** From a source, any seen since its previous read; in a snapshot, any in the last four samples (about a minute). */
   readonly now: ReadonlyArray<ThrottleCondition>
   /** The conditions the source can see at all: all four from the firmware's mask, under-voltage alone from the kernel's sensor. */
   readonly watched: ReadonlyArray<ThrottleCondition>
@@ -66,7 +66,7 @@ export interface Throttling {
 /**
  * The firmware's `get_throttled` mask, as sysfs prints it (`50005`), or as
  * `vcgencmd get_throttled` does (`throttled=0x50005`): a condition counts if
- * either its bit for this moment or its bit for the last 2 seconds is set.
+ * either its bit for the kernel's last poll or its bit for the 2 seconds before is set.
  * Anything else is not a mask and gives `undefined`.
  */
 export const parseThrottled = (text: string): Throttling | undefined => {
