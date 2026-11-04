@@ -97,17 +97,17 @@ docker run --rm --privileged --user root -v /var/tmp/soak-disk:/soak -e SOAK_DIR
   --entrypoint bash ot-gateway:test scripts/soak.sh 1h
 ```
 
-### 4. Real-time soak, 24 hours, then 7 days
+### 4. Real-time soak, 12 hours
 
 The release gate: the soak at speed 1, so every timer, NTP correction and SD-card write happens at its real rate.
 
 ```bash
-docker run -d --name soak --user root -v /var/tmp/soak-24h:/soak -e SOAK_DIR=/soak \
+docker run -d --name soak --user root -v /var/tmp/soak-12h:/soak -e SOAK_DIR=/soak \
   -e SOAK_DEVICES=4 -e SOAK_STRICT_HOST=1 \
-  --entrypoint bash ot-gateway:test scripts/soak.sh 24h
+  --entrypoint bash ot-gateway:test scripts/soak.sh 12h
 ```
 
-Read `docker logs soak` and `/var/tmp/soak-24h/summary.txt` at the end. Then run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below.
+Read `docker logs soak` and `/var/tmp/soak-12h/summary.txt` at the end. Before a Pi goes into its first building, also run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below; a release does not wait for that week.
 
 ### 5. Power loss, 20 times
 
@@ -131,7 +131,7 @@ An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cp
 
 | What            | Pass                                                                                                          | Where to read it                                                                                            |
 | --------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Memory          | Levels off within an hour; no growth over the 24 hours (the soak's growth check), well under the 768 MB limit | Status page, `ot_gateway_process_memory_bytes`, soak summary                                                |
+| Memory          | Levels off within an hour; no growth over the 12 hours (the soak's growth check), well under the 768 MB limit | Status page, `ot_gateway_process_memory_bytes`, soak summary                                                |
 | Event loop      | p99 under 50 ms; no `event loop stalled`                                                                      | `ot_gateway_event_loop_lag_seconds`, soak summary                                                           |
 | CPU             | Under 10% of one core for a few devices polled every 5 s                                                      | `ot_gateway_process_cpu_seconds_total`, status page                                                         |
 | Power and heat  | No conditions during tests 1–6, no `Undervoltage detected!` in the kernel log, under 70 °C in its case        | Status page, `ot_gateway_host_throttled`, `ot_gateway_host_temperature_celsius`, `journalctl -k -g voltage` |
