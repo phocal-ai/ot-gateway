@@ -4,7 +4,8 @@ name: Health
 # sections of .claude/skills/health/SKILL.md against Grafana Cloud and tracks
 # findings as `health` issues. The prompt is .github/prompts/health.md. The
 # agent reaches GitHub only through .github/scripts/health-gh.sh, which keeps it
-# to `health` issues (tests: scripts/test-health-gh.sh).
+# to `health` issues, and runs no other shell command (.github/scripts/
+# health-bash-guard.sh). Tests for both: scripts/test-health-gh.sh.
 #
 # Secrets (the job skips with a warning until all three exist):
 #   CLAUDE_CODE_OAUTH_TOKEN  from `claude setup-token`
@@ -94,10 +95,17 @@ jobs:
         run: |
           # Without pipefail, tee hides a Claude failure (bad token, CLI error) and the job passes.
           set -o pipefail
-          # GitHub goes through .github/scripts/health-gh.sh: health-labelled issues only, and
-          # only text the bot wrote. Read is allowed in the checkout; the denies (Claude Code
-          # applies Read rules to Grep and Glob too) keep the runner's system, credential and
-          # temp directories out of reach. In a rule, `//` starts an absolute path, `~/` the home.
+          # What the agent can reach:
+          # - Built-in tools: Read, Grep and Glob for the checkout, and Bash for one command,
+          #   .github/scripts/health-gh.sh (health-labelled issues only, only the bot's text).
+          #   Naming Grep and Glob brings them back; on Linux they are not in the default set.
+          # - blockReadsOutsideWorkingDirectories makes the file tools refuse paths outside the
+          #   checkout. health-bash-guard.sh (a PreToolUse hook) denies every other shell
+          #   command, including the read-only ones Claude Code runs without asking.
+          # - The denies cover the checkout's .git and, as a second layer, a few system paths.
+          #   In a rule, `//` starts an absolute path and `~/` the home directory.
+          # - dontAsk denies whatever would need approval.
+          tools="Read,Grep,Glob,Bash"
           allowed=(
             "Read(./**)" Grep Glob
             mcp__grafana__query_prometheus mcp__grafana__query_loki_logs mcp__grafana__query_loki_stats
@@ -105,20 +113,22 @@ jobs:
             mcp__grafana__list_prometheus_metric_names mcp__grafana__list_prometheus_label_values
             "Bash(.github/scripts/health-gh.sh:*)"
           )
-          # The checkout is under /home/runner/work, so /home is denied by its parts. ~/.claude
-          # is left readable in case Claude Code hands the agent a saved tool result from it.
-          work_root=$(dirname "$(dirname "$GITHUB_WORKSPACE")")
           denied=(
-            "Read(//proc/**)" "Read(//sys/**)" "Read(//dev/**)" "Read(//etc/**)" "Read(//root/**)"
-            "Read(//run/**)" "Read(//var/**)"
-            "Read(/$RUNNER_TEMP/**)" "Read(/$work_root/_*/**)" "Read(/$HOME/runners/**)"
-            "Read(~/.config/**)" "Read(~/.ssh/**)" "Read(~/.docker/**)" "Read(~/.gitconfig)"
-            "Read(~/.git-credentials)" "Read(~/.npmrc)" "Read(./.git/**)"
+            "Read(./.git/**)" "Read(//proc/**)" "Read(//sys/**)" "Read(/$RUNNER_TEMP/**)" "Read(~/.config/**)"
           )
+          settings=$(jq -cn '{
+            permissions: { blockReadsOutsideWorkingDirectories: true },
+            hooks: { PreToolUse: [ { matcher: "Bash", hooks: [
+              { type: "command", command: "\"$CLAUDE_PROJECT_DIR\"/.github/scripts/health-bash-guard.sh", timeout: 10 }
+            ] } ] }
+          }')
           npx -y "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
             -p "$(cat .github/prompts/health.md)" \
             --model "$CLAUDE_MODEL" \
             --mcp-config "$RUNNER_TEMP/mcp.json" --strict-mcp-config \
+            --settings "$settings" \
+            --permission-mode dontAsk \
+            --tools "$tools" \
             --allowedTools "${allowed[@]}" \
             --disallowedTools "${denied[@]}" \
             --output-format text < /dev/null | tee "$RUNNER_TEMP/report.md"

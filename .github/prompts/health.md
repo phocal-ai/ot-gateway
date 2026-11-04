@@ -15,16 +15,22 @@ Raise a finding only for **Warn** or **Act now** in the skill's terms, or for a 
 - `budget:series`, `budget:dpm`, `budget:logs`, `budget:traces` or `budget:overage`
 - `gateway:<environment>/<site>/<building>/<device>:<stale|read_failed|publish_failed|slow>`
 
-Use `.github/scripts/health-gh.sh` for GitHub, never `gh` itself (it is not allowed). Run it from the repository root exactly as written below, one call per command, without `bash`, `./`, pipes, `&&`, heredocs or `$(...)`; put the text inline as one quoted argument. It takes these forms and refuses anything else:
+Use `.github/scripts/health-gh.sh` for GitHub. It is the only shell command this job can run: `gh`, `cat`, `ls`, `grep`, `echo` and everything else are denied, so read files with the Read, Grep and Glob tools. Run it from the repository root exactly as written below, one call per command. These forms work, and it refuses anything else:
 
 ```bash
 .github/scripts/health-gh.sh issue list --state open --json number,title,body --limit 100
 .github/scripts/health-gh.sh issue view <n>
-.github/scripts/health-gh.sh issue create --title "<title>" --body "<body>"
-.github/scripts/health-gh.sh issue comment <n> --body "<text>"
-.github/scripts/health-gh.sh issue close <n> --comment "<text>"
-.github/scripts/health-gh.sh label create health --color D93F0B --description "Found by the scheduled health check"
+.github/scripts/health-gh.sh issue create --title '<title>' --body '<body>'
+.github/scripts/health-gh.sh issue comment <n> --body '<text>'
+.github/scripts/health-gh.sh issue close <n> --comment '<text>'
+.github/scripts/health-gh.sh label create health --color D93F0B --description 'Found by the scheduled health check'
 ```
+
+Quoting rules (the command is checked before it runs):
+
+- Put every title, body and comment in **single quotes**. Inside them, backticks, `$`, `"`, `{job="x"}` and line breaks are kept as written. For an apostrophe, close the quote, add `\'` and reopen: `'it'\''s'` gives `it's`.
+- Outside single quotes, use only letters, digits and `_ . , : / = @ % + -`. No double quotes, `$`, backticks, `;`, `&&`, pipes, redirects, `#`, `~`, globs, heredocs, `bash` or `./` in front.
+- Keep each command under 9,000 characters; a longer body is refused. Trim the evidence to the numbers and queries that matter.
 
 It works only on issues with the `health` label and adds that label to the issues it creates. It shows only what `github-actions[bot]` wrote: `issue view` prints the body and the bot's comments as JSON, and leaves out every other comment. Issues opened by someone else are left out of the list, and `issue view` hides their title and body. A refusal starts with `health-gh:` and says why; fix the call rather than working around it.
 

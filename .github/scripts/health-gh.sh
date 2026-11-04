@@ -24,9 +24,11 @@ set -euo pipefail
 
 readonly label="health"
 readonly max_creates=5
-# How gh's JSON names the Actions bot: `app/github-actions` for issue authors,
-# `github-actions` for comment authors, `github-actions[bot]` in the REST API.
-readonly bot_logins='["github-actions[bot]","github-actions","app/github-actions"]'
+# How `gh --json` names the Actions bot (GITHUB_TOKEN writes): an issue author is
+# `app/github-actions` with `is_bot: true`, a comment author is `github-actions`.
+readonly jq_bot='
+  def issue_by_bot: .author.login == "app/github-actions" and (.author.is_bot | . == null or . == true);
+  def comment_by_bot: .author.login == "github-actions";'
 readonly private_vars="CLAUDE_CODE_OAUTH_TOKEN GRAFANA_MCP_READ_TOKEN GRAFANA_MCP_URL GH_TOKEN"
 readonly list_fields=" number title body state url createdAt updatedAt closedAt labels "
 readonly hidden="(not shown: not written by github-actions[bot])"
@@ -74,6 +76,8 @@ require_public() {
     if [ "$name" = GRAFANA_MCP_URL ]; then
       host=${value#*://}
       host=${host%%/*}
+      host=${host##*@}
+      host=${host%%:*}
       [ -z "$host" ] || [[ $text != *"$host"* ]] || refuse "the text contains the Grafana host name; leave it out"
     fi
   done
@@ -134,13 +138,14 @@ issue_list() {
       *) refuse "issue list does not take '$1'" ;;
     esac
   done
+  local fields_pattern='^[a-zA-Z]+(,[a-zA-Z]+)*$'
+  [[ $fields =~ $fields_pattern ]] || refuse "--json takes comma-separated field names:$list_fields"
   IFS=, read -r -a requested <<<"$fields"
-  [ ${#requested[@]} -gt 0 ] || refuse "--json needs at least one field"
   for field in "${requested[@]}"; do
     [[ $list_fields == *" $field "* ]] || refuse "--json fields are:$list_fields"
   done
   gh issue list --label "$label" --state "$state" --limit "$limit" --json "$fields,author" |
-    jq --argjson bots "$bot_logins" 'map(select(.author.login as $login | any($bots[]; . == $login)) | del(.author))'
+    jq "$jq_bot"' map(select(issue_by_bot) | del(.author))'
 }
 
 issue_view() {
@@ -149,14 +154,13 @@ issue_view() {
   local issue
   issue=$(gh issue view "$1" --json number,title,state,author,body,labels,comments)
   has_label <<<"$issue" || refuse "issue #$1 does not carry the '$label' label"
-  jq --argjson bots "$bot_logins" --arg hidden "$hidden" '
-    def by_bot: .author.login as $login | any($bots[]; . == $login);
+  jq --arg hidden "$hidden" "$jq_bot"'
     {
       number,
       state,
-      title: (if by_bot then .title else $hidden end),
-      body: (if by_bot then .body else $hidden end),
-      comments: [.comments[]? | select(by_bot) | { createdAt, body }]
+      title: (if issue_by_bot then .title else $hidden end),
+      body: (if issue_by_bot then .body else $hidden end),
+      comments: [.comments[]? | select(comment_by_bot) | { createdAt, body }]
     }' <<<"$issue"
 }
 
