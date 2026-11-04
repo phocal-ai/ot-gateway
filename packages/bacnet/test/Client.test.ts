@@ -1,13 +1,15 @@
 /**
  * The BACnet/IP client over real UDP on loopback, against simulated devices
- * and against hand-written peers that drop, delay or misdirect answers.
+ * and against hand-written peers that drop, delay or misdirect answers;
+ * discovery with several devices on one broadcast, on an in-memory network.
  */
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
-import { driverRequests, withMetricAttributes } from "@ot-gateway/core"
-import { Effect, Exit, Metric, Queue, Result, Schedule } from "effect"
+import { driverRequests, makeMemoryNetwork, withMetricAttributes } from "@ot-gateway/core"
+import { Effect, Exit, Fiber, Metric, Queue, Result, Schedule } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
+import { TestClock } from "effect/testing"
 import {
   type Apdu,
   type BacnetClientOptions,
@@ -503,4 +505,58 @@ describe("ReadPropertyMultiple answers", () => {
     ].map((answer) => checkReadPropertyMultipleAck(asked, answer))
     expect(failures.every(Result.isFailure)).toBe(true)
   })
+})
+
+const at = (ip: string) => NetAddress.inetAddressFromIpStringUnsafe(ip, 47_808)
+
+describe("discover on an in-memory network", () => {
+  it.effect("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
+    Effect.gen(function* () {
+      const network = makeMemoryNetwork()
+      const serve = (ip: string, instance: number) =>
+        Effect.flatMap(network.host(ip).udp({ address: ip, port: 47_808 }), (socket) =>
+          serveSimulatedDevice(socket, makeDevice(instance))
+        )
+      yield* serve("10.0.2.1", 2001)
+      yield* serve("10.0.2.2", 2001)
+      yield* serve("10.0.2.3", 3001)
+      // A peer that says I-Am for 4001 twice from one address, as a device does when it hears Who-Is twice.
+      const peer = yield* network.host("10.0.2.4").udp({ address: "10.0.2.4", port: 47_808 })
+      yield* peer.reader
+      const peerWriter = yield* peer.writer
+      const repeatedIAm = encodeFrame({
+        _tag: "UnconfirmedRequest",
+        service: UnconfirmedService.IAm,
+        body: encodeIAm({
+          device: { objectType: ObjectType.device, instance: 4001 },
+          maxApdu: 480,
+          segmentation: 3,
+          vendorId: 1
+        })
+      })
+      const socket = yield* network.host("10.0.0.1").udp({ address: "10.0.0.1", port: 47_808 })
+      const client = yield* makeBacnetClient(socket, {
+        broadcastAddress: at("255.255.255.255"),
+        requestTimeout: "1 second"
+      })
+
+      const discovering = yield* client.discover({ within: "1 second" }).pipe(Effect.forkChild)
+      yield* TestClock.adjust("10 millis")
+      yield* peerWriter.write({ payload: repeatedIAm, address: at("10.0.0.1") })
+      yield* peerWriter.write({ payload: repeatedIAm, address: at("10.0.0.1") })
+      yield* TestClock.adjust("1 second")
+      const found = yield* Fiber.join(discovering)
+
+      const byInstance = new Map(found.map((device) => [device.instance, device]))
+      expect([...byInstance.keys()].toSorted((left, right) => left - right)).toEqual([2001, 3001, 4001])
+      const claimed = byInstance.get(2001)
+      const sources = claimed === undefined ? [] : [claimed, ...claimed.conflicts]
+      expect(sources.map((source) => NetAddress.formatInet(source.address)).toSorted()).toEqual([
+        "10.0.2.1:47808",
+        "10.0.2.2:47808"
+      ])
+      expect(byInstance.get(3001)?.conflicts).toEqual([])
+      expect(byInstance.get(4001)?.conflicts).toEqual([])
+    }).pipe(Effect.scoped)
+  )
 })

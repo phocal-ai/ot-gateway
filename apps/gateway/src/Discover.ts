@@ -7,16 +7,25 @@
  * `{ "devices": [...] }` in the config's own shape on stdout: ids are slugs
  * of the object names, units QUDT where known, and nothing writable (a
  * write is a decision, not a default). Progress and failures go to stderr.
+ *
+ * When more than one address answers for the same device instance, the
+ * instance does not say which host is the device. Its draft entry then has
+ * no `address` and no points, and a warning on stderr names every address
+ * that answered, so that the operator takes the address from a source they
+ * trust.
  */
 import {
   type BacnetClient,
   type DescribedDevice,
+  type DeviceAddress,
   type DiscoveredDevice,
   describeDevice,
+  type FoundDevice,
   makeBacnetNetwork,
+  MAX_CONFLICTS,
   MAX_OBJECTS
 } from "@ot-gateway/bacnet"
-import type { GatewayConfig } from "@ot-gateway/core"
+import type { GatewayConfig, Network } from "@ot-gateway/core"
 import { Console, Effect } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 
@@ -46,16 +55,20 @@ const unique = (taken: Set<string>, wanted: string, suffix: string) => {
   return id
 }
 
-/** A device's address for the config: only for a device on this network (one behind a router is found by Who-Is). */
-const addressOf = (device: DiscoveredDevice) => {
-  if (device.network !== undefined) return undefined
+/**
+ * A device's address for the config: only for a device on this network (one
+ * behind a router is found by Who-Is), and only when no other address
+ * answered for its instance.
+ */
+const addressOf = (device: FoundDevice) => {
+  if (device.network !== undefined || device.conflicts.length > 0) return undefined
   const host = NetAddress.formatHost(device.address)
   return device.address.port === 47808 ? host : `${host}:${device.address.port}`
 }
 
 /** The config draft for described devices, ids unique across them and against `existing`. */
 export const draftDevices = (
-  found: ReadonlyArray<{ readonly device: DiscoveredDevice; readonly described: DescribedDevice }>,
+  found: ReadonlyArray<{ readonly device: FoundDevice; readonly described: DescribedDevice }>,
   existing: ReadonlyArray<string> = []
 ) => {
   const deviceIds = new Set(existing)
@@ -89,9 +102,37 @@ export const draftDevices = (
  */
 export const printable = (name: string) => name.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, 120)
 
-/** Describe one device, or say on stderr why not and leave it out. */
-const describeOne = (client: BacnetClient, device: DiscoveredDevice) =>
+const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(":")
+
+/** Where an answer came from, as printed: its IP address and port, and its network behind a router. */
+const sourceText = (source: DeviceAddress) =>
+  printable(
+    NetAddress.formatInet(source.address) +
+      (source.network === undefined
+        ? ""
+        : ` (network ${source.network.network}, address ${hex(source.network.address)})`)
+  )
+
+/** Name every address that answered for the device's instance, and say where its address must come from. */
+const conflictWarning = (device: FoundDevice) =>
+  Console.error(
+    `  device ${device.instance}: WARNING, more than one address answered for it: ` +
+      [device, ...device.conflicts].map(sourceText).join(", ") +
+      (device.conflicts.length >= MAX_CONFLICTS ? " and possibly more" : "") +
+      ". Its draft entry has no address and no points. Take its address from a source you trust" +
+      " (commissioning sheet, device display, DHCP reservation), not from this list."
+  )
+
+/** Nothing read from a device: no name, no objects. */
+const NOT_DESCRIBED: DescribedDevice = { name: "", listed: 0, objects: [] }
+
+/**
+ * Describe one device, or say on stderr why not and leave it out. One that
+ * several addresses answered for is not read from any of them.
+ */
+const describeOne = (client: BacnetClient, device: FoundDevice) =>
   Effect.gen(function* () {
+    if (device.conflicts.length > 0) return [{ device, described: NOT_DESCRIBED }]
     const described = yield* describeDevice(client, device, device.instance)
     yield* Console.error(
       `  device ${device.instance} at ${NetAddress.formatInet(device.address)}: "${printable(described.name)}", ${described.objects.length} point(s)` +
@@ -110,10 +151,10 @@ const describeOne = (client: BacnetClient, device: DiscoveredDevice) =>
 const skip = (device: DiscoveredDevice, why: string) =>
   Console.error(`  device ${device.instance}: left out, ${why}`).pipe(Effect.as([]))
 
-/** Discover, describe and print the draft. */
-export const discover = (config: GatewayConfig) =>
+/** Discover, describe and print the draft; through `network` instead of Node's in a simulation. */
+export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">) =>
   Effect.gen(function* () {
-    const client = yield* makeBacnetNetwork(config.bacnet)
+    const client = yield* makeBacnetNetwork(config.bacnet, network)
     yield* Console.error(`Who-Is to ${config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
     const devices = yield* client.discover({ within: LISTEN })
     if (devices.length === 0) {
@@ -121,6 +162,12 @@ export const discover = (config: GatewayConfig) =>
         "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD."
       )
     }
+    // Configured devices are named too: one configured without an address is located by the same broadcast.
+    yield* Effect.forEach(
+      devices.filter((device) => device.conflicts.length > 0),
+      conflictWarning,
+      { discard: true }
+    )
     const configured = new Map(
       config.devices.flatMap((device) => (device.protocol === "bacnet-ip" ? [[device.deviceInstance, device.id]] : []))
     )
