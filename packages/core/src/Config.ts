@@ -143,14 +143,22 @@ export type Device = typeof Device.Type
 const ConnectString = Schema.NonEmptyString.pipe(Schema.check(Schema.isMaxLength(1_024)))
 
 export const MqttSettings = Schema.Struct({
-  /** `mqtt://` or `mqtts://host:port`, without credentials (they would be printed and logged with it). */
+  /**
+   * `mqtts://host:port` (TLS) or `mqtt://host:port`, without credentials (they
+   * would be printed and logged with it). Whitespace around it is refused
+   * rather than trimmed, so the URL that is checked is the one that is used.
+   */
   url: Schema.NonEmptyString.pipe(
     Schema.check(
-      Schema.makeFilter(
-        (url) =>
-          !/^[a-z][a-z0-9+.-]*:\/\/[^/?#]*@/i.test(url) ||
+      Schema.makeFilter((url) => url.trim() === url || "must not start or end with whitespace"),
+      Schema.makeFilter((url) => {
+        const parsed = URL.parse(url)
+        if (parsed === null) return "must be a URL, such as mqtts://broker.local:8883"
+        return (
+          (parsed.username === "" && parsed.password === "") ||
           "must not contain credentials; use mqtt.username and mqtt.passwordEnv"
-      )
+        )
+      })
     )
   ),
   clientId: Schema.optionalKey(ConnectString),
@@ -159,6 +167,31 @@ export const MqttSettings = Schema.Struct({
   passwordEnv: Schema.optionalKey(Schema.String)
 })
 export type MqttSettings = typeof MqttSettings.Type
+
+const loopbackIpv4 = new RegExp(`^127(\\.${octet}){3}$`)
+
+/**
+ * Hosts on this machine: `localhost`, 127.0.0.0/8 and `::1`. `URL` leaves the
+ * host of an `mqtt:` URL as written (case included), except IPv6, which it
+ * normalizes and keeps in brackets. Any other host is treated as remote.
+ */
+const isLoopbackHost = (hostname: string): boolean => {
+  const host = hostname.toLowerCase()
+  return host === "localhost" || host === "[::1]" || loopbackIpv4.test(host)
+}
+
+/**
+ * The warning for a broker password that is sent without TLS: `passwordEnv`
+ * set and an `mqtt://` URL to a host that is not this machine. MQTT carries
+ * the password in the CONNECT packet, so only `mqtts://` keeps it encrypted
+ * on the network. `undefined` when there is nothing to warn about.
+ */
+export const mqttPasswordWarning = (settings: MqttSettings): string | undefined => {
+  if (settings.passwordEnv === undefined) return undefined
+  const url = URL.parse(settings.url)
+  if (url === null || url.protocol !== "mqtt:" || isLoopbackHost(url.hostname)) return undefined
+  return "the MQTT password is sent unencrypted over mqtt://; use mqtts:// to encrypt it"
+}
 
 export const BufferSettings = Schema.Struct({
   /** SQLite file used for store-and-forward. */

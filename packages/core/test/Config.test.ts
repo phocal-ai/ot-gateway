@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Exit } from "effect"
-import { cycleTimeoutMs, parseConfig } from "../src/index.ts"
+import { cycleTimeoutMs, mqttPasswordWarning, parseConfig } from "../src/index.ts"
 
 const minimal = {
   site: "vienna-hq",
@@ -209,4 +209,73 @@ describe("parseConfig", () => {
       expect(Exit.isFailure(yield* Effect.exit(parseConfig(JSON.stringify(tooShort))))).toBe(true)
     })
   )
+})
+
+/** The decode error for a config whose broker is at `url`, or "accepted". */
+const brokerUrlRejection = (url: string) =>
+  parseConfig(JSON.stringify({ ...minimal, mqtt: { url } })).pipe(
+    Effect.as("accepted"),
+    Effect.catchTag("SchemaError", (error) => Effect.succeed(String(error)))
+  )
+
+describe("mqtt.url", () => {
+  it.effect("refuses whitespace around the URL instead of trimming it", () =>
+    Effect.gen(function* () {
+      for (const url of [" mqtts://broker.local:8883", "mqtts://broker.local:8883\n", "\tmqtt://user:secret@broker"]) {
+        const rejection = yield* brokerUrlRejection(url)
+        expect(rejection).toContain("must not start or end with whitespace")
+        expect(rejection).not.toContain("secret")
+      }
+    })
+  )
+
+  it.effect("refuses credentials wherever URL parsing finds them", () =>
+    Effect.gen(function* () {
+      for (const url of [
+        "mqtt://user:secret@broker:1883",
+        "mqtts://token@broker",
+        "MQTTS://user:secret@broker",
+        "mqtt://:secret@broker"
+      ]) {
+        const rejection = yield* brokerUrlRejection(url)
+        expect(rejection).toContain("must not contain credentials; use mqtt.username and mqtt.passwordEnv")
+        expect(rejection).not.toContain("secret")
+      }
+      expect(yield* brokerUrlRejection("mqtts://broker.local:8883/path?query=a@b")).toBe("accepted")
+    })
+  )
+
+  it.effect("refuses a URL that does not parse, without repeating it", () =>
+    Effect.gen(function* () {
+      const rejection = yield* brokerUrlRejection("mqtt://user:secret@broker:99999")
+      expect(rejection).toContain("must be a URL")
+      expect(rejection).not.toContain("secret")
+      expect(yield* brokerUrlRejection("broker.local")).toContain("must be a URL")
+    })
+  )
+})
+
+describe("mqttPasswordWarning", () => {
+  it("warns about a password over mqtt:// to a remote broker", () => {
+    for (const url of ["mqtt://broker.local:1883", "mqtt://192.168.1.10", "mqtt://[fd00::1]:1883", "MQTT://broker"]) {
+      expect(mqttPasswordWarning({ url, passwordEnv: "MQTT_PASSWORD" })).toContain("use mqtts://")
+    }
+  })
+
+  it("does not warn over mqtts://, to this machine, or without a password", () => {
+    for (const url of ["mqtts://broker.local:8883", "MQTTS://broker.local"]) {
+      expect(mqttPasswordWarning({ url, passwordEnv: "MQTT_PASSWORD" })).toBeUndefined()
+    }
+    for (const url of ["mqtt://localhost:1883", "mqtt://LOCALHOST", "mqtt://127.0.0.1", "mqtt://127.10.20.30:1884"]) {
+      expect(mqttPasswordWarning({ url, passwordEnv: "MQTT_PASSWORD" })).toBeUndefined()
+    }
+    expect(mqttPasswordWarning({ url: "mqtt://[::1]:1883", passwordEnv: "MQTT_PASSWORD" })).toBeUndefined()
+    expect(mqttPasswordWarning({ url: "mqtt://broker.local:1883", username: "gw" })).toBeUndefined()
+  })
+
+  it("treats names and addresses that only look like loopback as remote", () => {
+    for (const url of ["mqtt://127.0.0.1.example.com", "mqtt://localhost.example.com", "mqtt://128.0.0.1"]) {
+      expect(mqttPasswordWarning({ url, passwordEnv: "MQTT_PASSWORD" })).toBeDefined()
+    }
+  })
 })
