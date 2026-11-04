@@ -67,13 +67,13 @@ Traces on `grafanacloud-traces`: failed cycles carry `span.ot_gateway.outcome`. 
 
 ## 3. Claude Code in this repo
 
-Loki, `{service_name="claude-code"}`. The repo is structured metadata (`vcs_repository_name="ot-gateway"`), so filter after the selector:
+Loki, `{service_name="claude-code"}`. The repo is structured metadata, so filter after the selector. It is `ot-gateway`, and `plenum` before the repo was renamed, hence `vcs_repository_name=~"ot-gateway|plenum"`:
 
-- **Failing tools:** `sum by (tool_name, success) (count_over_time({service_name="claude-code"} | event_name="tool_result" | vcs_repository_name="ot-gateway" [$W]))`. Report the failure rate per tool. For failures, pull a few lines with `| success="false"` to show the error.
-- **Hooks:** `sum by (hook_name) (count_over_time({service_name="claude-code"} | event_name="hook_execution_complete" | vcs_repository_name="ot-gateway" [$W]))`. A Stop hook that keeps blocking means `pnpm check` keeps failing at the end of turns.
-- **Usage by model:** `sum by (model) (sum_over_time({service_name="claude-code"} | event_name="api_request" | vcs_repository_name="ot-gateway" | unwrap output_tokens [$W]))`. Swap in `input_tokens`, `cache_read_tokens` or `cache_creation_tokens` for the other token types.
+- **Failing tools:** `sum by (tool_name, success) (count_over_time({service_name="claude-code"} | event_name="tool_result" | vcs_repository_name=~"ot-gateway|plenum" [$W]))`. Report the failure rate per tool. For failures, pull a few lines with `| success="false"` to show the error.
+- **Hooks:** `sum by (hook_name) (count_over_time({service_name="claude-code"} | event_name="hook_execution_complete" | vcs_repository_name=~"ot-gateway|plenum" [$W]))`. A Stop hook that keeps blocking means `pnpm check` keeps failing at the end of turns.
+- **Usage by model:** `sum by (model) (sum_over_time({service_name="claude-code"} | event_name="api_request" | vcs_repository_name=~"ot-gateway|plenum" | unwrap output_tokens [$W]))`. Swap in `input_tokens`, `cache_read_tokens` or `cache_creation_tokens` for the other token types.
   We use Claude Code on an Anthropic subscription, so nothing is billed per token. What a subscription limits is usage per time window, which tokens measure. Each event's `cost_usd` is Claude Code's estimate at pay-as-you-go API prices. If you report it, label it "API-equivalent estimate, not billed", never as spend.
-- **API errors:** `count_over_time({service_name="claude-code"} | event_name="api_error" | vcs_repository_name="ot-gateway" [$W])`
+- **API errors:** `count_over_time({service_name="claude-code"} | event_name="api_error" | vcs_repository_name=~"ot-gateway|plenum" [$W])`
 
 ## Report
 

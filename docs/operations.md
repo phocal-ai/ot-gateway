@@ -115,25 +115,27 @@ OT_GATEWAY_TAG=v0.7.0 docker compose -f packaging/compose.yaml up -d
 
 Until v0.5.0 the project was called Plenum. From v0.6.0 everything that carried the name is called `ot-gateway`, and nothing reads the old names any more. MQTT topics and payloads, the config's keys and the status API are the same. What changes:
 
-| Before (v0.5.0 and earlier)                     | From v0.6.0                                                     |
-| ----------------------------------------------- | --------------------------------------------------------------- |
-| image `ghcr.io/phocal-ai/plenum-gateway`        | `ghcr.io/phocal-ai/ot-gateway`                                  |
-| container `plenum`, `PLENUM_TAG`                | container `ot-gateway`, `OT_GATEWAY_TAG`                        |
-| `/etc/plenum`, `/var/lib/plenum`, `/opt/plenum` | `/etc/ot-gateway`, `/var/lib/ot-gateway`, `/opt/ot-gateway`     |
-| service `plenum-gateway`, user `plenum`         | service `ot-gateway`, user `ot-gateway`                         |
-| `plenum.json`, `plenum.env` in a checkout       | `ot-gateway.json`, `ot-gateway.env`                             |
-| metrics `plenum_*`, attributes `plenum.*`       | `ot_gateway_*`, `ot_gateway.*`                                  |
-| `service.name=plenum-gateway`                   | `service.name=ot-gateway`                                       |
-| dashboard `phocal-plenum-gateway`               | `phocal-ot-gateway` (import it; the old one stops getting data) |
+| Before (v0.5.0 and earlier)                                              | From v0.6.0                                                     |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| image `ghcr.io/phocal-ai/plenum-gateway`                                 | `ghcr.io/phocal-ai/ot-gateway`                                  |
+| container `plenum`, `PLENUM_TAG`                                         | container `ot-gateway`, `OT_GATEWAY_TAG`                        |
+| `/etc/plenum`, `/var/lib/plenum`, `/opt/plenum`                          | `/etc/ot-gateway`, `/var/lib/ot-gateway`, `/opt/ot-gateway`     |
+| service `plenum-gateway`, user `plenum`                                  | service `ot-gateway`, user `ot-gateway`                         |
+| `plenum.json`, `plenum.env` in a checkout                                | `ot-gateway.json`, `ot-gateway.env`                             |
+| metrics `plenum_*`, attributes `plenum.*`                                | `ot_gateway_*`, `ot_gateway.*`                                  |
+| `service.name=plenum-gateway`                                            | `service.name=ot-gateway`                                       |
+| dashboard `phocal-plenum-gateway`                                        | `phocal-ot-gateway` (import it; the old one stops getting data) |
+| default MQTT client id `plenum-<hostname>`                               | `ot-gateway-<hostname>`                                         |
+| `~/.config/phocal/plenum-gateway.env`, `PLENUM_ENV_FILE` (in a checkout) | `~/.config/phocal/ot-gateway.env`, `OT_GATEWAY_ENV_FILE`        |
 
-Variables that the config names, like `mqtt.passwordEnv`, keep working under the names it gives. Only a `service.namespace=plenum` in `OTEL_RESOURCE_ATTRIBUTES` needs changing to `ot-gateway`, so that the new dashboard finds the gateway.
+Variables that the config names, like `mqtt.passwordEnv`, keep working under the names it gives. Only a `service.namespace=plenum` in `OTEL_RESOURCE_ATTRIBUTES` needs changing to `ot-gateway`, so that the new dashboard finds the gateway. A broker that allows clients by id (a Mosquitto ACL with `%c`, EMQX client-id authentication, an AWS IoT policy) refuses the new default id: set `mqtt.clientId` to the old one, `plenum-<hostname>`, or allow the new one first.
 
 ### With Docker Compose
 
-Stop the old container, move the config and the outbox, point the outbox at its new path, and check the config against the new image before starting it:
+Stop the old container cleanly (it says `offline` to the broker and closes the outbox), move the config and the outbox, point the outbox at its new path, and check the config against the new image before starting it:
 
 ```bash
-docker rm -f plenum
+docker stop -t 30 plenum && docker rm plenum
 ```
 
 ```bash
@@ -152,11 +154,11 @@ docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gatew
 curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.0/packaging/compose.yaml && docker compose -f compose.yaml up -d
 ```
 
-The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
+Fetching `compose.yaml` replaces the one in the current directory: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service, move the config and the outbox, then install from a v0.6.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.6.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -167,10 +169,22 @@ sudo mv /etc/plenum /etc/ot-gateway && sudo mv /var/lib/plenum /var/lib/ot-gatew
 ```
 
 ```bash
+sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-gateway/gateway.env
+```
+
+```bash
+git fetch --tags && git checkout v0.6.0
+```
+
+```bash
+pnpm install && pnpm --filter @ot-gateway/web build
+```
+
+```bash
 sudo packaging/install.sh /etc/ot-gateway/gateway.json
 ```
 
-systemd hands `/var/lib/ot-gateway` to the new user when the service starts (`StateDirectory`). Once it runs, remove what is left: `sudo rm -r /opt/plenum && sudo userdel plenum`.
+`pnpm install` comes first because the old `node_modules` still links the old package names, and the status page is built again so the installer does not copy the old one. systemd hands `/var/lib/ot-gateway` to the new user when the service starts (`StateDirectory`). Once it runs, remove what is left: `sudo rm -r /opt/plenum && sudo userdel plenum`.
 
 ## The outbox
 

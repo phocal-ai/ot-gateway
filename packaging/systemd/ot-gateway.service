@@ -4,7 +4,7 @@
 # /etc/ot-gateway/gateway.env. The outbox belongs under /var/lib/ot-gateway
 # (StateDirectory), so point `buffer.path` there.
 [Unit]
-Description=OT Gateway building gateway (Modbus TCP and BACnet/IP to MQTT)
+Description=OT Gateway: Modbus TCP and BACnet/IP to MQTT for buildings
 Documentation=https://github.com/phocal-ai/ot-gateway
 Wants=network-online.target
 After=network-online.target time-sync.target
