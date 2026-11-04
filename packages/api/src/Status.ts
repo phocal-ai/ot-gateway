@@ -55,9 +55,17 @@ export const HostStatus = Schema.Struct({
   clockSteps: Schema.Number,
   openFds: Schema.optionalKey(Schema.Number),
   temperatureC: Schema.optionalKey(Schema.Number),
-  /** Raspberry Pi power and thermal conditions, now and since boot; absent off a Pi. */
+  /**
+   * Raspberry Pi power and thermal conditions; absent off a Pi. `now` is any seen in the last four samples (about a minute). `watched` is
+   * what the Pi lets the gateway see: all four conditions, and since boot, before kernel 6.18; under-voltage alone
+   * from 6.18 on.
+   */
   throttled: Schema.optionalKey(
-    Schema.Struct({ now: Schema.Array(Schema.String), sinceBoot: Schema.Array(Schema.String) })
+    Schema.Struct({
+      now: Schema.Array(Schema.String),
+      sinceBoot: Schema.optionalKey(Schema.Array(Schema.String)),
+      watched: Schema.Array(Schema.String)
+    })
   ),
   /** Free space on the outbox's filesystem, in bytes. */
   diskFreeBytes: Schema.optionalKey(Schema.Number)

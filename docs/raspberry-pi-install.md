@@ -84,12 +84,15 @@ and put that address in `HostName` instead. Reserve the address for the Pi in th
 
 **If it warns that the remote host identification has changed**, you wrote a new card for a Pi you logged into before. Forget the old one with `ssh-keygen -R ot-gateway.local` and log in again.
 
-Check that the 64-bit system is running, and note how the Pi is doing before the gateway runs on it: `throttled=0x0` means no under-voltage or overheating since boot.
+Check that the 64-bit system is running, and note how the Pi is doing before the gateway runs on it: `throttled=0x0` means no under-voltage or overheating right now, and an empty kernel log means no under-voltage since boot.
 
 ```bash
 uname -m      # must print aarch64
 vcgencmd get_throttled; vcgencmd measure_temp
+journalctl -k -g voltage      # "Undervoltage detected!" if the power supply is too weak
 ```
+
+On Raspberry Pi OS 13 (kernel 6.18 and later) the kernel clears the firmware's since-boot flags every two seconds, so `vcgencmd get_throttled` shows only the last moments; the kernel log is the record.
 
 ### Optional: let an AI assistant do the rest
 
@@ -195,6 +198,6 @@ curl -s http://127.0.0.1:8080/api/status
 
 On a test Pi with a few devices, expect about 130 MB of memory, a few percent of CPU and an event-loop lag (p99) of a few milliseconds once the first minute is over.
 
-Under-voltage and throttling do not show yet on Raspberry Pi OS 13 (kernel 6.18 and later): the gateway reads them from a file those kernels no longer have. Check them on the Pi with `vcgencmd get_throttled`, which should print `throttled=0x0`.
+On Raspberry Pi OS 13 (kernel 6.18 and later) the Pi lets the gateway see under-voltage (even a dip of a second), but not a capped frequency, throttling or the soft temperature limit, and nothing from before the gateway started. The Host card says `power: under-voltage only`. The gateway still warns when the SoC gets hot (80 °C), and on the Pi `vcgencmd get_throttled` shows the rest.
 
 From here on, [operations.md](operations.md) covers upgrades, logs and the outbox, and [raspberry-pi-testing.md](raspberry-pi-testing.md) the tests before a Pi goes into a building.
