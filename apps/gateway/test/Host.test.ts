@@ -196,13 +196,18 @@ describe("host monitor", () => {
       expect(lines).toEqual([
         "Info: event loop responsive again",
         "Info: host has cooled down",
-        "Info: host conditions cleared",
         "Info: the outbox's disk has room again"
       ])
-      // The gauges keep the worst of the last minute, so a stall between two exports still shows.
+      // The gauges keep the worst of the last minute, so a stall or a dip between two exports still shows.
       expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(2.5)
+      expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
+      expect(monitor.latest()?.throttled?.now).toEqual(["under_voltage", "throttled"])
       yield* Effect.all([tick, tick, tick])
       expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(0.01)
+      // Conditions clear after a clean minute, not at the first clean sample.
+      expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(0)
+      expect(monitor.latest()?.throttled?.now).toEqual([])
+      expect(lines.at(-1)).toBe("Info: host conditions cleared")
       yield* Fiber.interrupt(fiber)
     })
   )
@@ -296,6 +301,19 @@ describe("throttling source", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("finds a sensor whose driver loads after the gateway started", () =>
+    Effect.gen(function* () {
+      const { fs, root } = yield* sysfs({ "class/hwmon/hwmon0/name": "cpu_thermal\n" })
+      const source = yield* throttlingSource(fs, { sysfs: root })
+      expect(source.kind).toBe("none")
+      expect(yield* source.read).toBeUndefined()
+      yield* fs.makeDirectory(`${root}/class/hwmon/hwmon1`)
+      yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/in0_lcrit_alarm`, "1\n")
+      yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/name`, "rpi_volt\n")
+      expect(yield* source.read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.live("keeps a dip the sensor showed between two reads until the next read", () =>
     Effect.gen(function* () {
       const { fs, root } = yield* sysfs({
@@ -344,6 +362,8 @@ describe("throttling source", () => {
       expect(monitor.latest()?.throttled).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
       alarm = "0"
       yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
+      expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
+      yield* TestClock.adjust(3 * SAMPLE_INTERVAL_MS)
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(0)
       // No series for what the sensor cannot see: a 0 would read as "not throttled".
       const series = (yield* Metric.snapshot).filter(

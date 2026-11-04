@@ -56,8 +56,9 @@ export const HostStatus = Schema.Struct({
   openFds: Schema.optionalKey(Schema.Number),
   temperatureC: Schema.optionalKey(Schema.Number),
   /**
-   * Raspberry Pi power and thermal conditions; absent off a Pi. `watched` is what the Pi lets the gateway see:
-   * all four conditions, now and since boot, on kernels before 6.18; under-voltage now alone on later ones.
+   * Raspberry Pi power and thermal conditions; absent off a Pi. `now` is any seen in the last minute. `watched` is
+   * what the Pi lets the gateway see: all four conditions, and since boot, before kernel 6.18; under-voltage alone
+   * from 6.18 on.
    */
   throttled: Schema.optionalKey(
     Schema.Struct({
