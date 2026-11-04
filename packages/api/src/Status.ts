@@ -56,16 +56,12 @@ export const HostStatus = Schema.Struct({
   openFds: Schema.optionalKey(Schema.Number),
   temperatureC: Schema.optionalKey(Schema.Number),
   /**
-   * Raspberry Pi power and thermal conditions; absent off a Pi. `now` is any seen in the last four samples (about a minute). `watched` is
-   * what the Pi lets the gateway see: all four conditions, and since boot, before kernel 6.18; under-voltage alone
-   * from 6.18 on.
+   * Raspberry Pi power and thermal conditions; absent off a Pi. `now` is any seen in the last four samples (about a
+   * minute). `watched` is what the Pi lets the gateway see: all four conditions on kernels that still expose the
+   * firmware's mask, under-voltage alone on newer ones (the Raspberry Pi kernel dropped the mask in March 2025).
    */
   throttled: Schema.optionalKey(
-    Schema.Struct({
-      now: Schema.Array(Schema.String),
-      sinceBoot: Schema.optionalKey(Schema.Array(Schema.String)),
-      watched: Schema.Array(Schema.String)
-    })
+    Schema.Struct({ now: Schema.Array(Schema.String), watched: Schema.Array(Schema.String) })
   ),
   /** Free space on the outbox's filesystem, in bytes. */
   diskFreeBytes: Schema.optionalKey(Schema.Number)

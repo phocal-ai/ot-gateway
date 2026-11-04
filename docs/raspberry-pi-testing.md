@@ -28,7 +28,7 @@ A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What run
    curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
    ```
 
-3. Note the baseline: no power or thermal conditions (`0x0`), no under-voltage in the kernel log, and the idle temperature. On kernel 6.18 and later, `vcgencmd` shows only the last two seconds; the kernel log is the record since boot.
+3. Note the baseline: no power or thermal conditions (`0x0`), no under-voltage in the kernel log, and the idle temperature. `vcgencmd` shows only the last two seconds (the kernel clears the flags that often); the kernel log is the record since boot.
 
    ```bash
    vcgencmd get_throttled; vcgencmd measure_temp; journalctl -k -g voltage
@@ -125,7 +125,7 @@ Pull the plug (or switch the smart plug) while the gateway is writing its outbox
 
 ### 7. Heat
 
-An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cpu 4` beside the gateway. This proves the warnings work: expect `host is hot` and a `soft_temperature_limit` or `throttled` condition on the status page, in the health message and on the dashboard. On kernel 6.18 and later the gateway cannot see those two: expect `host is hot` and the temperature, and check `vcgencmd get_throttled` on the Pi while it is hot. The gateway itself should keep every device `ok`.
+An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cpu 4` beside the gateway. This proves the warnings work: expect `host is hot` and a `soft_temperature_limit` or `throttled` condition on the status page, in the health message and on the dashboard. On Raspberry Pi OS 13 and other kernels built since March 2025 the gateway cannot see those two: expect `host is hot` and the temperature, and check `vcgencmd get_throttled` on the Pi while it is hot. The gateway itself should keep every device `ok`.
 
 ## Pass criteria
 

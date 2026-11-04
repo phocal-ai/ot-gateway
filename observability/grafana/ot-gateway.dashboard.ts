@@ -650,7 +650,7 @@ timeseries(
     x: 6,
     w: 6,
     description:
-      "What the Raspberry Pi firmware reports: under_voltage (a weak power supply or cable, the most common cause of SD corruption), frequency_capped, throttled, soft_temperature_limit. On kernel 6.18 and later only under_voltage (the kernel shows no more); empty off a Pi."
+      "What the Raspberry Pi firmware reports: under_voltage (a weak power supply or cable, the most common cause of SD corruption), frequency_capped, throttled, soft_temperature_limit. On Raspberry Pi kernels built since March 2025 only under_voltage (the kernel shows no more); empty off a Pi."
   }
 )
 timeseries(

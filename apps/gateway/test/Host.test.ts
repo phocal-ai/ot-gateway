@@ -34,18 +34,14 @@ import {
 import { parseVersion, versionFile } from "../src/Version.ts"
 
 describe("parsing", () => {
-  it("reads the firmware's throttle mask, now and since boot", () => {
-    expect(parseThrottled("0\n")).toEqual({ now: [], sinceBoot: [], watched: THROTTLE_CONDITIONS })
-    // Under-voltage now, and under-voltage and throttling since boot: the classic weak power supply.
-    expect(parseThrottled("50005\n")).toEqual({
-      now: ["under_voltage", "throttled"],
-      sinceBoot: ["under_voltage", "throttled"],
-      watched: THROTTLE_CONDITIONS
-    })
-    expect(parseThrottled("throttled=0x80008")).toMatchObject({
-      now: ["soft_temperature_limit"],
-      sinceBoot: ["soft_temperature_limit"]
-    })
+  it("reads the firmware's throttle mask: a condition counts at this moment or in the last 2 seconds", () => {
+    expect(parseThrottled("0\n")).toEqual({ now: [], watched: THROTTLE_CONDITIONS })
+    // Under-voltage and throttling, now and in the last 2 seconds: the classic weak power supply.
+    expect(parseThrottled("50005\n")).toEqual({ now: ["under_voltage", "throttled"], watched: THROTTLE_CONDITIONS })
+    // Gone at this moment, but within the 2 seconds since the kernel's driver last cleared the flags.
+    expect(parseThrottled("50000")).toMatchObject({ now: ["under_voltage", "throttled"] })
+    expect(parseThrottled("2")).toMatchObject({ now: ["frequency_capped"] })
+    expect(parseThrottled("throttled=0x80000")).toMatchObject({ now: ["soft_temperature_limit"] })
     expect(parseThrottled("")).toBeUndefined()
     expect(parseThrottled("not a mask")).toBeUndefined()
   })
@@ -189,7 +185,7 @@ describe("host monitor", () => {
       // Everything recovers.
       lines.length = 0
       state.lag = { p99Ms: 5, maxMs: 10 }
-      state.throttled = "50000"
+      state.throttled = "0"
       state.temperature = 60
       state.free = 1e9
       yield* tick
@@ -220,7 +216,7 @@ describe("host monitor", () => {
     })
   )
 
-  it.effect("reports conditions from before it started once, and leaves out what the machine cannot tell", () =>
+  it.effect("leaves out what the machine cannot tell", () =>
     Effect.gen(function* () {
       const lines: Array<string> = []
       const logger = Logger.layer([
@@ -229,16 +225,13 @@ describe("host monitor", () => {
         })
       ])
       const { state, sources } = fakeHost()
-      state.throttled = "10000"
       const monitor = yield* makeHostMonitor(sources, { version: "dev" })
       const fiber = yield* monitor.run.pipe(
-        withMetricAttributes({ test: "host-since-boot" }),
+        withMetricAttributes({ test: "host-unknown" }),
         Effect.provide(logger),
         Effect.forkChild
       )
       yield* Effect.yieldNow
-      yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
-      expect(lines).toEqual(["Warn: host has reported power or thermal conditions since boot"])
 
       // Not a Pi, no thermal zone, not Linux, no buffer: those fields are absent, not 0.
       state.throttled = undefined
@@ -250,6 +243,7 @@ describe("host monitor", () => {
       expect(snapshot).not.toHaveProperty("temperatureC")
       expect(snapshot).not.toHaveProperty("throttled")
       expect(snapshot).not.toHaveProperty("diskFreeBytes")
+      expect(lines).toEqual([])
       yield* Fiber.interrupt(fiber)
     })
   )
@@ -268,7 +262,7 @@ const sysfs = (files: Record<string, string>) =>
   })
 
 describe("throttling source", () => {
-  it.effect("reads the firmware's mask where the kernel still exposes it (before 6.18)", () =>
+  it.effect("reads the firmware's mask where the kernel still exposes it (before March 2025)", () =>
     Effect.gen(function* () {
       const { fs, root } = yield* sysfs({
         "devices/platform/soc/soc:firmware/get_throttled": "50005\n",
@@ -292,7 +286,7 @@ describe("throttling source", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
-  it.effect("falls back to the rpi_volt sensor's under-voltage alarm (6.18 and later), and follows it", () =>
+  it.effect("falls back to the rpi_volt sensor's under-voltage alarm (newer kernels), and follows it", () =>
     Effect.gen(function* () {
       const { fs, root } = yield* sysfs({
         "class/hwmon/hwmon0/name": "cpu_thermal\n",
@@ -325,21 +319,35 @@ describe("throttling source", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
-  it.live("keeps a dip the sensor showed between two reads until the next read", () =>
-    Effect.gen(function* () {
-      const { fs, root } = yield* sysfs({
-        "class/hwmon/hwmon1/name": "rpi_volt\n",
-        "class/hwmon/hwmon1/in0_lcrit_alarm": "0\n"
-      })
-      const alarm = `${root}/class/hwmon/hwmon1/in0_lcrit_alarm`
-      const { read } = yield* throttlingSource(fs, { sysfs: root, pollMs: 5 })
-      yield* fs.writeFileString(alarm, "1\n")
-      yield* Effect.sleep("60 millis")
-      yield* fs.writeFileString(alarm, "0\n")
-      expect(yield* read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
-      expect(yield* read).toEqual({ now: [], watched: ["under_voltage"] })
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
-  )
+  for (const { kind, path, dip, clean, seen } of [
+    {
+      kind: "rpi-volt-sensor",
+      path: "class/hwmon/hwmon1/in0_lcrit_alarm",
+      dip: "1\n",
+      clean: "0\n",
+      seen: { now: ["under_voltage"], watched: ["under_voltage"] }
+    },
+    {
+      kind: "firmware-mask",
+      path: "devices/platform/soc/soc:firmware/get_throttled",
+      dip: "50005\n",
+      clean: "0\n",
+      seen: { now: ["under_voltage", "throttled"], watched: THROTTLE_CONDITIONS }
+    }
+  ]) {
+    it.live(`keeps a dip the ${kind} source showed between two reads until the next read`, () =>
+      Effect.gen(function* () {
+        const { fs, root } = yield* sysfs({ "class/hwmon/hwmon1/name": "rpi_volt\n", [path]: clean })
+        const source = yield* throttlingSource(fs, { sysfs: root, pollMs: 5 })
+        expect(source.kind).toBe(kind)
+        yield* fs.writeFileString(`${root}/${path}`, dip)
+        yield* Effect.sleep("60 millis")
+        yield* fs.writeFileString(`${root}/${path}`, clean)
+        expect(yield* source.read).toEqual(seen)
+        expect(yield* source.read).toEqual({ now: [], watched: seen.watched })
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+    )
+  }
 
   it.effect("reads nothing off a Pi", () =>
     Effect.gen(function* () {
@@ -352,7 +360,7 @@ describe("throttling source", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
-  it.effect("with the alarm alone, the monitor reports under-voltage and nothing since boot", () =>
+  it.effect("with the alarm alone, the monitor reports under-voltage and no other condition", () =>
     Effect.gen(function* () {
       const lines: Array<string> = []
       const logger = Logger.layer([

@@ -48,40 +48,41 @@ const COOL_C = 75
 export const LOW_DISK_BYTES = 64 * 1024 * 1024
 const ROOMY_BYTES = 128 * 1024 * 1024
 
-/** The Raspberry Pi firmware's power and thermal flags, by bit: now in bits 0–3, since boot in bits 16–19. */
+/**
+ * The Raspberry Pi firmware's power and thermal flags, by bit: at this moment in bits 0–3, and in bits 16–19
+ * since they were last cleared. The kernel's voltage driver clears those every 2 seconds (it has since 2018), so
+ * they mean "in the last 2 seconds", never "since boot". The kernel log keeps under-voltage since boot.
+ */
 export const THROTTLE_CONDITIONS = ["under_voltage", "frequency_capped", "throttled", "soft_temperature_limit"] as const
 export type ThrottleCondition = (typeof THROTTLE_CONDITIONS)[number]
 
 export interface Throttling {
   /** Conditions now; from the kernel's sensor, any seen since the previous read; in a snapshot, any in the last four samples (about a minute). */
   readonly now: ReadonlyArray<ThrottleCondition>
-  /** What the firmware remembers since boot; absent when the source cannot tell. */
-  readonly sinceBoot?: ReadonlyArray<ThrottleCondition>
   /** The conditions the source can see at all: all four from the firmware's mask, under-voltage alone from the kernel's sensor. */
   readonly watched: ReadonlyArray<ThrottleCondition>
 }
 
 /**
  * The firmware's `get_throttled` mask, as sysfs prints it (`50005`), or as
- * `vcgencmd get_throttled` does (`throttled=0x50005`). Anything else is not
- * a mask and gives `undefined`.
+ * `vcgencmd get_throttled` does (`throttled=0x50005`): a condition counts if
+ * either its bit for this moment or its bit for the last 2 seconds is set.
+ * Anything else is not a mask and gives `undefined`.
  */
 export const parseThrottled = (text: string): Throttling | undefined => {
   const match = /^(?:throttled=)?(?:0x)?([0-9a-f]{1,8})$/i.exec(text.trim())
   if (match === null) return undefined
   const mask = Number.parseInt(match[1] ?? "", 16)
   return {
-    now: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << bit)) !== 0),
-    sinceBoot: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << (bit + 16))) !== 0),
+    now: THROTTLE_CONDITIONS.filter((_, bit) => (mask & ((1 << bit) | (1 << (bit + 16)))) !== 0),
     watched: THROTTLE_CONDITIONS
   }
 }
 
 /**
  * The kernel's `rpi_volt` sensor, `in0_lcrit_alarm`: `1` when the firmware
- * reported under-voltage at the driver's last poll. The driver polls every
- * 2 seconds and clears the firmware's sticky bits each time, so this is
- * under-voltage now, nothing since boot, and none of the other conditions.
+ * reported under-voltage at the driver's last poll, every 2 seconds: so
+ * under-voltage in the last 2 seconds, and none of the other conditions.
  * Anything but `0` or `1` gives `undefined`.
  */
 export const parseUnderVoltageAlarm = (text: string): Throttling | undefined => {
@@ -135,8 +136,8 @@ export interface HostSources {
 
 const THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
 
-/** How often the `rpi_volt` alarm is read: half the driver's 2 s poll, so no value it reports goes unread. */
-export const UNDER_VOLTAGE_POLL_MS = 1_000
+/** How often the flags are read: half the kernel driver's 2 s poll, so no value it reports goes unread. */
+export const THROTTLE_POLL_MS = 1_000
 
 /** Where the Raspberry Pi's power and thermal flags come from, and an effect that reads them. */
 export interface ThrottlingSource {
@@ -146,15 +147,16 @@ export interface ThrottlingSource {
 }
 
 /**
- * Where the Raspberry Pi's power and thermal flags can be read. Kernels before
- * 6.18 expose the firmware's whole mask as `get_throttled`. Later ones only
- * the under-voltage alarm of the `rpi_volt` hwmon sensor, which shows the
- * last 2 seconds: it is polled every `UNDER_VOLTAGE_POLL_MS` until the scope
- * closes, and a read reports under-voltage if any poll since the previous
- * read saw it, so a dip between two 15 s samples is not missed. Neither on a
- * machine that is not a Pi: the reader gives `undefined`, and looks again at
- * every read (a directory listing), since a service can start before udev has
- * loaded the sensor's driver. `sysfs` and `pollMs` are for tests.
+ * Where the Raspberry Pi's power and thermal flags can be read. The firmware's
+ * whole mask, `get_throttled`, until the Raspberry Pi kernel dropped it in
+ * March 2025 (during 6.12); since then only the under-voltage alarm of the
+ * `rpi_volt` hwmon sensor. Both show the last 2 seconds, so the source is
+ * polled every `THROTTLE_POLL_MS` until the scope closes, and a read reports
+ * every condition any poll saw since the previous read: a dip between two
+ * 15 s samples is not missed. Neither on a machine that is not a Pi: the
+ * reader gives `undefined`, and looks again at every read (a directory
+ * listing), since a service can start before udev has loaded the sensor's
+ * driver. `sysfs` and `pollMs` are for tests.
  */
 export const throttlingSource = Effect.fnUntraced(function* (
   fs: FileSystem.FileSystem,
@@ -167,45 +169,49 @@ export const throttlingSource = Effect.fnUntraced(function* (
   const parsedFrom = (path: string, parse: (text: string) => Throttling | undefined) =>
     Effect.map(readText(path), (text) => (text === undefined ? undefined : parse(text)))
 
+  /** `current` polled in the background; each read adds what the polls saw since the previous one. */
+  const latched = Effect.fnUntraced(function* (current: Effect.Effect<Throttling | undefined>) {
+    const seenSinceRead = new Set<ThrottleCondition>()
+    // Every read looks at the source itself; the poller covers the time between reads, from one interval on.
+    yield* Effect.sleep(options.pollMs ?? THROTTLE_POLL_MS).pipe(
+      Effect.andThen(current),
+      Effect.tap((polled) =>
+        Effect.sync(() => {
+          for (const condition of polled?.now ?? []) seenSinceRead.add(condition)
+        })
+      ),
+      Effect.forever,
+      Effect.forkIn(scope)
+    )
+    return Effect.map(current, (now): Throttling | undefined => {
+      if (now === undefined) return undefined
+      const seen = now.watched.filter((condition) => now.now.includes(condition) || seenSinceRead.has(condition))
+      seenSinceRead.clear()
+      return { now: seen, watched: now.watched }
+    })
+  })
+
   const mask = `${sysfs}/devices/platform/soc/soc:firmware/get_throttled`
   const hwmon = `${sysfs}/class/hwmon`
-  const fromSensor = (sensor: string) =>
-    Effect.gen(function* () {
-      const alarm = parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm)
-      let seenSinceRead = false
-      // Every read looks at the alarm itself; the poller covers the time between reads, from one interval on.
-      yield* Effect.sleep(options.pollMs ?? UNDER_VOLTAGE_POLL_MS).pipe(
-        Effect.andThen(alarm),
-        Effect.tap((alarmNow) =>
-          Effect.sync(() => {
-            if (alarmNow !== undefined && alarmNow.now.length > 0) seenSinceRead = true
-          })
-        ),
-        Effect.forever,
-        Effect.forkIn(scope)
-      )
+  const detect = Effect.gen(function* () {
+    const maskText = yield* readText(mask)
+    if (maskText !== undefined && parseThrottled(maskText) !== undefined) {
+      yield* Effect.logInfo("power and thermal conditions from the firmware's mask")
+      return {
+        kind: "firmware-mask",
+        read: yield* latched(parsedFrom(mask, parseThrottled))
+      } satisfies ThrottlingSource
+    }
+    const sensors = yield* fs.readDirectory(hwmon).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+    for (const sensor of sensors) {
+      if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() !== "rpi_volt") continue
       yield* Effect.logInfo(
         "power conditions from the kernel's rpi_volt sensor: under-voltage only; this kernel does not show throttling"
       )
       return {
         kind: "rpi-volt-sensor",
-        read: Effect.map(alarm, (alarmNow): Throttling | undefined => {
-          if (alarmNow === undefined) return undefined
-          const underVoltage = seenSinceRead || alarmNow.now.length > 0
-          seenSinceRead = false
-          return { now: underVoltage ? ["under_voltage"] : [], watched: alarmNow.watched }
-        })
+        read: yield* latched(parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm))
       } satisfies ThrottlingSource
-    })
-  const detect = Effect.gen(function* () {
-    const maskText = yield* readText(mask)
-    if (maskText !== undefined && parseThrottled(maskText) !== undefined) {
-      yield* Effect.logInfo("power and thermal conditions from the firmware's mask")
-      return { kind: "firmware-mask", read: parsedFrom(mask, parseThrottled) } satisfies ThrottlingSource
-    }
-    const sensors = yield* fs.readDirectory(hwmon).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
-    for (const sensor of sensors) {
-      if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() === "rpi_volt") return yield* fromSensor(sensor)
     }
     return undefined
   })
@@ -354,7 +360,6 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
   let lowDisk = false
   let conditions: ReadonlyArray<ThrottleCondition> = []
   const throttleWindows: Array<ReadonlyArray<ThrottleCondition>> = []
-  let reportedSinceBoot = false
 
   const sample = Effect.gen(function* () {
     const at = yield* monotonicMillis
@@ -438,15 +443,6 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
       } else if (conditions.length > 0 && recent.length === 0) {
         yield* Effect.logInfo("host conditions cleared").pipe(Effect.annotateLogs({ was: conditions.join(",") }))
       }
-      // Something before the gateway started, or between two samples: the firmware remembers it until reboot.
-      const sinceBoot = throttled.sinceBoot ?? []
-      if (!reportedSinceBoot && started.length === 0 && sinceBoot.length > 0) {
-        reportedSinceBoot = true
-        yield* Effect.logWarning("host has reported power or thermal conditions since boot").pipe(
-          Effect.annotateLogs({ conditions: sinceBoot.join(",") })
-        )
-      }
-      if (started.length > 0) reportedSinceBoot = true
       conditions = recent
     }
 
