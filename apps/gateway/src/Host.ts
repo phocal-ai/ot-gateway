@@ -54,7 +54,10 @@ export type ThrottleCondition = (typeof THROTTLE_CONDITIONS)[number]
 
 export interface Throttling {
   readonly now: ReadonlyArray<ThrottleCondition>
-  readonly sinceBoot: ReadonlyArray<ThrottleCondition>
+  /** What the firmware remembers since boot; absent when the source cannot tell. */
+  readonly sinceBoot?: ReadonlyArray<ThrottleCondition>
+  /** The conditions the source can see at all: all four from the firmware's mask, under-voltage alone from the kernel's sensor. */
+  readonly watched: ReadonlyArray<ThrottleCondition>
 }
 
 /**
@@ -68,8 +71,22 @@ export const parseThrottled = (text: string): Throttling | undefined => {
   const mask = Number.parseInt(match[1] ?? "", 16)
   return {
     now: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << bit)) !== 0),
-    sinceBoot: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << (bit + 16))) !== 0)
+    sinceBoot: THROTTLE_CONDITIONS.filter((_, bit) => (mask & (1 << (bit + 16))) !== 0),
+    watched: THROTTLE_CONDITIONS
   }
+}
+
+/**
+ * The kernel's `rpi_volt` sensor, `in0_lcrit_alarm`: `1` when the firmware
+ * reported under-voltage at the driver's last poll. The driver polls every
+ * 2 seconds and clears the firmware's sticky bits each time, so this is
+ * under-voltage now, nothing since boot, and none of the other conditions.
+ * Anything but `0` or `1` gives `undefined`.
+ */
+export const parseUnderVoltageAlarm = (text: string): Throttling | undefined => {
+  const value = text.trim()
+  if (value !== "0" && value !== "1") return undefined
+  return { now: value === "1" ? ["under_voltage"] : [], watched: ["under_voltage"] }
 }
 
 /** A thermal zone's `temp`: millidegrees Celsius, as degrees to one decimal; `undefined` if it is not plausible. */
@@ -116,7 +133,32 @@ export interface HostSources {
 }
 
 const THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
-const GET_THROTTLED = "/sys/devices/platform/soc/soc:firmware/get_throttled"
+
+/**
+ * Where the Raspberry Pi's power and thermal flags can be read, as an effect
+ * that reads them. Kernels before 6.18 expose the firmware's whole mask as
+ * `get_throttled`; later ones only the under-voltage alarm of the `rpi_volt`
+ * hwmon sensor, which is found once, here. Neither on a machine that is not a
+ * Pi: the reader then gives `undefined`. `sysfs` is `/sys` but for tests.
+ */
+export const throttlingSource = Effect.fnUntraced(function* (
+  fs: FileSystem.FileSystem,
+  sysfs = "/sys"
+): Effect.fn.Return<Effect.Effect<Throttling | undefined>> {
+  const readText = (path: string) =>
+    fs.readFileString(path).pipe(Effect.orElseSucceed((): string | undefined => undefined))
+  const parsedFrom = (path: string, parse: (text: string) => Throttling | undefined) =>
+    Effect.map(readText(path), (text) => (text === undefined ? undefined : parse(text)))
+  const mask = `${sysfs}/devices/platform/soc/soc:firmware/get_throttled`
+  if ((yield* readText(mask)) !== undefined) return parsedFrom(mask, parseThrottled)
+  const hwmon = `${sysfs}/class/hwmon`
+  const sensors = yield* fs.readDirectory(hwmon).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
+  for (const sensor of sensors) {
+    if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() === "rpi_volt")
+      return parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm)
+  }
+  return Effect.sync((): Throttling | undefined => undefined)
+})
 
 /**
  * The real machine. The event-loop histogram runs until the scope closes.
@@ -136,6 +178,7 @@ export const liveHostSources: Effect.Effect<HostSources, never, FileSystem.FileS
     )
     const readText = (path: string) =>
       fs.readFileString(path).pipe(Effect.orElseSucceed((): string | undefined => undefined))
+    const throttling = yield* throttlingSource(fs)
     return {
       memory: Effect.sync(() => {
         const usage = process.memoryUsage()
@@ -168,9 +211,7 @@ export const liveHostSources: Effect.Effect<HostSources, never, FileSystem.FileS
       temperatureC: Effect.map(readText(THERMAL_ZONE), (text) =>
         text === undefined ? undefined : parseMillidegrees(text)
       ),
-      throttling: Effect.map(readText(GET_THROTTLED), (text) =>
-        text === undefined ? undefined : parseThrottled(text)
-      ),
+      throttling,
       diskFreeBytes: (path) =>
         Effect.tryPromise(() => statfs(dirname(resolve(path)))).pipe(
           Effect.map((stats) => stats.bavail * stats.bsize),
@@ -308,7 +349,8 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
     }
 
     if (throttled !== undefined) {
-      for (const condition of THROTTLE_CONDITIONS)
+      // Only what the source can see: a 0 for a condition it cannot see would read as "fine".
+      for (const condition of throttled.watched)
         yield* gauge(hostThrottled, { condition }, throttled.now.includes(condition) ? 1 : 0)
       const started = throttled.now.filter((condition) => !conditions.includes(condition))
       if (started.length > 0) {
@@ -319,10 +361,11 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
         yield* Effect.logInfo("host conditions cleared").pipe(Effect.annotateLogs({ was: conditions.join(",") }))
       }
       // Something before the gateway started, or between two samples: the firmware remembers it until reboot.
-      if (!reportedSinceBoot && started.length === 0 && throttled.sinceBoot.length > 0) {
+      const sinceBoot = throttled.sinceBoot ?? []
+      if (!reportedSinceBoot && started.length === 0 && sinceBoot.length > 0) {
         reportedSinceBoot = true
         yield* Effect.logWarning("host has reported power or thermal conditions since boot").pipe(
-          Effect.annotateLogs({ conditions: throttled.sinceBoot.join(",") })
+          Effect.annotateLogs({ conditions: sinceBoot.join(",") })
         )
       }
       if (started.length > 0) reportedSinceBoot = true

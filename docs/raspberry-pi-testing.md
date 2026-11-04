@@ -28,10 +28,10 @@ A Raspberry Pi 4 on an SD card is the low end of where Plenum runs. What runs we
    curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
    ```
 
-3. Note the baseline: no power or thermal conditions (`0x0`), and the idle temperature.
+3. Note the baseline: no power or thermal conditions (`0x0`), no under-voltage in the kernel log, and the idle temperature. On kernel 6.18 and later, `vcgencmd` shows only the last two seconds; the kernel log is the record since boot.
 
    ```bash
-   vcgencmd get_throttled; vcgencmd measure_temp
+   vcgencmd get_throttled; vcgencmd measure_temp; journalctl -k -g voltage
    ```
 
 4. **Remote access** for a Pi that is not on your desk: Tailscale (or any VPN you already use) gives SSH and the status page through `ssh -L 8080:127.0.0.1:8080 pi@<name>`. Do not open the status page to the network.
@@ -129,18 +129,18 @@ An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cp
 
 ## Pass criteria
 
-| What            | Pass                                                                                                          | Where to read it                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Memory          | Levels off within an hour; no growth over the 24 hours (the soak's growth check), well under the 768 MB limit | Status page, `plenum_process_memory_bytes`, soak summary                |
-| Event loop      | p99 under 50 ms; no `event loop stalled`                                                                      | `plenum_event_loop_lag_seconds`, soak summary                           |
-| CPU             | Under 10% of one core for a few devices polled every 5 s                                                      | `plenum_process_cpu_seconds_total`, status page                         |
-| Power and heat  | No conditions during tests 1–6, temperature under 70 °C in its case                                           | Status page, `plenum_host_throttled`, `plenum_host_temperature_celsius` |
-| Storage writes  | Near zero while the broker is up; bounded during outages                                                      | `plenum_process_disk_written_bytes_total`                               |
-| Outbox          | Drains after every outage; nothing lost (soak checks order and backlog)                                       | Soak summary, `plenum_buffer_rows`                                      |
-| Clock           | One step after a boot without network, none otherwise                                                         | `plenum_clock_steps_total`, the log                                     |
-| Open files      | Flat                                                                                                          | `plenum_process_open_fds`, soak summary                                 |
-| Restarts        | None, other than the power cuts                                                                               | `plenum_process_start_time_seconds`                                     |
-| Device requests | Mean request time steady; no unexplained refusals                                                             | Dashboard "Mean request time by device"                                 |
+| What            | Pass                                                                                                          | Where to read it                                                                                    |
+| --------------- | ------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Memory          | Levels off within an hour; no growth over the 24 hours (the soak's growth check), well under the 768 MB limit | Status page, `plenum_process_memory_bytes`, soak summary                                            |
+| Event loop      | p99 under 50 ms; no `event loop stalled`                                                                      | `plenum_event_loop_lag_seconds`, soak summary                                                       |
+| CPU             | Under 10% of one core for a few devices polled every 5 s                                                      | `plenum_process_cpu_seconds_total`, status page                                                     |
+| Power and heat  | No conditions during tests 1–6, no `Undervoltage detected!` in the kernel log, under 70 °C in its case        | Status page, `plenum_host_throttled`, `plenum_host_temperature_celsius`, `journalctl -k -g voltage` |
+| Storage writes  | Near zero while the broker is up; bounded during outages                                                      | `plenum_process_disk_written_bytes_total`                                                           |
+| Outbox          | Drains after every outage; nothing lost (soak checks order and backlog)                                       | Soak summary, `plenum_buffer_rows`                                                                  |
+| Clock           | One step after a boot without network, none otherwise                                                         | `plenum_clock_steps_total`, the log                                                                 |
+| Open files      | Flat                                                                                                          | `plenum_process_open_fds`, soak summary                                                             |
+| Restarts        | None, other than the power cuts                                                                               | `plenum_process_start_time_seconds`                                                                 |
+| Device requests | Mean request time steady; no unexplained refusals                                                             | Dashboard "Mean request time by device"                                                             |
 
 ## Reporting
 

@@ -162,6 +162,9 @@ const Host = ({ host }: { readonly host: HostStatus }) => {
         </div>
         <CardDescription>
           gateway {host.version} · Node {host.node}
+          {host.throttled !== undefined && !host.throttled.watched.includes("throttled")
+            ? " · power: under-voltage only (this kernel shows no throttling; check vcgencmd get_throttled)"
+            : null}
         </CardDescription>
       </CardHeader>
       <CardContent>

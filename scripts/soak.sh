@@ -37,7 +37,9 @@
 #
 # - SOAK_STRICT_HOST=1 (for a run on the target hardware) also fails the run when
 #   the event loop stalled for a second or more, or the host reported under-voltage,
-#   throttling or the soft temperature limit. The summary reports both either way.
+#   throttling or the soft temperature limit (on Raspberry Pi kernels 6.18 and later,
+#   under-voltage only: check `journalctl -k -g voltage` for the rest of the history).
+#   The summary reports both either way.
 #
 # The run fails (exit 1) when the gateway exits or logs FATAL, when the last
 # health message does not show every device ok, when more than SOAK_MAX_BACKLOG
