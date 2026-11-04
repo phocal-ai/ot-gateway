@@ -96,6 +96,24 @@ describe("parseConfig", () => {
     })
   )
 
+  it.effect("takes one bit of a register as a read-only bool point, and nothing else", () =>
+    Effect.gen(function* () {
+      const [device] = minimal.devices
+      const withPoint = (overrides: Record<string, unknown>) => ({
+        ...minimal,
+        devices: [{ ...device, points: device?.points.map((point) => ({ ...point, ...overrides })) }]
+      })
+      const outcome = (overrides: Record<string, unknown>) =>
+        Effect.map(Effect.exit(parseConfig(JSON.stringify(withPoint(overrides)))), (exit) => exit._tag)
+      expect(yield* outcome({ table: "holding", dataType: "bool", bit: 3 })).toBe("Success")
+      expect(yield* outcome({ table: "input", dataType: "bool", bit: 15 })).toBe("Success")
+      expect(yield* outcome({ table: "holding", dataType: "bool", bit: 16 })).toBe("Failure")
+      expect(yield* outcome({ table: "holding", dataType: "uint16", bit: 3 })).toBe("Failure")
+      expect(yield* outcome({ table: "coil", dataType: "bool", bit: 3 })).toBe("Failure")
+      expect(yield* outcome({ table: "holding", dataType: "bool", bit: 3, writable: true })).toBe("Failure")
+    })
+  )
+
   it.effect("reads 32-bit values high word first unless byteOrder says otherwise, and refuses unknown orders", () =>
     Effect.gen(function* () {
       const [device] = minimal.devices

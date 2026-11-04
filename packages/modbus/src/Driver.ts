@@ -14,8 +14,7 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { DriverError, driverRefusals } from "@plenum/core"
 import type { Driver, ModbusDevice, ModbusPoint, Network, Reading, WriteValue } from "@plenum/core"
-import { Clock, Effect, Metric, Schedule } from "effect"
-import type { Duration } from "effect"
+import { Clock, Duration, Effect, Metric, Schedule } from "effect"
 import { makeModbusClient } from "./Client.ts"
 import type { ModbusClient, ModbusClientError } from "./Client.ts"
 import { encodeValue, exceptionName, FunctionCode, isTransientException } from "./Frame.ts"
@@ -83,7 +82,11 @@ export const makeModbusDriverFromClient = (
   client: ModbusClient,
   options: PlanOptions = {}
 ): Driver => {
-  const blocks = planReads(device.points, options)
+  const blocks = planReads(device.points, {
+    maxRegisters: device.maxRegistersPerRead,
+    maxBits: device.maxBitsPerRead,
+    ...options
+  })
   const fail = (reason: DriverError["reason"], message: string) =>
     Effect.fail(new DriverError({ device: device.id, reason, message }))
 
@@ -185,6 +188,7 @@ const integerRange = {
  */
 export const writeRequestFor = (point: ModbusPoint, value: WriteValue): WriteRequest | string => {
   if (value === null) return "Modbus has nothing to release; write a value"
+  if (point.bit !== undefined) return "a bit of a register cannot be written"
   if (point.table === "coil") {
     if (typeof value !== "boolean") return "a coil takes true or false"
     return { functionCode: FunctionCode.WriteSingleCoil, address: point.address, value }
@@ -220,6 +224,7 @@ export const makeModbusDriver = Effect.fn("makeModbusDriver")(function* (
   const socket = yield* options.network ? options.network.tcp(target) : NodeSocket.makeNet(target)
   const client = yield* makeModbusClient(socket, {
     unitId: device.unitId,
+    requestGap: Duration.millis(device.requestGapMs),
     ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
   })
   return makeModbusDriverFromClient(device, client, options)

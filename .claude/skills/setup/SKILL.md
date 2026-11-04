@@ -82,6 +82,8 @@ For each register, write a point:
 - `address`: **0-based.** Datasheets often list 40001-style numbers or 1-based addresses, so 40001 means holding `address: 0`. When the sheet is unclear, say which you assumed. A wrong guess shows up in step 7 as values that are off, or as exception 2 (illegal data address).
 - `dataType`: `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64` or `bool`. 32-bit values take two registers, 64-bit ones four.
 - `byteOrder` (default `ABCD`, high word first): `CDAB` when the datasheet says low word first, "word swap" or "little-endian word order" (common on meters); `BADC` for bytes swapped within each register; `DCBA` for fully little-endian. When the sheet doesn't say, leave the default and let step 7 show it.
+- `bit` (0–15) for a status word documented bit by bit: one `bool` point per flag, all on the same register address; read-only.
+- On the device: `requestGapMs` (50–200) for a device behind a Modbus gateway or serial bridge, and `maxRegistersPerRead` when the sheet limits how many registers one read may ask for.
 - `scaling: { "factor": 0.1 }` for registers in tenths, and so on.
 - `unit` in QUDT (`unit:DEG_C`, `unit:KiloW`, `unit:KiloW-HR`, `unit:PERCENT`, `unit:V`, `unit:A`, `unit:HZ`, `unit:PA`).
 - `id`: a slug of the name.

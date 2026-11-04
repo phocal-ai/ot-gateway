@@ -18,7 +18,7 @@
  *   the response arrived is sent once more on a new connection. Devices that
  *   close the connection after every response depend on this.
  */
-import { describeSocketError, driverConnects, driverRequests } from "@plenum/core"
+import { describeSocketError, driverConnects, driverRequests, monotonicMillis } from "@plenum/core"
 import { Deferred, Duration, Effect, Exit, Metric, Schema, Scope, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import {
@@ -51,6 +51,11 @@ export interface ModbusClientOptions {
   readonly unitId: number
   /** Time allowed for one request, from sending it to a complete response (default 2 s). */
   readonly requestTimeout?: Duration.Input
+  /**
+   * Pause after each request before the next one goes out (default none).
+   * Slow gateways and serial bridges drop requests sent back to back.
+   */
+  readonly requestGap?: Duration.Input
 }
 
 export interface ModbusClient {
@@ -166,7 +171,10 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
   options: ModbusClientOptions
 ) {
   const requestTimeout = options.requestTimeout ?? "2 seconds"
+  const requestGapMillis = Duration.toMillis(Duration.fromInputUnsafe(options.requestGap ?? 0))
   const lock = yield* Semaphore.make(1)
+  // When the last request ended (monotonic ms), for the gap before the next one.
+  let lastEnded = Number.NEGATIVE_INFINITY
   let connection: Connection | undefined
   let transactionId = 0
 
@@ -274,7 +282,12 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
     decode: (frame: Uint8Array) => Effect.Effect<A, ModbusFrameError | ModbusException>,
     resend = true
   ): Effect.Effect<A, ModbusClientError> =>
-    send(quantity, encode, resend).pipe(
+    Effect.gen(function* () {
+      if (requestGapMillis <= 0) return
+      const wait = lastEnded + requestGapMillis - (yield* monotonicMillis)
+      if (wait > 0) yield* Effect.sleep(Duration.millis(wait))
+    }).pipe(
+      Effect.andThen(send(quantity, encode, resend)),
       Effect.flatMap(decode),
       Effect.tap(() => countRequest("ok")),
       Effect.catchTags({
@@ -283,6 +296,7 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
         ModbusConnectionError: (error) => reset("connection").pipe(Effect.andThen(Effect.fail(error))),
         ModbusFrameError: (error) => reset("invalid_response").pipe(Effect.andThen(Effect.fail(error)))
       }),
+      Effect.ensuring(Effect.flatMap(monotonicMillis, (now) => Effect.sync(() => (lastEnded = now)))),
       Semaphore.withPermit(lock)
     )
 

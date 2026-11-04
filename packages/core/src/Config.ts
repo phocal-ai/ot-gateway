@@ -62,6 +62,25 @@ export const ModbusDevice = Schema.Struct({
   ),
   pollIntervalMs,
   cycleTimeoutMs: cycleTimeoutMsField,
+  /**
+   * Minimum pause between the end of one request and the start of the next
+   * on this device's connection (default 0). Slow Modbus gateways and serial
+   * bridges drop requests that arrive back to back; 50 to 200 ms helps.
+   */
+  requestGapMs: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 0, maximum: 10_000 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(0))
+  ),
+  /** Most registers one read asks for (default 125, the protocol's limit); some devices refuse longer reads. */
+  maxRegistersPerRead: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 125 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(125))
+  ),
+  /** Most coils or discrete inputs one read asks for (default 2000, the protocol's limit). */
+  maxBitsPerRead: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 2_000 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(2_000))
+  ),
   points: pointsOf(ModbusPoint)
 })
 export type ModbusDevice = typeof ModbusDevice.Type

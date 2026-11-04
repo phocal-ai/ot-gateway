@@ -72,16 +72,19 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 
 `"protocol": "modbus-tcp"`.
 
-| Key              | Type          | Default   | Meaning                                                                                       |
-| ---------------- | ------------- | --------- | --------------------------------------------------------------------------------------------- |
-| `protocol`       | `modbus-tcp`  | required  |                                                                                               |
-| `id`             | slug          | required  | Third topic level.                                                                            |
-| `host`           | string        | required  | IP address or host name.                                                                      |
-| `port`           | 1–65535       | 502       |                                                                                               |
-| `unitId`         | 0–255         | 1         | MBAP unit identifier: 1 or 255 for a plain TCP device, the slave id behind a Modbus gateway.  |
-| `pollIntervalMs` | 100–86400000  | 5000      | How often the device is read.                                                                 |
-| `cycleTimeoutMs` | 1000–86400000 | see below | How long one cycle (read with retries, then publish) may take before it is abandoned as hung. |
-| `points`         | array         | required  | [Modbus points](#modbus-points), at least one, ids unique.                                    |
+| Key                   | Type          | Default   | Meaning                                                                                                                                                          |
+| --------------------- | ------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol`            | `modbus-tcp`  | required  |                                                                                                                                                                  |
+| `id`                  | slug          | required  | Third topic level.                                                                                                                                               |
+| `host`                | string        | required  | IP address or host name.                                                                                                                                         |
+| `port`                | 1–65535       | 502       |                                                                                                                                                                  |
+| `unitId`              | 0–255         | 1         | MBAP unit identifier: 1 or 255 for a plain TCP device, the slave id behind a Modbus gateway.                                                                     |
+| `pollIntervalMs`      | 100–86400000  | 5000      | How often the device is read.                                                                                                                                    |
+| `cycleTimeoutMs`      | 1000–86400000 | see below | How long one cycle (read with retries, then publish) may take before it is abandoned as hung.                                                                    |
+| `requestGapMs`        | 0–10000       | 0         | Minimum pause after each request before the next one. Slow Modbus gateways and serial bridges drop requests sent back to back; 50–200 ms helps.                  |
+| `maxRegistersPerRead` | 1–125         | 125       | Most registers in one read. Lower it for a device that refuses long reads (`illegal_data_value` or `illegal_data_address` on a range that reads fine in pieces). |
+| `maxBitsPerRead`      | 1–2000        | 2000      | Most coils or discrete inputs in one read.                                                                                                                       |
+| `points`              | array         | required  | [Modbus points](#modbus-points), at least one, ids unique.                                                                                                       |
 
 `cycleTimeoutMs` defaults to twice `pollIntervalMs`, and at least `pollIntervalMs` plus 30 s.
 
@@ -131,12 +134,13 @@ Every point, whatever its protocol, has these keys.
 
 ## Modbus points
 
-| Key         | Type                                                                                  | Default  | Meaning                                                                                                                                                                    |
-| ----------- | ------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `table`     | `holding`, `input`, `coil`, `discrete`                                                | required | FC 03, 04, 01 and 02. Only `holding` and `coil` can be written.                                                                                                            |
-| `address`   | 0–65535                                                                               | required | 0-based. Datasheets often count from 1 or write 40001 for holding address 0. A value of several registers must end by 65535.                                               |
-| `dataType`  | `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`, `bool` | required | 32-bit types take two registers, 64-bit ones four. 64-bit integers are exact up to 2^53.                                                                                   |
-| `byteOrder` | `ABCD`, `CDAB`, `BADC`, `DCBA`                                                        | `ABCD`   | How a value's bytes are spread over its registers: high word first, low word first (common on meters), bytes swapped in each register, little-endian. See troubleshooting. |
+| Key         | Type                                                                                  | Default  | Meaning                                                                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `table`     | `holding`, `input`, `coil`, `discrete`                                                | required | FC 03, 04, 01 and 02. Only `holding` and `coil` can be written.                                                                                                                             |
+| `address`   | 0–65535                                                                               | required | 0-based. Datasheets often count from 1 or write 40001 for holding address 0. A value of several registers must end by 65535.                                                                |
+| `dataType`  | `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`, `bool` | required | 32-bit types take two registers, 64-bit ones four. 64-bit integers are exact up to 2^53.                                                                                                    |
+| `byteOrder` | `ABCD`, `CDAB`, `BADC`, `DCBA`                                                        | `ABCD`   | How a value's bytes are spread over its registers: high word first, low word first (common on meters), bytes swapped in each register, little-endian. See troubleshooting.                  |
+| `bit`       | 0–15                                                                                  | none     | One bit of a holding or input register (0 is the least significant), published as `true` or `false`: a status word's flags as separate points. Needs `dataType: "bool"`; cannot be written. |
 
 ## BACnet points
 
