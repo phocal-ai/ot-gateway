@@ -5,22 +5,26 @@
  */
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
-import { driverRequests, makeMemoryNetwork, withMetricAttributes } from "@ot-gateway/core"
-import { Effect, Exit, Fiber, Metric, Queue, Result, Schedule } from "effect"
+import { driverRequests, makeMemoryNetwork, type MemoryNetwork, withMetricAttributes } from "@ot-gateway/core"
+import { type Duration, Effect, Exit, Fiber, Metric, Queue, Result, Schedule } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
-import { TestClock } from "effect/testing"
+
 import {
   type Apdu,
   type BacnetClientOptions,
   checkReadPropertyMultipleAck,
   type CovNotification,
   decodeFrame,
+  type DeviceAddress,
   encodeIAm,
   encodeFrame,
   ErrorCode,
   makeBacnetClient,
   makeSimulatedDevice,
+  MAX_CONFLICTS,
+  MAX_DEVICES,
+  type NetworkAddress,
   ObjectType,
   PropertyId,
   serveSimulatedDevice,
@@ -509,8 +513,53 @@ describe("ReadPropertyMultiple answers", () => {
 
 const at = (ip: string) => NetAddress.inetAddressFromIpStringUnsafe(ip, 47_808)
 
+/** An I-Am for `instance`, from a device behind a router when `source` is given. */
+const iAmFrame = (instance: number, source?: NetworkAddress) =>
+  encodeFrame(
+    {
+      _tag: "UnconfirmedRequest",
+      service: UnconfirmedService.IAm,
+      body: encodeIAm({
+        device: { objectType: ObjectType.device, instance },
+        maxApdu: 480,
+        segmentation: 3,
+        vendorId: 1
+      })
+    },
+    source === undefined ? {} : { source }
+  )
+
+const routed = (network: number, mac: number): NetworkAddress => ({ network, address: new Uint8Array([mac]) })
+
+/**
+ * Discover from 10.0.0.1 on `network` while a peer at 10.0.2.9 (a device,
+ * or a router for the devices behind it) sends the client `frames`. In real
+ * time: under the test clock, the end of the window could come before the
+ * client has read a few thousand datagrams.
+ */
+const discoverHearing = Effect.fnUntraced(function* (
+  network: MemoryNetwork,
+  frames: ReadonlyArray<Uint8Array>,
+  within: Duration.Input = "300 millis"
+) {
+  const peer = yield* network.host("10.0.2.9").udp({ address: "10.0.2.9", port: 47_808 })
+  yield* peer.reader
+  const peerWriter = yield* peer.writer
+  const socket = yield* network.host("10.0.0.1").udp({ address: "10.0.0.1", port: 47_808 })
+  const client = yield* makeBacnetClient(socket, {
+    broadcastAddress: at("255.255.255.255"),
+    requestTimeout: "1 second"
+  })
+  const discovering = yield* client.discover({ within }).pipe(Effect.forkChild)
+  yield* Effect.sleep("20 millis")
+  yield* Effect.forEach(frames, (payload) => peerWriter.write({ payload, address: at("10.0.0.1") }), { discard: true })
+  return yield* Fiber.join(discovering)
+})
+
+const sourceOf = (source: DeviceAddress) => ({ at: NetAddress.formatInet(source.address), network: source.network })
+
 describe("discover on an in-memory network", () => {
-  it.effect("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
+  it.live("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
     Effect.gen(function* () {
       const network = makeMemoryNetwork()
       const serve = (ip: string, instance: number) =>
@@ -520,32 +569,8 @@ describe("discover on an in-memory network", () => {
       yield* serve("10.0.2.1", 2001)
       yield* serve("10.0.2.2", 2001)
       yield* serve("10.0.2.3", 3001)
-      // A peer that says I-Am for 4001 twice from one address, as a device does when it hears Who-Is twice.
-      const peer = yield* network.host("10.0.2.4").udp({ address: "10.0.2.4", port: 47_808 })
-      yield* peer.reader
-      const peerWriter = yield* peer.writer
-      const repeatedIAm = encodeFrame({
-        _tag: "UnconfirmedRequest",
-        service: UnconfirmedService.IAm,
-        body: encodeIAm({
-          device: { objectType: ObjectType.device, instance: 4001 },
-          maxApdu: 480,
-          segmentation: 3,
-          vendorId: 1
-        })
-      })
-      const socket = yield* network.host("10.0.0.1").udp({ address: "10.0.0.1", port: 47_808 })
-      const client = yield* makeBacnetClient(socket, {
-        broadcastAddress: at("255.255.255.255"),
-        requestTimeout: "1 second"
-      })
-
-      const discovering = yield* client.discover({ within: "1 second" }).pipe(Effect.forkChild)
-      yield* TestClock.adjust("10 millis")
-      yield* peerWriter.write({ payload: repeatedIAm, address: at("10.0.0.1") })
-      yield* peerWriter.write({ payload: repeatedIAm, address: at("10.0.0.1") })
-      yield* TestClock.adjust("1 second")
-      const found = yield* Fiber.join(discovering)
+      // 4001 says I-Am twice from one address, as a device does when it hears Who-Is twice.
+      const found = yield* discoverHearing(network, [iAmFrame(4001), iAmFrame(4001)])
 
       const byInstance = new Map(found.map((device) => [device.instance, device]))
       expect([...byInstance.keys()].toSorted((left, right) => left - right)).toEqual([2001, 3001, 4001])
@@ -557,6 +582,41 @@ describe("discover on an in-memory network", () => {
       ])
       expect(byInstance.get(3001)?.conflicts).toEqual([])
       expect(byInstance.get(4001)?.conflicts).toEqual([])
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("tells sources behind one router apart by network and address there", () =>
+    Effect.gen(function* () {
+      const found = yield* discoverHearing(makeMemoryNetwork(), [
+        iAmFrame(5001, routed(5, 7)),
+        iAmFrame(5001, routed(5, 7)),
+        iAmFrame(5001, routed(5, 8)),
+        iAmFrame(5001, routed(6, 7)),
+        iAmFrame(5001)
+      ])
+      expect(found).toHaveLength(1)
+      const [device] = found
+      expect(device === undefined ? undefined : sourceOf(device)).toEqual({
+        at: "10.0.2.9:47808",
+        network: routed(5, 7)
+      })
+      expect(device?.conflicts.map(sourceOf)).toEqual([
+        { at: "10.0.2.9:47808", network: routed(5, 8) },
+        { at: "10.0.2.9:47808", network: routed(6, 7) },
+        { at: "10.0.2.9:47808", network: undefined }
+      ])
+    }).pipe(Effect.scoped)
+  )
+
+  it.live("keeps at most MAX_CONFLICTS other sources per instance and MAX_DEVICES instances", () =>
+    Effect.gen(function* () {
+      const network = makeMemoryNetwork()
+      const claims = Array.from({ length: MAX_CONFLICTS + 5 }, (_, mac) => iAmFrame(6001, routed(5, mac)))
+      const flood = Array.from({ length: MAX_DEVICES + 5 }, (_, index) => iAmFrame(10_000 + index))
+      const found = yield* discoverHearing(network, [...claims, ...flood], "2 seconds")
+      expect(found).toHaveLength(MAX_DEVICES)
+      expect(found.find((device) => device.instance === 6001)?.conflicts).toHaveLength(MAX_CONFLICTS)
+      expect(found.some((device) => device.instance === 10_000 + MAX_DEVICES)).toBe(false)
     }).pipe(Effect.scoped)
   )
 })

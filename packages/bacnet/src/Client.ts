@@ -114,6 +114,9 @@ export interface DiscoveredDevice extends DeviceAddress, Omit<IAm, "device"> {
 /** Most other sources `discover` keeps for one instance. */
 export const MAX_CONFLICTS = 16
 
+/** Most instances one `discover` keeps; answers for further instances are dropped. */
+export const MAX_DEVICES = 4_096
+
 /** What `discover` found for one instance: the first answer, and every other source that answered for it. */
 export interface FoundDevice extends DiscoveredDevice {
   /**
@@ -167,7 +170,8 @@ export interface BacnetClient {
   /**
    * Broadcast Who-Is (or ask `target` only) and collect the devices that
    * answer, one entry per instance, with every other source that answered
-   * for the same instance in its `conflicts`.
+   * for the same instance in its `conflicts`. At most `MAX_DEVICES`
+   * instances, the first to answer.
    */
   readonly discover: (options?: DiscoverOptions) => Effect.Effect<ReadonlyArray<FoundDevice>, BacnetSocketError>
   /**
@@ -730,7 +734,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
             if (!whoIsMatches(whoIs, device.instance)) return
             const first = found.get(device.instance)
             if (first === undefined) {
-              found.set(device.instance, { device, conflicts: [] })
+              if (found.size < MAX_DEVICES) found.set(device.instance, { device, conflicts: [] })
               return
             }
             // The same source again (a resent I-Am) is not a conflict; another source for the instance is.
