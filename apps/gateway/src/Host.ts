@@ -53,7 +53,7 @@ export const THROTTLE_CONDITIONS = ["under_voltage", "frequency_capped", "thrott
 export type ThrottleCondition = (typeof THROTTLE_CONDITIONS)[number]
 
 export interface Throttling {
-  /** Conditions now; from the kernel's sensor, any seen since the previous read; in a snapshot, any in the last minute. */
+  /** Conditions now; from the kernel's sensor, any seen since the previous read; in a snapshot, any in the last four samples (about a minute). */
   readonly now: ReadonlyArray<ThrottleCondition>
   /** What the firmware remembers since boot; absent when the source cannot tell. */
   readonly sinceBoot?: ReadonlyArray<ThrottleCondition>
@@ -173,13 +173,15 @@ export const throttlingSource = Effect.fnUntraced(function* (
     Effect.gen(function* () {
       const alarm = parsedFrom(`${hwmon}/${sensor}/in0_lcrit_alarm`, parseUnderVoltageAlarm)
       let seenSinceRead = false
-      yield* alarm.pipe(
+      // Every read looks at the alarm itself; the poller covers the time between reads, from one interval on.
+      yield* Effect.sleep(options.pollMs ?? UNDER_VOLTAGE_POLL_MS).pipe(
+        Effect.andThen(alarm),
         Effect.tap((alarmNow) =>
           Effect.sync(() => {
             if (alarmNow !== undefined && alarmNow.now.length > 0) seenSinceRead = true
           })
         ),
-        Effect.repeat(Schedule.spaced(options.pollMs ?? UNDER_VOLTAGE_POLL_MS)),
+        Effect.forever,
         Effect.forkIn(scope)
       )
       yield* Effect.logInfo(
@@ -419,8 +421,8 @@ export const makeHostMonitor = Effect.fnUntraced(function* (sources: HostSources
     // Power and thermal conditions: what any of the last minute's samples saw, like the event-loop gauges, so a
     // dip between two exports still shows, and a supply that keeps dipping is one warning, cleared after a clean minute.
     let recentlyThrottled: Throttling | undefined
-    if (throttled === undefined) throttleWindows.length = 0
-    else {
+    // A sample the source could not read leaves the window as it was, so it cannot clear a condition early.
+    if (throttled !== undefined) {
       throttleWindows.push(throttled.now)
       if (throttleWindows.length > LAG_WINDOWS) throttleWindows.shift()
       const recent = throttled.watched.filter((condition) => throttleWindows.some((now) => now.includes(condition)))

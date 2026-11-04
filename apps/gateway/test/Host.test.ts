@@ -202,12 +202,20 @@ describe("host monitor", () => {
       expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(2.5)
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
       expect(monitor.latest()?.throttled?.now).toEqual(["under_voltage", "throttled"])
-      yield* Effect.all([tick, tick, tick])
+      // Conditions clear after four clean samples (a minute), not before.
+      yield* Effect.all([tick, tick])
+      expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
+      expect(lines).not.toContain("Info: host conditions cleared")
+      yield* tick
       expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(0.01)
-      // Conditions clear after a clean minute, not at the first clean sample.
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(0)
       expect(monitor.latest()?.throttled?.now).toEqual([])
-      expect(lines.at(-1)).toBe("Info: host conditions cleared")
+      expect(lines).toEqual([
+        "Info: event loop responsive again",
+        "Info: host has cooled down",
+        "Info: the outbox's disk has room again",
+        "Info: host conditions cleared"
+      ])
       yield* Fiber.interrupt(fiber)
     })
   )
@@ -311,6 +319,9 @@ describe("throttling source", () => {
       yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/in0_lcrit_alarm`, "1\n")
       yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/name`, "rpi_volt\n")
       expect(yield* source.read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
+      // Found once: later reads follow that sensor without looking for it again (which would now find nothing).
+      yield* fs.writeFileString(`${root}/class/hwmon/hwmon1/name`, "renamed\n")
+      expect(yield* source.read).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -361,9 +372,12 @@ describe("throttling source", () => {
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
       expect(monitor.latest()?.throttled).toEqual({ now: ["under_voltage"], watched: ["under_voltage"] })
       alarm = "0"
+      // Still 1 at 15, 30 and 45 s, so every one-minute export sees the dip; 0 after a clean minute.
+      for (let sample = 1; sample <= 3; sample++) {
+        yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
+        expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
+      }
       yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
-      expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
-      yield* TestClock.adjust(3 * SAMPLE_INTERVAL_MS)
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(0)
       // No series for what the sensor cannot see: a 0 would read as "not throttled".
       const series = (yield* Metric.snapshot).filter(
