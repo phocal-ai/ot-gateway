@@ -6,7 +6,7 @@
  * down at startup delays publishing but does not stop the gateway.
  */
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { type MqttSettings, type Network, offlinePayload, Publisher, PublishError } from "@plenum/core"
+import { type MqttSettings, type Network, offlinePayload, Publisher, PublishError } from "@ot-gateway/core"
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"
 import { makeMqttClient, MqttPublishError } from "./Client.ts"
@@ -83,7 +83,7 @@ const translate = <A>(effect: Effect.Effect<A, MqttPublishError>): Effect.Effect
 /**
  * A `Publisher` from the gateway's `mqtt` settings. The password is read from
  * the environment variable named by `passwordEnv`, never from the file. The
- * client id defaults to `plenum-<hostname>`.
+ * client id defaults to `ot-gateway-<hostname>`.
  *
  * Retained messages that reached the broker are remembered (the latest per
  * topic) and published again after every reconnect, because a broker without
@@ -156,7 +156,7 @@ export const MqttPublisher = (
 
       const client = yield* makeMqttClient(socket, {
         ...clientOptions,
-        clientId: settings.clientId ?? `plenum-${hostname()}`,
+        clientId: settings.clientId ?? `ot-gateway-${hostname()}`,
         ...(settings.username === undefined ? {} : { username: settings.username }),
         ...(password === undefined ? {} : { password }),
         ...(health === undefined

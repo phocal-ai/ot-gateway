@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Interop tests: Plenum against implementations that are not ours, so a spec
+# Interop tests: OT Gateway against implementations that are not ours, so a spec
 # misread the same way in our client and our simulators cannot hide.
 #
 #   scripts/interop.sh                 # all peers
@@ -13,11 +13,11 @@
 # - modbus: a pymodbus server (Python 3, a pinned version in a virtualenv).
 #
 # Everything started is stopped on exit. The tests are in
-# apps/gateway/test/interop and run only with PLENUM_INTEROP=1.
+# apps/gateway/test/interop and run only with OT_GATEWAY_INTEROP=1.
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-work=${INTEROP_DIR:-${TMPDIR:-/tmp}/plenum-interop}
+work=${INTEROP_DIR:-${TMPDIR:-/tmp}/ot-gateway-interop}
 mkdir -p "$work"
 peers=("$@")
 [[ ${#peers[@]} -eq 0 ]] && peers=(mqtt bacnet modbus)
@@ -27,7 +27,7 @@ containers=()
 modbus_pid=""
 cleanup() {
   for container in "${containers[@]}"; do docker rm -f "$container" >/dev/null 2>&1 || true; done
-  docker network rm plenum-interop >/dev/null 2>&1 || true
+  docker network rm ot-gateway-interop >/dev/null 2>&1 || true
   if [[ -n $modbus_pid ]]; then kill "$modbus_pid" 2>/dev/null || true; fi
 }
 trap cleanup EXIT
@@ -42,26 +42,26 @@ wait_for_port() {
   return 1
 }
 
-export PLENUM_INTEROP=1
+export OT_GATEWAY_INTEROP=1
 
 if wants mqtt; then
-  docker run -d --name plenum-interop-mosquitto -p 127.0.0.1:18831:1883 \
+  docker run -d --name ot-gateway-interop-mosquitto -p 127.0.0.1:18831:1883 \
     -v "$repo/test/interop/mqtt/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro" eclipse-mosquitto:2.0.18 >/dev/null
-  containers+=(plenum-interop-mosquitto)
-  docker run -d --name plenum-interop-emqx -p 127.0.0.1:18832:1883 emqx/emqx:5.8.6 >/dev/null
-  containers+=(plenum-interop-emqx)
+  containers+=(ot-gateway-interop-mosquitto)
+  docker run -d --name ot-gateway-interop-emqx -p 127.0.0.1:18832:1883 emqx/emqx:5.8.6 >/dev/null
+  containers+=(ot-gateway-interop-emqx)
   wait_for_port 127.0.0.1 18831
   # EMQX accepts TCP before it takes MQTT connections.
-  for _ in $(seq 120); do docker logs plenum-interop-emqx 2>&1 | grep -q "is running now" && break; sleep 1; done
-  export PLENUM_INTEROP_BROKERS=mqtt://127.0.0.1:18831,mqtt://127.0.0.1:18832
+  for _ in $(seq 120); do docker logs ot-gateway-interop-emqx 2>&1 | grep -q "is running now" && break; sleep 1; done
+  export OT_GATEWAY_INTEROP_BROKERS=mqtt://127.0.0.1:18831,mqtt://127.0.0.1:18832
 fi
 
 if wants bacnet; then
-  docker build -q -t plenum-interop-bacserv "$repo/test/interop/bacnet" >/dev/null
-  docker network create --subnet 172.30.0.0/24 plenum-interop >/dev/null
-  docker run -d --name plenum-interop-bacserv --network plenum-interop --ip 172.30.0.10 plenum-interop-bacserv 2002 >/dev/null
-  containers+=(plenum-interop-bacserv)
-  export PLENUM_INTEROP_BACNET=172.30.0.10 PLENUM_INTEROP_BACNET_BROADCAST=172.30.0.255
+  docker build -q -t ot-gateway-interop-bacserv "$repo/test/interop/bacnet" >/dev/null
+  docker network create --subnet 172.30.0.0/24 ot-gateway-interop >/dev/null
+  docker run -d --name ot-gateway-interop-bacserv --network ot-gateway-interop --ip 172.30.0.10 ot-gateway-interop-bacserv 2002 >/dev/null
+  containers+=(ot-gateway-interop-bacserv)
+  export OT_GATEWAY_INTEROP_BACNET=172.30.0.10 OT_GATEWAY_INTEROP_BACNET_BROADCAST=172.30.0.255
 fi
 
 if wants modbus; then
@@ -70,7 +70,7 @@ if wants modbus; then
   "$work/venv/bin/python" "$repo/test/interop/modbus/server.py" 15020 >"$work/modbus.log" 2>&1 &
   modbus_pid=$!
   wait_for_port 127.0.0.1 15020
-  export PLENUM_INTEROP_MODBUS=127.0.0.1:15020
+  export OT_GATEWAY_INTEROP_MODBUS=127.0.0.1:15020
 fi
 
 cd "$repo/apps/gateway"

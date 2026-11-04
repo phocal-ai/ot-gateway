@@ -18,9 +18,9 @@ import {
   Publisher,
   PublishError,
   withMetricAttributes
-} from "@plenum/core"
-import { makeBrokerControl, MqttPublisher, serveMqtt } from "@plenum/mqtt"
-import type { BrokerControl } from "@plenum/mqtt"
+} from "@ot-gateway/core"
+import { makeBrokerControl, MqttPublisher, serveMqtt } from "@ot-gateway/mqtt"
+import type { BrokerControl } from "@ot-gateway/mqtt"
 import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope } from "effect"
 import { existsSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
@@ -28,7 +28,7 @@ import { BufferedPublisher } from "../../src/index.ts"
 
 const tempDirectory = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem
-  return yield* fs.makeTempDirectoryScoped({ prefix: "plenum-buffer-chaos-" })
+  return yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-buffer-chaos-" })
 }).pipe(Effect.provide(NodeServices.layer))
 
 /** A broker stand-in whose behaviour each test scripts. */

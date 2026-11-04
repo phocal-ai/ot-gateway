@@ -286,7 +286,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
     const readAt = yield* Clock.currentTimeMillis
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
-    yield* Effect.annotateCurrentSpan("plenum.readings", readings.length)
+    yield* Effect.annotateCurrentSpan("ot_gateway.readings", readings.length)
     const published = yield* handling
       .withPermit(Effect.forEach(readings, (reading) => handleReading(reading, polledSince), { discard: true }))
       .pipe(Effect.result)
@@ -303,14 +303,14 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         Effect.all([
           Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, error.reason)),
           deviceFailed(error.reason, "device read failed", { reason: error.reason, error: error.message }),
-          Effect.annotateCurrentSpan({ "plenum.outcome": "read_failed", "plenum.reason": error.reason }),
+          Effect.annotateCurrentSpan({ "ot_gateway.outcome": "read_failed", "ot_gateway.reason": error.reason }),
           Metric.update(Metric.withAttributes(readFailures, { reason: error.reason }), 1),
           countCycle("read_failed")
         ]),
       PublishError: (error) =>
         Effect.all([
           publishFailed("values", "publish failed", { topic: error.topic, error: error.message }),
-          Effect.annotateCurrentSpan({ "plenum.outcome": "publish_failed" }),
+          Effect.annotateCurrentSpan({ "ot_gateway.outcome": "publish_failed" }),
           Metric.update(publishFailures, 1),
           countCycle("publish_failed")
         ]),
@@ -321,7 +321,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
             timeoutMs: error.timeoutMs,
             error: error.message
           }),
-          Effect.annotateCurrentSpan({ "plenum.outcome": "timed_out" }),
+          Effect.annotateCurrentSpan({ "ot_gateway.outcome": "timed_out" }),
           countCycle("timed_out")
         ])
     }),
@@ -337,7 +337,11 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       Effect.withSpan("Device.pollCycle", {
         root: true,
         sampled: draw < sampleRatio,
-        attributes: { "plenum.site": ctx.site, "plenum.building": ctx.building, "plenum.device": driver.deviceId }
+        attributes: {
+          "ot_gateway.site": ctx.site,
+          "ot_gateway.building": ctx.building,
+          "ot_gateway.device": driver.deviceId
+        }
       })
     )
   })

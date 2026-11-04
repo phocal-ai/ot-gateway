@@ -3,7 +3,7 @@
  * untrusted, so a decoder may fail with a typed error but never throw or die.
  */
 import { describe, expect, it } from "@effect/vitest"
-import type { ModbusPoint } from "@plenum/core"
+import type { ModbusPoint } from "@ot-gateway/core"
 import { Cause, Effect, Exit } from "effect"
 import {
   decodeBitResponse,

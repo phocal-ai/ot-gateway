@@ -14,7 +14,7 @@ import {
   processDiskWritten,
   processMemory,
   withMetricAttributes
-} from "@plenum/core"
+} from "@ot-gateway/core"
 import { Effect, Fiber, FileSystem, Logger, Metric } from "effect"
 import { TestClock } from "effect/testing"
 import {
@@ -131,7 +131,7 @@ describe("host monitor", () => {
       const { state, sources } = fakeHost()
       const monitor = yield* makeHostMonitor(sources, {
         version: "v9.9.9",
-        bufferPath: "/var/lib/plenum/buffer.sqlite"
+        bufferPath: "/var/lib/ot-gateway/buffer.sqlite"
       })
       const fiber = yield* monitor.run.pipe(withMetricAttributes(tag), Effect.provide(logger), Effect.forkChild)
       const tick = TestClock.adjust(SAMPLE_INTERVAL_MS)
@@ -259,7 +259,7 @@ describe("host monitor", () => {
 const sysfs = (files: Record<string, string>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
-    const root = yield* fs.makeTempDirectoryScoped({ prefix: "plenum-sysfs-" })
+    const root = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-sysfs-" })
     for (const [path, text] of Object.entries(files)) {
       yield* fs.makeDirectory(`${root}/${path.slice(0, path.lastIndexOf("/"))}`, { recursive: true })
       yield* fs.writeFileString(`${root}/${path}`, text)
@@ -381,7 +381,7 @@ describe("throttling source", () => {
       expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(0)
       // No series for what the sensor cannot see: a 0 would read as "not throttled".
       const series = (yield* Metric.snapshot).filter(
-        (metric) => metric.id === "plenum_host_throttled" && metric.attributes?.["test"] === "host-alarm"
+        (metric) => metric.id === "ot_gateway_host_throttled" && metric.attributes?.["test"] === "host-alarm"
       )
       expect(series.map((metric) => metric.attributes?.["condition"])).toEqual(["under_voltage"])
       expect(lines).toEqual(["Warn: host reports a power or thermal condition", "Info: host conditions cleared"])

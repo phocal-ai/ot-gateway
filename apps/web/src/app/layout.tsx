@@ -3,7 +3,7 @@ import type * as React from "react"
 import "./globals.css"
 
 export const metadata: Metadata = {
-  title: "Plenum gateway",
+  title: "OT Gateway",
   description: "The gateway's devices, values and commands"
 }
 

@@ -1,7 +1,7 @@
 /**
- * Generates `dashboards/plenum-gateway.json`, the "phocal / Plenum gateway" dashboard.
+ * Generates `dashboards/ot-gateway.json`, the "phocal / OT Gateway" dashboard.
  *
- *   node observability/grafana/plenum-gateway.dashboard.ts
+ *   node observability/grafana/ot-gateway.dashboard.ts
  *
  * Edit this file, not the JSON. Metric names and attributes come from
  * `packages/core/src/Telemetry.ts`; spans and logs from `runDevice` and the
@@ -20,11 +20,11 @@ const tempo: Datasource = { type: "tempo", uid: "grafanacloud-traces" }
 
 /** Series selector shared by every PromQL query. */
 const sel =
-  'service_namespace="plenum", deployment_environment=~"$environment", site=~"$site", building=~"$building", device=~"$device"'
+  'service_namespace="ot-gateway", deployment_environment=~"$environment", site=~"$site", building=~"$building", device=~"$device"'
 /** For the gateway's own series (process and host), which have no `device`. */
 const hostSel =
-  'service_namespace="plenum", deployment_environment=~"$environment", site=~"$site", building=~"$building"'
-const logSel = '{service_name="plenum-gateway", service_namespace="plenum", deployment_environment=~"$environment"}'
+  'service_namespace="ot-gateway", deployment_environment=~"$environment", site=~"$site", building=~"$building"'
+const logSel = '{service_name="ot-gateway", service_namespace="ot-gateway", deployment_environment=~"$environment"}'
 
 const panels: Array<Record<string, unknown>> = []
 let nextId = 0
@@ -150,25 +150,29 @@ const staleness = (
   })
 
 row("Health")
-stat("Devices reporting", `count(max_over_time(plenum_device_last_success_timestamp_seconds{${sel}}[$__range]))`, {
+stat("Devices reporting", `count(max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range]))`, {
   unit: "short",
   x: 0,
   description: "Devices that completed at least one successful cycle in the range."
 })
-stat("Stalest device", `max(time() - max_over_time(plenum_device_last_success_timestamp_seconds{${sel}}[$__range]))`, {
-  unit: "s",
-  x: 4,
-  description:
-    "Seconds since the device that has gone longest without a successful cycle last succeeded. Uses the last value in the range, so a stopped gateway turns red instead of disappearing.",
-  thresholds: [
-    { color: "green", value: null },
-    { color: "orange", value: 60 },
-    { color: "red", value: 300 }
-  ]
-})
+stat(
+  "Stalest device",
+  `max(time() - max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range]))`,
+  {
+    unit: "s",
+    x: 4,
+    description:
+      "Seconds since the device that has gone longest without a successful cycle last succeeded. Uses the last value in the range, so a stopped gateway turns red instead of disappearing.",
+    thresholds: [
+      { color: "green", value: null },
+      { color: "orange", value: 60 },
+      { color: "red", value: 300 }
+    ]
+  }
+)
 stat(
   "Cycle success",
-  `sum(rate(plenum_poll_cycles_total{${sel}, outcome="ok"}[$__range])) / sum(rate(plenum_poll_cycles_total{${sel}}[$__range]))`,
+  `sum(rate(ot_gateway_poll_cycles_total{${sel}, outcome="ok"}[$__range])) / sum(rate(ot_gateway_poll_cycles_total{${sel}}[$__range]))`,
   {
     unit: "percentunit",
     x: 8,
@@ -180,18 +184,18 @@ stat(
     ]
   }
 )
-stat("Read failures (range)", `sum(increase(plenum_read_failures_total{${sel}}[$__range])) or vector(0)`, {
+stat("Read failures (range)", `sum(increase(ot_gateway_read_failures_total{${sel}}[$__range])) or vector(0)`, {
   unit: "short",
   x: 12,
   description: "Cycles whose device read still failed after retries."
 })
-stat("Publish failures (range)", `sum(increase(plenum_publish_failures_total{${sel}}[$__range])) or vector(0)`, {
+stat("Publish failures (range)", `sum(increase(ot_gateway_publish_failures_total{${sel}}[$__range])) or vector(0)`, {
   unit: "short",
   x: 16
 })
 stat(
   "Cycle p95",
-  `histogram_quantile(0.95, sum by (le) (rate(plenum_poll_duration_seconds_bucket{${sel}}[$__range])))`,
+  `histogram_quantile(0.95, sum by (le) (rate(ot_gateway_poll_duration_seconds_bucket{${sel}}[$__range])))`,
   { unit: "s", x: 20, decimals: 3, description: "Includes driver retries and publishing." }
 )
 y += 4
@@ -200,7 +204,10 @@ row("Polling")
 timeseries(
   "Cycles by outcome",
   [
-    { expr: `sum by (outcome) (rate(plenum_poll_cycles_total{${sel}}[$__rate_interval]))`, legendFormat: "{{outcome}}" }
+    {
+      expr: `sum by (outcome) (rate(ot_gateway_poll_cycles_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}"
+    }
   ],
   {
     unit: "ops",
@@ -215,7 +222,7 @@ timeseries(
   "Read failures by device and reason",
   [
     {
-      expr: `sum by (device, reason) (rate(plenum_read_failures_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device, reason) (rate(ot_gateway_read_failures_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}} {{reason}}"
     }
   ],
@@ -225,11 +232,11 @@ timeseries(
   "Cycle duration p50 / p95 by device",
   [
     {
-      expr: `histogram_quantile(0.5, sum by (device, le) (rate(plenum_poll_duration_seconds_bucket{${sel}}[$__rate_interval])))`,
+      expr: `histogram_quantile(0.5, sum by (device, le) (rate(ot_gateway_poll_duration_seconds_bucket{${sel}}[$__rate_interval])))`,
       legendFormat: "p50 {{device}}"
     },
     {
-      expr: `histogram_quantile(0.95, sum by (device, le) (rate(plenum_poll_duration_seconds_bucket{${sel}}[$__rate_interval])))`,
+      expr: `histogram_quantile(0.95, sum by (device, le) (rate(ot_gateway_poll_duration_seconds_bucket{${sel}}[$__rate_interval])))`,
       legendFormat: "p95 {{device}}"
     }
   ],
@@ -239,8 +246,8 @@ y += 8
 timeseries(
   "Values published vs suppressed by deadband",
   [
-    { expr: `sum(rate(plenum_values_published_total{${sel}}[$__rate_interval]))`, legendFormat: "published" },
-    { expr: `sum(rate(plenum_values_suppressed_total{${sel}}[$__rate_interval]))`, legendFormat: "suppressed" }
+    { expr: `sum(rate(ot_gateway_values_published_total{${sel}}[$__rate_interval]))`, legendFormat: "published" },
+    { expr: `sum(rate(ot_gateway_values_suppressed_total{${sel}}[$__rate_interval]))`, legendFormat: "suppressed" }
   ],
   {
     unit: "ops",
@@ -255,7 +262,7 @@ timeseries(
   "Seconds since last successful cycle",
   [
     {
-      expr: `time() - max by (device) (plenum_device_last_success_timestamp_seconds{${sel}})`,
+      expr: `time() - max by (device) (ot_gateway_device_last_success_timestamp_seconds{${sel}})`,
       legendFormat: "{{device}}"
     }
   ],
@@ -268,7 +275,7 @@ timeseries(
   "Device requests by outcome",
   [
     {
-      expr: `sum by (device, outcome) (rate(plenum_driver_requests_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device, outcome) (rate(ot_gateway_driver_requests_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}} {{outcome}}"
     }
   ],
@@ -285,7 +292,7 @@ timeseries(
   "Connections opened by device",
   [
     {
-      expr: `sum by (device, outcome) (increase(plenum_driver_connects_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device, outcome) (increase(ot_gateway_driver_connects_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}} {{outcome}}"
     }
   ],
@@ -302,7 +309,7 @@ timeseries(
   "Pipeline restarts by device",
   [
     {
-      expr: `sum by (device) (increase(plenum_device_restarts_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device) (increase(ot_gateway_device_restarts_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}}"
     }
   ],
@@ -319,7 +326,7 @@ timeseries(
   "Device refusals by exception",
   [
     {
-      expr: `sum by (device, exception) (increase(plenum_driver_refusals_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device, exception) (increase(ot_gateway_driver_refusals_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}} {{exception}}"
     }
   ],
@@ -336,7 +343,7 @@ timeseries(
   "Mean request time by device",
   [
     {
-      expr: `sum by (device) (rate(plenum_driver_request_seconds_total{${sel}}[$__rate_interval])) / sum by (device) (rate(plenum_driver_requests_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device) (rate(ot_gateway_driver_request_seconds_total{${sel}}[$__rate_interval])) / sum by (device) (rate(ot_gateway_driver_requests_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}}"
     }
   ],
@@ -355,7 +362,7 @@ timeseries(
   "Connected to the MQTT broker",
   [
     {
-      expr: `max by (service_instance_id) (plenum_mqtt_connected{${sel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_mqtt_connected{${sel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -371,7 +378,7 @@ timeseries(
   "Broker connection attempts by outcome",
   [
     {
-      expr: `sum by (outcome) (increase(plenum_mqtt_connects_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (outcome) (increase(ot_gateway_mqtt_connects_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{outcome}}"
     }
   ],
@@ -391,7 +398,7 @@ timeseries(
   "Commands by outcome",
   [
     {
-      expr: `sum by (outcome) (increase(plenum_commands_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (outcome) (increase(ot_gateway_commands_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{outcome}}"
     }
   ],
@@ -408,7 +415,7 @@ timeseries(
   "Rejected and failed commands by reason",
   [
     {
-      expr: `sum by (outcome, reason) (increase(plenum_commands_total{${sel}, outcome!="written"}[$__rate_interval]))`,
+      expr: `sum by (outcome, reason) (increase(ot_gateway_commands_total{${sel}, outcome!="written"}[$__rate_interval]))`,
       legendFormat: "{{outcome}}: {{reason}}"
     }
   ],
@@ -428,7 +435,7 @@ timeseries(
   "Messages waiting in the buffer",
   [
     {
-      expr: `max by (service_instance_id) (plenum_buffer_rows{${sel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_buffer_rows{${sel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -444,15 +451,15 @@ timeseries(
   "Buffer traffic",
   [
     {
-      expr: `sum(increase(plenum_buffer_written_total{${sel}}[$__rate_interval]))`,
+      expr: `sum(increase(ot_gateway_buffer_written_total{${sel}}[$__rate_interval]))`,
       legendFormat: "stored"
     },
     {
-      expr: `sum(increase(plenum_buffer_drained_total{${sel}}[$__rate_interval]))`,
+      expr: `sum(increase(ot_gateway_buffer_drained_total{${sel}}[$__rate_interval]))`,
       legendFormat: "delivered"
     },
     {
-      expr: `sum by (reason) (increase(plenum_buffer_dropped_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (reason) (increase(ot_gateway_buffer_dropped_total{${sel}}[$__rate_interval]))`,
       legendFormat: "dropped: {{reason}}"
     }
   ],
@@ -469,11 +476,11 @@ timeseries(
   "Buffer store failures",
   [
     {
-      expr: `sum by (operation) (increase(plenum_buffer_failures_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (operation) (increase(ot_gateway_buffer_failures_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{operation}}"
     },
     {
-      expr: `sum(increase(plenum_buffer_bypassed_total{${sel}}[$__rate_interval]))`,
+      expr: `sum(increase(ot_gateway_buffer_bypassed_total{${sel}}[$__rate_interval]))`,
       legendFormat: "published past the buffer"
     }
   ],
@@ -490,7 +497,7 @@ timeseries(
   "Running without a buffer",
   [
     {
-      expr: `max by (service_instance_id) (plenum_buffer_disabled{${sel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_buffer_disabled{${sel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -507,7 +514,7 @@ y += 8
 row("Freshness")
 staleness(
   "Device freshness",
-  `time() - max by (device) (max_over_time(plenum_device_last_success_timestamp_seconds{${sel}}[$__range]))`,
+  `time() - max by (device) (max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range]))`,
   {
     x: 0,
     w: 12,
@@ -519,7 +526,7 @@ timeseries(
   "Points not read by device",
   [
     {
-      expr: `sum by (device, reason) (increase(plenum_point_read_failures_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device, reason) (increase(ot_gateway_point_read_failures_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}} {{reason}}"
     }
   ],
@@ -536,7 +543,7 @@ timeseries(
   "Values pushed by device",
   [
     {
-      expr: `sum by (device) (increase(plenum_pushed_readings_total{${sel}}[$__rate_interval]))`,
+      expr: `sum by (device) (increase(ot_gateway_pushed_readings_total{${sel}}[$__rate_interval]))`,
       legendFormat: "{{device}}"
     }
   ],
@@ -552,7 +559,7 @@ timeseries(
   "Points pushed instead of polled",
   [
     {
-      expr: `max by (device) (plenum_pushed_points{${sel}})`,
+      expr: `max by (device) (ot_gateway_pushed_points{${sel}})`,
       legendFormat: "{{device}}"
     }
   ],
@@ -571,7 +578,7 @@ timeseries(
   "Gateway memory",
   [
     {
-      expr: `max by (service_instance_id, kind) (plenum_process_memory_bytes{${hostSel}})`,
+      expr: `max by (service_instance_id, kind) (ot_gateway_process_memory_bytes{${hostSel}})`,
       legendFormat: "{{service_instance_id}} {{kind}}"
     }
   ],
@@ -587,7 +594,7 @@ timeseries(
   "Event loop lag",
   [
     {
-      expr: `max by (service_instance_id, quantile) (plenum_event_loop_lag_seconds{${hostSel}})`,
+      expr: `max by (service_instance_id, quantile) (ot_gateway_event_loop_lag_seconds{${hostSel}})`,
       legendFormat: "{{service_instance_id}} {{quantile}}"
     }
   ],
@@ -603,7 +610,7 @@ timeseries(
   "Gateway CPU",
   [
     {
-      expr: `sum by (service_instance_id) (rate(plenum_process_cpu_seconds_total{${hostSel}}[$__rate_interval]))`,
+      expr: `sum by (service_instance_id) (rate(ot_gateway_process_cpu_seconds_total{${hostSel}}[$__rate_interval]))`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -619,7 +626,7 @@ timeseries(
   "SoC temperature",
   [
     {
-      expr: `max by (service_instance_id) (plenum_host_temperature_celsius{${hostSel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_host_temperature_celsius{${hostSel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -634,7 +641,7 @@ timeseries(
   "Power and thermal conditions (Raspberry Pi)",
   [
     {
-      expr: `max by (service_instance_id, condition) (max_over_time(plenum_host_throttled{${hostSel}}[$__rate_interval]))`,
+      expr: `max by (service_instance_id, condition) (max_over_time(ot_gateway_host_throttled{${hostSel}}[$__rate_interval]))`,
       legendFormat: "{{service_instance_id}} {{condition}}"
     }
   ],
@@ -650,7 +657,7 @@ timeseries(
   "Outbox disk free",
   [
     {
-      expr: `min by (service_instance_id) (plenum_buffer_disk_free_bytes{${hostSel}})`,
+      expr: `min by (service_instance_id) (ot_gateway_buffer_disk_free_bytes{${hostSel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -665,7 +672,7 @@ timeseries(
   "Storage writes",
   [
     {
-      expr: `sum by (service_instance_id) (rate(plenum_process_disk_written_bytes_total{${hostSel}}[$__rate_interval]))`,
+      expr: `sum by (service_instance_id) (rate(ot_gateway_process_disk_written_bytes_total{${hostSel}}[$__rate_interval]))`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -682,7 +689,7 @@ timeseries(
   "Open files",
   [
     {
-      expr: `max by (service_instance_id) (plenum_process_open_fds{${hostSel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_process_open_fds{${hostSel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -698,7 +705,7 @@ timeseries(
   "Wall-clock steps",
   [
     {
-      expr: `sum by (service_instance_id, direction) (increase(plenum_clock_steps_total{${hostSel}}[$__rate_interval]))`,
+      expr: `sum by (service_instance_id, direction) (increase(ot_gateway_clock_steps_total{${hostSel}}[$__rate_interval]))`,
       legendFormat: "{{service_instance_id}} {{direction}}"
     }
   ],
@@ -723,7 +730,7 @@ panels.push({
     {
       refId: "A",
       datasource: prom,
-      expr: `max by (service_instance_id, version, node) (plenum_process_start_time_seconds{${hostSel}}) * 1000`,
+      expr: `max by (service_instance_id, version, node) (ot_gateway_process_start_time_seconds{${hostSel}}) * 1000`,
       instant: true,
       format: "table"
     }
@@ -749,7 +756,7 @@ panels.push({
   id: ++nextId,
   type: "table",
   title: "Failed polling cycles (traces)",
-  description: "Device.pollCycle spans annotated with plenum.outcome. Click a trace ID for the span and its logs.",
+  description: "Device.pollCycle spans annotated with ot_gateway.outcome. Click a trace ID for the span and its logs.",
   datasource: tempo,
   gridPos: { h: 8, w: 24, x: 0, y },
   targets: [
@@ -759,7 +766,7 @@ panels.push({
       queryType: "traceql",
       limit: 50,
       tableType: "traces",
-      query: '{resource.service.name="plenum-gateway" && name="Device.pollCycle" && span.plenum.outcome != nil}'
+      query: '{resource.service.name="ot-gateway" && name="Device.pollCycle" && span.ot_gateway.outcome != nil}'
     }
   ],
   fieldConfig: { defaults: {}, overrides: [] },
@@ -781,11 +788,11 @@ const variable = (name: string, label: string, query: string) => ({
 })
 
 const dashboard = {
-  uid: "phocal-plenum-gateway",
-  title: "phocal / Plenum gateway",
-  tags: ["phocal", "plenum", "gateway"],
+  uid: "phocal-ot-gateway",
+  title: "phocal / OT Gateway",
+  tags: ["phocal", "ot-gateway", "gateway"],
   description:
-    "Plenum gateway telemetry (Effect OTLP -> Grafana Cloud). Source: plenum/observability/grafana/plenum-gateway.dashboard.ts",
+    "OT Gateway telemetry (Effect OTLP -> Grafana Cloud). Source: ot-gateway/observability/grafana/ot-gateway.dashboard.ts",
   timezone: "browser",
   schemaVersion: 39,
   editable: true,
@@ -796,24 +803,24 @@ const dashboard = {
       variable(
         "environment",
         "Environment",
-        'label_values(plenum_poll_cycles_total{service_namespace="plenum"}, deployment_environment)'
+        'label_values(ot_gateway_poll_cycles_total{service_namespace="ot-gateway"}, deployment_environment)'
       ),
-      variable("site", "Site", 'label_values(plenum_poll_cycles_total{service_namespace="plenum"}, site)'),
+      variable("site", "Site", 'label_values(ot_gateway_poll_cycles_total{service_namespace="ot-gateway"}, site)'),
       variable(
         "building",
         "Building",
-        'label_values(plenum_poll_cycles_total{service_namespace="plenum", site=~"$site"}, building)'
+        'label_values(ot_gateway_poll_cycles_total{service_namespace="ot-gateway", site=~"$site"}, building)'
       ),
       variable(
         "device",
         "Device",
-        'label_values(plenum_poll_cycles_total{service_namespace="plenum", site=~"$site", building=~"$building"}, device)'
+        'label_values(ot_gateway_poll_cycles_total{service_namespace="ot-gateway", site=~"$site", building=~"$building"}, device)'
       )
     ]
   },
   panels
 }
 
-const target = new URL("dashboards/plenum-gateway.json", import.meta.url)
+const target = new URL("dashboards/ot-gateway.json", import.meta.url)
 writeFileSync(target, `${JSON.stringify(dashboard, null, 2)}\n`)
 console.log(`wrote ${target.pathname} (${panels.length} panels)`)

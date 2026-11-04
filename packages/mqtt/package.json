@@ -1,7 +1,7 @@
 {
-  "name": "@plenum/mqtt",
+  "name": "@ot-gateway/mqtt",
   "version": "0.0.0",
-  "description": "Effect-native MQTT 5 publishing client for Plenum.",
+  "description": "Effect-native MQTT 5 publishing client for OT Gateway.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "4.1.2",
-    "@plenum/core": "workspace:*",
+    "@ot-gateway/core": "workspace:*",
     "effect": "4.1.2"
   }
 }

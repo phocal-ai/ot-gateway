@@ -17,7 +17,7 @@ apps/web/out
 **/.npmrc
 .env
 .env.*
-plenum.env
-plenum.json
+ot-gateway.env
+ot-gateway.json
 *.sqlite
 *.sqlite-*

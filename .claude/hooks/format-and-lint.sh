@@ -14,7 +14,7 @@ case "$FILE_PATH" in
 esac
 
 # Run from the file's own checkout so its configs and ignore patterns
-# (repos/**, generated dashboards) apply. Files outside a plenum checkout with
+# (repos/**, generated dashboards) apply. Files outside a ot-gateway checkout with
 # installed tools (memory files, other repos) are left alone.
 ROOT=$(git -C "$(dirname "$FILE_PATH")" rev-parse --show-toplevel 2>/dev/null || true)
 [ -n "$ROOT" ] && [ -x "$ROOT/node_modules/.bin/oxfmt" ] && [ -f "$ROOT/.oxfmtrc.json" ] || exit 0

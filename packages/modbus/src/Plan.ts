@@ -4,7 +4,7 @@
  *
  * Pure, so the grouping rules are tested without a socket.
  */
-import type { ModbusPoint } from "@plenum/core"
+import type { ModbusPoint } from "@ot-gateway/core"
 import { decodeValue, FunctionCode, maxReadQuantity, registerCount } from "./Frame.ts"
 import type { ReadCode } from "./Frame.ts"
 

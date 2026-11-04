@@ -4,9 +4,9 @@
  * reference implementation. Discovery, ReadPropertyMultiple, WriteProperty
  * with priority and relinquish, and change of value.
  *
- * Runs with PLENUM_INTEROP=1 and PLENUM_INTEROP_BACNET=<device ip>; the test
+ * Runs with OT_GATEWAY_INTEROP=1 and OT_GATEWAY_INTEROP_BACNET=<device ip>; the test
  * binds the BACnet port (47808) on every address, since bacserv answers
- * Who-Is with a broadcast I-Am. PLENUM_INTEROP_BACNET_BROADCAST is the
+ * Who-Is with a broadcast I-Am. OT_GATEWAY_INTEROP_BACNET_BROADCAST is the
  * broadcast address of the network bacserv is on.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
@@ -19,13 +19,13 @@ import {
   ObjectType,
   parseDeviceAddress,
   PropertyId
-} from "@plenum/bacnet"
-import { parseConfig, type Reading } from "@plenum/core"
+} from "@ot-gateway/bacnet"
+import { parseConfig, type Reading } from "@ot-gateway/core"
 import { Effect, Result, Stream } from "effect"
 
-const device = process.env["PLENUM_INTEROP_BACNET"]
-const broadcast = process.env["PLENUM_INTEROP_BACNET_BROADCAST"] ?? "255.255.255.255"
-const enabled = process.env["PLENUM_INTEROP"] === "1" && device !== undefined
+const device = process.env["OT_GATEWAY_INTEROP_BACNET"]
+const broadcast = process.env["OT_GATEWAY_INTEROP_BACNET_BROADCAST"] ?? "255.255.255.255"
+const enabled = process.env["OT_GATEWAY_INTEROP"] === "1" && device !== undefined
 
 /** The first instance of `objectType` in the device's object list, read element by element (always fits unsegmented). */
 const firstInstance = Effect.fnUntraced(function* (client: BacnetClient, target: DeviceAddress, objectType: number) {

@@ -1,22 +1,22 @@
-# The Plenum gateway as a systemd service (packaging/install.sh installs it).
+# The OT Gateway as a systemd service (packaging/install.sh installs it).
 #
-# Config: /etc/plenum/gateway.json, secrets and OTEL_* variables in
-# /etc/plenum/gateway.env. The outbox belongs under /var/lib/plenum
+# Config: /etc/ot-gateway/gateway.json, secrets and OTEL_* variables in
+# /etc/ot-gateway/gateway.env. The outbox belongs under /var/lib/ot-gateway
 # (StateDirectory), so point `buffer.path` there.
 [Unit]
-Description=Plenum building gateway (Modbus TCP and BACnet/IP to MQTT)
-Documentation=https://github.com/phocal-ai/plenum
+Description=OT Gateway building gateway (Modbus TCP and BACnet/IP to MQTT)
+Documentation=https://github.com/phocal-ai/ot-gateway
 Wants=network-online.target
 After=network-online.target time-sync.target
 
 [Service]
 Type=simple
-User=plenum
-Group=plenum
-WorkingDirectory=/opt/plenum
-EnvironmentFile=-/etc/plenum/gateway.env
+User=ot-gateway
+Group=ot-gateway
+WorkingDirectory=/opt/ot-gateway
+EnvironmentFile=-/etc/ot-gateway/gateway.env
 Environment=NODE_ENV=production
-ExecStart=/usr/bin/env node --max-semi-space-size=4 apps/gateway/src/main.ts /etc/plenum/gateway.json
+ExecStart=/usr/bin/env node --max-semi-space-size=4 apps/gateway/src/main.ts /etc/ot-gateway/gateway.json
 # SIGINT is the gateway's clean shutdown: offline health message, cancelled COV subscriptions, outbox closed.
 KillSignal=SIGINT
 TimeoutStopSec=30
@@ -25,8 +25,8 @@ Restart=always
 RestartSec=5
 StartLimitIntervalSec=0
 
-StateDirectory=plenum
-ReadOnlyPaths=/etc/plenum
+StateDirectory=ot-gateway
+ReadOnlyPaths=/etc/ot-gateway
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

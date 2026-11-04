@@ -5,7 +5,7 @@ paths:
   - "apps/**/*.ts"
 ---
 
-Plenum is on Effect 4 (`effect@4.1.2`). The source of truth is `repos/effect/` (see CLAUDE.md, "Reference repos"); v3 → v4 renames are in `repos/effect/migration/v3-to-v4.md`. This adds detail to CLAUDE.md's "Effect 4 conventions"; it does not repeat them. Apply it to new and changed code, and fix a violation in existing code when you are already editing that function.
+OT Gateway is on Effect 4 (`effect@4.1.2`). The source of truth is `repos/effect/` (see CLAUDE.md, "Reference repos"); v3 → v4 renames are in `repos/effect/migration/v3-to-v4.md`. This adds detail to CLAUDE.md's "Effect 4 conventions"; it does not repeat them. Apply it to new and changed code, and fix a violation in existing code when you are already editing that function.
 
 `pnpm typecheck` runs the Effect language service (`@effect/tsgo`, configured in `tsconfig.base.json`), so many of these rules fail the build. The rest are on you and on `/review-effect`.
 
@@ -13,7 +13,7 @@ Plenum is on Effect 4 (`effect@4.1.2`). The source of truth is `repos/effect/` (
 
 A type records where a value came from and what has been checked about it. Keep the strongest type you have.
 
-**Parse once, at the boundary.** Untrusted input is decoded from `unknown` by the adapter that owns that boundary, with `Schema.decodeUnknownEffect` (`decodeUnknownSync` / `decodeUnknownExit` outside an Effect). In Plenum the boundaries are: the gateway config file, env, MQTT payloads (including commands), Modbus and BACnet frames off the wire, and SQLite rows. Everything inward receives the parsed type and does not re-check it. Binary codecs are the exception to "use Schema": they decode bytes by hand, but they still return a typed value or a tagged error, never `unknown`.
+**Parse once, at the boundary.** Untrusted input is decoded from `unknown` by the adapter that owns that boundary, with `Schema.decodeUnknownEffect` (`decodeUnknownSync` / `decodeUnknownExit` outside an Effect). In OT Gateway the boundaries are: the gateway config file, env, MQTT payloads (including commands), Modbus and BACnet frames off the wire, and SQLite rows. Everything inward receives the parsed type and does not re-check it. Binary codecs are the exception to "use Schema": they decode bytes by hand, but they still return a typed value or a tagged error, never `unknown`.
 
 - **Never widen a known value** to `unknown`, `object` or `Record<string, unknown>` because a broad type is easier to implement against.
 - **Never erase a type and assert it back** (`x as unknown as T`, `as any as T`). An assertion parses nothing. Redesign the boundary instead: use the owning schema, a typed constructor or a brand.

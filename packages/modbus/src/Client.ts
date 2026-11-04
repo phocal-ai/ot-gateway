@@ -28,7 +28,7 @@
  *   the response arrived is sent once more on a new connection. Devices that
  *   close the connection after every response depend on this.
  */
-import { describeSocketError, driverConnects, driverRequests, monotonicMillis, timeRequest } from "@plenum/core"
+import { describeSocketError, driverConnects, driverRequests, monotonicMillis, timeRequest } from "@ot-gateway/core"
 import { Deferred, Duration, Effect, Exit, Metric, Schema, Scope, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import {

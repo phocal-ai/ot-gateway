@@ -48,7 +48,7 @@
 # SOAK_MAX_RSS_GROWTH (default 1.5 times) or SOAK_MAX_FD_GROWTH (default 16).
 #
 # Processes are tracked by PID and only those are stopped. Results go to
-# SOAK_DIR (default $TMPDIR/plenum-soak-<time>). The gateway loads the same env
+# SOAK_DIR (default $TMPDIR/ot-gateway-soak-<time>). The gateway loads the same env
 # file as `pnpm gateway`, so its telemetry reaches the configured backend.
 set -euo pipefail
 
@@ -74,12 +74,12 @@ at_least() { echo $(($1 > $2 ? $1 : $2)); }
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 source_config=${SOAK_CONFIG:-$repo/examples/gateway.json}
-dir=${SOAK_DIR:-${TMPDIR:-/tmp}/plenum-soak-$(date +%Y%m%dT%H%M%S)}
+dir=${SOAK_DIR:-${TMPDIR:-/tmp}/ot-gateway-soak-$(date +%Y%m%dT%H%M%S)}
 outage_every=${OUTAGE_EVERY:-$((7200 / speed))}
 outage_for=${OUTAGE_FOR:-$(at_least $((60 / speed)) 10)}
 sample_every=${SAMPLE_EVERY:-$(at_least $((600 / speed)) 5)}
 drain=${SOAK_DRAIN:-$(at_least $((180 / speed)) 60)}
-env_file=${PLENUM_ENV_FILE:-$HOME/.config/phocal/plenum-gateway.env}
+env_file=${OT_GATEWAY_ENV_FILE:-$HOME/.config/phocal/ot-gateway.env}
 mkdir -p "$dir"
 log() { echo "$(date +%FT%T) $*" | tee -a "$dir/events.log"; }
 
@@ -90,13 +90,13 @@ volume=""
 if [[ ${SOAK_DISK_FAULT:-0} == 1 ]]; then
   case $(uname) in
     Darwin)
-      hdiutil create -quiet -size 16m -fs HFS+ -volname plenum-soak "$dir/disk.dmg"
-      volume=$(hdiutil attach -nobrowse "$dir/disk.dmg" | awk -F'\t' '/plenum-soak/ {print $NF}')
+      hdiutil create -quiet -size 16m -fs HFS+ -volname ot-gateway-soak "$dir/disk.dmg"
+      volume=$(hdiutil attach -nobrowse "$dir/disk.dmg" | awk -F'\t' '/ot-gateway-soak/ {print $NF}')
       ;;
     Linux)
       volume=$dir/disk
       mkdir -p "$volume"
-      if ! $as_root mount -t tmpfs -o size=16m,mode=1777 plenum-soak "$volume"; then
+      if ! $as_root mount -t tmpfs -o size=16m,mode=1777 ot-gateway-soak "$volume"; then
         echo "SOAK_DISK_FAULT on Linux mounts a tmpfs: run as root or with passwordless sudo" >&2
         exit 1
       fi

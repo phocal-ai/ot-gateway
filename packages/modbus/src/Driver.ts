@@ -12,8 +12,8 @@
  * problem, since the device is unreachable then.
  */
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { DriverError, driverRefusals } from "@plenum/core"
-import type { Driver, ModbusDevice, ModbusPoint, Network, Reading, WriteValue } from "@plenum/core"
+import { DriverError, driverRefusals } from "@ot-gateway/core"
+import type { Driver, ModbusDevice, ModbusPoint, Network, Reading, WriteValue } from "@ot-gateway/core"
 import { Clock, Duration, Effect, Metric, Schedule } from "effect"
 import { makeModbusClient, makeModbusLink } from "./Client.ts"
 import type { ModbusClient, ModbusClientError, ModbusLink } from "./Client.ts"
@@ -127,7 +127,7 @@ export const makeModbusDriverFromClient = (
       )
       readings.push(...blockReadings)
     }
-    yield* Effect.annotateCurrentSpan({ "plenum.requests": blocks.length, "plenum.refused": refusals.length })
+    yield* Effect.annotateCurrentSpan({ "ot_gateway.requests": blocks.length, "ot_gateway.refused": refusals.length })
     if (blocks.length > 0 && refusals.length === blocks.length) {
       return yield* new DriverError({
         device: device.id,

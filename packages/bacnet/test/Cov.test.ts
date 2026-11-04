@@ -3,7 +3,7 @@
  * the test clock: lapses, renewals, moves and restarts take minutes.
  */
 import { describe, expect, it } from "@effect/vitest"
-import type { BacnetDevice, BacnetPoint, Reading } from "@plenum/core"
+import type { BacnetDevice, BacnetPoint, Reading } from "@ot-gateway/core"
 import { Clock, Effect, Result, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { TestClock } from "effect/testing"

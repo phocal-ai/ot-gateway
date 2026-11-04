@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --max-semi-space-size=4
 /**
- * Plenum gateway entry point.
+ * OT Gateway entry point.
  *
  *   node apps/gateway/src/main.ts path/to/gateway.json
  *   node apps/gateway/src/main.ts --check path/to/gateway.json
@@ -20,7 +20,7 @@
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
-import { type GatewayConfig, parseConfig } from "@plenum/core"
+import { type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Console, Effect, FileSystem } from "effect"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { discover } from "./Discover.ts"
@@ -58,7 +58,7 @@ setDefaultAutoSelectFamilyAttemptTimeout(2000)
 const program = Effect.gen(function* () {
   const args = process.argv.slice(2)
   const flags = new Set(["--check", "--discover"])
-  const path = args.find((arg) => !flags.has(arg)) ?? "plenum.json"
+  const path = args.find((arg) => !flags.has(arg)) ?? "ot-gateway.json"
   const fs = yield* FileSystem.FileSystem
   const config = yield* parseConfig(yield* fs.readFileString(path))
   if (args.includes("--check")) return yield* Console.log(describe(config))

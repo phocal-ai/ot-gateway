@@ -1,7 +1,7 @@
 {
-  "name": "@plenum/buffer",
+  "name": "@ot-gateway/buffer",
   "version": "0.0.0",
-  "description": "SQLite store-and-forward for Plenum's northbound messages.",
+  "description": "SQLite store-and-forward for OT Gateway's northbound messages.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -13,11 +13,11 @@
   },
   "dependencies": {
     "@effect/sql-sqlite-node": "4.1.2",
-    "@plenum/core": "workspace:*",
+    "@ot-gateway/core": "workspace:*",
     "effect": "4.1.2"
   },
   "devDependencies": {
     "@effect/platform-node": "4.1.2",
-    "@plenum/mqtt": "workspace:*"
+    "@ot-gateway/mqtt": "workspace:*"
   }
 }

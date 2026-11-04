@@ -8,12 +8,12 @@
  * late (`maxAge` in `makeCommandGuard`).
  *
  * Every queue drops what does not fit. A dropped command is counted in
- * `plenum_commands{outcome="dropped"}` and logged when dropping starts and
+ * `ot_gateway_commands{outcome="dropped"}` and logged when dropping starts and
  * when it stops, not once per message: a flood must not flood the logs too.
  */
-import { commands, type InboundCommand, monotonicMillis } from "@plenum/core"
-import type { GatewayConfig, Publisher } from "@plenum/core"
-import type { InboundMessage } from "@plenum/mqtt"
+import { commands, type InboundCommand, monotonicMillis } from "@ot-gateway/core"
+import type { GatewayConfig, Publisher } from "@ot-gateway/core"
+import type { InboundMessage } from "@ot-gateway/mqtt"
 import { Effect, Metric, Queue } from "effect"
 
 /** Commands received and not yet dispatched. */

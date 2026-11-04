@@ -5,7 +5,7 @@
  */
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
-import type { BacnetDevice, BacnetSettings } from "@plenum/core"
+import type { BacnetDevice, BacnetSettings } from "@ot-gateway/core"
 import { Effect, Fiber, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { captureLogs } from "./scripted.ts"

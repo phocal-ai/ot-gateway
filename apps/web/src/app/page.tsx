@@ -5,7 +5,7 @@
  * health and latest values, and the recent commands. Polls `/api/status`
  * every two seconds; read-only.
  */
-import type { DeviceStatus, GatewayStatus, HostStatus } from "@plenum/api"
+import type { DeviceStatus, GatewayStatus, HostStatus } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
@@ -278,7 +278,7 @@ const StatusPage = () => {
     <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Plenum</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">OT Gateway</h1>
           {status === undefined ? null : (
             <p className="text-sm text-muted-foreground">
               {status.site} / {status.building} · gateway {status.id}

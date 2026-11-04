@@ -3,7 +3,7 @@
  * cannot produce: closing after a response, resets, padding, wrong ids.
  */
 import * as Net from "node:net"
-import type { ModbusDevice, ModbusPoint } from "@plenum/core"
+import type { ModbusDevice, ModbusPoint } from "@ot-gateway/core"
 import { Effect, Exit } from "effect"
 import { decodeRequest, encodeRegisterResponse, takeFrame } from "../../src/index.ts"
 import type { ReadRequest } from "../../src/index.ts"

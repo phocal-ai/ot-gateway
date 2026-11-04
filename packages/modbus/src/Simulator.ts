@@ -12,7 +12,7 @@
  * quiet), and `maxConnections` refuses connections beyond the first few, as
  * many small gateways do.
  */
-import type { ModbusPoint } from "@plenum/core"
+import type { ModbusPoint } from "@ot-gateway/core"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Effect, Option } from "effect"
 import * as Socket from "effect/socket/Socket"

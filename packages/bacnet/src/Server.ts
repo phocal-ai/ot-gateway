@@ -15,7 +15,7 @@
  * whenever a subscribed object changes (clause 13.1), at the address and
  * through the routing they subscribed from.
  */
-import { describeDatagramSocketError } from "@plenum/core"
+import { describeDatagramSocketError } from "@ot-gateway/core"
 import { Clock, Effect, Queue, Result } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"

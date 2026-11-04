@@ -4,7 +4,7 @@
  * clock that jumps. Each test asserts the fixed behaviour of a chaos finding.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { makeMemoryNetwork } from "@plenum/core"
+import { makeMemoryNetwork } from "@ot-gateway/core"
 import { Clock, Effect, Exit, Logger } from "effect"
 import { TestClock } from "effect/testing"
 import { makeMqttClient } from "../../src/Client.ts"

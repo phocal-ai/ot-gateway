@@ -4,10 +4,10 @@
   "id": "main",
   "mqtt": {
     "url": "mqtt://localhost:1883",
-    "clientId": "plenum-demo"
+    "clientId": "ot-gateway-demo"
   },
   "buffer": {
-    "path": "./plenum-buffer.sqlite"
+    "path": "./ot-gateway-buffer.sqlite"
   },
   "status": {},
   "devices": [

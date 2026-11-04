@@ -1,7 +1,7 @@
 {
-  "name": "@plenum/simulator",
+  "name": "@ot-gateway/simulator",
   "version": "0.0.0",
-  "description": "Simulated devices for Plenum tests and demos.",
+  "description": "Simulated devices for OT Gateway tests and demos.",
   "license": "MIT",
   "type": "module",
   "exports": {
@@ -12,7 +12,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@plenum/core": "workspace:*",
+    "@ot-gateway/core": "workspace:*",
     "effect": "4.1.2"
   }
 }

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operations.md)) or the retained health topic `site/building/$gateway/<id>/health`: each device is `ok`, `starting` or `failing` with a reason. Then the log (`journalctl -u plenum-gateway -f`): it records a problem once when it starts and once when it ends, so search for the device id. Quoted messages below are what the log says.
+Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operations.md)) or the retained health topic `site/building/$gateway/<id>/health`: each device is `ok`, `starting` or `failing` with a reason. Then the log (`journalctl -u ot-gateway -f`): it records a problem once when it starts and once when it ends, so search for the device id. Quoted messages below are what the log says.
 
 ## The gateway does not start
 
@@ -8,7 +8,7 @@ Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operati
 | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | A `SchemaError` with a path, e.g. `at ["devices"][2]["points"][0]["address"]` | The config. The message names the key and the rule; [configuration.md](configuration.md) has every key. Check with `--check` before restarting. |
 | `mqtt.url must not contain credentials`                                       | Move them: `mqtt.username`, and the password in the env file under the name in `mqtt.passwordEnv`.                                              |
-| A missing environment variable                                                | `mqtt.passwordEnv` names a variable that is not set. Under systemd it goes in `/etc/plenum/gateway.env`.                                        |
+| A missing environment variable                                                | `mqtt.passwordEnv` names a variable that is not set. Under systemd it goes in `/etc/ot-gateway/gateway.env`.                                    |
 | `BufferLocked`                                                                | Another gateway has the same `buffer.path` open. Two gateways never share an outbox.                                                            |
 | `could not open the BACnet/IP endpoint, trying again`                         | UDP 47808 is taken, usually by another BACnet program on the host (or `--discover` still running). Readings from other devices carry on.        |
 
@@ -30,7 +30,7 @@ Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operati
 | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `failing`, reason `connection`                                                                              | Wrong IP or port, a firewall, or the device takes one client at a time and the BMS already has it. Many meters and Modbus gateways allow one or two connections.                                                                                |
 | `failing`, reason `timeout`                                                                                 | The device takes the connection but does not answer: wrong `unitId` behind a Modbus gateway (each serial device has its own), or a serial bus too slow for the poll interval.                                                                   |
-| `connection closed by the peer` for a second device on the same gateway, or only one device at a time works | Something else holds the gateway's connection slots (the BMS, a commissioning tool, a second Plenum gateway): many accept only one or two connections. Devices on the same `host` and `port` in one Plenum config already share one connection. |
+| `connection closed by the peer` for a second device on the same gateway, or only one device at a time works | Something else holds the gateway's connection slots (the BMS, a commissioning tool, a second OT Gateway): many accept only one or two connections. Devices on the same `host` and `port` in one OT Gateway config already share one connection. |
 | Timeouts now and then, on a Modbus gateway or serial bridge                                                 | Requests arrive back to back faster than the bridge forwards them. Set `requestGapMs` (50–200).                                                                                                                                                 |
 | A range is refused that reads fine point by point                                                           | The device limits how much one read may ask for: lower `maxRegistersPerRead` (16 or 32 are common limits).                                                                                                                                      |
 | `device refused a read`, exception `illegal_data_address`                                                   | The address does not exist: datasheets count from 1 or write 40001 for holding address 0, so try one lower; or the register is in the other table (`input` vs `holding`). The other blocks keep reading.                                        |
@@ -70,12 +70,12 @@ Every command gets a result on `…/$set/result`. `rejected` never reached the d
 
 ## The outbox
 
-| Symptom                                               | Cause and fix                                                                                                                               |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Rows waiting keeps growing                            | The broker is unreachable or refusing; see above. Rows drain in order once it is back.                                                      |
-| `buffer cannot store messages; publishing directly …` | The disk is full or the file is locked. Values go straight to the broker while it takes them; free space and buffering resumes on its own.  |
-| `buffer file was unusable, moved it aside …`          | The file was corrupt (an SD card fault, a power cut). A new one started; the old one is kept beside it as `*.corrupt-<time>`.               |
-| `broker rejected buffered messages, dropped them`     | The broker refused stored messages outright (too large, not authorized). Retrying cannot help; they are counted in `plenum_buffer_dropped`. |
+| Symptom                                               | Cause and fix                                                                                                                                   |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Rows waiting keeps growing                            | The broker is unreachable or refusing; see above. Rows drain in order once it is back.                                                          |
+| `buffer cannot store messages; publishing directly …` | The disk is full or the file is locked. Values go straight to the broker while it takes them; free space and buffering resumes on its own.      |
+| `buffer file was unusable, moved it aside …`          | The file was corrupt (an SD card fault, a power cut). A new one started; the old one is kept beside it as `*.corrupt-<time>`.                   |
+| `broker rejected buffered messages, dropped them`     | The broker refused stored messages outright (too large, not authorized). Retrying cannot help; they are counted in `ot_gateway_buffer_dropped`. |
 
 ## The status page
 
@@ -83,7 +83,7 @@ Every command gets a result on `…/$set/result`. `rejected` never reached the d
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Not reachable from another machine                       | It listens on `127.0.0.1` by default. Use an SSH tunnel, or set `status.bindAddress` to `0.0.0.0` on a network you trust.                  |
 | `421 Misdirected request`                                | On a loopback address it answers only `localhost`, `127.0.0.1` and `[::1]`, against DNS rebinding. Use one of those (the SSH tunnel does). |
-| Only the API, no page                                    | The page is not built. Run `pnpm --filter @plenum/web build` and reinstall; the image always includes it.                                  |
+| Only the API, no page                                    | The page is not built. Run `pnpm --filter @ot-gateway/web build` and reinstall; the image always includes it.                              |
 | `status page not served; the gateway runs on without it` | The port is taken. Readings are unaffected; pick another `status.port`.                                                                    |
 
 ## The machine

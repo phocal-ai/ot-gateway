@@ -21,13 +21,13 @@ const seconds = { unit: "seconds" } as const
  * Polling cycles finished, by `outcome`: `ok`, `read_failed`, `publish_failed`
  * or `timed_out` (the cycle hung past the device's `cycleTimeoutMs` and was abandoned).
  */
-export const pollCycles = Metric.counter("plenum_poll_cycles", {
+export const pollCycles = Metric.counter("ot_gateway_poll_cycles", {
   description: "Polling cycles finished, by outcome",
   incremental: true
 })
 
 /** Wall time of one cycle, including driver retries and publishing. */
-export const pollDuration = Metric.histogram("plenum_poll_duration_seconds", {
+export const pollDuration = Metric.histogram("ot_gateway_poll_duration_seconds", {
   description: "Duration of one polling cycle, including retries",
   attributes: seconds,
   // Five buckets (8 series per device with sum and count): enough to tell a fast device from one that
@@ -36,31 +36,31 @@ export const pollDuration = Metric.histogram("plenum_poll_duration_seconds", {
 })
 
 /** Driver read failures after retries were exhausted, by `reason` (the `DriverError` reason). */
-export const readFailures = Metric.counter("plenum_read_failures", {
+export const readFailures = Metric.counter("ot_gateway_read_failures", {
   description: "Device reads that failed after retries, by reason",
   incremental: true
 })
 
 /** Messages that could not be published northbound. */
-export const publishFailures = Metric.counter("plenum_publish_failures", {
+export const publishFailures = Metric.counter("ot_gateway_publish_failures", {
   description: "Messages that failed to publish",
   incremental: true
 })
 
 /** Point values published because they changed by more than the deadband. */
-export const valuesPublished = Metric.counter("plenum_values_published", {
+export const valuesPublished = Metric.counter("ot_gateway_values_published", {
   description: "Point values published",
   incremental: true
 })
 
 /** Point values read but not published because they stayed inside the deadband. */
-export const valuesSuppressed = Metric.counter("plenum_values_suppressed", {
+export const valuesSuppressed = Metric.counter("ot_gateway_values_suppressed", {
   description: "Point values suppressed by the deadband",
   incremental: true
 })
 
 /** Unix time of the last cycle that read the device successfully. */
-export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timestamp_seconds", {
+export const deviceLastSuccess = Metric.gauge("ot_gateway_device_last_success_timestamp_seconds", {
   description: "Unix time of the last successful polling cycle of a device",
   attributes: seconds
 })
@@ -74,7 +74,7 @@ export const deviceLastSuccess = Metric.gauge("plenum_device_last_success_timest
  * is a read failure, not a point failure. Without a `point`
  * attribute, to keep the series count flat; the log says which point.
  */
-export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
+export const pointReadFailures = Metric.counter("ot_gateway_point_read_failures", {
   description: "Points a reachable device did not deliver in a cycle, by reason",
   incremental: true
 })
@@ -84,13 +84,13 @@ export const pointReadFailures = Metric.counter("plenum_point_read_failures", {
  * failure) and was restarted. Any increase is a bug to report; the log has
  * the cause.
  */
-export const deviceRestarts = Metric.counter("plenum_device_restarts", {
+export const deviceRestarts = Metric.counter("ot_gateway_device_restarts", {
   description: "Device pipelines restarted after a defect",
   incremental: true
 })
 
 /** Values a device pushed between polls (BACnet change-of-value), before the deadband. */
-export const pushedReadings = Metric.counter("plenum_pushed_readings", {
+export const pushedReadings = Metric.counter("ot_gateway_pushed_readings", {
   description: "Values pushed by devices between polls",
   incremental: true
 })
@@ -99,7 +99,7 @@ export const pushedReadings = Metric.counter("plenum_pushed_readings", {
  * Points a device currently pushes (a live change-of-value subscription), so
  * the polling cycle skips them. A UCUM annotation unit, so no `_ratio` suffix.
  */
-export const pushedPoints = Metric.gauge("plenum_pushed_points", {
+export const pushedPoints = Metric.gauge("ot_gateway_pushed_points", {
   description: "Points kept up to date by device pushes instead of polling",
   attributes: { unit: "{point}" }
 })
@@ -110,7 +110,7 @@ export const pushedPoints = Metric.gauge("plenum_pushed_points", {
  * Drivers count requests instead of opening a span per request, which would
  * multiply trace volume; the cycle span carries the request count.
  */
-export const driverRequests = Metric.counter("plenum_driver_requests", {
+export const driverRequests = Metric.counter("ot_gateway_driver_requests", {
   description: "Requests sent to field devices, by outcome",
   incremental: true
 })
@@ -118,17 +118,17 @@ export const driverRequests = Metric.counter("plenum_driver_requests", {
 /**
  * Seconds spent waiting for field devices, summed over every request (any
  * outcome, connecting included). One series per device:
- * `rate(plenum_driver_request_seconds_total) / rate(plenum_driver_requests_total)`
+ * `rate(ot_gateway_driver_request_seconds_total) / rate(ot_gateway_driver_requests_total)`
  * is the mean time a request takes, which tells a slow device from a cycle
  * that is slow because it sends many requests.
  */
-export const driverRequestSeconds = Metric.counter("plenum_driver_request_seconds", {
+export const driverRequestSeconds = Metric.counter("ot_gateway_driver_request_seconds", {
   description: "Time spent on requests to field devices",
   attributes: seconds,
   incremental: true
 })
 
-/** Add the time `effect` took to `plenum_driver_request_seconds`, whatever its outcome. */
+/** Add the time `effect` took to `ot_gateway_driver_request_seconds`, whatever its outcome. */
 export const timeRequest = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
   Effect.flatMap(monotonicMillis, (start) =>
     Effect.ensuring(
@@ -142,7 +142,7 @@ export const timeRequest = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Eff
  * `illegal_data_address`). Counted once per refused block and read, after
  * retries; the driver logs a refusal only when it starts and when it ends.
  */
-export const driverRefusals = Metric.counter("plenum_driver_refusals", {
+export const driverRefusals = Metric.counter("ot_gateway_driver_refusals", {
   description: "Reads a field device refused, by exception",
   incremental: true
 })
@@ -152,7 +152,7 @@ export const driverRefusals = Metric.counter("plenum_driver_refusals", {
  * dropping. Devices behind one Modbus gateway share a connection; it is counted under the device whose request
  * opened it.
  */
-export const driverConnects = Metric.counter("plenum_driver_connects", {
+export const driverConnects = Metric.counter("ot_gateway_driver_connects", {
   description: "Connection attempts to field devices, by outcome",
   incremental: true
 })
@@ -161,7 +161,7 @@ export const driverConnects = Metric.counter("plenum_driver_connects", {
  * Connection attempts to the MQTT broker, by `outcome`: `ok`, `failed` (network
  * or timeout) or `rejected` (the broker refused, e.g. bad credentials).
  */
-export const mqttConnects = Metric.counter("plenum_mqtt_connects", {
+export const mqttConnects = Metric.counter("ot_gateway_mqtt_connects", {
   description: "Connection attempts to the MQTT broker, by outcome",
   incremental: true
 })
@@ -171,25 +171,25 @@ export const mqttConnects = Metric.counter("plenum_mqtt_connects", {
  * annotation, which Grafana's OTLP translation drops, so the name gets no
  * `_ratio` suffix.
  */
-export const mqttConnected = Metric.gauge("plenum_mqtt_connected", {
+export const mqttConnected = Metric.gauge("ot_gateway_mqtt_connected", {
   description: "Whether the gateway is connected to the MQTT broker",
   attributes: { unit: "{connection}" }
 })
 
 /** Messages waiting in the store-and-forward outbox. A UCUM annotation unit, so no `_ratio` suffix. */
-export const bufferRows = Metric.gauge("plenum_buffer_rows", {
+export const bufferRows = Metric.gauge("ot_gateway_buffer_rows", {
   description: "Messages waiting in the store-and-forward outbox",
   attributes: { unit: "{row}" }
 })
 
 /** Messages written to the outbox because the broker was unavailable (or older ones were still waiting). */
-export const bufferWritten = Metric.counter("plenum_buffer_written", {
+export const bufferWritten = Metric.counter("ot_gateway_buffer_written", {
   description: "Messages stored in the outbox",
   incremental: true
 })
 
 /** Messages from the outbox that reached the broker. */
-export const bufferDrained = Metric.counter("plenum_buffer_drained", {
+export const bufferDrained = Metric.counter("ot_gateway_buffer_drained", {
   description: "Messages from the outbox delivered to the broker",
   incremental: true
 })
@@ -202,7 +202,7 @@ export const bufferDrained = Metric.counter("plenum_buffer_drained", {
  * poison message) or `lost` (rows in a file that was replaced or corrupted
  * while the gateway ran).
  */
-export const bufferDropped = Metric.counter("plenum_buffer_dropped", {
+export const bufferDropped = Metric.counter("ot_gateway_buffer_dropped", {
   description: "Messages dropped from the outbox, by reason",
   incremental: true
 })
@@ -211,13 +211,13 @@ export const bufferDropped = Metric.counter("plenum_buffer_dropped", {
  * Outbox operations that failed, by `operation`: `insert`, `delete`, `read`
  * or `open`. A full or locked disk shows up here first.
  */
-export const bufferFailures = Metric.counter("plenum_buffer_failures", {
+export const bufferFailures = Metric.counter("ot_gateway_buffer_failures", {
   description: "Outbox operations that failed, by operation",
   incremental: true
 })
 
 /** Messages sent straight to the broker because the outbox could not store them (disk full, say). */
-export const bufferBypassed = Metric.counter("plenum_buffer_bypassed", {
+export const bufferBypassed = Metric.counter("ot_gateway_buffer_bypassed", {
   description: "Messages published past the outbox because it could not store them",
   incremental: true
 })
@@ -226,7 +226,7 @@ export const bufferBypassed = Metric.counter("plenum_buffer_bypassed", {
  * 1 while the gateway runs without its outbox because the file could not be
  * opened, else 0. Values published during an outage are lost meanwhile.
  */
-export const bufferDisabled = Metric.gauge("plenum_buffer_disabled", {
+export const bufferDisabled = Metric.gauge("ot_gateway_buffer_disabled", {
   description: "Whether the gateway runs without its store-and-forward outbox",
   attributes: { unit: "{state}" }
 })
@@ -237,7 +237,7 @@ export const bufferDisabled = Metric.gauge("plenum_buffer_disabled", {
  * retained message) or `failed` (the device could not be written), and by
  * `reason` for the last two. Every command is also logged.
  */
-export const commands = Metric.counter("plenum_commands", {
+export const commands = Metric.counter("ot_gateway_commands", {
   description: "Commands received over MQTT, by outcome and reason",
   incremental: true
 })
@@ -252,20 +252,20 @@ export const commands = Metric.counter("plenum_commands", {
 const bytes = { unit: "bytes" } as const
 
 /** Memory of the gateway process, by `kind`: `rss` (resident) or `heap` (V8 heap in use). */
-export const processMemory = Metric.gauge("plenum_process_memory_bytes", {
+export const processMemory = Metric.gauge("ot_gateway_process_memory_bytes", {
   description: "Memory of the gateway process, by kind",
   attributes: bytes
 })
 
 /** CPU time the gateway process used, user and system together. */
-export const processCpu = Metric.counter("plenum_process_cpu_seconds", {
+export const processCpu = Metric.counter("ot_gateway_process_cpu_seconds", {
   description: "CPU time used by the gateway process",
   attributes: seconds,
   incremental: true
 })
 
 /** Open file descriptors (sockets included); a steady rise is a leak. Linux only. */
-export const processOpenFds = Metric.gauge("plenum_process_open_fds", {
+export const processOpenFds = Metric.gauge("ot_gateway_process_open_fds", {
   description: "File descriptors the gateway process holds open",
   attributes: { unit: "{fd}" }
 })
@@ -274,7 +274,7 @@ export const processOpenFds = Metric.gauge("plenum_process_open_fds", {
  * Bytes the gateway process caused to be written to storage (`write_bytes` in
  * `/proc/self/io`): what wears out an SD card. Linux only.
  */
-export const processDiskWritten = Metric.counter("plenum_process_disk_written_bytes", {
+export const processDiskWritten = Metric.counter("ot_gateway_process_disk_written_bytes", {
   description: "Bytes the gateway process wrote to storage",
   attributes: bytes,
   incremental: true
@@ -284,7 +284,7 @@ export const processDiskWritten = Metric.counter("plenum_process_disk_written_by
  * Unix time the gateway started, with `version` (the gateway's) and `node`
  * attributes: a restart shows as a new value, an upgrade as a new series.
  */
-export const processStart = Metric.gauge("plenum_process_start_time_seconds", {
+export const processStart = Metric.gauge("ot_gateway_process_start_time_seconds", {
   description: "Unix time the gateway process started, by version",
   attributes: seconds
 })
@@ -294,7 +294,7 @@ export const processStart = Metric.gauge("plenum_process_start_time_seconds", {
  * worst over the last minute. Everything in the gateway shares one loop, so
  * a lag of seconds delays every device, keepalive and deadline.
  */
-export const eventLoopLag = Metric.gauge("plenum_event_loop_lag_seconds", {
+export const eventLoopLag = Metric.gauge("ot_gateway_event_loop_lag_seconds", {
   description: "Event loop delay over the last minute, by quantile",
   attributes: seconds
 })
@@ -304,13 +304,13 @@ export const eventLoopLag = Metric.gauge("plenum_event_loop_lag_seconds", {
  * (`forward` or `backward`): NTP setting the time of a machine without a
  * real-time clock. Each step is also logged with its size.
  */
-export const clockSteps = Metric.counter("plenum_clock_steps", {
+export const clockSteps = Metric.counter("ot_gateway_clock_steps", {
   description: "Steps of the wall clock, by direction",
   incremental: true
 })
 
 /** Temperature of the SoC (the first thermal zone). */
-export const hostTemperature = Metric.gauge("plenum_host_temperature_celsius", {
+export const hostTemperature = Metric.gauge("ot_gateway_host_temperature_celsius", {
   description: "Temperature of the host's SoC",
   attributes: { unit: "celsius" }
 })
@@ -321,13 +321,13 @@ export const hostTemperature = Metric.gauge("plenum_host_temperature_celsius", {
  * Raspberry Pi kernel, and from 6.18 on only `under_voltage`: the other
  * conditions have no series there, rather than a 0 that would read as fine.
  */
-export const hostThrottled = Metric.gauge("plenum_host_throttled", {
+export const hostThrottled = Metric.gauge("ot_gateway_host_throttled", {
   description: "Whether the Raspberry Pi firmware reports a power or thermal condition",
   attributes: { unit: "{state}" }
 })
 
 /** Free space on the filesystem that holds the outbox, for the gateway's user. Only with a buffer. */
-export const bufferDiskFree = Metric.gauge("plenum_buffer_disk_free_bytes", {
+export const bufferDiskFree = Metric.gauge("ot_gateway_buffer_disk_free_bytes", {
   description: "Free space on the outbox's filesystem",
   attributes: bytes
 })

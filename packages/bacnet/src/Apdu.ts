@@ -2,7 +2,7 @@
  * Application layer PDUs, APDU (ASHRAE 135, clause 20.1). The service
  * parameters stay as bytes here; `Services.ts` encodes and decodes them.
  *
- * Plenum never sends segmented messages and does not accept segmented
+ * OT Gateway never sends segmented messages and does not accept segmented
  * responses (it asks for small batches instead). A segmented ComplexACK is
  * still decoded, with its segment fields, so the client can abort it.
  */

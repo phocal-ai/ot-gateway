@@ -1,15 +1,15 @@
 /**
  * The Modbus driver against a server that is not ours (pymodbus,
  * test/interop/modbus/server.py): reads of every table and type, and writes
- * read back. Runs with PLENUM_INTEROP=1 and PLENUM_INTEROP_MODBUS=host:port.
+ * read back. Runs with OT_GATEWAY_INTEROP=1 and OT_GATEWAY_INTEROP_MODBUS=host:port.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { parseConfig } from "@plenum/core"
-import { makeModbusDriver } from "@plenum/modbus"
+import { parseConfig } from "@ot-gateway/core"
+import { makeModbusDriver } from "@ot-gateway/modbus"
 import { Effect } from "effect"
 
-const target = process.env["PLENUM_INTEROP_MODBUS"]
-const enabled = process.env["PLENUM_INTEROP"] === "1" && target !== undefined
+const target = process.env["OT_GATEWAY_INTEROP_MODBUS"]
+const enabled = process.env["OT_GATEWAY_INTEROP"] === "1" && target !== undefined
 
 const deviceConfig = Effect.gen(function* () {
   const [host = "127.0.0.1", port = "5020"] = (target ?? "").split(":")
