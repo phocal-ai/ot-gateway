@@ -15,8 +15,8 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { DriverError, driverRefusals } from "@plenum/core"
 import type { Driver, ModbusDevice, ModbusPoint, Network, Reading, WriteValue } from "@plenum/core"
 import { Clock, Duration, Effect, Metric, Schedule } from "effect"
-import { makeModbusClient } from "./Client.ts"
-import type { ModbusClient, ModbusClientError } from "./Client.ts"
+import { makeModbusClient, makeModbusLink } from "./Client.ts"
+import type { ModbusClient, ModbusClientError, ModbusLink } from "./Client.ts"
 import { encodeValue, exceptionName, FunctionCode, isTransientException } from "./Frame.ts"
 import type { ModbusException, WriteRequest } from "./Frame.ts"
 import { planReads, valueFromBits, valueFromRegisters } from "./Plan.ts"
@@ -228,4 +228,54 @@ export const makeModbusDriver = Effect.fn("makeModbusDriver")(function* (
     ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
   })
   return makeModbusDriverFromClient(device, client, options)
+})
+
+/** Where a device is reached. Devices with the same endpoint share one connection. */
+export const endpointOf = (device: Pick<ModbusDevice, "host" | "port">): string =>
+  `${device.host.toLowerCase()}:${device.port}`
+
+export type ModbusLinksOptions = Pick<ModbusDriverOptions, "connectTimeout" | "requestTimeout" | "network">
+
+/**
+ * One link per endpoint among `devices`, by `endpointOf`, for as long as the
+ * scope lasts; each connects on its first request. Devices behind one Modbus
+ * TCP gateway share its link, and with it one request at a time and the
+ * largest `requestGapMs` among them: the gap protects the gateway's serial
+ * bus, whichever device the request is for.
+ */
+export const makeModbusLinks = Effect.fn("makeModbusLinks")(function* (
+  devices: ReadonlyArray<ModbusDevice>,
+  options: ModbusLinksOptions = {}
+) {
+  const groups = new Map<string, Array<ModbusDevice>>()
+  for (const device of devices) {
+    const key = endpointOf(device)
+    groups.set(key, [...(groups.get(key) ?? []), device])
+  }
+  const links = new Map<string, ModbusLink>()
+  for (const [key, group] of groups) {
+    const [first] = group
+    if (first === undefined) continue
+    const target = { host: first.host, port: first.port, openTimeout: options.connectTimeout ?? "3 seconds" }
+    const socket = yield* options.network ? options.network.tcp(target) : NodeSocket.makeNet(target)
+    const gap = Math.max(...group.map((device) => device.requestGapMs))
+    links.set(
+      key,
+      yield* makeModbusLink(socket, {
+        requestGap: Duration.millis(gap),
+        ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
+      })
+    )
+    if (group.length > 1) {
+      yield* Effect.logInfo("devices share one connection").pipe(
+        Effect.annotateLogs({
+          endpoint: key,
+          devices: group.map((device) => `${device.id} (unit ${device.unitId})`).join(", "),
+          requestGapMs: gap
+        })
+      )
+    }
+  }
+  const shared: ReadonlyMap<string, ModbusLink> = links
+  return shared
 })

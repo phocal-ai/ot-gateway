@@ -6,9 +6,10 @@
  *   node apps/gateway/src/bench.ts path/to/gateway.json
  *
  * - an MQTT test broker on the port in `mqtt.url`, printing every message
- * - a Modbus TCP simulator for every `modbus-tcp` device on localhost, with
+ * - a Modbus TCP simulator for every `modbus-tcp` endpoint on localhost, with
  *   values that change over time (floats follow a slow sine, integers count
- *   up every 10 s, booleans flip every 30 s)
+ *   up every 10 s, booleans flip every 30 s). Devices on the same port are
+ *   units behind one simulated gateway, each answering its own unit id.
  * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
  *   is on localhost with a port other than the gateway's own, with analog
  *   values on the same sine and binary values flipping every 30 s
@@ -25,7 +26,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { objectTypeNumber, serveSimulatedDevice, setPresentValue, simulatedDeviceFor } from "@plenum/bacnet"
 import { type BacnetDevice, type GatewayConfig, type ModbusDevice, parseConfig } from "@plenum/core"
-import { makeRegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
+import { endpointOf, makeRegisterBank, type RegisterBank, serveModbus, setPointValue } from "@plenum/modbus"
 import { makeBrokerControl, parseBrokerUrl, serveMqtt } from "@plenum/mqtt"
 import { Clock, Console, Effect, FileSystem, Result, Schedule } from "effect"
 
@@ -69,9 +70,28 @@ const runBroker = Effect.fn("runBroker")(function* (config: GatewayConfig) {
   })
 })
 
-const runSimulator = Effect.fn("runSimulator")(function* (device: ModbusDevice, pace: Pace) {
-  const server = yield* NodeSocketServer.make({ host: device.host, port: device.port })
-  const bank = makeRegisterBank()
+/**
+ * One simulated endpoint: a device, or a Modbus TCP gateway with several
+ * devices behind it (one register bank per unit id), as the config has them.
+ */
+const runSimulator = Effect.fn("runSimulator")(function* (devices: ReadonlyArray<ModbusDevice>, pace: Pace) {
+  const [first] = devices
+  if (first === undefined) return yield* Effect.never
+  const server = yield* NodeSocketServer.make({ host: first.host, port: first.port })
+  const units = new Map<number, RegisterBank>()
+  for (const device of devices) {
+    const bank = units.get(device.unitId) ?? makeRegisterBank()
+    units.set(device.unitId, bank)
+    yield* simulateDevice(device, bank, pace)
+  }
+  yield* Console.log(
+    `Modbus simulator for ${devices.map((device) => `${device.id} (unit ${device.unitId})`).join(", ")} on ${first.host}:${first.port}`
+  )
+  return yield* serveModbus(server, units)
+})
+
+/** Keep `device`'s points in `bank` moving, until the scope closes. */
+const simulateDevice = Effect.fn("simulateDevice")(function* (device: ModbusDevice, bank: RegisterBank, pace: Pace) {
   // A writable point starts at its lower limit (or 0) and then changes only by command.
   for (const point of device.points) if (point.writable) setPointValue(bank, point, point.limits?.min ?? 0)
   const update = Effect.gen(function* () {
@@ -88,8 +108,6 @@ const runSimulator = Effect.fn("runSimulator")(function* (device: ModbusDevice, 
     })
   })
   yield* update.pipe(Effect.repeat(pace.update), Effect.forkScoped)
-  yield* Console.log(`Modbus simulator for ${device.id} on ${device.host}:${device.port}`)
-  return yield* serveModbus(server, bank)
 })
 
 const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
@@ -154,7 +172,11 @@ const program = Effect.gen(function* () {
     return at === undefined ? [] : [runBacnetSimulator(device, at.host, at.port, pace)]
   })
   const broker = only === "devices" ? [] : [runBroker(config)]
-  const devices = only === "broker" ? [] : [...simulated.map((device) => runSimulator(device, pace)), ...bacnet]
+  const endpoints = new Map<string, Array<ModbusDevice>>()
+  for (const device of simulated)
+    endpoints.set(endpointOf(device), [...(endpoints.get(endpointOf(device)) ?? []), device])
+  const devices =
+    only === "broker" ? [] : [...[...endpoints.values()].map((group) => runSimulator(group, pace)), ...bacnet]
   yield* Effect.all([...broker, ...devices], {
     concurrency: "unbounded",
     discard: true

@@ -27,7 +27,7 @@ import {
   superviseDevice,
   withMetricAttributes
 } from "@plenum/core"
-import { makeModbusDriver } from "@plenum/modbus"
+import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@plenum/modbus"
 import { MqttPublisher } from "@plenum/mqtt"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
@@ -106,7 +106,8 @@ const runOne = (
   health: HealthRegistry,
   bacnet: BacnetNetwork,
   network: Network | undefined,
-  drivers: DriverRegistry
+  drivers: DriverRegistry,
+  modbusLinks: ReadonlyMap<string, ModbusLink>
 ) => {
   /** Poll the device, and take commands for it while doing so. */
   const run = (driver: Driver) => Effect.andThen(drivers.register(driver), runDevice(ctx, driver))
@@ -121,9 +122,12 @@ const runOne = (
   switch (device.protocol) {
     case "simulator":
       return runDevice(ctx, makeSimulatorDriver(device))
-    case "modbus-tcp":
-      // The device's connection lives as long as its polling loop.
-      return Effect.scoped(Effect.flatMap(makeModbusDriver(device, network === undefined ? {} : { network }), run))
+    case "modbus-tcp": {
+      // The connection belongs to the device's endpoint, shared with any other device behind the same gateway.
+      const link = modbusLinks.get(endpointOf(device))
+      if (link === undefined) return Effect.die(new Error(`no Modbus link for ${device.id}`))
+      return run(makeModbusDriverFromClient(device, link.unit(device.unitId)))
+    }
     case "bacnet-ip": {
       if (bacnet === undefined) return Effect.void
       // All BACnet devices share the gateway's one UDP socket, once it is open.
@@ -167,6 +171,11 @@ const runDevices = Effect.fn("runGateway")(function* (
     bacnet = yield* Deferred.make<BacnetClient>()
     yield* openBacnet(config, health.registry, bacnet, network).pipe(Effect.forkScoped)
   }
+  // One connection per Modbus endpoint, for as long as the gateway runs; each opens on its first request.
+  const modbusLinks = yield* makeModbusLinks(
+    config.devices.filter((device) => device.protocol === "modbus-tcp"),
+    network === undefined ? {} : { network }
+  )
   if (config.status !== undefined && status !== undefined)
     yield* serveStatus(config.status, status).pipe(Effect.forkScoped)
   yield* Effect.all(
@@ -178,7 +187,9 @@ const runDevices = Effect.fn("runGateway")(function* (
       // A bug in one device's pipeline restarts that device only; suspended, so a restart builds a fresh driver.
       ...config.devices.map((device) =>
         superviseDevice(
-          Effect.suspend(() => runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers)),
+          Effect.suspend(() =>
+            runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers, modbusLinks)
+          ),
           { deviceId: device.id, health: health.registry }
         )
       ),

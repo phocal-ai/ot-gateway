@@ -5,10 +5,17 @@
  *
  * Serves FC 01–04. Unmapped addresses answer "illegal data address" and other
  * function codes "illegal function", as a strict device would.
+ *
+ * With one bank per unit id it plays a Modbus TCP gateway in front of an
+ * RS-485 bus: a unit it does not have answers "gateway target failed to
+ * respond", a unit in `silentUnits` never answers (a gateway that stays
+ * quiet), and `maxConnections` refuses connections beyond the first few, as
+ * many small gateways do.
  */
 import type { ModbusPoint } from "@plenum/core"
-import { Effect } from "effect"
-import type * as Socket from "effect/socket/Socket"
+import * as NodeSocket from "@effect/platform-node/NodeSocket"
+import { Effect, Option } from "effect"
+import * as Socket from "effect/socket/Socket"
 import type * as SocketServer from "effect/socket/SocketServer"
 import {
   appendChunks,
@@ -74,9 +81,29 @@ export interface SimulatorControl {
   readonly writes: Array<WriteRequest>
   /** Refuse every write with this exception code (a device in local override, say). */
   refuseWrites?: number
+  /** Units whose requests are never answered: a serial device that is dead, behind a gateway that stays quiet. */
+  readonly silentUnits: Set<number>
+  /** Connections open at once beyond this are closed as soon as they are accepted. */
+  maxConnections?: number
+  /** Connections open now, and accepted so far (refused ones not counted). */
+  open: number
+  accepted: number
 }
 
-export const makeSimulatorControl = (): SimulatorControl => ({ silent: false, requests: 0, writes: [] })
+export const makeSimulatorControl = (): SimulatorControl => ({
+  silent: false,
+  requests: 0,
+  writes: [],
+  silentUnits: new Set(),
+  open: 0,
+  accepted: 0
+})
+
+/** One device's memory, or a gateway's: one bank per unit id. */
+export type SimulatedUnits = RegisterBank | ReadonlyMap<number, RegisterBank>
+
+const bankFor = (units: SimulatedUnits, unitId: number): RegisterBank | undefined =>
+  "holding" in units ? units : units.get(unitId)
 
 const readTable = <A>(table: Map<number, A>, address: number, quantity: number): ReadonlyArray<A> | undefined => {
   const values: Array<A> = []
@@ -146,10 +173,24 @@ export const answerWrite = (
   return encodeWriteResponse(transactionId, unitId, request)
 }
 
-const serveConnection = (bank: RegisterBank, control: SimulatorControl) =>
+const serveConnection = (units: SimulatedUnits, control: SimulatorControl) =>
   Effect.fnUntraced(
     function* (socket: Socket.Socket) {
+      // A gateway out of connection slots: accept, then reset the connection at once.
+      if (control.maxConnections !== undefined && control.open >= control.maxConnections) {
+        const net = yield* Effect.serviceOption(NodeSocket.NetSocket)
+        if (Option.isSome(net)) net.value.destroy()
+        // Elsewhere (an in-memory network), close it the portable way: end the socket's writer.
+        else {
+          const closing = yield* socket.writer
+          yield* closing.write(new Socket.CloseEvent())
+        }
+        return
+      }
       const writer = yield* socket.writer
+      control.open++
+      control.accepted++
+      yield* Effect.addFinalizer(() => Effect.sync(() => control.open--))
       const { pull } = yield* socket.reader
       let buffer: Uint8Array = new Uint8Array(0)
       while (true) {
@@ -159,18 +200,27 @@ const serveConnection = (bank: RegisterBank, control: SimulatorControl) =>
           buffer = split.rest
           control.requests++
           const decoded = yield* decodeRequest(split.frame)
-          if (!control.silent) {
+          const unitId = decoded._tag === "Read" ? decoded.request.unitId : decoded.unitId
+          const bank = bankFor(units, unitId)
+          if (!control.silent && !control.silentUnits.has(unitId)) {
             yield* writer.write(
-              decoded._tag === "Read"
-                ? answerRead(bank, decoded.request)
-                : decoded._tag === "Write"
-                  ? answerWrite(bank, control, decoded.transactionId, decoded.unitId, decoded.request)
-                  : encodeExceptionResponse(
-                      decoded.transactionId,
-                      decoded.unitId,
-                      decoded.functionCode,
-                      ExceptionCode.IllegalFunction
+              decoded._tag === "Unsupported"
+                ? encodeExceptionResponse(
+                    decoded.transactionId,
+                    decoded.unitId,
+                    decoded.functionCode,
+                    ExceptionCode.IllegalFunction
+                  )
+                : bank === undefined
+                  ? encodeExceptionResponse(
+                      decoded._tag === "Read" ? decoded.request.transactionId : decoded.transactionId,
+                      unitId,
+                      decoded.request.functionCode,
+                      ExceptionCode.GatewayTargetFailedToRespond
                     )
+                  : decoded._tag === "Read"
+                    ? answerRead(bank, decoded.request)
+                    : answerWrite(bank, control, decoded.transactionId, decoded.unitId, decoded.request)
             )
           }
           split = takeFrame(buffer)
@@ -184,9 +234,9 @@ const serveConnection = (bank: RegisterBank, control: SimulatorControl) =>
     Effect.catchTags({ SocketError: () => Effect.void, ModbusFrameError: () => Effect.void })
   )
 
-/** Serve `bank` on `server` until the surrounding scope closes. */
+/** Serve one bank, or one per unit id, on `server` until the surrounding scope closes. */
 export const serveModbus = (
   server: SocketServer.SocketServer["Service"],
-  bank: RegisterBank,
+  units: SimulatedUnits,
   control: SimulatorControl = makeSimulatorControl()
-): Effect.Effect<never, SocketServer.SocketServerError> => server.run(serveConnection(bank, control))
+): Effect.Effect<never, SocketServer.SocketServerError> => server.run(serveConnection(units, control))

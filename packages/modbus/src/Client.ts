@@ -1,12 +1,22 @@
 /**
- * Modbus TCP client: one connection to one device, one request at a time.
+ * Modbus TCP client: one connection to one endpoint (`host:port`), one
+ * request at a time, for one unit or several.
+ *
+ * A link (`makeModbusLink`) owns the connection; `link.unit(id)` is the
+ * client for one unit id on it. Several devices behind one Modbus TCP gateway
+ * (RS-485 meters, say) share its link: many such gateways accept only one or
+ * two connections, and their serial bus answers one request at a time anyway.
  *
  * Requests are serialized because many devices and serial gateways handle a
  * single outstanding transaction only (Messaging on TCP/IP Implementation
- * Guide §4.2.1). The connection is opened on first use and dropped after a
- * timeout, a socket error or an unreadable frame, so the next request starts
- * on a clean stream. Backoff between failing requests comes from the caller
- * (the pipeline's retry policy and poll interval).
+ * Guide §4.2.1), and the request gap applies across every unit on the link.
+ * The connection is opened on first use and dropped after a socket error or an
+ * unreadable frame, so the next request starts on a clean stream. After a
+ * timeout it is dropped only when no unit on it has answered since its own
+ * last request: one dead device on a serial bus does not reset the connection
+ * the others are using, but a connection that has gone silent for every unit
+ * is replaced. Backoff between failing requests comes from the caller (the
+ * pipeline's retry policy and poll interval).
  *
  * A reader fiber per connection consumes everything the device sends, so:
  * - a response is paired with its request by the MBAP transaction id
@@ -47,8 +57,7 @@ export class ModbusConnectionError extends Schema.TaggedError<ModbusConnectionEr
 
 export type ModbusClientError = ModbusTimeout | ModbusConnectionError | ModbusException | ModbusFrameError
 
-export interface ModbusClientOptions {
-  readonly unitId: number
+export interface ModbusLinkOptions {
   /** Time allowed for one request, from sending it to a complete response (default 2 s). */
   readonly requestTimeout?: Duration.Input
   /**
@@ -56,6 +65,10 @@ export interface ModbusClientOptions {
    * Slow gateways and serial bridges drop requests sent back to back.
    */
   readonly requestGap?: Duration.Input
+}
+
+export interface ModbusClientOptions extends ModbusLinkOptions {
+  readonly unitId: number
 }
 
 export interface ModbusClient {
@@ -79,6 +92,12 @@ export interface ModbusClient {
   readonly write: (request: WriteRequest) => Effect.Effect<void, ModbusClientError>
 }
 
+/** One connection to an endpoint, shared by the units behind it. */
+export interface ModbusLink {
+  /** The client for one unit id on this link. */
+  readonly unit: (unitId: number) => ModbusClient
+}
+
 /** A request waiting for its response. */
 interface Pending {
   readonly transactionId: number
@@ -97,6 +116,8 @@ interface Connection {
   closed: ModbusConnectionError | undefined
   /** Responses received on this connection. */
   answered: number
+  /** Units whose last request on this connection was answered (a response or an exception). */
+  readonly answering: Set<number>
 }
 
 const countRequest = (outcome: "ok" | "timeout" | "exception" | "invalid_response" | "connection") =>
@@ -162,13 +183,13 @@ const readLoop = (conn: Connection, reader: Socket.Reader) =>
   )
 
 /**
- * Build a client on `socket`, which describes how to dial the device (for
+ * Build a link on `socket`, which describes how to dial the endpoint (for
  * production, `NodeSocket.makeNet`). The open connection is closed with the
  * surrounding scope.
  */
-export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
+export const makeModbusLink = Effect.fn("makeModbusLink")(function* (
   socket: Socket.Socket,
-  options: ModbusClientOptions
+  options: ModbusLinkOptions
 ) {
   const requestTimeout = options.requestTimeout ?? "2 seconds"
   const requestGapMillis = Duration.toMillis(Duration.fromInputUnsafe(options.requestGap ?? 0))
@@ -206,7 +227,15 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       )
     )
     yield* countConnect("ok")
-    const conn: Connection = { scope, writer, buffer: emptyBuffer, pending: undefined, closed: undefined, answered: 0 }
+    const conn: Connection = {
+      scope,
+      writer,
+      buffer: emptyBuffer,
+      pending: undefined,
+      closed: undefined,
+      answered: 0,
+      answering: new Set()
+    }
     yield* Effect.forkIn(readLoop(conn, reader), scope)
     connection = conn
     return conn
@@ -238,11 +267,12 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
    * unanswered. That is safe for reads only: writes pass `resend: false`.
    */
   const send: (
+    unitId: number,
     quantity: number,
     encode: (transactionId: number) => Uint8Array,
     resend: boolean
   ) => Effect.Effect<Uint8Array, ModbusTimeout | ModbusConnectionError | ModbusFrameError> = Effect.fnUntraced(
-    function* (quantity, encode, resend) {
+    function* (unitId, quantity, encode, resend) {
       // Dialing has its own timeout (the socket's openTimeout); the request timeout starts once connected.
       const conn = yield* connect
       transactionId = (transactionId + 1) & 0xffff
@@ -263,20 +293,34 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
         }),
         Effect.catchTag("ModbusConnectionError", (error) =>
           resend && conn.answered > 0 && pending.received === 0
-            ? Effect.andThen(disconnect, send(quantity, encode, false))
+            ? Effect.andThen(disconnect, send(unitId, quantity, encode, false))
             : Effect.fail(error)
         )
       )
       conn.answered++
+      conn.answering.add(unitId)
       return frame
     }
   )
 
   /** Drop the connection after a failure that leaves the stream in an unknown state. */
-  const reset = (outcome: "timeout" | "connection" | "invalid_response") =>
+  const reset = (outcome: "connection" | "invalid_response") =>
     Effect.all([disconnect, countRequest(outcome)], { discard: true })
 
+  /**
+   * A unit did not answer in time. Its late answer, if any, is dropped by
+   * transaction id, so the connection is only replaced when no unit on it is
+   * known to answer: then the connection itself is what went quiet.
+   */
+  const timedOut = (unitId: number) =>
+    Effect.suspend(() => {
+      connection?.answering.delete(unitId)
+      const stillAnswering = (connection?.answering.size ?? 0) > 0
+      return Effect.all([stillAnswering ? Effect.void : disconnect, countRequest("timeout")], { discard: true })
+    })
+
   const request = <A>(
+    unitId: number,
     quantity: number,
     encode: (transactionId: number) => Uint8Array,
     decode: (frame: Uint8Array) => Effect.Effect<A, ModbusFrameError | ModbusException>,
@@ -288,12 +332,12 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       if (wait > 0) yield* Effect.sleep(Duration.millis(wait))
     }).pipe(
       // Time from sending (connecting, if need be) to the answer: not the gap or the wait for the lock.
-      Effect.andThen(timeRequest(send(quantity, encode, resend))),
+      Effect.andThen(timeRequest(send(unitId, quantity, encode, resend))),
       Effect.flatMap(decode),
       Effect.tap(() => countRequest("ok")),
       Effect.catchTags({
         ModbusException: (error) => countRequest("exception").pipe(Effect.andThen(Effect.fail(error))),
-        ModbusTimeout: (error) => reset("timeout").pipe(Effect.andThen(Effect.fail(error))),
+        ModbusTimeout: (error) => timedOut(unitId).pipe(Effect.andThen(Effect.fail(error))),
         ModbusConnectionError: (error) => reset("connection").pipe(Effect.andThen(Effect.fail(error))),
         ModbusFrameError: (error) => reset("invalid_response").pipe(Effect.andThen(Effect.fail(error)))
       }),
@@ -301,34 +345,39 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       Semaphore.withPermit(lock)
     )
 
-  const client: ModbusClient = {
+  const unit = (unitId: number): ModbusClient => ({
     readRegisters: (functionCode, address, quantity) =>
       request(
+        unitId,
         quantity,
-        (id) => encodeReadRequest({ transactionId: id, unitId: options.unitId, functionCode, address, quantity }),
+        (id) => encodeReadRequest({ transactionId: id, unitId, functionCode, address, quantity }),
         (frame) =>
-          Effect.map(
-            decodeReadResponse(frame, { unitId: options.unitId, functionCode, quantity }),
-            (response) => response.registers
-          )
+          Effect.map(decodeReadResponse(frame, { unitId, functionCode, quantity }), (response) => response.registers)
       ),
     readBits: (functionCode, address, quantity) =>
       request(
+        unitId,
         quantity,
-        (id) => encodeReadRequest({ transactionId: id, unitId: options.unitId, functionCode, address, quantity }),
-        (frame) =>
-          Effect.map(
-            decodeBitResponse(frame, { unitId: options.unitId, functionCode, quantity }),
-            (response) => response.bits
-          )
+        (id) => encodeReadRequest({ transactionId: id, unitId, functionCode, address, quantity }),
+        (frame) => Effect.map(decodeBitResponse(frame, { unitId, functionCode, quantity }), (response) => response.bits)
       ),
     write: (writeRequest) =>
       request(
+        unitId,
         writeRequest.functionCode === FunctionCode.WriteMultipleRegisters ? writeRequest.values.length : 1,
-        (id) => encodeWriteRequest(id, options.unitId, writeRequest),
-        (frame) => decodeWriteResponse(frame, options.unitId, writeRequest),
+        (id) => encodeWriteRequest(id, unitId, writeRequest),
+        (frame) => decodeWriteResponse(frame, unitId, writeRequest),
         false
       )
-  }
-  return client
+  })
+  return { unit } satisfies ModbusLink
+})
+
+/** A client for one device: a link of its own, for its unit id. */
+export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
+  socket: Socket.Socket,
+  options: ModbusClientOptions
+) {
+  const link = yield* makeModbusLink(socket, options)
+  return link.unit(options.unitId)
 })
