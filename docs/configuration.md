@@ -88,6 +88,8 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 
 `cycleTimeoutMs` defaults to twice `pollIntervalMs`, and at least `pollIntervalMs` plus 30 s.
 
+**Several devices behind one Modbus gateway** (RS-485 meters behind an RTU-to-TCP converter, say) are configured as one device each, with the gateway's `host` and `port` and each meter's own `unitId`. Devices with the same `host` and `port` share one TCP connection, since many gateways accept only one or two, and their requests take turns, as the serial bus needs anyway. The largest `requestGapMs` among them applies to all of them. A meter that stops answering delays the others by up to the request timeout (2 s) per cycle, but does not cost them the connection; the gateway reconnects only when none of them answers.
+
 ## BACnet/IP devices
 
 `"protocol": "bacnet-ip"`.

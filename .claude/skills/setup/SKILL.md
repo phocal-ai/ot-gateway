@@ -84,6 +84,7 @@ For each register, write a point:
 - `byteOrder` (default `ABCD`, high word first): `CDAB` when the datasheet says low word first, "word swap" or "little-endian word order" (common on meters); `BADC` for bytes swapped within each register; `DCBA` for fully little-endian. When the sheet doesn't say, leave the default and let step 7 show it.
 - `bit` (0–15) for a status word documented bit by bit: one `bool` point per flag, all on the same register address; read-only.
 - On the device: `requestGapMs` (50–200) for a device behind a Modbus gateway or serial bridge, and `maxRegistersPerRead` when the sheet limits how many registers one read may ask for.
+- Several meters behind one Modbus gateway: one device each, with the gateway's `host` and `port` and each meter's own `unitId` (its RS-485 address). They share one connection automatically.
 - `scaling: { "factor": 0.1 }` for registers in tenths, and so on.
 - `unit` in QUDT (`unit:DEG_C`, `unit:KiloW`, `unit:KiloW-HR`, `unit:PERCENT`, `unit:V`, `unit:A`, `unit:HZ`, `unit:PA`).
 - `id`: a slug of the name.

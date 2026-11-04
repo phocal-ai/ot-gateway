@@ -147,7 +147,11 @@ export const driverRefusals = Metric.counter("plenum_driver_refusals", {
   incremental: true
 })
 
-/** Connection attempts to a device, by `outcome`: `ok` or `failed`. A rising `ok` count means the link keeps dropping. */
+/**
+ * Connection attempts to a device, by `outcome`: `ok` or `failed`. A rising `ok` count means the link keeps
+ * dropping. Devices behind one Modbus gateway share a connection; it is counted under the device whose request
+ * opened it.
+ */
 export const driverConnects = Metric.counter("plenum_driver_connects", {
   description: "Connection attempts to field devices, by outcome",
   incremental: true

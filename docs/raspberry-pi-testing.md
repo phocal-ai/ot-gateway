@@ -133,6 +133,6 @@ An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cp
 
 Keep each test's `summary.txt`, `docker logs` and a screenshot of the dashboard's Host row, with the Pi model, the SD card's make and size, the power supply and the image version. Anything that fails is an issue labeled `pi-test`, with those attached.
 
-## Known gap
+## Several meters behind one gateway
 
-Several serial devices behind one Modbus RTU-to-TCP gateway each open their own TCP connection to it, and many of those gateways accept only one or two. Until the gateway shares one connection per `host:port`, test real RS-485 meters one per gateway, or expect connection refusals beyond the first.
+Put two or more RS-485 meters behind one RTU-to-TCP gateway, each its own device in the config with the gateway's `host` and `port` and its own `unitId`. They share one TCP connection (`devices share one connection` in the log). Disconnect one meter from the bus: the others stay `ok`, and the gateway keeps its connection.
