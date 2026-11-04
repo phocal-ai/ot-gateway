@@ -65,14 +65,21 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 
 External sources live under `repos/` as squashed git subtrees, so they are always available without extra clones. They are read-only: never edit them and never import from `repos/` in our code.
 
-| Ref    | Path            | Pinned to                                                                                    |
-| ------ | --------------- | -------------------------------------------------------------------------------------------- |
-| Effect | `repos/effect/` | tag `effect@4.1.2` of `https://github.com/Effect-TS/effect.git`, the version in our lockfile |
+| Ref            | Path                          | Pinned to                                                                                    |
+| -------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| Effect         | `repos/effect/`               | tag `effect@4.1.2` of `https://github.com/Effect-TS/effect.git`, the version in our lockfile |
+| Security audit | `repos/security-audit-skill/` | commit `c1c8a8c14710` of `https://github.com/cloudflare/security-audit-skill.git` (MIT)      |
 
 Keep the subtree on the same version as the installed `effect` package. After bumping it in the lockfile:
 
 ```bash
 git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git effect@<version> --squash
+```
+
+`repos/security-audit-skill/` is the workflow behind `/security-audit` (`.claude/skills/security-audit/SKILL.md`, which adds this repo's rules: findings stay out of the public repo, source-only, an agent budget). Update it after reading the upstream diff:
+
+```bash
+git subtree pull --prefix=repos/security-audit-skill https://github.com/cloudflare/security-audit-skill.git main --squash
 ```
 
 **Before writing Effect code**, read the reference in this order:
