@@ -21,6 +21,9 @@ const tempo: Datasource = { type: "tempo", uid: "grafanacloud-traces" }
 /** Series selector shared by every PromQL query. */
 const sel =
   'service_namespace="plenum", deployment_environment=~"$environment", site=~"$site", building=~"$building", device=~"$device"'
+/** For the gateway's own series (process and host), which have no `device`. */
+const hostSel =
+  'service_namespace="plenum", deployment_environment=~"$environment", site=~"$site", building=~"$building"'
 const logSel = '{service_name="plenum-gateway", service_namespace="plenum", deployment_environment=~"$environment"}'
 
 const panels: Array<Record<string, unknown>> = []
@@ -329,6 +332,22 @@ timeseries(
       "Reads a device refused, after retries. illegal_data_address on every cycle means a point address is wrong; busy and gateway exceptions come and go. The log has one warning when a refusal starts, not one per cycle."
   }
 )
+timeseries(
+  "Mean request time by device",
+  [
+    {
+      expr: `sum by (device) (rate(plenum_driver_request_seconds_total{${sel}}[$__rate_interval])) / sum by (device) (rate(plenum_driver_requests_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{device}}"
+    }
+  ],
+  {
+    unit: "s",
+    x: 12,
+    w: 12,
+    description:
+      "How long one request takes, from sending (and connecting, if need be) to the answer. A slow device or Modbus gateway shows here; a cycle that is slow because it sends many requests does not. Timeouts count at their full length."
+  }
+)
 y += 8
 
 row("Broker")
@@ -545,6 +564,174 @@ timeseries(
       "Points kept up to date by a live change-of-value subscription, which the polling cycle skips. A drop means the device refused or stopped sending notifications, and those points are polled again."
   }
 )
+y += 8
+
+row("Host")
+timeseries(
+  "Gateway memory",
+  [
+    {
+      expr: `max by (service_instance_id, kind) (plenum_process_memory_bytes{${hostSel}})`,
+      legendFormat: "{{service_instance_id}} {{kind}}"
+    }
+  ],
+  {
+    unit: "bytes",
+    x: 0,
+    w: 8,
+    description:
+      "Resident memory (rss) and V8 heap in use. Both should level off within an hour of a start; a steady climb over days is a leak."
+  }
+)
+timeseries(
+  "Event loop lag",
+  [
+    {
+      expr: `max by (service_instance_id, quantile) (plenum_event_loop_lag_seconds{${hostSel}})`,
+      legendFormat: "{{service_instance_id}} {{quantile}}"
+    }
+  ],
+  {
+    unit: "s",
+    x: 8,
+    w: 8,
+    description:
+      "The worst event-loop delay of the last minute. Every device, keepalive and deadline shares the loop: a p99 above 50 ms on a Pi is worth a look, a max above 1 s is logged as a stall."
+  }
+)
+timeseries(
+  "Gateway CPU",
+  [
+    {
+      expr: `sum by (service_instance_id) (rate(plenum_process_cpu_seconds_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "percentunit",
+    x: 16,
+    w: 8,
+    description: "Share of one CPU core the gateway process uses, user and system time together."
+  }
+)
+y += 8
+timeseries(
+  "SoC temperature",
+  [
+    {
+      expr: `max by (service_instance_id) (plenum_host_temperature_celsius{${hostSel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "celsius",
+    x: 0,
+    w: 6,
+    description: "The first thermal zone. A Raspberry Pi 4 starts throttling at 80 °C; the log warns at 80 °C."
+  }
+)
+timeseries(
+  "Power and thermal conditions (Raspberry Pi)",
+  [
+    {
+      expr: `max by (service_instance_id, condition) (max_over_time(plenum_host_throttled{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{service_instance_id}} {{condition}}"
+    }
+  ],
+  {
+    unit: "bool_yes_no",
+    x: 6,
+    w: 6,
+    description:
+      "What the Raspberry Pi firmware reports: under_voltage (a weak power supply or cable, the most common cause of SD corruption), frequency_capped, throttled, soft_temperature_limit. Empty off a Pi."
+  }
+)
+timeseries(
+  "Outbox disk free",
+  [
+    {
+      expr: `min by (service_instance_id) (plenum_buffer_disk_free_bytes{${hostSel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "bytes",
+    x: 12,
+    w: 6,
+    description: "Free space on the filesystem that holds the store-and-forward outbox. The log warns below 64 MiB."
+  }
+)
+timeseries(
+  "Storage writes",
+  [
+    {
+      expr: `sum by (service_instance_id) (rate(plenum_process_disk_written_bytes_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "Bps",
+    x: 18,
+    w: 6,
+    description:
+      "Bytes the gateway writes to storage: what wears an SD card. Near zero while the broker is up (the outbox is only written during outages), high while it buffers."
+  }
+)
+y += 8
+timeseries(
+  "Open files",
+  [
+    {
+      expr: `max by (service_instance_id) (plenum_process_open_fds{${hostSel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 8,
+    description:
+      "File descriptors the gateway holds, sockets included. Flat in a healthy gateway; a slow climb is a leak."
+  }
+)
+timeseries(
+  "Wall-clock steps",
+  [
+    {
+      expr: `sum by (service_instance_id, direction) (increase(plenum_clock_steps_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{service_instance_id}} {{direction}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 8,
+    w: 8,
+    stack: true,
+    description:
+      "NTP setting the time of a machine without a real-time clock: normal once after boot. Timestamps jump with each step; deadlines and backoffs do not, they use the monotonic clock."
+  }
+)
+panels.push({
+  id: ++nextId,
+  type: "table",
+  title: "Gateways: version and start",
+  description:
+    "Which build each gateway runs, and when it last started. A start time that keeps changing is a gateway that restarts.",
+  datasource: prom,
+  gridPos: { h: 8, w: 8, x: 16, y },
+  targets: [
+    {
+      refId: "A",
+      datasource: prom,
+      expr: `max by (service_instance_id, version, node) (plenum_process_start_time_seconds{${hostSel}}) * 1000`,
+      instant: true,
+      format: "table"
+    }
+  ],
+  transformations: [{ id: "organize", options: { excludeByName: { Time: true }, renameByName: { Value: "Started" } } }],
+  fieldConfig: { defaults: { unit: "dateTimeAsIso" }, overrides: [] },
+  options: { showHeader: true }
+})
 y += 8
 
 row("Logs and traces")

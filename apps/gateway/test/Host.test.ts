@@ -1,0 +1,253 @@
+/**
+ * The host monitor: parsing what Linux and the Raspberry Pi firmware print,
+ * telling an NTP step from slewing, and logging problems when they start and
+ * end rather than on every sample.
+ */
+import * as NodeServices from "@effect/platform-node/NodeServices"
+import { describe, expect, it } from "@effect/vitest"
+import {
+  bufferDiskFree,
+  clockSteps,
+  eventLoopLag,
+  hostThrottled,
+  processCpu,
+  processDiskWritten,
+  processMemory,
+  withMetricAttributes
+} from "@plenum/core"
+import { Effect, Fiber, Logger, Metric } from "effect"
+import { TestClock } from "effect/testing"
+import {
+  clockStep,
+  type HostSources,
+  hostHealth,
+  liveHostSources,
+  makeHostMonitor,
+  parseMillidegrees,
+  parseThrottled,
+  parseWriteBytes,
+  SAMPLE_INTERVAL_MS
+} from "../src/Host.ts"
+import { parseVersion, versionFile } from "../src/Version.ts"
+
+describe("parsing", () => {
+  it("reads the firmware's throttle mask, now and since boot", () => {
+    expect(parseThrottled("0\n")).toEqual({ now: [], sinceBoot: [] })
+    // Under-voltage now, and under-voltage and throttling since boot: the classic weak power supply.
+    expect(parseThrottled("50005\n")).toEqual({
+      now: ["under_voltage", "throttled"],
+      sinceBoot: ["under_voltage", "throttled"]
+    })
+    expect(parseThrottled("throttled=0x80008")).toEqual({
+      now: ["soft_temperature_limit"],
+      sinceBoot: ["soft_temperature_limit"]
+    })
+    expect(parseThrottled("")).toBeUndefined()
+    expect(parseThrottled("not a mask")).toBeUndefined()
+  })
+
+  it("reads a thermal zone in millidegrees, and refuses what is not a temperature", () => {
+    expect(parseMillidegrees("48312\n")).toBe(48.3)
+    expect(parseMillidegrees("-5000")).toBe(-5)
+    expect(parseMillidegrees("999999")).toBeUndefined()
+    expect(parseMillidegrees("hot")).toBeUndefined()
+  })
+
+  it("reads write_bytes from /proc/self/io", () => {
+    const io =
+      "rchar: 1\nwchar: 2\nsyscr: 3\nsyscw: 4\nread_bytes: 4096\nwrite_bytes: 1236992\ncancelled_write_bytes: 0\n"
+    expect(parseWriteBytes(io)).toBe(1_236_992)
+    expect(parseWriteBytes("rchar: 1\n")).toBeUndefined()
+  })
+
+  it("tells an NTP step from slewing", () => {
+    expect(clockStep(1000, 1007)).toBeUndefined()
+    expect(clockStep(0, 3_600_000)).toBe(3_600_000)
+    expect(clockStep(5000, 2000)).toBe(-3000)
+  })
+
+  it("takes a version that is safe for a metric attribute, and nothing else", () => {
+    expect(parseVersion("v0.4.0\n")).toBe("v0.4.0")
+    expect(parseVersion("v0.4.0-3-g1e57130-dirty")).toBe("v0.4.0-3-g1e57130-dirty")
+    expect(parseVersion("")).toBeUndefined()
+    expect(parseVersion("v1 with spaces")).toBeUndefined()
+  })
+})
+
+/** A machine the test sets by hand. */
+const fakeHost = () => {
+  const state = {
+    rss: 100e6,
+    heap: 40e6,
+    cpu: 1,
+    offset: 0,
+    written: 1000 as number | undefined,
+    lag: { p99Ms: 5, maxMs: 10 },
+    fds: 30,
+    temperature: 50 as number | undefined,
+    throttled: "0" as string | undefined,
+    free: 1e9 as number | undefined
+  }
+  const sources: HostSources = {
+    memory: Effect.sync(() => ({ rss: state.rss, heap: state.heap })),
+    cpuSeconds: Effect.sync(() => state.cpu),
+    eventLoopLag: Effect.sync(() => state.lag),
+    clockOffsetMs: Effect.sync(() => state.offset),
+    openFds: Effect.sync(() => state.fds),
+    diskWrittenBytes: Effect.sync(() => state.written),
+    temperatureC: Effect.sync(() => state.temperature),
+    throttling: Effect.sync(() => (state.throttled === undefined ? undefined : parseThrottled(state.throttled))),
+    diskFreeBytes: () => Effect.sync(() => state.free)
+  }
+  return { state, sources }
+}
+
+const value = (metric: Metric.Gauge<number>, attributes: Record<string, string>) =>
+  Effect.map(Metric.value(Metric.withAttributes(metric, attributes)), (state) => state.value)
+const count = (metric: Metric.Counter<number>, attributes: Record<string, string>) =>
+  Effect.map(Metric.value(Metric.withAttributes(metric, attributes)), (state) => state.count)
+
+describe("host monitor", () => {
+  it.effect("exports the process and the machine, and logs each problem when it starts and when it ends", () =>
+    Effect.gen(function* () {
+      const lines: Array<string> = []
+      const logger = Logger.layer([
+        Logger.make(({ logLevel, message }) => {
+          lines.push(`${logLevel}: ${(Array.isArray(message) ? message : [message]).join(" ")}`)
+        })
+      ])
+      const tag = { test: "host-monitor" }
+      const { state, sources } = fakeHost()
+      const monitor = yield* makeHostMonitor(sources, {
+        version: "v9.9.9",
+        bufferPath: "/var/lib/plenum/buffer.sqlite"
+      })
+      const fiber = yield* monitor.run.pipe(withMetricAttributes(tag), Effect.provide(logger), Effect.forkChild)
+      const tick = TestClock.adjust(SAMPLE_INTERVAL_MS)
+      yield* Effect.yieldNow
+
+      expect(yield* value(processMemory, { ...tag, kind: "rss" })).toBe(100e6)
+      expect(yield* value(bufferDiskFree, tag)).toBe(1e9)
+      expect(monitor.latest()?.openFds).toBe(30)
+      expect(lines).toEqual([])
+
+      // A minute of trouble: a stall, a weak power supply, a hot SoC, a full disk, NTP setting the time.
+      state.cpu = 4
+      state.written = 5096
+      state.lag = { p99Ms: 400, maxMs: 2500 }
+      state.throttled = "50005"
+      state.temperature = 82.5
+      state.free = 10e6
+      state.offset = 3_600_000
+      yield* tick
+      // The same trouble on the next sample is not logged again.
+      state.lag = { p99Ms: 300, maxMs: 1500 }
+      yield* tick
+
+      expect(yield* count(processCpu, tag)).toBe(3)
+      expect(yield* count(processDiskWritten, tag)).toBe(4096)
+      expect(yield* count(clockSteps, { ...tag, direction: "forward" })).toBe(1)
+      expect(yield* value(hostThrottled, { ...tag, condition: "under_voltage" })).toBe(1)
+      expect(yield* value(hostThrottled, { ...tag, condition: "frequency_capped" })).toBe(0)
+      expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(2.5)
+      expect(monitor.latest()).toMatchObject({
+        clockSteps: 1,
+        temperatureC: 82.5,
+        diskFreeBytes: 10e6,
+        eventLoopLagMs: { p99: 400, max: 2500 },
+        throttled: { now: ["under_voltage", "throttled"] }
+      })
+      const snapshot = monitor.latest()
+      expect(snapshot === undefined ? undefined : hostHealth(snapshot)).toEqual({
+        memoryBytes: 100e6,
+        eventLoopLagMs: 2500,
+        clockSteps: 1,
+        temperatureC: 82.5,
+        throttled: ["under_voltage", "throttled"],
+        diskFreeBytes: 10e6
+      })
+      expect(lines).toEqual([
+        "Warn: event loop stalled: every device and deadline waits for it",
+        "Warn: wall clock stepped; timestamps jump with it, deadlines do not",
+        "Warn: host is hot",
+        "Warn: host reports a power or thermal condition",
+        "Warn: the outbox's disk is nearly full"
+      ])
+
+      // Everything recovers.
+      lines.length = 0
+      state.lag = { p99Ms: 5, maxMs: 10 }
+      state.throttled = "50000"
+      state.temperature = 60
+      state.free = 1e9
+      yield* tick
+      expect(lines).toEqual([
+        "Info: event loop responsive again",
+        "Info: host has cooled down",
+        "Info: host conditions cleared",
+        "Info: the outbox's disk has room again"
+      ])
+      // The gauges keep the worst of the last minute, so a stall between two exports still shows.
+      expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(2.5)
+      yield* Effect.all([tick, tick, tick])
+      expect(yield* value(eventLoopLag, { ...tag, quantile: "max" })).toBe(0.01)
+      yield* Fiber.interrupt(fiber)
+    })
+  )
+
+  it.effect("reports conditions from before it started once, and leaves out what the machine cannot tell", () =>
+    Effect.gen(function* () {
+      const lines: Array<string> = []
+      const logger = Logger.layer([
+        Logger.make(({ logLevel, message }) => {
+          lines.push(`${logLevel}: ${(Array.isArray(message) ? message : [message]).join(" ")}`)
+        })
+      ])
+      const { state, sources } = fakeHost()
+      state.throttled = "10000"
+      const monitor = yield* makeHostMonitor(sources, { version: "dev" })
+      const fiber = yield* monitor.run.pipe(
+        withMetricAttributes({ test: "host-since-boot" }),
+        Effect.provide(logger),
+        Effect.forkChild
+      )
+      yield* Effect.yieldNow
+      yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
+      expect(lines).toEqual(["Warn: host has reported power or thermal conditions since boot"])
+
+      // Not a Pi, no thermal zone, not Linux, no buffer: those fields are absent, not 0.
+      state.throttled = undefined
+      state.temperature = undefined
+      state.written = undefined
+      yield* TestClock.adjust(SAMPLE_INTERVAL_MS)
+      const snapshot = monitor.latest()
+      expect(snapshot).toBeDefined()
+      expect(snapshot).not.toHaveProperty("temperatureC")
+      expect(snapshot).not.toHaveProperty("throttled")
+      expect(snapshot).not.toHaveProperty("diskFreeBytes")
+      yield* Fiber.interrupt(fiber)
+    })
+  )
+})
+
+describe("live sources", () => {
+  it.live("read this machine without privileges", () =>
+    Effect.gen(function* () {
+      const host = yield* liveHostSources
+      const memory = yield* host.memory
+      expect(memory.rss).toBeGreaterThan(0)
+      expect(yield* host.cpuSeconds).toBeGreaterThan(0)
+      expect(yield* host.diskFreeBytes(versionFile)).toBeGreaterThan(0)
+      if (process.platform === "linux") {
+        expect(yield* host.openFds).toBeGreaterThan(0)
+        expect(yield* host.diskWrittenBytes).toBeGreaterThanOrEqual(0)
+      }
+      // Wherever the files are missing (not a Pi, no thermal zone) these are undefined, never a failure.
+      yield* host.temperatureC
+      yield* host.throttling
+      yield* Effect.sleep("50 millis")
+      const lag = yield* host.eventLoopLag
+      if (lag !== undefined) expect(lag.maxMs).toBeGreaterThanOrEqual(0)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})

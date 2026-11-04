@@ -3,8 +3,9 @@
 #
 #   sudo packaging/install.sh [path/to/gateway.json]
 #
-# - Copies the runtime files to /opt/plenum and installs their production
-#   dependencies there (pnpm through corepack; Node 22.18 or later needed).
+# - Builds the runtime files and their production dependencies in
+#   /opt/plenum.new (pnpm through corepack; Node 22.18 or later needed), and
+#   swaps them in for /opt/plenum only once the config passes their check.
 # - Creates the system user `plenum`, and /etc/plenum/gateway.json from the
 #   config given (or keeps the one already there; the example config on a
 #   first install). The outbox goes to /var/lib/plenum/buffer.sqlite.
@@ -38,23 +39,28 @@ links=$(cd "$repo" && find package.json pnpm-lock.yaml pnpm-workspace.yaml packa
   -name node_modules -prune -o -type l -print 2>/dev/null | head -5)
 [[ -z $links ]] || fail "the checkout has symlinks where only files belong, nothing was installed:"$'\n'"$links"
 
-echo "Installing the gateway to $prefix"
-mkdir -p "$prefix"
+# The new version is built next to the running one and checked against the config before it replaces
+# anything: a config the new version refuses leaves the running gateway, its files and its config as they were.
+staging="$prefix.new"
+rm -rf "$staging"
+trap 'rm -rf "$staging" /etc/plenum/gateway.json.new' EXIT
+echo "Building the gateway in $staging"
 for path in package.json pnpm-lock.yaml pnpm-workspace.yaml packages apps/gateway; do
-  mkdir -p "$prefix/$(dirname "$path")"
-  rm -rf "${prefix:?}/$path"
-  cp -R "$repo/$path" "$prefix/$path"
+  mkdir -p "$staging/$(dirname "$path")"
+  cp -R "$repo/$path" "$staging/$path"
 done
-find "$prefix" -name node_modules -prune -exec rm -rf {} +
+find "$staging" -name node_modules -prune -exec rm -rf {} +
+# Which build this is, for telemetry and the status page (the checkout may belong to another user, hence safe.directory).
+git -c safe.directory="$repo" -C "$repo" describe --tags --always --dirty >"$staging/VERSION" 2>/dev/null ||
+  echo dev >"$staging/VERSION"
 # The status page, when it is built (pnpm --filter @plenum/web build, on any machine: it is static files).
-rm -rf "$prefix/apps/web"
 if [[ -f $repo/apps/web/out/index.html ]]; then
-  mkdir -p "$prefix/apps/web"
-  cp -R "$repo/apps/web/out" "$prefix/apps/web/out"
+  mkdir -p "$staging/apps/web"
+  cp -R "$repo/apps/web/out" "$staging/apps/web/out"
 else
   echo "The status page is not built (pnpm --filter @plenum/web build); the gateway serves its API only."
 fi
-(cd "$prefix" && corepack pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@plenum/gateway...")
+(cd "$staging" && corepack pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@plenum/gateway...")
 
 mkdir -p /etc/plenum
 if [[ -n $config_source ]]; then
@@ -72,13 +78,21 @@ if [[ -f /etc/plenum/gateway.json.new ]]; then
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n")
   '
   # As the service user: checking loads the gateway's dependencies, and root has no business running them.
-  (cd "$prefix" && runuser -u plenum -- node apps/gateway/src/main.ts --check /etc/plenum/gateway.json.new) ||
-    { rm -f /etc/plenum/gateway.json.new; fail "the config is not valid; nothing was changed"; }
-  mv /etc/plenum/gateway.json.new /etc/plenum/gateway.json
+  (cd "$staging" && runuser -u plenum -- node apps/gateway/src/main.ts --check /etc/plenum/gateway.json.new) ||
+    fail "the config is not valid; nothing was changed"
 else
-  (cd "$prefix" && runuser -u plenum -- node apps/gateway/src/main.ts --check /etc/plenum/gateway.json) ||
-    fail "/etc/plenum/gateway.json is not valid"
+  (cd "$staging" && runuser -u plenum -- node apps/gateway/src/main.ts --check /etc/plenum/gateway.json) ||
+    fail "/etc/plenum/gateway.json is not valid for this version; nothing was changed"
 fi
+
+# Checked: swap the new version in, then the new config.
+if [[ -d $prefix ]]; then
+  rm -rf "$prefix.old"
+  mv "$prefix" "$prefix.old"
+fi
+mv "$staging" "$prefix"
+rm -rf "$prefix.old"
+[[ -f /etc/plenum/gateway.json.new ]] && mv /etc/plenum/gateway.json.new /etc/plenum/gateway.json
 touch /etc/plenum/gateway.env
 chmod 640 /etc/plenum/gateway.env
 chgrp plenum /etc/plenum/gateway.env

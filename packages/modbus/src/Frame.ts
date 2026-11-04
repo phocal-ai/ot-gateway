@@ -7,7 +7,7 @@
  * - Modbus Messaging on TCP/IP Implementation Guide v1.0b (MBAP header, §3.1.3)
  */
 import { Effect, Schema } from "effect"
-import type { DataType } from "@plenum/core"
+import { type ByteOrder, type DataType, registerWidth } from "@plenum/core"
 
 export const FunctionCode = {
   ReadCoils: 0x01,
@@ -486,17 +486,34 @@ export const encodeExceptionResponse = (
 }
 
 /** Registers occupied by a data type. */
-export const registerCount = (dataType: DataType): number =>
-  dataType === "int32" || dataType === "uint32" || dataType === "float32" ? 2 : 1
+export const registerCount = (dataType: DataType): number => registerWidth(dataType)
 
 /**
- * Decode a value from registers, big-endian with the high word first
- * (the most common layout). Word-swapped devices are a later option.
+ * Registers reordered between the device's byte order and big-endian (ABCD).
+ * Both steps are their own inverse, so the same function goes either way:
+ * CDAB and DCBA reverse the registers, BADC and DCBA swap the two bytes of
+ * each (see `ByteOrder`).
  */
-export const decodeValue = (registers: ReadonlyArray<number>, dataType: DataType): number | boolean => {
-  const view = new DataView(new ArrayBuffer(4))
-  view.setUint16(0, registers[0] ?? 0)
-  view.setUint16(2, registers[1] ?? 0)
+export const reorderRegisters = (registers: ReadonlyArray<number>, byteOrder: ByteOrder): ReadonlyArray<number> => {
+  const words = byteOrder === "CDAB" || byteOrder === "DCBA" ? registers.toReversed() : registers
+  return byteOrder === "BADC" || byteOrder === "DCBA"
+    ? words.map((word) => ((word & 0xff) << 8) | ((word >> 8) & 0xff))
+    : words
+}
+
+/**
+ * Decode a value from registers sent in `byteOrder` (default big-endian,
+ * high word first). A 64-bit integer beyond ±2^53 loses precision as a
+ * JavaScript number; no meter counts that far.
+ */
+export const decodeValue = (
+  registers: ReadonlyArray<number>,
+  dataType: DataType,
+  byteOrder: ByteOrder = "ABCD"
+): number | boolean => {
+  const ordered = reorderRegisters(registers.slice(0, registerWidth(dataType)), byteOrder)
+  const view = new DataView(new ArrayBuffer(8))
+  ordered.forEach((register, index) => view.setUint16(index * 2, register))
   switch (dataType) {
     case "bool":
       return (registers[0] ?? 0) !== 0
@@ -510,12 +527,26 @@ export const decodeValue = (registers: ReadonlyArray<number>, dataType: DataType
       return view.getInt32(0)
     case "float32":
       return view.getFloat32(0)
+    case "uint64":
+      return Number(view.getBigUint64(0))
+    case "int64":
+      return Number(view.getBigInt64(0))
+    case "float64":
+      return view.getFloat64(0)
   }
 }
 
-/** The inverse of `decodeValue`: the registers holding `value` as `dataType`. Integers are truncated and wrap. */
-export const encodeValue = (value: number | boolean, dataType: DataType): ReadonlyArray<number> => {
-  const view = new DataView(new ArrayBuffer(4))
+/**
+ * The inverse of `decodeValue`: the registers holding `value` as `dataType`,
+ * in `byteOrder`. Integers are truncated and wrap; callers that write check
+ * the range first (`writeRequestFor`).
+ */
+export const encodeValue = (
+  value: number | boolean,
+  dataType: DataType,
+  byteOrder: ByteOrder = "ABCD"
+): ReadonlyArray<number> => {
+  const view = new DataView(new ArrayBuffer(8))
   const numeric = typeof value === "boolean" ? Number(value) : value
   switch (dataType) {
     case "bool":
@@ -523,13 +554,24 @@ export const encodeValue = (value: number | boolean, dataType: DataType): Readon
     case "uint16":
     case "int16":
       view.setUint16(0, Math.trunc(numeric) & 0xffff)
-      return [view.getUint16(0)]
+      break
     case "uint32":
     case "int32":
       view.setUint32(0, Math.trunc(numeric) >>> 0)
-      return [view.getUint16(0), view.getUint16(2)]
+      break
     case "float32":
       view.setFloat32(0, numeric)
-      return [view.getUint16(0), view.getUint16(2)]
+      break
+    case "uint64":
+    case "int64":
+      view.setBigUint64(0, BigInt.asUintN(64, BigInt(Math.trunc(numeric))))
+      break
+    case "float64":
+      view.setFloat64(0, numeric)
   }
+  const width = registerWidth(dataType)
+  return reorderRegisters(
+    Array.from({ length: width }, (_, index) => view.getUint16(index * 2)),
+    byteOrder
+  )
 }

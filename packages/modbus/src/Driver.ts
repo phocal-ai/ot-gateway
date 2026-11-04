@@ -14,10 +14,9 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { DriverError, driverRefusals } from "@plenum/core"
 import type { Driver, ModbusDevice, ModbusPoint, Network, Reading, WriteValue } from "@plenum/core"
-import { Clock, Effect, Metric, Schedule } from "effect"
-import type { Duration } from "effect"
-import { makeModbusClient } from "./Client.ts"
-import type { ModbusClient, ModbusClientError } from "./Client.ts"
+import { Clock, Duration, Effect, Metric, Schedule } from "effect"
+import { makeModbusClient, makeModbusLink } from "./Client.ts"
+import type { ModbusClient, ModbusClientError, ModbusLink } from "./Client.ts"
 import { encodeValue, exceptionName, FunctionCode, isTransientException } from "./Frame.ts"
 import type { ModbusException, WriteRequest } from "./Frame.ts"
 import { planReads, valueFromBits, valueFromRegisters } from "./Plan.ts"
@@ -83,7 +82,11 @@ export const makeModbusDriverFromClient = (
   client: ModbusClient,
   options: PlanOptions = {}
 ): Driver => {
-  const blocks = planReads(device.points, options)
+  const blocks = planReads(device.points, {
+    maxRegisters: device.maxRegistersPerRead,
+    maxBits: device.maxBitsPerRead,
+    ...options
+  })
   const fail = (reason: DriverError["reason"], message: string) =>
     Effect.fail(new DriverError({ device: device.id, reason, message }))
 
@@ -164,12 +167,17 @@ export const makeModbusDriverFromClient = (
   }
 }
 
-/** Integer ranges of the register types; float32 takes any finite number. */
+/**
+ * Integer ranges of the register types; floats take any finite number. A
+ * 64-bit integer is written exactly up to ±2^53, as far as a number reaches.
+ */
 const integerRange = {
   int16: [-32_768, 32_767],
   uint16: [0, 65_535],
   int32: [-(2 ** 31), 2 ** 31 - 1],
-  uint32: [0, 2 ** 32 - 1]
+  uint32: [0, 2 ** 32 - 1],
+  int64: [Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER],
+  uint64: [0, Number.MAX_SAFE_INTEGER]
 } as const
 
 /**
@@ -180,6 +188,7 @@ const integerRange = {
  */
 export const writeRequestFor = (point: ModbusPoint, value: WriteValue): WriteRequest | string => {
   if (value === null) return "Modbus has nothing to release; write a value"
+  if (point.bit !== undefined) return "a bit of a register cannot be written"
   if (point.table === "coil") {
     if (typeof value !== "boolean") return "a coil takes true or false"
     return { functionCode: FunctionCode.WriteSingleCoil, address: point.address, value }
@@ -191,12 +200,12 @@ export const writeRequestFor = (point: ModbusPoint, value: WriteValue): WriteReq
     return { functionCode: FunctionCode.WriteSingleRegister, address: point.address, value: value ? 1 : 0 }
   }
   if (typeof value !== "number" || !Number.isFinite(value)) return `a ${point.dataType} takes a finite number`
-  if (point.dataType !== "float32") {
+  if (point.dataType !== "float32" && point.dataType !== "float64") {
     const [minimum, maximum] = integerRange[point.dataType]
     if (!Number.isInteger(value)) return `${value} is not a whole number, as a ${point.dataType} needs`
     if (value < minimum || value > maximum) return `${value} does not fit a ${point.dataType}`
   }
-  const registers = encodeValue(value, point.dataType)
+  const registers = encodeValue(value, point.dataType, point.byteOrder)
   const [first] = registers
   return registers.length === 1 && first !== undefined
     ? { functionCode: FunctionCode.WriteSingleRegister, address: point.address, value: first }
@@ -215,7 +224,58 @@ export const makeModbusDriver = Effect.fn("makeModbusDriver")(function* (
   const socket = yield* options.network ? options.network.tcp(target) : NodeSocket.makeNet(target)
   const client = yield* makeModbusClient(socket, {
     unitId: device.unitId,
+    requestGap: Duration.millis(device.requestGapMs),
     ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
   })
   return makeModbusDriverFromClient(device, client, options)
+})
+
+/** Where a device is reached. Devices with the same endpoint share one connection. */
+export const endpointOf = (device: Pick<ModbusDevice, "host" | "port">): string =>
+  `${device.host.toLowerCase()}:${device.port}`
+
+export type ModbusLinksOptions = Pick<ModbusDriverOptions, "connectTimeout" | "requestTimeout" | "network">
+
+/**
+ * One link per endpoint among `devices`, by `endpointOf`, for as long as the
+ * scope lasts; each connects on its first request. Devices behind one Modbus
+ * TCP gateway share its link, and with it one request at a time and the
+ * largest `requestGapMs` among them: the gap protects the gateway's serial
+ * bus, whichever device the request is for.
+ */
+export const makeModbusLinks = Effect.fn("makeModbusLinks")(function* (
+  devices: ReadonlyArray<ModbusDevice>,
+  options: ModbusLinksOptions = {}
+) {
+  const groups = new Map<string, Array<ModbusDevice>>()
+  for (const device of devices) {
+    const key = endpointOf(device)
+    groups.set(key, [...(groups.get(key) ?? []), device])
+  }
+  const links = new Map<string, ModbusLink>()
+  for (const [key, group] of groups) {
+    const [first] = group
+    if (first === undefined) continue
+    const target = { host: first.host, port: first.port, openTimeout: options.connectTimeout ?? "3 seconds" }
+    const socket = yield* options.network ? options.network.tcp(target) : NodeSocket.makeNet(target)
+    const gap = Math.max(...group.map((device) => device.requestGapMs))
+    links.set(
+      key,
+      yield* makeModbusLink(socket, {
+        requestGap: Duration.millis(gap),
+        ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
+      })
+    )
+    if (group.length > 1) {
+      yield* Effect.logInfo("devices share one connection").pipe(
+        Effect.annotateLogs({
+          endpoint: key,
+          devices: group.map((device) => `${device.id} (unit ${device.unitId})`).join(", "),
+          requestGapMs: gap
+        })
+      )
+    }
+  }
+  const shared: ReadonlyMap<string, ModbusLink> = links
+  return shared
 })

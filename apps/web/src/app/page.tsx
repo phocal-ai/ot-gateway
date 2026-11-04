@@ -5,13 +5,13 @@
  * health and latest values, and the recent commands. Polls `/api/status`
  * every two seconds; read-only.
  */
-import type { DeviceStatus, GatewayStatus } from "@plenum/api"
+import type { DeviceStatus, GatewayStatus, HostStatus } from "@plenum/api"
 import { Effect } from "effect"
 import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ago, fetchStatus, formatValue, unitLabel } from "@/lib/status"
+import { ago, fetchStatus, formatBytes, formatValue, unitLabel } from "@/lib/status"
 
 const POLL_MS = 2000
 
@@ -122,6 +122,76 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
   )
 }
 
+/** One figure of the host card; `warn` turns it amber. */
+const Figure = ({
+  label,
+  value,
+  warn
+}: {
+  readonly label: string
+  readonly value: string
+  readonly warn?: boolean
+}) => (
+  <div className="flex flex-col gap-1">
+    <span className="text-xs text-muted-foreground">{label}</span>
+    <span className={`font-mono text-sm tabular-nums ${warn === true ? "text-amber-600 dark:text-amber-400" : ""}`}>
+      {value}
+    </span>
+  </div>
+)
+
+/** The machine under the gateway: what to look at first when a Pi misbehaves. */
+const Host = ({ host }: { readonly host: HostStatus }) => {
+  const conditions = host.throttled?.now ?? []
+  const sinceBoot = host.throttled?.sinceBoot ?? []
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <CardTitle>Host</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            {conditions.map((condition) => (
+              <Badge key={condition} variant="destructive">
+                {condition.replaceAll("_", " ")}
+              </Badge>
+            ))}
+            {conditions.length === 0 && sinceBoot.length > 0 ? (
+              <Badge variant="warning">since boot: {sinceBoot.map((c) => c.replaceAll("_", " ")).join(", ")}</Badge>
+            ) : null}
+          </div>
+        </div>
+        <CardDescription>
+          gateway {host.version} · Node {host.node}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <Figure label="Memory" value={formatBytes(host.memoryBytes)} />
+          <Figure label="CPU" value={`${host.cpuPercent.toFixed(1)} %`} />
+          <Figure
+            label="Event loop lag (max, 1 min)"
+            value={`${host.eventLoopLagMs.max} ms`}
+            warn={host.eventLoopLagMs.max >= 1000}
+          />
+          <Figure
+            label="Temperature"
+            value={host.temperatureC === undefined ? "–" : `${host.temperatureC.toFixed(1)} °C`}
+            warn={(host.temperatureC ?? 0) >= 80}
+          />
+          <Figure
+            label="Buffer disk free"
+            value={host.diskFreeBytes === undefined ? "–" : formatBytes(host.diskFreeBytes)}
+            warn={host.diskFreeBytes !== undefined && host.diskFreeBytes < 64 * 1024 * 1024}
+          />
+          <Figure label="Open files" value={host.openFds === undefined ? "–" : String(host.openFds)} />
+          <Figure label="Clock steps" value={String(host.clockSteps)} warn={host.clockSteps > 0} />
+          <Figure label="Heap" value={formatBytes(host.heapBytes)} />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 const Commands = ({ status }: { readonly status: GatewayStatus }) => (
   <Card>
     <CardHeader>
@@ -219,6 +289,7 @@ const StatusPage = () => {
       ) : (
         <>
           <Overview status={status} stale={load._tag !== "ok"} />
+          {status.host === undefined ? null : <Host host={status.host} />}
           <section className="grid gap-4 lg:grid-cols-2">
             {status.devices.map((device) => (
               <Device key={device.id} device={device} now={status.now} />

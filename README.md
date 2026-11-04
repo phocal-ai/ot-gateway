@@ -90,7 +90,17 @@ node apps/gateway/src/main.ts --discover path/to/gateway.json
 
 ## Running it for real
 
-On a Raspberry Pi (64-bit OS) or any Linux machine with systemd and Node.js 22.18 or newer, from a checkout:
+[docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
+
+The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/plenum-gateway`, amd64 and arm64, published for releases) for a Raspberry Pi on the 64-bit OS as much as for an industrial PC.
+
+```bash
+docker compose -f packaging/compose.yaml up -d
+```
+
+The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. Secrets go in `/etc/plenum/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env`. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`PLENUM_TAG=v… docker compose … up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page.
+
+On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout:
 
 ```bash
 sudo packaging/install.sh path/to/gateway.json
@@ -98,21 +108,13 @@ sudo packaging/install.sh path/to/gateway.json
 
 It installs the gateway to `/opt/plenum` with its production dependencies, creates the `plenum` user, validates the config into `/etc/plenum/gateway.json` (with the outbox in `/var/lib/plenum`), and starts the `plenum-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u plenum-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/plenum/gateway.env`. Build the status page first (`pnpm --filter @plenum/web build`, on any machine) and the script installs it too.
 
-Or as a container, for amd64 and arm64 (published for releases as `ghcr.io/phocal-ai/plenum-gateway`):
-
-```bash
-docker run -d --name plenum --network host --restart unless-stopped \
-  -v /etc/plenum:/etc/plenum:ro -v /var/lib/plenum:/var/lib/plenum \
-  ghcr.io/phocal-ai/plenum-gateway:latest
-```
-
-Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. Secrets go in `/etc/plenum/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env`. The image includes the status page.
+Either way, the gateway watches the machine it runs on (memory, event-loop lag, temperature, Raspberry Pi under-voltage and throttling, disk, clock steps) and reports it on the status page, in the health message and in telemetry. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) is how to test it on a Pi before it goes into a building.
 
 The status page listens on `127.0.0.1` only, by default, and then answers only requests addressed to a loopback name, so a web page cannot reach it through DNS rebinding. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page is read-only, but it has no login.
 
 ## Configuration
 
-A gateway is described by one JSON document:
+A gateway is described by one JSON document; [docs/configuration.md](docs/configuration.md) lists every key with its default.
 
 ```json
 {
@@ -154,6 +156,8 @@ A gateway is described by one JSON document:
 ```
 
 With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@plenum/buffer`](packages/buffer).
+
+A Modbus point's `dataType` is `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64` or `bool`; 32-bit values take two registers and 64-bit ones four. Modbus fixes the byte order only within a register, so devices differ in how they spread a wider value: `byteOrder` is `ABCD` (high word first, the default), `CDAB` (low word first, common on meters), `BADC` (bytes swapped in each register) or `DCBA` (little-endian). A float32 that reads as something like `1.4e-41` where `21.5` belongs means the byte order is wrong. A 64-bit integer is exact up to 2^53. A point with `bit` (0–15) is one flag of a status register, `true` or `false`. Several devices behind one Modbus TCP gateway (RS-485 meters, say) are one device each with the gateway's `host` and `port` and their own `unitId`; they share one connection. For awkward devices, a Modbus device takes `requestGapMs` (a pause between requests, for gateways and serial bridges that drop requests sent back to back) and `maxRegistersPerRead` / `maxBitsPerRead` (shorter reads).
 
 BACnet devices are found by `deviceInstance` with Who-Is, or reached directly at `address` (`ip` or `ip:port`). A point reads `present-value` of its object unless it names another `property`. With `cov` (default `true`) the gateway subscribes to change-of-value notifications for present values and polls only what they do not cover. Every BACnet device shares one UDP socket, set in the optional `bacnet` block: `bindAddress` (default `0.0.0.0`; on Linux, binding one address stops broadcasts from arriving), `port` (47808; devices broadcast I-Am there), `broadcastAddress` (`255.255.255.255`, port 47808 unless given; set your subnet's, since the default leaves through one interface only), `requestTimeoutMs` (3000), `retries` (2), `covLifetimeSeconds` (300, the lifetime requested for change-of-value subscriptions, renewed at half of it) and `bbmdAddress` (`ip` or `ip:port` of the subnet's BBMD; only it may forward answers to the gateway, and without it only the device itself may). See [`@plenum/bacnet`](packages/bacnet).
 

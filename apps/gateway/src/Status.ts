@@ -6,6 +6,7 @@
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
 import { type CommandStatus, type DeviceStatus, type GatewayStatus, PlenumApi } from "@plenum/api"
+import type { HostSnapshot } from "./Host.ts"
 import {
   bufferRows,
   type CommandOutcome,
@@ -50,7 +51,18 @@ export interface StatusState {
   readonly snapshot: Effect.Effect<GatewayStatus>
 }
 
-export const makeStatusState = (config: GatewayConfig, health: HealthRegistry, since: number): StatusState => {
+/** Where the page's host section comes from: the host monitor's last sample, when there is a monitor. */
+export interface StatusHost {
+  readonly latest: () => HostSnapshot | undefined
+  readonly version: string
+}
+
+export const makeStatusState = (
+  config: GatewayConfig,
+  health: HealthRegistry,
+  since: number,
+  host?: StatusHost
+): StatusState => {
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
   const payloads = new Map<string, string>()
@@ -100,6 +112,7 @@ export const makeStatusState = (config: GatewayConfig, health: HealthRegistry, s
           })
         }
       })
+      const sample = host?.latest()
       return {
         site: config.site,
         building: config.building,
@@ -108,6 +121,9 @@ export const makeStatusState = (config: GatewayConfig, health: HealthRegistry, s
         now,
         broker: { url: config.mqtt.url, connected },
         ...(config.buffer === undefined ? {} : { buffer: { path: config.buffer.path, rows: Math.max(0, rows) } }),
+        ...(host === undefined || sample === undefined
+          ? {}
+          : { host: { version: host.version, node: process.versions.node, ...sample } }),
         devices,
         commands: [...commands]
       }

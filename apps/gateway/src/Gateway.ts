@@ -27,12 +27,13 @@ import {
   superviseDevice,
   withMetricAttributes
 } from "@plenum/core"
-import { makeModbusDriver } from "@plenum/modbus"
+import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@plenum/modbus"
 import { MqttPublisher } from "@plenum/mqtt"
 import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { makeStatusState, serveStatus, type StatusState } from "./Status.ts"
 import { traceSampleRatio } from "./Telemetry.ts"
 
@@ -43,6 +44,10 @@ export interface GatewayOptions {
   readonly buffer?: BufferedPublisherOptions
   /** Told about every message the publisher accepted (stored or sent), after it did. */
   readonly onAccepted?: (topic: string, payload: string, options: PublishOptions | undefined) => void
+  /** Watch the process and the machine through these (`liveHostSources`); without them, nothing is sampled. */
+  readonly host?: HostSources
+  /** The gateway's version, for telemetry. */
+  readonly version?: string
 }
 
 /**
@@ -101,7 +106,8 @@ const runOne = (
   health: HealthRegistry,
   bacnet: BacnetNetwork,
   network: Network | undefined,
-  drivers: DriverRegistry
+  drivers: DriverRegistry,
+  modbusLinks: ReadonlyMap<string, ModbusLink>
 ) => {
   /** Poll the device, and take commands for it while doing so. */
   const run = (driver: Driver) => Effect.andThen(drivers.register(driver), runDevice(ctx, driver))
@@ -116,9 +122,12 @@ const runOne = (
   switch (device.protocol) {
     case "simulator":
       return runDevice(ctx, makeSimulatorDriver(device))
-    case "modbus-tcp":
-      // The device's connection lives as long as its polling loop.
-      return Effect.scoped(Effect.flatMap(makeModbusDriver(device, network === undefined ? {} : { network }), run))
+    case "modbus-tcp": {
+      // The connection belongs to the device's endpoint, shared with any other device behind the same gateway.
+      const link = modbusLinks.get(endpointOf(device))
+      if (link === undefined) return Effect.die(new Error(`no Modbus link for ${device.id}`))
+      return run(makeModbusDriverFromClient(device, link.unit(device.unitId)))
+    }
     case "bacnet-ip": {
       if (bacnet === undefined) return Effect.void
       // All BACnet devices share the gateway's one UDP socket, once it is open.
@@ -150,7 +159,8 @@ const runDevices = Effect.fn("runGateway")(function* (
   health: GatewayHealth,
   network: Network | undefined,
   commands: Commands,
-  status: StatusState | undefined
+  status: StatusState | undefined,
+  host: HostMonitor | undefined
 ) {
   const sampleRatio = yield* traceSampleRatio
   yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
@@ -161,6 +171,11 @@ const runDevices = Effect.fn("runGateway")(function* (
     bacnet = yield* Deferred.make<BacnetClient>()
     yield* openBacnet(config, health.registry, bacnet, network).pipe(Effect.forkScoped)
   }
+  // One connection per Modbus endpoint, for as long as the gateway runs; each opens on its first request.
+  const modbusLinks = yield* makeModbusLinks(
+    config.devices.filter((device) => device.protocol === "modbus-tcp"),
+    network === undefined ? {} : { network }
+  )
   if (config.status !== undefined && status !== undefined)
     yield* serveStatus(config.status, status).pipe(Effect.forkScoped)
   yield* Effect.all(
@@ -172,10 +187,13 @@ const runDevices = Effect.fn("runGateway")(function* (
       // A bug in one device's pipeline restarts that device only; suspended, so a restart builds a fresh driver.
       ...config.devices.map((device) =>
         superviseDevice(
-          Effect.suspend(() => runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers)),
+          Effect.suspend(() =>
+            runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers, modbusLinks)
+          ),
           { deviceId: device.id, health: health.registry }
         )
       ),
+      ...(host === undefined ? [] : [keepRunning("host monitor", host.run)]),
       // A command at a time per device, each with its own deadline; devices do not wait for each other.
       ...(commands.routing === undefined ? [] : [keepRunning("command guard", commands.routing.run)])
     ],
@@ -231,12 +249,26 @@ const northbound = (
 export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig, options: GatewayOptions = {}) {
   const registry = makeHealthRegistry(config.devices.map((device) => device.id))
   const startedAt = yield* Clock.currentTimeMillis
+  const host =
+    options.host === undefined
+      ? undefined
+      : yield* makeHostMonitor(options.host, {
+          version: options.version ?? "unknown",
+          ...(config.buffer === undefined ? {} : { bufferPath: config.buffer.path })
+        })
+  const latestHost = () => host?.latest()
   const health: GatewayHealth = {
     topic: healthTopic(config.site, config.building, config.id),
     registry,
-    online: Effect.map(Clock.currentTimeMillis, (now) => onlinePayload(registry, startedAt, now))
+    online: Effect.map(Clock.currentTimeMillis, (now) => {
+      const snapshot = latestHost()
+      return onlinePayload(registry, startedAt, now, snapshot === undefined ? undefined : hostHealth(snapshot))
+    })
   }
-  const status = config.status === undefined ? undefined : makeStatusState(config, registry, startedAt)
+  const status =
+    config.status === undefined
+      ? undefined
+      : makeStatusState(config, registry, startedAt, { latest: latestHost, version: options.version ?? "unknown" })
   const drivers = makeDriverRegistry()
   const clock = yield* Clock.clockWith(Effect.succeed)
   const guard = makeCommandGuard({
@@ -253,7 +285,7 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     drivers,
     routing: writable ? yield* makeCommandRouting(config, guard.handle) : undefined
   }
-  return yield* runDevices(config, health, options.network, commands, status).pipe(
+  return yield* runDevices(config, health, options.network, commands, status, host).pipe(
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.

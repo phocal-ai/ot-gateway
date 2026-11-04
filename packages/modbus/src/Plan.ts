@@ -38,12 +38,17 @@ export interface PlanOptions {
    * range, so merging across gaps is opt-in.
    */
   readonly maxGap?: number
+  /** Most registers in one read (default and at most 125, §6.3); some devices refuse longer reads. */
+  readonly maxRegisters?: number
+  /** Most coils or discrete inputs in one read (default and at most 2000, §6.1). */
+  readonly maxBits?: number
 }
 
 /**
  * Group points into read blocks: per table, sorted by address, merging a
- * point into the current block while it fits the gap rule and the protocol's
- * quantity limit (125 registers or 2000 bits).
+ * point into the current block while it fits the gap rule and the quantity
+ * limit (the protocol's 125 registers or 2000 bits, or the device's lower one).
+ * Several points may read the same address (bits of one register).
  */
 export const planReads = (points: ReadonlyArray<ModbusPoint>, options: PlanOptions = {}): ReadonlyArray<ReadBlock> => {
   const maxGap = options.maxGap ?? 0
@@ -51,7 +56,8 @@ export const planReads = (points: ReadonlyArray<ModbusPoint>, options: PlanOptio
   for (const table of ["holding", "input", "coil", "discrete"] as const) {
     const sorted = points.filter((p) => p.table === table).toSorted((a, b) => a.address - b.address)
     const functionCode = functionCodeFor[table]
-    const limit = maxReadQuantity(functionCode)
+    const protocolLimit = maxReadQuantity(functionCode)
+    const limit = Math.min(protocolLimit, (isBitTable(table) ? options.maxBits : options.maxRegisters) ?? protocolLimit)
     let current: { address: number; end: number; points: Array<ModbusPoint> } | undefined
     for (const point of sorted) {
       const end = point.address + pointWidth(point)
@@ -95,7 +101,8 @@ export const valueFromRegisters = (
   registers: ReadonlyArray<number>
 ): number | boolean => {
   const offset = point.address - blockAddress
-  return decodeValue(registers.slice(offset, offset + registerCount(point.dataType)), point.dataType)
+  if (point.bit !== undefined) return (((registers[offset] ?? 0) >> point.bit) & 1) === 1
+  return decodeValue(registers.slice(offset, offset + registerCount(point.dataType)), point.dataType, point.byteOrder)
 }
 
 /** The value of `point` inside a bit block read starting at `blockAddress`. */

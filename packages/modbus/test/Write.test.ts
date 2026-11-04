@@ -18,7 +18,7 @@ import {
 } from "../src/index.ts"
 
 const point = (id: string, table: ModbusPoint["table"], address: number, dataType: ModbusPoint["dataType"]) =>
-  ({ id, name: id, writable: true, table, address, dataType }) satisfies ModbusPoint
+  ({ id, name: id, writable: true, table, address, dataType, byteOrder: "ABCD" }) satisfies ModbusPoint
 
 const points = [
   point("setpoint", "holding", 100, "float32"),
@@ -34,6 +34,9 @@ const device: ModbusDevice = {
   port: 502,
   unitId: 1,
   pollIntervalMs: 5_000,
+  requestGapMs: 0,
+  maxRegistersPerRead: 125,
+  maxBitsPerRead: 2000,
   points
 }
 
@@ -103,5 +106,27 @@ describe("Modbus writes", () => {
       value: 1
     })
     expect(writeRequestFor(point("p", "discrete", 7, "bool"), true)).toBe("discrete inputs are read-only")
+  })
+
+  it("writes in the point's byte order, wide values with FC 16", () => {
+    const swapped = { ...point("p", "holding", 7, "float32"), byteOrder: "CDAB" as const }
+    // 21.5 = 0x41AC0000, low word first.
+    expect(writeRequestFor(swapped, 21.5)).toEqual({
+      functionCode: FunctionCode.WriteMultipleRegisters,
+      address: 7,
+      values: [0x0000, 0x41ac]
+    })
+    const counter = { ...point("p", "holding", 7, "uint64"), byteOrder: "DCBA" as const }
+    expect(writeRequestFor(counter, 0x0001_0203_0405_0607)).toEqual({
+      functionCode: FunctionCode.WriteMultipleRegisters,
+      address: 7,
+      values: [0x0706, 0x0504, 0x0302, 0x0100]
+    })
+    // One bit of a register would need a read-modify-write that could undo another change.
+    expect(writeRequestFor({ ...point("p", "holding", 7, "bool"), bit: 2 }, true)).toBe(
+      "a bit of a register cannot be written"
+    )
+    // Beyond 2^53 a number is no longer exact: refused rather than written as a neighbour.
+    expect(writeRequestFor(counter, 2 ** 60)).toBe(`${2 ** 60} does not fit a uint64`)
   })
 })

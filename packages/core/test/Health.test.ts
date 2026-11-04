@@ -49,6 +49,17 @@ describe("health messages", () => {
     })
     expect(JSON.parse(offlinePayload("shutdown"))).toEqual({ status: "offline", reason: "shutdown" })
   })
+
+  it("carries the host's sample once there is one", () => {
+    const host = { memoryBytes: 1e8, eventLoopLagMs: 12, clockSteps: 1, temperatureC: 61.2, throttled: [] }
+    expect(JSON.parse(onlinePayload(makeHealthRegistry([]), 1, 10, host))).toEqual({
+      status: "online",
+      since: 1,
+      ts: 10,
+      devices: {},
+      host
+    })
+  })
 })
 
 describe("runHealthReporter", () => {

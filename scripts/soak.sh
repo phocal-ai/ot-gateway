@@ -35,6 +35,10 @@
 # - No outage ends within the last SOAK_DRAIN seconds (default 180 s /
 #   SOAK_SPEED, at least 60), so the run ends with the buffer drained.
 #
+# - SOAK_STRICT_HOST=1 (for a run on the target hardware) also fails the run when
+#   the event loop stalled for a second or more, or the host reported under-voltage,
+#   throttling or the soft temperature limit. The summary reports both either way.
+#
 # The run fails (exit 1) when the gateway exits or logs FATAL, when the last
 # health message does not show every device ok, when more than SOAK_MAX_BACKLOG
 # rows (default 1000) are still buffered when it stops, or when memory or open
@@ -224,7 +228,7 @@ sample() {
 check() {
   node -e '
     const fs = require("fs")
-    const [dir, maxRssGrowth, maxFdGrowth, maxBacklog, rowsText] = process.argv.slice(1)
+    const [dir, maxRssGrowth, maxFdGrowth, maxBacklog, rowsText, strictHost] = process.argv.slice(1)
     const failures = []
     const lines = []
     const count = (level) => fs.readFileSync(`${dir}/gateway.log`, "utf8").split("\n").filter((line) => line.includes(`] ${level} (`)).length
@@ -263,10 +267,27 @@ check() {
     else if (notOk.length > 0) failures.push(`not ok in the last health message: ${notOk.join(", ")}`)
     else lines.push(`health:   online, all ${config.devices.length} device(s) ok`)
 
+    // The machine: what the host monitor saw (gateway.log) and its last sample (the health message).
+    const host = health?.host
+    if (host !== undefined) {
+      const extra = [
+        host.temperatureC === undefined ? "" : `, ${host.temperatureC} °C`,
+        host.throttled === undefined ? "" : `, conditions now: ${host.throttled.join(",") || "none"}`
+      ].join("")
+      lines.push(`host:     ${Math.round(host.memoryBytes / 1e6)} MB, event loop max ${host.eventLoopLagMs} ms in the last minute, ${host.clockSteps} clock step(s)${extra}`)
+    }
+    const log = fs.readFileSync(`${dir}/gateway.log`, "utf8")
+    const stalls = log.split("\n").filter((line) => line.includes("event loop stalled")).length
+    const conditions = log.split("\n").filter((line) => line.includes("power or thermal condition")).length
+    lines.push(`machine:  ${stalls} event-loop stall(s), ${conditions} power or thermal warning(s)`)
+    // On real hardware (a Pi soak), either is a failure; under emulation or on a busy CI runner, stalls are expected.
+    if (strictHost === "1" && stalls > 0) failures.push(`the event loop stalled ${stalls} time(s)`)
+    if (strictHost === "1" && conditions > 0) failures.push("the host reported a power or thermal condition")
+
     lines.push(failures.length === 0 ? "verdict:  PASS" : `verdict:  FAIL\n${failures.map((failure) => `  - ${failure}`).join("\n")}`)
     fs.writeFileSync(`${dir}/verdict.txt`, lines.join("\n") + "\n")
     process.exit(failures.length === 0 ? 0 : 1)
-  ' "$dir" "${SOAK_MAX_RSS_GROWTH:-1.5}" "${SOAK_MAX_FD_GROWTH:-16}" "${SOAK_MAX_BACKLOG:-1000}" "$1"
+  ' "$dir" "${SOAK_MAX_RSS_GROWTH:-1.5}" "${SOAK_MAX_FD_GROWTH:-16}" "${SOAK_MAX_BACKLOG:-1000}" "$1" "${SOAK_STRICT_HOST:-0}"
 }
 cleanup() {
   stop_pid "$gateway" INT

@@ -13,7 +13,8 @@ const point = (
   writable: false,
   table,
   address,
-  dataType
+  dataType,
+  byteOrder: "ABCD"
 })
 
 const shape = (points: ReadonlyArray<ModbusPoint>, maxGap?: number) =>
@@ -63,6 +64,37 @@ describe("planReads", () => {
   it("lets overlapping points share registers", () => {
     const points = [point("whole", "holding", 10, "uint32"), point("low", "holding", 11, "uint16")]
     expect(shape(points)).toEqual([{ table: "holding", address: 10, quantity: 2, points: ["whole", "low"] }])
+  })
+})
+
+describe("device quirks", () => {
+  it("keeps reads within a device's lower limits", () => {
+    const registers = Array.from({ length: 40 }, (_, i) => point(`r${i}`, "holding", i, "uint16"))
+    const bits = Array.from({ length: 30 }, (_, i) => point(`b${i}`, "coil", i, "bool"))
+    const blocks = planReads([...registers, ...bits], { maxRegisters: 16, maxBits: 10 })
+    expect(blocks.filter((b) => b.table === "holding").map((b) => b.quantity)).toEqual([16, 16, 8])
+    expect(blocks.filter((b) => b.table === "coil").map((b) => b.quantity)).toEqual([10, 10, 10])
+    // A 32-bit value is never split across two reads.
+    const wide = planReads(
+      [point("x", "holding", 0, "uint16"), point("y", "holding", 1, "float32"), point("z", "holding", 3, "uint16")],
+      { maxRegisters: 2 }
+    )
+    expect(wide.map((b) => [b.address, b.quantity])).toEqual([
+      [0, 1],
+      [1, 2],
+      [3, 1]
+    ])
+  })
+
+  it("reads bits of one status register in one request, each its own point", () => {
+    const alarm = { ...point("alarm", "holding", 7, "bool"), bit: 3 }
+    const running = { ...point("running", "holding", 7, "bool"), bit: 0 }
+    const blocks = planReads([alarm, running])
+    expect(blocks.map((b) => [b.address, b.quantity, b.points.length])).toEqual([[7, 1, 2]])
+    // 0b1000: bit 3 set, bit 0 clear.
+    expect(valueFromRegisters(alarm, 7, [0b1000])).toBe(true)
+    expect(valueFromRegisters(running, 7, [0b1000])).toBe(false)
+    expect(valueFromRegisters({ ...point("top", "input", 0, "bool"), bit: 15 }, 0, [0x8000])).toBe(true)
   })
 })
 

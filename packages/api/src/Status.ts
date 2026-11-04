@@ -40,6 +40,30 @@ export const CommandStatus = Schema.Struct({
 })
 export type CommandStatus = typeof CommandStatus.Type
 
+/** The gateway process and its machine, from the last sample of the host monitor (every 15 s). */
+export const HostStatus = Schema.Struct({
+  version: Schema.String,
+  node: Schema.String,
+  /** Resident memory and V8 heap in use, in bytes. */
+  memoryBytes: Schema.Number,
+  heapBytes: Schema.Number,
+  /** Share of one CPU core since the previous sample, in percent. */
+  cpuPercent: Schema.Number,
+  /** The worst event-loop delay of the last minute, in ms. */
+  eventLoopLagMs: Schema.Struct({ p99: Schema.Number, max: Schema.Number }),
+  /** Wall-clock steps (NTP setting the time) since the gateway started. */
+  clockSteps: Schema.Number,
+  openFds: Schema.optionalKey(Schema.Number),
+  temperatureC: Schema.optionalKey(Schema.Number),
+  /** Raspberry Pi power and thermal conditions, now and since boot; absent off a Pi. */
+  throttled: Schema.optionalKey(
+    Schema.Struct({ now: Schema.Array(Schema.String), sinceBoot: Schema.Array(Schema.String) })
+  ),
+  /** Free space on the outbox's filesystem, in bytes. */
+  diskFreeBytes: Schema.optionalKey(Schema.Number)
+})
+export type HostStatus = typeof HostStatus.Type
+
 export const GatewayStatus = Schema.Struct({
   site: Schema.String,
   building: Schema.String,
@@ -50,6 +74,8 @@ export const GatewayStatus = Schema.Struct({
   broker: Schema.Struct({ url: Schema.String, connected: Schema.Boolean }),
   /** Absent without a `buffer` in the config. */
   buffer: Schema.optionalKey(Schema.Struct({ path: Schema.String, rows: Schema.Number })),
+  /** Absent until the host monitor's first sample. */
+  host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),
   /** The most recent commands, newest first. */
   commands: Schema.Array(CommandStatus)
