@@ -156,11 +156,11 @@ export interface ThrottlingSource {
  * 15 s samples is not missed. Neither on a machine that is not a Pi: the
  * reader gives `undefined`, and looks again at every read (a directory
  * listing), since a service can start before udev has loaded the sensor's
- * driver. `sysfs` and `pollMs` are for tests.
+ * driver. `sysfs` is for tests.
  */
 export const throttlingSource = Effect.fnUntraced(function* (
   fs: FileSystem.FileSystem,
-  options: { readonly sysfs?: string; readonly pollMs?: number } = {}
+  options: { readonly sysfs?: string } = {}
 ): Effect.fn.Return<ThrottlingSource, never, Scope.Scope> {
   const scope = yield* Effect.scope
   const sysfs = options.sysfs ?? "/sys"
@@ -173,7 +173,7 @@ export const throttlingSource = Effect.fnUntraced(function* (
   const latched = Effect.fnUntraced(function* (current: Effect.Effect<Throttling | undefined>) {
     const seenSinceRead = new Set<ThrottleCondition>()
     // Every read looks at the source itself; the poller covers the time between reads, from one interval on.
-    yield* Effect.sleep(options.pollMs ?? THROTTLE_POLL_MS).pipe(
+    yield* Effect.sleep(THROTTLE_POLL_MS).pipe(
       Effect.andThen(current),
       Effect.tap((polled) =>
         Effect.sync(() => {
