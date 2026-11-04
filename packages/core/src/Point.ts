@@ -120,8 +120,27 @@ export const ModbusPoint = Schema.Struct({
   table: Schema.Literals(["holding", "input", "coil", "discrete"]),
   address: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 65535 }))),
   dataType: DataType,
-  byteOrder: ByteOrder.pipe(Schema.withDecodingDefaultKey(Effect.succeed("ABCD")))
+  byteOrder: ByteOrder.pipe(Schema.withDecodingDefaultKey(Effect.succeed("ABCD"))),
+  /**
+   * One bit of a holding or input register, 0 (least significant) to 15:
+   * a status word's alarm flag, say. The point is true or false, so it needs
+   * `dataType: "bool"`, and it cannot be written: setting one bit means
+   * reading the register and writing it back, which could undo another
+   * change made to it in between.
+   */
+  bit: Schema.optionalKey(Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 15 }))))
 }).check(
+  Schema.makeFilter((point) => {
+    if (point.bit === undefined) return true
+    if (point.table !== "holding" && point.table !== "input") {
+      return {
+        path: ["bit"],
+        issue: "a bit is read from a holding or input register; coils and discrete inputs are bits already"
+      }
+    }
+    if (point.dataType !== "bool") return { path: ["dataType"], issue: 'a bit of a register is "bool"' }
+    return !point.writable || { path: ["writable"], issue: "a bit of a register cannot be written" }
+  }),
   Schema.makeFilter((point) => {
     if (point.table !== "holding" && point.table !== "input") return true
     const width = registerWidth(point.dataType)

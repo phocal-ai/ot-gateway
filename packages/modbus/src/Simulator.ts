@@ -51,6 +51,12 @@ export const setPointValue = (bank: RegisterBank, point: ModbusPoint, value: num
     case "holding":
     case "input": {
       const table = bank[point.table]
+      if (point.bit !== undefined) {
+        // One bit of a register: the others keep what other points set.
+        const current = table.get(point.address) ?? 0
+        table.set(point.address, bit ? current | (1 << point.bit) : current & ~(1 << point.bit))
+        return
+      }
       encodeValue(value, point.dataType, point.byteOrder).forEach((register, i) =>
         table.set(point.address + i, register)
       )

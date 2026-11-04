@@ -34,6 +34,9 @@ const device: ModbusDevice = {
   port: 502,
   unitId: 1,
   pollIntervalMs: 5_000,
+  requestGapMs: 0,
+  maxRegistersPerRead: 125,
+  maxBitsPerRead: 2000,
   points
 }
 
@@ -119,6 +122,10 @@ describe("Modbus writes", () => {
       address: 7,
       values: [0x0706, 0x0504, 0x0302, 0x0100]
     })
+    // One bit of a register would need a read-modify-write that could undo another change.
+    expect(writeRequestFor({ ...point("p", "holding", 7, "bool"), bit: 2 }, true)).toBe(
+      "a bit of a register cannot be written"
+    )
     // Beyond 2^53 a number is no longer exact: refused rather than written as a neighbour.
     expect(writeRequestFor(counter, 2 ** 60)).toBe(`${2 ** 60} does not fit a uint64`)
   })

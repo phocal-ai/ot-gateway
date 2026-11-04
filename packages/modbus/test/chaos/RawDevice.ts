@@ -98,6 +98,9 @@ export const deviceOn = (port: number, points: ReadonlyArray<ModbusPoint>): Modb
   port,
   unitId: 1,
   pollIntervalMs: 1000,
+  requestGapMs: 0,
+  maxRegistersPerRead: 125,
+  maxBitsPerRead: 2000,
   points
 })
 
