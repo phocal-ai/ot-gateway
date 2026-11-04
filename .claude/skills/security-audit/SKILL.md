@@ -1,11 +1,13 @@
 ---
 name: security-audit
-description: Security audit of OT Gateway with Cloudflare's security-audit workflow (vendored, pinned). Use for "/security-audit", "security audit", "find vulnerabilities", "pen-test the code", a full or scoped security review, or a security question about the gateway. Runs source-only; findings stay outside the repository.
+description: Security audit of OT Gateway with Cloudflare's security-audit workflow (vendored, pinned). Use for "/security-audit", "security audit", "find vulnerabilities", "pen-test the code", a full or scoped security audit, or a security question about the gateway (answered in guidance mode). Runs source-only; findings stay outside the repository.
 ---
 
 The workflow is Cloudflare's [security-audit-skill](https://github.com/cloudflare/security-audit-skill), vendored as a read-only subtree in `repos/security-audit-skill/` (see CLAUDE.md, "Reference repos"). Read `repos/security-audit-skill/skills/security-audit/SKILL.md` in full and follow it. Its **skill directory** is that file's absolute directory: its companion files, `report-schema.json` and the two validators (`node <skill dir>/validate-coverage-ledger.cjs`, `node <skill dir>/validate-findings.cjs`) live there. Never edit the vendored files.
 
 What follows is specific to OT Gateway and wins where it is stricter than the workflow.
+
+The workflow's operating modes still apply: a security question gets an answer in guidance mode (no output directory, no budget). A full audit runs only when someone explicitly asks for an audit.
 
 ## Disclosure
 
@@ -22,7 +24,7 @@ The repository is public, and so is everything the `Health` workflow writes. Unt
 
 ## Budget
 
-The stack runs on a Claude subscription with a weekly usage limit (it was hit on 2026-11-03), so every run has an agent budget in `run-metadata.json`. Without other instructions, propose the `quick` profile with a budget of 25 agent invocations, and say what that leaves uncovered. Count every reconnaissance agent, hunter, critic and verifier.
+The stack runs on a Claude subscription with a weekly usage limit, so every run has an agent budget in `run-metadata.json`. Without other instructions, propose the `quick` profile with a budget of 25 agent invocations, and say what that leaves uncovered. Count every reconnaissance agent, hunter, critic and verifier.
 
 ## Where to look first
 
