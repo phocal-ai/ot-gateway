@@ -1,0 +1,31 @@
+# The gateway as a container, for a Raspberry Pi or any Linux edge box with Docker (amd64 or arm64).
+#
+#   sudo install -d -m 755 /etc/plenum /var/lib/plenum && sudo chown 1000:1000 /var/lib/plenum
+#   sudo install -m 644 plenum.json /etc/plenum/gateway.json        # buffer.path under /var/lib/plenum
+#   sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env
+#   docker compose -f packaging/compose.yaml up -d
+#
+# Upgrade with PLENUM_TAG=<new tag> docker compose -f packaging/compose.yaml up -d, and go back the same way.
+# docs/operations.md has the rest: logs, backups and what to watch.
+services:
+  gateway:
+    # A release tag, not latest: an upgrade is a decision, and going back is setting the old tag again.
+    image: ghcr.io/phocal-ai/plenum-gateway:${PLENUM_TAG:-v0.4.0}
+    container_name: plenum
+    # BACnet discovery and change-of-value need the building network's broadcasts, which a bridge network drops.
+    network_mode: host
+    restart: unless-stopped
+    # Time to flush the outbox and say goodbye to the broker before the container is killed.
+    stop_grace_period: 30s
+    volumes:
+      - /etc/plenum:/etc/plenum:ro
+      - /var/lib/plenum:/var/lib/plenum
+    # Docker keeps container logs forever by default, on the SD card. Three files of 10 MB at most,
+    # and the gateway logs transitions, not states, so that is days to weeks of history.
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+        max-file: "3"
+    # A bounded heap: a leak shows as a restart and a metric, not as a Pi that swaps until it stops answering.
+    mem_limit: 768m

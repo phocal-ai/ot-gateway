@@ -18,7 +18,7 @@
  *   the response arrived is sent once more on a new connection. Devices that
  *   close the connection after every response depend on this.
  */
-import { describeSocketError, driverConnects, driverRequests, monotonicMillis } from "@plenum/core"
+import { describeSocketError, driverConnects, driverRequests, monotonicMillis, timeRequest } from "@plenum/core"
 import { Deferred, Duration, Effect, Exit, Metric, Schema, Scope, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import {
@@ -287,7 +287,8 @@ export const makeModbusClient = Effect.fn("makeModbusClient")(function* (
       const wait = lastEnded + requestGapMillis - (yield* monotonicMillis)
       if (wait > 0) yield* Effect.sleep(Duration.millis(wait))
     }).pipe(
-      Effect.andThen(send(quantity, encode, resend)),
+      // Time from sending (connecting, if need be) to the answer: not the gap or the wait for the lock.
+      Effect.andThen(timeRequest(send(quantity, encode, resend))),
       Effect.flatMap(decode),
       Effect.tap(() => countRequest("ok")),
       Effect.catchTags({

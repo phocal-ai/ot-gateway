@@ -68,3 +68,15 @@ export const ago = (then: number | undefined, now: number) => {
   if (seconds < 86_400) return `${Math.round(seconds / 3600)} h ago`
   return `${Math.round(seconds / 86_400)} d ago`
 }
+
+/** Bytes as people read them: 312 MB, 1.4 GB. */
+export const formatBytes = (bytes: number) => {
+  const units = ["B", "KB", "MB", "GB", "TB"]
+  let value = bytes
+  let unit = 0
+  while (value >= 1000 && unit < units.length - 1) {
+    value /= 1000
+    unit++
+  }
+  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}

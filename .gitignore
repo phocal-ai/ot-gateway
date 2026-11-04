@@ -9,6 +9,8 @@ coverage/
 .env.*
 !.env.example
 .DS_Store
+# Written by the container build and packaging/install.sh
+/VERSION
 
 # Local MCP config (copy from .mcp.json.example)
 .mcp.json

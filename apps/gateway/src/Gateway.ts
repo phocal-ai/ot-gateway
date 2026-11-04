@@ -33,6 +33,7 @@ import { makeSimulatorDriver } from "@plenum/simulator"
 import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { makeStatusState, serveStatus, type StatusState } from "./Status.ts"
 import { traceSampleRatio } from "./Telemetry.ts"
 
@@ -43,6 +44,10 @@ export interface GatewayOptions {
   readonly buffer?: BufferedPublisherOptions
   /** Told about every message the publisher accepted (stored or sent), after it did. */
   readonly onAccepted?: (topic: string, payload: string, options: PublishOptions | undefined) => void
+  /** Watch the process and the machine through these (`liveHostSources`); without them, nothing is sampled. */
+  readonly host?: HostSources
+  /** The gateway's version, for telemetry. */
+  readonly version?: string
 }
 
 /**
@@ -150,7 +155,8 @@ const runDevices = Effect.fn("runGateway")(function* (
   health: GatewayHealth,
   network: Network | undefined,
   commands: Commands,
-  status: StatusState | undefined
+  status: StatusState | undefined,
+  host: HostMonitor | undefined
 ) {
   const sampleRatio = yield* traceSampleRatio
   yield* Effect.log(`Plenum starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
@@ -176,6 +182,7 @@ const runDevices = Effect.fn("runGateway")(function* (
           { deviceId: device.id, health: health.registry }
         )
       ),
+      ...(host === undefined ? [] : [keepRunning("host monitor", host.run)]),
       // A command at a time per device, each with its own deadline; devices do not wait for each other.
       ...(commands.routing === undefined ? [] : [keepRunning("command guard", commands.routing.run)])
     ],
@@ -231,12 +238,26 @@ const northbound = (
 export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig, options: GatewayOptions = {}) {
   const registry = makeHealthRegistry(config.devices.map((device) => device.id))
   const startedAt = yield* Clock.currentTimeMillis
+  const host =
+    options.host === undefined
+      ? undefined
+      : yield* makeHostMonitor(options.host, {
+          version: options.version ?? "unknown",
+          ...(config.buffer === undefined ? {} : { bufferPath: config.buffer.path })
+        })
+  const latestHost = () => host?.latest()
   const health: GatewayHealth = {
     topic: healthTopic(config.site, config.building, config.id),
     registry,
-    online: Effect.map(Clock.currentTimeMillis, (now) => onlinePayload(registry, startedAt, now))
+    online: Effect.map(Clock.currentTimeMillis, (now) => {
+      const snapshot = latestHost()
+      return onlinePayload(registry, startedAt, now, snapshot === undefined ? undefined : hostHealth(snapshot))
+    })
   }
-  const status = config.status === undefined ? undefined : makeStatusState(config, registry, startedAt)
+  const status =
+    config.status === undefined
+      ? undefined
+      : makeStatusState(config, registry, startedAt, { latest: latestHost, version: options.version ?? "unknown" })
   const drivers = makeDriverRegistry()
   const clock = yield* Clock.clockWith(Effect.succeed)
   const guard = makeCommandGuard({
@@ -253,7 +274,7 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     drivers,
     routing: writable ? yield* makeCommandRouting(config, guard.handle) : undefined
   }
-  return yield* runDevices(config, health, options.network, commands, status).pipe(
+  return yield* runDevices(config, health, options.network, commands, status, host).pipe(
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.

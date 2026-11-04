@@ -92,7 +92,15 @@ node apps/gateway/src/main.ts --discover path/to/gateway.json
 
 [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
 
-On a Raspberry Pi (64-bit OS) or any Linux machine with systemd and Node.js 22.18 or newer, from a checkout:
+The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/plenum-gateway`, amd64 and arm64, published for releases) for a Raspberry Pi on the 64-bit OS as much as for an industrial PC.
+
+```bash
+docker compose -f packaging/compose.yaml up -d
+```
+
+The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. Secrets go in `/etc/plenum/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env`. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`PLENUM_TAG=v… docker compose … up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page.
+
+On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout:
 
 ```bash
 sudo packaging/install.sh path/to/gateway.json
@@ -100,15 +108,7 @@ sudo packaging/install.sh path/to/gateway.json
 
 It installs the gateway to `/opt/plenum` with its production dependencies, creates the `plenum` user, validates the config into `/etc/plenum/gateway.json` (with the outbox in `/var/lib/plenum`), and starts the `plenum-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u plenum-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/plenum/gateway.env`. Build the status page first (`pnpm --filter @plenum/web build`, on any machine) and the script installs it too.
 
-Or as a container, for amd64 and arm64 (published for releases as `ghcr.io/phocal-ai/plenum-gateway`):
-
-```bash
-docker run -d --name plenum --network host --restart unless-stopped \
-  -v /etc/plenum:/etc/plenum:ro -v /var/lib/plenum:/var/lib/plenum \
-  ghcr.io/phocal-ai/plenum-gateway:latest
-```
-
-Host networking lets BACnet discovery hear broadcast I-Ams. The image reads `/etc/plenum/gateway.json`; point `buffer.path` under `/var/lib/plenum` so the outbox outlives the container. Secrets go in `/etc/plenum/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env`. The image includes the status page.
+Either way, the gateway watches the machine it runs on (memory, event-loop lag, temperature, Raspberry Pi under-voltage and throttling, disk, clock steps) and reports it on the status page, in the health message and in telemetry. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) is how to test it on a Pi before it goes into a building.
 
 The status page listens on `127.0.0.1` only, by default, and then answers only requests addressed to a loopback name, so a web page cannot reach it through DNS rebinding. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page is read-only, but it has no login.
 

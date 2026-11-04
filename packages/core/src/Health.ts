@@ -47,6 +47,24 @@ export const makeHealthRegistry = (deviceIds: ReadonlyArray<Slug>): HealthRegist
   }
 }
 
+/**
+ * The machine the gateway runs on, as the health message reports it. Fields
+ * the host cannot tell (no thermal zone, not a Raspberry Pi) are left out.
+ */
+export interface HostHealth {
+  /** Resident memory of the gateway process. */
+  readonly memoryBytes: number
+  /** The longest the event loop was late in the last minute. */
+  readonly eventLoopLagMs: number
+  /** Wall-clock steps (NTP setting the time) since the gateway started. */
+  readonly clockSteps: number
+  readonly temperatureC?: number
+  /** Power or thermal conditions the Raspberry Pi firmware reports right now; empty when there are none. */
+  readonly throttled?: ReadonlyArray<string>
+  /** Free space on the outbox's filesystem. */
+  readonly diskFreeBytes?: number
+}
+
 export interface OnlineMessage {
   readonly status: "online"
   /** Unix ms when the gateway started. */
@@ -54,6 +72,8 @@ export interface OnlineMessage {
   /** Unix ms when this message was written. */
   readonly ts: number
   readonly devices: Readonly<Record<string, DeviceHealth>>
+  /** Absent until the host monitor's first sample, and where the gateway runs without one. */
+  readonly host?: HostHealth
 }
 
 export interface OfflineMessage {
@@ -64,12 +84,13 @@ export interface OfflineMessage {
 
 export type HealthMessage = OnlineMessage | OfflineMessage
 
-export const onlinePayload = (registry: HealthRegistry, since: number, now: number): string =>
+export const onlinePayload = (registry: HealthRegistry, since: number, now: number, host?: HostHealth): string =>
   JSON.stringify({
     status: "online",
     since,
     ts: now,
-    devices: Object.fromEntries(registry.devices)
+    devices: Object.fromEntries(registry.devices),
+    ...(host === undefined ? {} : { host })
   } satisfies OnlineMessage)
 
 export const offlinePayload = (reason: OfflineMessage["reason"]): string =>

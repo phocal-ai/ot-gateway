@@ -45,7 +45,7 @@ Ask these in a single `AskUserQuestion`:
 3. **Where it will run:**
    - "This machine, for now"
    - "Raspberry Pi / Linux with systemd"
-   - "Docker"
+   - "Docker (recommended on a Pi or any edge box)"
 
 Then ask in plain text, in one message, only for what applies:
 
@@ -131,7 +131,7 @@ Do whichever the user chose in step 3:
 - **Docker:**
   - copy `plenum.json` to `/etc/plenum/gateway.json`, with `buffer.path` set to `/var/lib/plenum/buffer.sqlite`;
   - copy `plenum.env` to `/etc/plenum/gateway.env` readable by the container's user (uid 1000, `node`) and nobody else: `sudo install -m 600 -o 1000 -g 1000 plenum.env /etc/plenum/gateway.env`. Never make it world-readable to get the container started;
-  - give the `docker run` command from the README ("Running it for real"); the image includes the status page.
+  - with a yes from the user, start it with `docker compose -f packaging/compose.yaml up -d` (it pins a release tag, uses host networking for BACnet and caps Docker's logs); the image includes the status page. Check it with `docker logs plenum --tail 20`.
 - **This machine, for now:** give the one command to start it again: `node --env-file-if-exists=plenum.env apps/gateway/src/main.ts plenum.json`.
 
 The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>`. Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`.

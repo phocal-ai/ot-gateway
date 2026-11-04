@@ -12,7 +12,6 @@ import type { GatewayConfig } from "@plenum/core"
 import { Config, ConfigProvider, Effect, Layer } from "effect"
 import { FetchHttpClient, HttpClient } from "effect/http"
 import { Otlp, OtlpSerialization } from "effect/observability"
-import packageJson from "../package.json" with { type: "json" }
 
 export const serviceName = "plenum-gateway"
 
@@ -65,7 +64,8 @@ export const otlpHttpClient = Layer.effect(
   })
 ).pipe(Layer.provide(FetchHttpClient.layer))
 
-export const telemetryLayer = (config: GatewayConfig) =>
+/** `version` is the build (`readVersion`), exported as `service.version`. */
+export const telemetryLayer = (config: GatewayConfig, version: string) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const envAttributes = yield* Config.String("OTEL_RESOURCE_ATTRIBUTES").pipe(Config.withDefault(""))
@@ -73,7 +73,7 @@ export const telemetryLayer = (config: GatewayConfig) =>
       return Otlp.layerFromConfig({
         resource: {
           serviceName: envServiceName,
-          serviceVersion: packageJson.version,
+          serviceVersion: version,
           attributes: {
             "plenum.site": config.site,
             "plenum.building": config.building,

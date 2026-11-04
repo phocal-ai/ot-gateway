@@ -22,6 +22,7 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 
 - `dev` is the integration branch. Branch off `dev` and open pull requests against `dev`.
 - `main` holds releases only. It moves forward when `dev` is merged into it for a release, and each release is tagged on `main` (`vX.Y.Z`).
+- A release also moves the default tag in `packaging/compose.yaml` (`PLENUM_TAG`) and the `docker run` example in `docs/operations.md` to the new tag.
 - Urgent fixes for a release branch off `main`, merge back into `main`, then get merged into `dev` so the two don't drift.
 - Name working branches by intent, e.g. `feat/modbus-batching`, `fix/mqtt-reconnect`, `docs/topics`.
 
@@ -55,10 +56,10 @@ That packs roughly a day of outages and renewals into half an hour: every interv
 
 Until a Pi is on the bench, the `Soak` workflow also runs the soak inside the arm64 container image under QEMU, held to two cores and 1 GB: it shows the ARM build and the memory and CPU headroom, not the SD card or heat.
 
-Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi:
+Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi with `SOAK_STRICT_HOST=1`, which also fails on an event-loop stall or a power or thermal condition. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the whole procedure and the pass criteria:
 
 ```bash
-scripts/soak.sh 24h
+SOAK_STRICT_HOST=1 scripts/soak.sh 24h
 ```
 
 ## Reporting device quirks
