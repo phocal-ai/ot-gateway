@@ -21,6 +21,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
+      - run: scripts/test-health-gh.sh
       - name: Build the status page
         run: pnpm --filter @ot-gateway/web build
         env:

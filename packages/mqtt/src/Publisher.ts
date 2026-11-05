@@ -6,7 +6,14 @@
  * down at startup delays publishing but does not stop the gateway.
  */
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { type MqttSettings, type Network, offlinePayload, Publisher, PublishError } from "@ot-gateway/core"
+import {
+  type MqttSettings,
+  mqttPasswordWarning,
+  type Network,
+  offlinePayload,
+  Publisher,
+  PublishError
+} from "@ot-gateway/core"
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"
 import { makeMqttClient, MqttPublishError } from "./Client.ts"
@@ -27,7 +34,7 @@ export interface BrokerAddress {
 export const parseBrokerUrl = (url: string): Effect.Effect<BrokerAddress, MqttSettingsError> =>
   Effect.gen(function* () {
     const parsed = URL.parse(url)
-    if (parsed === null) return yield* new MqttSettingsError({ message: `mqtt.url is not a URL: ${url}` })
+    if (parsed === null) return yield* new MqttSettingsError({ message: "mqtt.url is not a URL" })
     if (parsed.protocol !== "mqtt:" && parsed.protocol !== "mqtts:") {
       return yield* new MqttSettingsError({
         message: `mqtt.url must start with mqtt:// or mqtts://, got ${parsed.protocol}//`
@@ -99,6 +106,13 @@ export const MqttPublisher = (
     Effect.gen(function* () {
       const address = yield* parseBrokerUrl(settings.url)
       const password = settings.passwordEnv === undefined ? undefined : yield* Config.Redacted(settings.passwordEnv)
+      // Once per layer, not per connection: reconnects happen inside the client.
+      const passwordWarning = mqttPasswordWarning(settings)
+      if (passwordWarning !== undefined) {
+        yield* Effect.logWarning(passwordWarning).pipe(
+          Effect.annotateLogs({ broker: `${address.host}:${address.port}`, tls: address.tls })
+        )
+      }
       const openTimeout = options.connectTimeout ?? "10 seconds"
       const socket = options.network
         ? yield* options.network.tcp({ host: address.host, port: address.port, openTimeout })
