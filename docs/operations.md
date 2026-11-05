@@ -8,7 +8,7 @@ The fastest way to a first config is `/setup` in Claude Code (README, "Set it up
 
 ### Docker Compose (recommended)
 
-One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much as an industrial PC: `ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for every release. On a Pi it needs the 64-bit Raspberry Pi OS; there is no 32-bit ARM image. It reads `/etc/ot-gateway/gateway.json` and runs as uid 1000. Set `buffer.path` to `/var/lib/ot-gateway/buffer.sqlite` so the outbox outlives the container.
+One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much as an industrial PC: `ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for every release. On a Pi it needs the 64-bit Raspberry Pi OS; there is no 32-bit ARM image. It reads `/etc/ot-gateway/gateway.json` and runs as uid 1000. Set `buffer.path` to `/var/lib/ot-gateway/buffer.sqlite` and `history.path` to `/var/lib/ot-gateway/history.sqlite` so the outbox and the history outlive the container.
 
 ```bash
 sudo install -d -m 755 /etc/ot-gateway && sudo install -d -o 1000 -g 1000 /var/lib/ot-gateway
@@ -196,6 +196,15 @@ sudo packaging/install.sh /etc/ot-gateway/gateway.json
 - **A corrupt file** is moved aside (`buffer.sqlite.corrupt-<time>`) and a new one started. Its rows were values the broker never got; delete it once you no longer need them.
 - **Deleted while running:** the gateway restores it from its open connection, rows included.
 - **Rows waiting** is on the status page and in `ot_gateway_buffer_rows`.
+
+## The history
+
+`history.path` holds every read of the last day and per-minute rollups for `retentionDays` (7), for the status page's charts. Unlike the outbox it is a history: nothing in it is waiting to be sent, so losing it loses only the charts.
+
+- **Size** stays bounded by retention: about 150 MB for a day of 200 points read every 5 s, plus 15 MB per week of rollups. Old rows are deleted every hour and the file returns the space.
+- **Disk full:** up to 20,000 reads wait in memory; beyond that the oldest are dropped and counted in `ot_gateway_history_dropped`. Reading and publishing go on regardless.
+- **A corrupt file** is moved aside (`history.sqlite.corrupt-<time>`) and a new one started; delete the old one.
+- **Cannot be opened at all** (a read-only directory, say): the gateway runs without history, logs why once and sets `ot_gateway_history_disabled` to 1.
 
 To move a gateway to new hardware with values still waiting, stop the service and copy the file (and any `-wal` file next to it) to the same path on the new one.
 

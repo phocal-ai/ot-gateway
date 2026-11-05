@@ -258,6 +258,18 @@ export const BufferSettings = Schema.Struct({
 })
 export type BufferSettings = typeof BufferSettings.Type
 
+/** The on-device history of every read: raw for the last day, per minute for `retentionDays`. */
+export const HistorySettings = Schema.Struct({
+  /** SQLite file of the history; its own file, apart from the outbox. */
+  path: Schema.String,
+  /** Days of per-minute minimum, maximum and average kept (default 7). */
+  retentionDays: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 30 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(7))
+  )
+})
+export type HistorySettings = typeof HistorySettings.Type
+
 /** The gateway's own BACnet/IP endpoint, shared by every `bacnet-ip` device. */
 export const BacnetSettings = Schema.Struct({
   /**
@@ -379,6 +391,7 @@ export const GatewayConfig = Schema.Struct({
   ),
   mqtt: MqttSettings,
   buffer: Schema.optionalKey(BufferSettings),
+  history: Schema.optionalKey(HistorySettings),
   status: Schema.optionalKey(StatusSettings),
   bacnet: BacnetSettings.pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
   devices: Schema.Array(Device).pipe(Schema.check(uniqueIds("device")))

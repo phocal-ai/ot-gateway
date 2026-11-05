@@ -45,6 +45,7 @@ COPY packages/modbus/package.json packages/modbus/
 COPY packages/mqtt/package.json packages/mqtt/
 COPY packages/bacnet/package.json packages/bacnet/
 COPY packages/buffer/package.json packages/buffer/
+COPY packages/history/package.json packages/history/
 # Runtime dependencies of the gateway and the packages it uses; no dev tools, no lifecycle scripts.
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@ot-gateway/gateway..."
 

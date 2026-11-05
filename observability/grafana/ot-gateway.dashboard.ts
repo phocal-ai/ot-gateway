@@ -516,6 +516,48 @@ timeseries(
 )
 y += 8
 
+row("History")
+timeseries(
+  "History writes",
+  [
+    {
+      expr: `sum(increase(ot_gateway_history_written_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "written"
+    },
+    {
+      expr: `sum(increase(ot_gateway_history_dropped_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "dropped"
+    },
+    {
+      expr: `sum by (operation) (increase(ot_gateway_history_failures_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "failed: {{operation}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    description:
+      "Reads written to the on-device history (history.path), every 5 s in one batch. Failed writes keep up to 20,000 reads in memory; past that the oldest are dropped. Only the status page's charts lose them: reading and publishing go on."
+  }
+)
+timeseries(
+  "Running without history",
+  [
+    {
+      expr: `max by (service_instance_id) (ot_gateway_history_disabled{${sel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "bool_yes_no",
+    x: 12,
+    w: 12,
+    description: "1 while the history file could not be opened at start, so no reads are kept. The error log says why."
+  }
+)
+y += 8
+
 row("Freshness")
 staleness(
   "Device freshness",

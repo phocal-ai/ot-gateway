@@ -24,6 +24,7 @@ The top level of the document.
 | `healthIntervalMs` | 1000–3600000 | 60000    | How often the retained health message is refreshed.                                                         |
 | `mqtt`             | object       | required | The broker; see [mqtt](#mqtt).                                                                              |
 | `buffer`           | object       | none     | Store-and-forward outbox; see [buffer](#buffer). Without it, values read while the broker is down are lost. |
+| `history`          | object       | none     | Every read kept on the device; see [history](#history). The status page charts it.                          |
 | `status`           | object       | none     | The local status page; see [status](#status). Without it, nothing is served.                                |
 | `bacnet`           | object       | defaults | The gateway's BACnet/IP endpoint, shared by every BACnet device; see [bacnet](#bacnet).                     |
 | `devices`          | array        | required | Modbus TCP, BACnet/IP and simulated devices, ids unique; may be empty.                                      |
@@ -49,6 +50,19 @@ The session is clean: nothing sent while the gateway was offline is delivered la
 | --------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------- |
 | `path`    | string | required | The SQLite file. Its directory is created if missing. Put it on persistent storage (`/var/lib/ot-gateway` under systemd). |
 | `maxRows` | ≥ 1    | 1000000  | Rows kept while the broker is away; beyond that the oldest are dropped and counted in `ot_gateway_buffer_dropped`.        |
+
+## history
+
+Every read, whatever the point's publish mode, kept on the gateway for the status page's charts and `GET /api/history`. It does not go to the broker.
+
+| Key             | Type   | Default  | Meaning                                                                                                                              |
+| --------------- | ------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `path`          | string | required | The SQLite file, apart from the buffer's. Its directory is created if missing. Put it on persistent storage (`/var/lib/ot-gateway`). |
+| `retentionDays` | 1–30   | 7        | Days of per-minute minimum, maximum and average kept. Every single read is kept for the last day.                                    |
+
+Reads are written in batches every 5 s. Size it at about 40 bytes per read for the last day plus 50 bytes per point and minute: 200 points read every 5 s take about 150 MB for the day of reads and 15 MB per week of minutes. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
+
+`GET /api/history?device=ahu-1&point=supply-air-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count }`; `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Within the last day the buckets come from every read, beyond it from the minutes.
 
 ## status
 

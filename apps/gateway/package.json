@@ -21,6 +21,7 @@
     "@ot-gateway/bacnet": "workspace:*",
     "@ot-gateway/buffer": "workspace:*",
     "@ot-gateway/core": "workspace:*",
+    "@ot-gateway/history": "workspace:*",
     "@ot-gateway/modbus": "workspace:*",
     "@ot-gateway/mqtt": "workspace:*",
     "@ot-gateway/simulator": "workspace:*",

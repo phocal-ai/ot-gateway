@@ -10,6 +10,7 @@ import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
 import { defaultCycleTimeoutMs } from "./Config.ts"
 import { type DriverError, PipelineTimeout, type PublishError } from "./Errors.ts"
+import type { HistorySink } from "./History.ts"
 import { monotonicMillis } from "./Monotonic.ts"
 import {
   addReading,
@@ -56,6 +57,8 @@ export interface DeviceContext {
   readonly cycleTimeoutMs?: number
   /** How the device's points go out unless a point says otherwise (default: every read). */
   readonly publish?: Publish
+  /** Where every read is kept on the device, if anywhere. */
+  readonly history?: HistorySink
 }
 
 /** Payload of a value: on a read, on a change, or the latest once per interval. */
@@ -265,6 +268,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     if (nonFinitePoints.delete(point.id)) {
       yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
     }
+    ctx.history?.record(driver.deviceId, point.id, value, reading.timestamp)
     const message: ValueMessage = {
       value,
       ts: reading.timestamp,

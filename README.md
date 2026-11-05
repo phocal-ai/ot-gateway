@@ -152,6 +152,7 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
   "id": "main",
   "mqtt": { "url": "mqtts://broker.local:8883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/ot-gateway/buffer.sqlite" },
+  "history": { "path": "/var/lib/ot-gateway/history.sqlite" },
   "devices": [
     {
       "protocol": "modbus-tcp",
@@ -191,6 +192,8 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
 ```
 
 `publish` decides what goes out, apart from how often the device is read. Without it, every read is sent. `{ "mode": "sample", "intervalMs": 60000 }` sends the latest value once a minute; `{ "mode": "aggregate", "intervalMs": 900000 }` sends minimum, maximum, time-weighted average, last value and count for each 15 minutes, in windows aligned to the clock; `{ "mode": "change", "deadband": 0.2, "maxSilenceMs": 3600000 }` sends when the value moves at least 0.2 and at least hourly. A point's own `publish` or `deadband` (short for change mode) overrides its device's. Above, the meter sends 15-minute aggregates and the air handler's temperature its changes. See [publish](docs/configuration.md#publish), with what each mode costs in traffic and buffer.
+
+With `history`, every read is kept on the gateway, each one for a day and per minute for `retentionDays` (7), for the status page's charts and `GET /api/history`. See [history](docs/configuration.md#history).
 
 With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@ot-gateway/buffer`](packages/buffer).
 
