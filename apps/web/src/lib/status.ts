@@ -2,7 +2,7 @@
  * The gateway's status, through the typed client for `OtGatewayApi`: the same
  * schema the gateway encodes with decodes the answer here.
  */
-import { type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
+import { type DeviceStatus, type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
 import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -73,22 +73,59 @@ export const formatValue = (value: number | boolean | undefined) => {
   return Math.abs(value) >= 1000 || Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2)
 }
 
-/**
- * The gateway's clock now: its `now` from the last answer, moved on by the time since that answer arrived. Ages
- * then count up every second between polls, and keep counting while the gateway does not answer, while a browser
- * whose own clock is off still shows them right.
- */
-export const gatewayNow = (serverNow: number, receivedAt: number, clientNow: number) =>
-  serverNow + Math.max(0, clientNow - receivedAt)
+/** A device counts as late once this many poll intervals pass without a read, and never sooner than `LATE_MIN_MS`. */
+const LATE_INTERVALS = 3
+const LATE_MIN_MS = 15_000
 
-/** "12 s ago", "4 min ago", from two Unix ms timestamps. */
-export const ago = (then: number | undefined, now: number) => {
+/**
+ * How fresh a device is, as a state rather than a counting number: `live` while it is read on schedule, `late`
+ * when no read came for a few intervals although the gateway has not marked it failing (a stalled cycle), and
+ * `failing` or `starting` as the gateway says.
+ */
+export type Freshness =
+  | { readonly _tag: "live" }
+  | { readonly _tag: "starting" }
+  | { readonly _tag: "late"; readonly lastSuccess: number | undefined }
+  | { readonly _tag: "failing"; readonly reason: string; readonly lastSuccess: number | undefined }
+
+export const freshness = (device: DeviceStatus, now: number): Freshness => {
+  if (device.status === "failing")
+    return { _tag: "failing", reason: device.reason ?? "failing", lastSuccess: device.lastSuccess }
+  if (device.status === "starting") return { _tag: "starting" }
+  const lateAfter = Math.max(LATE_INTERVALS * device.pollIntervalMs, LATE_MIN_MS)
+  return device.lastSuccess !== undefined && now - device.lastSuccess <= lateAfter
+    ? { _tag: "live" }
+    : { _tag: "late", lastSuccess: device.lastSuccess }
+}
+
+/** "every 5 s", "every 2 min": how often a device is read. */
+export const every = (intervalMs: number) => {
+  const seconds = intervalMs / 1000
+  if (seconds < 60) return `every ${Number(seconds.toFixed(1))} s`
+  if (seconds < 3600) return `every ${Number((seconds / 60).toFixed(1))} min`
+  return `every ${Number((seconds / 3600).toFixed(1))} h`
+}
+
+/**
+ * Since when, in steps that don't count every second: "under a minute", "4 min", "3 h", "2 d". For a device that
+ * stopped answering, where the seconds don't matter and a ticking number would only distract.
+ */
+export const since = (then: number | undefined, now: number) => {
   if (then === undefined) return "never"
-  const seconds = Math.max(0, Math.round((now - then) / 1000))
-  if (seconds < 60) return `${seconds} s ago`
-  if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`
-  if (seconds < 86_400) return `${Math.round(seconds / 3600)} h ago`
-  return `${Math.round(seconds / 86_400)} d ago`
+  const seconds = Math.max(0, (now - then) / 1000)
+  if (seconds < 60) return "under a minute"
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} min`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)} h`
+  return `${Math.floor(seconds / 86_400)} d`
+}
+
+/** A moment as a clock time (14:02:31), with the date when it is not today. Unlike "12 s ago", it does not change while you look. */
+export const clockTime = (at: number, now: number) => {
+  const moment = new Date(at)
+  const time = moment.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  return moment.toDateString() === new Date(now).toDateString()
+    ? time
+    : `${moment.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`
 }
 
 /** Bytes as people read them: 312 MB, 1.4 GB. */

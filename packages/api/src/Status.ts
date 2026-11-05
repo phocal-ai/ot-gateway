@@ -23,6 +23,8 @@ export const DeviceStatus = Schema.Struct({
   id: Schema.String,
   protocol: Schema.Literals(["modbus-tcp", "bacnet-ip", "simulator"]),
   status: Schema.Literals(["starting", "ok", "failing"]),
+  /** How often the gateway reads it, from the config. */
+  pollIntervalMs: Schema.Number,
   /** Why the device is failing (the health topic's reason). */
   reason: Schema.optionalKey(Schema.String),
   lastSuccess: Schema.optionalKey(Schema.Number),
