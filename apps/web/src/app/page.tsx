@@ -62,7 +62,12 @@ const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
           <TableRow>
             <TableHead>Point</TableHead>
             <TableHead className="text-right">Value</TableHead>
-            <TableHead className="text-right">Updated</TableHead>
+            <TableHead
+              className="text-right"
+              title="When the value last changed enough to be sent to the broker. The device itself is read on every cycle (last read, above)."
+            >
+              Changed
+            </TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -245,7 +250,7 @@ const MessageTable = ({ now, prefix }: { readonly now: number; readonly prefix: 
             <TableHead>Topic</TableHead>
             <TableHead>Latest payload</TableHead>
             <TableHead className="text-right">Messages</TableHead>
-            <TableHead className="text-right">Latest</TableHead>
+            <TableHead className="text-right">Last sent</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
