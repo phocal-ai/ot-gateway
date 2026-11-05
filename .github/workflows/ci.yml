@@ -12,6 +12,14 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      # Turborepo remote cache on Vercel (team wimluks-projects). Without the secret, as in a fork's
+      # pull request, turbo runs everything with no remote cache. Pull requests only read it; pushes to
+      # dev and main write it, so a branch cannot seed a result that other runs trust.
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: wimluks-projects
+      TURBO_CACHE: ${{ github.event_name == 'pull_request' && 'local:rw,remote:r' || 'local:rw,remote:rw' }}
+      TURBO_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6

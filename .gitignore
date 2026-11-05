@@ -28,3 +28,5 @@ next-env.d.ts
 # apps/site: docs pages generated from docs/ and the README, and Fumadocs' generated collections
 /apps/site/content/
 /apps/site/.source/
+# Turborepo
+.turbo
