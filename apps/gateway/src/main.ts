@@ -20,12 +20,13 @@
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
-import { type GatewayConfig, mqttPasswordWarning, parseConfig } from "@ot-gateway/core"
-import { Console, Effect, FileSystem } from "effect"
+import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
+import { Cause, Console, Effect, Result } from "effect"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { discover } from "./Discover.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
+import { loadConfig } from "./LoadConfig.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 import { telemetryLayer } from "./Telemetry.ts"
 import { readVersion } from "./Version.ts"
@@ -58,12 +59,25 @@ const describe = (config: GatewayConfig) => {
 // listens on the first address. Two seconds per address, well inside the 10 s connect timeout.
 setDefaultAutoSelectFamilyAttemptTimeout(2000)
 
+/**
+ * How a failed run ends. An expected failure (a config mistake, a port in use) is logged as its message and
+ * nothing else: a stack trace into Effect's internals does not help anyone fix a config. A defect, which is a
+ * bug, is logged with its whole cause. Both go through the logger, as the runtime's own report did, and the
+ * exit code is 1 either way.
+ */
+const reportFailure = <E extends { readonly message: string }>(cause: Cause.Cause<E>) => {
+  if (Cause.hasInterruptsOnly(cause)) return Effect.void
+  const error = Cause.findError(cause)
+  return Result.isSuccess(error) && !Cause.hasDies(cause)
+    ? Effect.logError(error.success.message)
+    : Effect.logError(cause)
+}
+
 const program = Effect.gen(function* () {
   const args = process.argv.slice(2)
   const flags = new Set(["--check", "--discover"])
   const path = args.find((arg) => !flags.has(arg)) ?? "ot-gateway.json"
-  const fs = yield* FileSystem.FileSystem
-  const config = yield* parseConfig(yield* fs.readFileString(path))
+  const config = yield* loadConfig(path)
   if (args.includes("--check")) return yield* Console.log(describe(config))
   if (args.includes("--discover")) return yield* discover(config)
   const version = yield* readVersion
@@ -72,4 +86,8 @@ const program = Effect.gen(function* () {
   )
 })
 
-program.pipe(Effect.provide(NodeServices.layer), NodeRuntime.runMain({ teardown: gatewayTeardown }))
+program.pipe(
+  Effect.tapCause(reportFailure),
+  Effect.provide(NodeServices.layer),
+  NodeRuntime.runMain({ teardown: gatewayTeardown, disableErrorReporting: true })
+)

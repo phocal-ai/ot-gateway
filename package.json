@@ -9,7 +9,7 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "check": "pnpm format:check && pnpm lint && turbo run typecheck test",
-    "gateway": "pnpm --filter @ot-gateway/gateway start",
+    "gateway": "turbo run build --filter=@ot-gateway/web --output-logs=errors-only && pnpm --filter @ot-gateway/gateway start",
     "bench": "pnpm --filter @ot-gateway/gateway bench",
     "lint": "oxlint --type-aware --disable-nested-config --deny-warnings",
     "lint:fix": "oxlint --type-aware --disable-nested-config --fix",

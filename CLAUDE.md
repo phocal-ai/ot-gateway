@@ -15,7 +15,7 @@ pnpm format           # oxfmt --write .
 pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
 pnpm test
-pnpm gateway          # run apps/gateway with examples/gateway.json
+pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json
 node apps/gateway/src/main.ts --check ot-gateway.json      # validate a config without connecting
 node apps/gateway/src/main.ts --discover ot-gateway.json   # find BACnet devices, print a draft of their config
 pnpm --filter @ot-gateway/core test   # one package
