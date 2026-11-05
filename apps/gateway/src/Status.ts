@@ -5,7 +5,7 @@
  * reach devices only through MQTT and the command guard.
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
-import { type CommandStatus, type DeviceStatus, type GatewayStatus, OtGatewayApi } from "@ot-gateway/api"
+import { type CommandStatus, type DeviceStatus, type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
 import type { HostSnapshot } from "./Host.ts"
 import {
   bufferRows,
@@ -24,6 +24,10 @@ import { fileURLToPath } from "node:url"
 /** Commands kept for the page, newest first. */
 const RECENT_COMMANDS = 50
 
+/** Topics whose latest message is kept for the page, and how much of each payload: bounded memory on a Pi. */
+const MAX_TOPICS = 2_000
+const MAX_PAYLOAD = 2_000
+
 /** Connections the server holds at once: a page polls with one; more is someone else's problem, not the gateway's memory. */
 const MAX_CONNECTIONS = 32
 
@@ -38,17 +42,23 @@ export const defaultWebRoot = fileURLToPath(new URL("../../web/out", import.meta
 
 export interface StatusState {
   /**
-   * Note a message the gateway is publishing; values (`site/building/device/point`)
-   * are kept, the rest ignored. Called before the publish, so the page shows
-   * what the devices read even while the broker is down.
+   * Note a message the gateway is publishing: the latest per topic under the
+   * site and building, for the messages view, and values
+   * (`site/building/device/point`) for the devices. Called before the publish,
+   * so the page shows what the devices read even while the broker is down.
    */
-  readonly recordPublish: (topic: string, payload: string) => void
+  readonly recordPublish: (
+    topic: string,
+    payload: string,
+    message: { readonly retained: boolean; readonly at: number }
+  ) => void
   readonly recordCommand: (
     at: number,
     command: { readonly device: string; readonly point: string },
     outcome: CommandOutcome
   ) => void
   readonly snapshot: Effect.Effect<GatewayStatus>
+  readonly messages: Effect.Effect<Messages>
 }
 
 /** Where the page's host section comes from: the host monitor's last sample, when there is a monitor. */
@@ -66,11 +76,17 @@ export const makeStatusState = (
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
   const payloads = new Map<string, string>()
+  const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number }>()
+  const droppedTopics = new Set<string>()
   const commands: Array<CommandStatus> = []
   const attributes = { site: config.site, building: config.building }
   return {
-    recordPublish: (topic, payload) => {
+    recordPublish: (topic, payload, message) => {
       if (!topic.startsWith(prefix)) return
+      const previous = latest.get(topic)
+      if (previous !== undefined || latest.size < MAX_TOPICS) {
+        latest.set(topic, { payload, retained: message.retained, at: message.at, count: (previous?.count ?? 0) + 1 })
+      } else if (droppedTopics.size < MAX_TOPICS) droppedTopics.add(topic)
       const rest = topic.slice(prefix.length)
       const slash = rest.indexOf("/")
       if (slash <= 0 || rest.indexOf("/", slash + 1) !== -1) return
@@ -127,7 +143,20 @@ export const makeStatusState = (
         devices,
         commands: [...commands]
       }
-    })
+    }),
+    messages: Effect.sync(() => ({
+      messages: [...latest.entries()]
+        .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+        .map(([topic, message]) => ({
+          topic,
+          payload: message.payload.slice(0, MAX_PAYLOAD),
+          truncated: message.payload.length > MAX_PAYLOAD,
+          retained: message.retained,
+          at: message.at,
+          count: message.count
+        })),
+      droppedTopics: droppedTopics.size
+    }))
   }
 }
 
@@ -143,7 +172,9 @@ export const serveStatus = (settings: StatusSettings, state: StatusState) =>
     const hasWeb = yield* fs.exists(`${webRoot}/index.html`).pipe(Effect.orElseSucceed(() => false))
     const api = HttpApiBuilder.layer(OtGatewayApi).pipe(
       Layer.provide(
-        HttpApiBuilder.group(OtGatewayApi, "status", (handlers) => handlers.handle("status", () => state.snapshot))
+        HttpApiBuilder.group(OtGatewayApi, "status", (handlers) =>
+          handlers.handle("status", () => state.snapshot).handle("messages", () => state.messages)
+        )
       )
     )
     const web = hasWeb

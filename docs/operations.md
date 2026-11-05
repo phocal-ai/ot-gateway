@@ -219,7 +219,7 @@ With `status` in the config, `http://127.0.0.1:8080` on the gateway shows the br
 ssh -L 8080:127.0.0.1:8080 pi@gateway
 ```
 
-and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON.
+and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The page's Messages section shows the latest message the gateway published on each topic (`GET /api/messages`, at most 2,000 topics and 2,000 characters of each payload); with more than 50 points it starts closed and is fetched only while open.
 
 ## Health on MQTT
 

@@ -75,11 +75,11 @@ describe("status", () => {
       health.recordSuccess("meter", 1_000)
       const state = makeStatusState(parsed, health, 500)
       // An undecodable payload shows as no value, not an error; the next good one replaces it.
-      state.recordPublish("s/b/meter/power", "not json")
+      state.recordPublish("s/b/meter/power", "not json", { retained: false, at: 1 })
       expect((yield* state.snapshot).devices[0]?.points[0]?.value).toBeUndefined()
-      state.recordPublish("s/b/meter/power", '{"value":12.5,"ts":900,"unit":"unit:KiloW"}')
-      state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}')
-      state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}')
+      state.recordPublish("s/b/meter/power", '{"value":12.5,"ts":900,"unit":"unit:KiloW"}', { retained: false, at: 1 })
+      state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: false, at: 1 })
+      state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}', { retained: false, at: 1 })
       for (let index = 0; index < 52; index++) {
         state.recordCommand(index, { device: "meter", point: "setpoint" }, { status: "written", value: index })
       }
@@ -120,6 +120,64 @@ describe("status", () => {
     })
   )
 
+  it.effect("keeps the latest message per topic under the site and building, sorted, with retain and a count", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: true, at: 10 })
+      state.recordPublish("s/b/meter/power", '{"value":1,"ts":11}', { retained: false, at: 11 })
+      state.recordPublish("s/b/meter/power", '{"value":2,"ts":12}', { retained: false, at: 12 })
+      state.recordPublish("s/b/$gateway/main/health", '{"status":"online"}', { retained: true, at: 13 })
+      state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}', { retained: false, at: 14 })
+      expect(yield* state.messages).toEqual({
+        messages: [
+          {
+            topic: "s/b/$gateway/main/health",
+            payload: '{"status":"online"}',
+            truncated: false,
+            retained: true,
+            at: 13,
+            count: 1
+          },
+          {
+            topic: "s/b/meter/power",
+            payload: '{"value":2,"ts":12}',
+            truncated: false,
+            retained: false,
+            at: 12,
+            count: 2
+          },
+          {
+            topic: "s/b/meter/power/$meta",
+            payload: '{"name":"Power"}',
+            truncated: false,
+            retained: true,
+            at: 10,
+            count: 1
+          }
+        ],
+        droppedTopics: 0
+      })
+    })
+  )
+
+  it.effect("bounds what it keeps: 2,000 topics, and 2,000 characters of each payload", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      for (let index = 0; index < 2_005; index++) {
+        state.recordPublish(`s/b/meter/p${index}`, "x".repeat(index === 0 ? 2_500 : 1), { retained: false, at: index })
+      }
+      // A topic already kept is still updated once the cap is reached.
+      state.recordPublish("s/b/meter/p0", "y".repeat(2_500), { retained: false, at: 9_999 })
+      const { messages, droppedTopics } = yield* state.messages
+      expect(messages).toHaveLength(2_000)
+      expect(droppedTopics).toBe(5)
+      const first = messages.find((message) => message.topic === "s/b/meter/p0")
+      expect(first?.payload).toHaveLength(2_000)
+      expect(first?.truncated).toBe(true)
+      expect(first?.count).toBe(2)
+    })
+  )
+
   it.effect("shows the host monitor's last sample with the gateway's version", () =>
     Effect.gen(function* () {
       const parsed = yield* config
@@ -146,7 +204,7 @@ describe("status", () => {
       const parsed = yield* config
       const port = yield* freePort
       const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
-      state.recordPublish("s/b/meter/power", '{"value":3,"ts":700}')
+      state.recordPublish("s/b/meter/power", '{"value":3,"ts":700}', { retained: false, at: 1 })
       const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
         Effect.provide(NodeServices.layer),
         Effect.forkChild
@@ -155,6 +213,8 @@ describe("status", () => {
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
       const status = yield* client.status.status()
       expect(status.devices[0]?.points[0]?.value).toBe(3)
+      const { messages } = yield* client.status.messages()
+      expect(messages.map((message) => message.topic)).toEqual(["s/b/meter/power"])
       // Without a built web app, the root says so instead of failing.
       const root = yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/`).then((response) => response.text()))
       expect(root).toContain("/api/status")
