@@ -59,15 +59,18 @@ The status page at <http://localhost:8080> shows the broker and buffer, every de
 
 To watch the data arrive on a real broker, `pnpm demo --public` (or `demo --public` in the `docker run` line) publishes the same simulated data to a public test broker: the first of broker.hivemq.com, broker.emqx.io and test.mosquitto.org that answers, under a site id of its own such as `demo-3e15e2`. It prints the `mosquitto_sub` command and the MQTT Explorer settings to watch it with. Anyone can read a public broker, so the gateway refuses one for any device that is not simulated on this machine.
 
-The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, `node apps/gateway/src/main.ts …` anywhere):
+The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere). For your own building, `pnpm ot-gateway init` is the quickest start without an agent:
 
-| Command                        | What it does                                                                          |
-| ------------------------------ | ------------------------------------------------------------------------------------- |
-| `ot-gateway demo`              | the demo above                                                                        |
-| `ot-gateway run [config]`      | run the gateway; the config defaults to `ot-gateway.json`                             |
-| `ot-gateway check [config]`    | validate a config without connecting to anything, listing every mistake with its path |
-| `ot-gateway discover [config]` | find BACnet devices and print a draft of their config (below)                         |
-| `ot-gateway --help`            | every command and flag; `--log-level debug` works with all of them                    |
+| Command                        | What it does                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------ |
+| `ot-gateway demo`              | the demo above                                                                             |
+| `ot-gateway init [config]`     | ask for the site, broker and devices, and write a config; the default is `ot-gateway.json` |
+| `ot-gateway run [config]`      | run the gateway with that config                                                           |
+| `ot-gateway check [config]`    | validate a config without connecting to anything, listing every mistake with its path      |
+| `ot-gateway discover [config]` | find BACnet devices and print a draft of their config (below)                              |
+| `ot-gateway watch [config]`    | print every message under the config's site and building as it reaches the broker          |
+| `ot-gateway status [--url]`    | the running gateway's broker, buffer and devices, one line each                            |
+| `ot-gateway --help`            | every command and flag; `--log-level debug` works with all of them                         |
 
 To work on the gateway, run the bench and the gateway as two processes instead: `pnpm bench` in one terminal (the broker and the simulated devices, printing every message) and `pnpm gateway` in another (the gateway with `examples/gateway.json`, after building the status page; Turborepo replays that build from its cache unless the page changed). Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer. `pnpm check` runs the format check, lint, typecheck and every test (about 30 s).
 

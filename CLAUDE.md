@@ -17,8 +17,11 @@ pnpm typecheck
 pnpm test
 pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
 pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
-pnpm ot-gateway check ot-gateway.json      # validate a config without connecting (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init                       # questions in, ot-gateway.json out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
+pnpm ot-gateway status                     # the running gateway's devices, one line each
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)

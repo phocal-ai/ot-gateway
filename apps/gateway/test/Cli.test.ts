@@ -22,6 +22,9 @@ describe("toCliArgs", () => {
   it("passes subcommands and flags such as --help through", () => {
     expect(toCliArgs(["demo"])).toEqual(["demo"])
     expect(toCliArgs(["check", "a.json"])).toEqual(["check", "a.json"])
+    expect(toCliArgs(["init"])).toEqual(["init"])
+    expect(toCliArgs(["watch", "a.json"])).toEqual(["watch", "a.json"])
+    expect(toCliArgs(["status", "--url", "http://pi:8080"])).toEqual(["status", "--url", "http://pi:8080"])
     expect(toCliArgs(["--help"])).toEqual(["--help"])
     expect(toCliArgs(["--version"])).toEqual(["--version"])
   })

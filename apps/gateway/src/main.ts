@@ -6,6 +6,7 @@
  *   node apps/gateway/src/main.ts run path/to/gateway.json
  *   node apps/gateway/src/main.ts check path/to/gateway.json
  *   node apps/gateway/src/main.ts discover path/to/gateway.json
+ *   node apps/gateway/src/main.ts init | watch | status
  *   node apps/gateway/src/main.ts --help
  *
  * Run it with `--max-semi-space-size=4` (the shebang and `pnpm gateway` do):

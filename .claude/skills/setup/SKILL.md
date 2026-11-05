@@ -109,7 +109,7 @@ Run `node apps/gateway/src/main.ts check ot-gateway.json` and fix every error it
 
 1. **Local test broker:** start `pnpm bench` in the background, with the bench reading `ot-gateway.json`: `node apps/gateway/src/bench.ts ot-gateway.json`. It serves simulators only for devices on localhost.
 2. Start the gateway in the background: `node --env-file-if-exists=ot-gateway.env apps/gateway/src/main.ts ot-gateway.json`.
-3. After about 15 s, read `curl -s http://127.0.0.1:8080/api/status`. Every device should be `"status":"ok"`, and its points should have values. Its gateway log lines say the same.
+3. After about 15 s, run `node apps/gateway/src/main.ts status` (one line per device; `curl -s http://127.0.0.1:8080/api/status` has the same as JSON). Every device should be `ok`, and its points should have values. Its gateway log lines say the same. To show the user what reaches the broker, run `node --env-file-if-exists=ot-gateway.env apps/gateway/src/main.ts watch ot-gateway.json` for a few seconds (it runs until stopped).
 4. Diagnose what isn't working, fix the config, and restart. Repeat until every device is ok or the cause is outside your reach:
 
    | Symptom                       | Likely cause                                                                                                                                                                              |
