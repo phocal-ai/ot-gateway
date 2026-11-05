@@ -17,6 +17,10 @@
     },
     "test": {
       "inputs": ["src/**", "test/**", "../../docs/*.md", "../../README.md"]
+    },
+    "build": {
+      "description": "Not cached: the pages come from docs/*.md, the README and whatever else scripts/content.ts lists, so a cached build could deploy stale docs",
+      "cache": false
     }
   }
 }
