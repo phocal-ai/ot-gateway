@@ -1,22 +1,44 @@
 /**
  * The `--discover` draft: slugs from free-text names, ids unique within the
- * draft and against the config, addresses only for devices on this network,
- * and a draft that the config schema accepts as it is.
+ * draft and against the config, and addresses only for devices on this
+ * network that no other address answered for. A draft of devices that each
+ * answered from one address and have objects is accepted by the config
+ * schema as it is; one drafted with `points: []` (behind a router with no
+ * objects read, or claimed from several addresses) is not, until someone
+ * fills it in. End to end on an in-memory network: devices answering Who-Is
+ * for the same instance from different addresses, and devices already in
+ * the config.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { type DescribedDevice, type DiscoveredDevice, parseDeviceAddress } from "@ot-gateway/bacnet"
-import { parseConfig } from "@ot-gateway/core"
-import { Effect, Result } from "effect"
-import { draftDevices, printable, slugify } from "../src/Discover.ts"
+import {
+  type DescribedDevice,
+  type FoundDevice,
+  makeSimulatedDevice,
+  MAX_CONFLICTS,
+  parseDeviceAddress,
+  serveSimulatedDevice
+} from "@ot-gateway/bacnet"
+import { makeMemoryNetwork, parseConfig } from "@ot-gateway/core"
+import { Effect, Fiber, Result } from "effect"
+import { TestClock, TestConsole } from "effect/testing"
+import { discover, draftDevices, printable, slugify } from "../src/Discover.ts"
 
-const found = (instance: number, at: string, described: DescribedDevice, routed = false) => {
-  const device: DiscoveredDevice = {
+const addressOf = (text: string) => Result.getOrThrow(parseDeviceAddress(text))
+
+const found = (
+  instance: number,
+  at: string,
+  described: DescribedDevice,
+  options: { readonly routed?: boolean; readonly conflicts?: ReadonlyArray<string> } = {}
+) => {
+  const device: FoundDevice = {
     instance,
-    address: Result.getOrThrow(parseDeviceAddress(at)),
+    address: addressOf(at),
     maxApdu: 1476,
     segmentation: 3,
     vendorId: 260,
-    ...(routed ? { network: { network: 5, address: new Uint8Array([7]) } } : {})
+    ...(options.routed === true ? { network: { network: 5, address: new Uint8Array([7]) } } : {}),
+    conflicts: (options.conflicts ?? []).map((other) => ({ address: addressOf(other) }))
   }
   return { device, described }
 }
@@ -35,7 +57,7 @@ describe("slugify", () => {
 describe("printable", () => {
   it("keeps escape sequences a device put in its name off the terminal", () => {
     expect(printable("AHU 2\u001b]0;pwned\u0007\u001b[2J")).toBe("AHU 2?]0;pwned??[2J")
-    expect(printable("Kühler\u200e")).toBe("Kühler?")
+    expect(printable("Kühler‎")).toBe("Kühler?")
     expect(printable("x".repeat(500))).toHaveLength(120)
   })
 })
@@ -60,7 +82,7 @@ describe("draftDevices", () => {
           listed: 1,
           objects: [{ objectType: "analog-value", instance: 9, name: "Setpoint" }]
         }),
-        found(3001, "10.0.0.1", { name: "", listed: 1, objects: [] }, true)
+        found(3001, "10.0.0.1", { name: "", listed: 1, objects: [] }, { routed: true })
       ],
       ["main-meter"]
     )
@@ -95,6 +117,13 @@ describe("draftDevices", () => {
     ])
   })
 
+  it("leaves the address out for a device that more than one address answered for", () => {
+    const [draft] = draftDevices([
+      found(2001, "10.0.0.5", { name: "", listed: 0, objects: [] }, { conflicts: ["10.0.0.9:47809"] })
+    ])
+    expect(draft).toEqual({ protocol: "bacnet-ip", id: "device-2001", deviceInstance: 2001, points: [] })
+  })
+
   it.effect("drafts devices the config schema accepts as they are", () =>
     Effect.gen(function* () {
       const draft = draftDevices([
@@ -112,6 +141,159 @@ describe("draftDevices", () => {
       )
       expect(config.devices.map((device) => device.id)).toEqual(["boiler-plant"])
       expect(config.devices[0]?.points.every((point) => !point.writable)).toBe(true)
+    })
+  )
+})
+
+const ahu = (instance: number) =>
+  makeSimulatedDevice({
+    instance,
+    name: "AHU 2",
+    objects: [
+      {
+        objectType: "analog-input",
+        instance: 1,
+        name: "Supply Temp",
+        presentValue: { type: "real", value: 18.5 },
+        units: 62
+      },
+      { objectType: "binary-output", instance: 2, name: "Fan", presentValue: { type: "enumerated", value: 1 } }
+    ]
+  })
+
+const supplyTemp = {
+  id: "supply-temp",
+  name: "Supply Temp",
+  unit: "unit:DEG_C",
+  objectType: "analog-input",
+  instance: 1
+}
+const fan = { id: "fan", name: "Fan", objectType: "binary-output", instance: 2 }
+
+/**
+ * Serve an AHU with each instance from its own host, run `--discover` from
+ * 10.0.0.1 with `devices` in the config, and return its stdout draft and
+ * stderr.
+ */
+const run = Effect.fnUntraced(
+  function* (
+    hosts: ReadonlyArray<{ readonly ip: string; readonly instance: number }>,
+    devices: ReadonlyArray<unknown> = []
+  ) {
+    const network = makeMemoryNetwork()
+    yield* Effect.forEach(hosts, ({ ip, instance }) =>
+      Effect.flatMap(network.host(ip).udp({ address: ip, port: 47_808 }), (socket) =>
+        serveSimulatedDevice(socket, ahu(instance))
+      )
+    )
+    const config = yield* parseConfig(
+      JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices })
+    )
+    const running = yield* discover(config, network.host("10.0.0.1")).pipe(Effect.forkChild)
+    yield* TestClock.adjust("4 seconds")
+    yield* Fiber.join(running)
+    const [draft] = yield* TestConsole.logLines
+    const errors = yield* TestConsole.errorLines
+    const parsed: unknown = JSON.parse(String(draft))
+    return {
+      draft: parsed,
+      errors: errors.map(String),
+      warnings: errors.map(String).filter((line) => line.includes("WARNING"))
+    }
+  },
+  Effect.scoped,
+  Effect.provide(TestConsole.layer)
+)
+
+const twoHosts = [
+  { ip: "10.0.2.1", instance: 2001 },
+  { ip: "10.0.2.2", instance: 2001 }
+]
+
+describe("discover", () => {
+  it.effect("drafts one device without an address, and warns, when two addresses answer for its instance", () =>
+    Effect.gen(function* () {
+      const { draft, warnings } = yield* run(twoHosts)
+      expect(draft).toEqual({
+        devices: [{ protocol: "bacnet-ip", id: "device-2001", deviceInstance: 2001, points: [] }]
+      })
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("device 2001")
+      expect(warnings[0]).toContain("10.0.2.1:47808, 10.0.2.2:47808.")
+      expect(warnings[0]).toContain("Two devices may share instance 2001, or one device answers on several addresses.")
+      expect(warnings[0]).toContain("Its draft entry has no address and no points.")
+      expect(warnings[0]).toContain("a source you trust")
+      expect(warnings[0]).toContain("the list only says which hosts to check")
+    })
+  )
+
+  it.effect("says that the list may be incomplete once MAX_CONFLICTS other addresses answered", () =>
+    Effect.gen(function* () {
+      const hosts = Array.from({ length: MAX_CONFLICTS + 2 }, (_, index) => ({
+        ip: `10.0.2.${index + 1}`,
+        instance: 2001
+      }))
+      const { warnings } = yield* run(hosts)
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]?.match(/10\.0\.2\.\d+:47808/g)).toHaveLength(MAX_CONFLICTS + 1)
+      expect(warnings[0]).toContain(" and possibly more.")
+    })
+  )
+
+  it.effect("tells how to fix a device in the config that several addresses answer for, without a draft entry", () =>
+    Effect.gen(function* () {
+      const configured = { protocol: "bacnet-ip", id: "ahu", deviceInstance: 2001, points: [supplyTemp] }
+      const { draft, errors, warnings } = yield* run(twoHosts, [configured])
+      expect(draft).toEqual({ devices: [] })
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("It is in the config as ahu: set its address from a source you trust")
+      expect(warnings[0]).not.toContain("draft entry")
+      expect(errors.some((line) => line.includes("already in the config as ahu"))).toBe(true)
+    })
+  )
+
+  it.effect("reads a device in the config at its address and drafts the objects it has no point for", () =>
+    Effect.gen(function* () {
+      // The configured point names its type by number, and has the id the new point would get.
+      const configured = {
+        protocol: "bacnet-ip",
+        id: "ahu",
+        deviceInstance: 2001,
+        address: "10.0.2.1",
+        points: [{ id: "fan", name: "Supply Temp", objectType: "0", instance: 1 }]
+      }
+      const { draft, errors, warnings } = yield* run([{ ip: "10.0.2.1", instance: 2001 }], [configured])
+      expect(draft).toEqual({
+        devices: [
+          {
+            protocol: "bacnet-ip",
+            id: "ahu",
+            deviceInstance: 2001,
+            address: "10.0.2.1",
+            points: [{ ...fan, id: "fan-2" }]
+          }
+        ]
+      })
+      expect(warnings).toEqual([])
+      expect(errors.some((line) => line.includes("in the config as ahu, read at 10.0.2.1: 1 point(s)"))).toBe(true)
+    })
+  )
+
+  it.effect("drafts a device that one address answered for with that address and its points", () =>
+    Effect.gen(function* () {
+      const { draft, warnings } = yield* run([{ ip: "10.0.2.1", instance: 2001 }])
+      expect(draft).toEqual({
+        devices: [
+          {
+            protocol: "bacnet-ip",
+            id: "ahu-2",
+            deviceInstance: 2001,
+            address: "10.0.2.1",
+            points: [supplyTemp, fan]
+          }
+        ]
+      })
+      expect(warnings).toEqual([])
     })
   )
 })

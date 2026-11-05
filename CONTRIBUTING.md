@@ -22,6 +22,7 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 
 - `dev` is the integration branch. Branch off `dev` and open pull requests against `dev`.
 - `main` holds releases only. It moves forward when `dev` is merged into it for a release, and each release is tagged on `main` (`vX.Y.Z`).
+- Pushing the tag publishes the image (`.github/workflows/image.yml`), only when the tagged commit is on `main`, and builds it from the tagged source without the pull requests' build cache. A plain `vX.Y.Z` also moves `:latest`; a prerelease such as `v0.7.0-rc.1` does not.
 - A release also moves the default tag in `packaging/compose.yaml` (`OT_GATEWAY_TAG`), the `docker run` example in `docs/operations.md` and the tag in the commands of `docs/raspberry-pi-install.md` and `docs/raspberry-pi-testing.md` to the new tag.
 - The first release under a new image name (v0.6.0, `ghcr.io/phocal-ai/ot-gateway`) creates a new, private package: make it public in the package's settings (the organization must allow public packages for that moment), then check `docker pull` without logging in.
 - Urgent fixes for a release branch off `main`, merge back into `main`, then get merged into `dev` so the two don't drift.
