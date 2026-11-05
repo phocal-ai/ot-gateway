@@ -124,10 +124,11 @@ Once values flow, the gateway belongs on a machine that stays on in the building
 The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for an industrial PC as much as for a Raspberry Pi on the 64-bit OS.
 
 ```bash
-docker compose -f packaging/compose.yaml up -d
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+docker compose up -d
 ```
 
-The image reads `/etc/ot-gateway/gateway.json`; point `buffer.path` under `/var/lib/ot-gateway` so the outbox outlives the container. Secrets go in `/etc/ot-gateway/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env`. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose … up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page.
+Run both in a folder with your `ot-gateway.json` (and `ot-gateway.env` for secrets, if the config names any). No `sudo` and no folders to make: the outbox and the history go to a Docker volume, and relative paths in the config land in it. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page. An install from v0.7.0 or earlier, with the config in `/etc/ot-gateway`, moves over as [docs/operations.md](docs/operations.md#from-the-etcot-gateway-layout-v070-and-earlier) shows.
 
 On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout owned by you or root (the script refuses one that others can write to):
 

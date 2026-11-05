@@ -136,10 +136,10 @@ Do whichever the user chose in step 3:
 - **systemd** (Pi or Linux): get a yes from the user, then run `sudo packaging/install.sh ot-gateway.json`. It validates the config, installs to `/opt/ot-gateway`, moves the buffer to `/var/lib/ot-gateway`, and starts `ot-gateway`.
   - Copy secrets: `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env`, then `sudo systemctl restart ot-gateway`.
   - Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
-- **Docker:**
-  - copy `ot-gateway.json` to `/etc/ot-gateway/gateway.json`, with `buffer.path` set to `/var/lib/ot-gateway/buffer.sqlite`;
-  - copy `ot-gateway.env` to `/etc/ot-gateway/gateway.env` readable by the container's user (uid 1000, `node`) and nobody else: `sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env`. Never make it world-readable to get the container started;
-  - with a yes from the user, start it with `docker compose -f packaging/compose.yaml up -d` (it pins a release tag, uses host networking for BACnet and caps Docker's logs); the image includes the status page. Check it with `docker logs ot-gateway --tail 20`.
+- **Docker:** no `sudo` and no folders to make. `compose.yaml` mounts `ot-gateway.json` from its project folder, reads `ot-gateway.env` from there if it exists (keep it `chmod 600`; never make it world-readable), and keeps the outbox and the history in the `ot-gateway_data` volume, where relative paths in the config land. In this checkout, run it from the repository root so both files are found:
+  - check: `docker compose -f packaging/compose.yaml --project-directory . run --rm gateway --check /etc/ot-gateway/gateway.json`;
+  - with a yes from the user, start it with `docker compose -f packaging/compose.yaml --project-directory . up -d` (it pins a release tag, uses host networking for BACnet and caps Docker's logs); the image includes the status page. Check it with `docker logs ot-gateway --tail 20`.
+  - On another machine: copy `packaging/compose.yaml`, `ot-gateway.json` and `ot-gateway.env` into one folder there and run `docker compose up -d` in it.
 - **This machine, for now:** give the one command to start it again: `node --env-file-if-exists=ot-gateway.env apps/gateway/src/main.ts ot-gateway.json`.
 
 The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>`. Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`.
