@@ -1,0 +1,241 @@
+name: Triage
+
+# CI failure triage. When CI, Soak, Interop or Image fails on dev, Claude Code
+# reads the failed jobs' logs and artifacts, reproduces the failure and either
+# fixes it (a flake or a small bug, with a test) or diagnoses it. Prompt:
+# .github/prompts/triage.md. A fix becomes a pull request against dev; a
+# diagnosis becomes an issue labelled `ci-failure`, one per failing job and test.
+# A person reviews and merges every fix.
+#
+# It triages only runs of this repository's dev branch from push, schedule or
+# workflow_dispatch, never a pull request run, whose code and logs may come from
+# a fork. A manual run takes the run ID and checks the same conditions.
+#
+# Two jobs, so the agent never holds a write token:
+# - diagnose: a read-only token in the steps that collect the run, the logs and
+#   the artifacts, none in the agent's step. The agent runs code only through
+#   .github/scripts/routine-run.sh, as a sandbox user without the Claude token
+#   (.github/actions/routine-agent), and its Bash calls are checked by
+#   .github/scripts/routine-bash-guard.sh.
+# - publish: applies the agent's patch, refuses it when it touches .github/,
+#   .claude/, repos/ or packaging/install.sh (.github/scripts/routine-diff-check.sh),
+#   pushes fix/ci-triage-<run id> and opens the pull request, or opens or comments
+#   on the issue. Tests for the scripts: scripts/test-routines.sh.
+#
+# A pull request opened with GITHUB_TOKEN starts no workflows, so publish
+# dispatches CI on the branch (workflow_dispatch); the checks land on its head
+# commit and show on the pull request. They test the branch as it is, not its
+# merge with dev. Interop and Image are dispatched too when the failure was theirs.
+# A failure of those dispatched runs is not triaged again: they are not on dev.
+#
+# Skips a failing job that already has an open triage pull request. Needs "Allow
+# GitHub Actions to create and approve pull requests" in the repository's Actions
+# settings for fixes, and the CLAUDE_CODE_OAUTH_TOKEN secret; it skips with a
+# warning without the secret.
+#
+# Cost: public repo, so Actions minutes are free; 10 to 30 minutes per failure on
+# dev. Nothing here exports telemetry.
+
+on:
+  workflow_run:
+    workflows: [CI, Soak, Interop, Image]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "The ID of a failed run on dev"
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: triage
+  cancel-in-progress: false
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.316
+  CLAUDE_MODEL: claude-sonnet-5-5
+
+jobs:
+  diagnose:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == 'dev' &&
+      contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event.workflow_run.event) &&
+      github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      outcome: ${{ steps.agent.outputs.outcome }}
+      test: ${{ steps.agent.outputs.test }}
+      run: ${{ steps.run.outputs.run }}
+      sha: ${{ steps.run.outputs.sha }}
+      key: ${{ steps.run.outputs.key }}
+      workflow: ${{ steps.run.outputs.workflow }}
+    steps:
+      - name: Check the run
+        id: run
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ github.event.workflow_run.id || inputs.run_id }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::warning::Triage skipped, missing secret: CLAUDE_CODE_OAUTH_TOKEN"
+            exit 0
+          fi
+          [[ $RUN =~ ^[0-9]{1,20}$ ]] || { echo "::error::run_id is a number"; exit 1; }
+          gh api "repos/$REPO/actions/runs/$RUN" > "$RUNNER_TEMP/run-api.json"
+          # The same conditions as the job's `if`, for a manual run.
+          jq -e --arg repo "$REPO" '
+            .conclusion == "failure" and .head_branch == "dev" and
+            (.event | IN("push", "schedule", "workflow_dispatch")) and
+            .head_repository.full_name == $repo' "$RUNNER_TEMP/run-api.json" >/dev/null || {
+            echo "::error::Run $RUN is not a failed push, schedule or manual run of dev in this repository."
+            exit 1
+          }
+          workflow=$(jq -r '.name' "$RUNNER_TEMP/run-api.json")
+          gh api "repos/$REPO/actions/runs/$RUN/jobs?per_page=100" \
+            -q '[.jobs[] | select(.conclusion == "failure") | .name]' > "$RUNNER_TEMP/failed-jobs.json"
+          jobs=$(jq -r 'join(",")' "$RUNNER_TEMP/failed-jobs.json")
+          key=$(printf '%s/%s' "$workflow" "$jobs" | tr -c 'A-Za-z0-9._,/ ()-' '_' | cut -c1-100)
+          marker="<!-- ci-triage:$key -->"
+          open=$(gh pr list --repo "$REPO" --state open --base dev --json headRefName,body \
+            | jq --arg marker "$marker" '[.[] | select((.headRefName | startswith("fix/ci-triage-")) and (.body | contains($marker)))] | length')
+          if [ "$open" != 0 ]; then
+            echo "::notice::$key already has an open triage pull request; skipped."
+            exit 0
+          fi
+          jq --argjson jobs "$(cat "$RUNNER_TEMP/failed-jobs.json")" \
+            '{ workflow: .name, run: .id, url: .html_url, event, head_sha, created_at, failed_jobs: $jobs }' \
+            "$RUNNER_TEMP/run-api.json" > "$RUNNER_TEMP/run.json"
+          {
+            echo "run=$RUN"
+            echo "sha=$(jq -r '.head_sha' "$RUNNER_TEMP/run-api.json")"
+            echo "key=$key"
+            echo "workflow=$workflow"
+            echo "ready=true"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v7
+        if: steps.run.outputs.ready == 'true'
+        with:
+          ref: ${{ steps.run.outputs.sha }}
+          persist-credentials: false
+
+      - name: Collect the logs and artifacts
+        if: steps.run.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN: ${{ steps.run.outputs.run }}
+        run: |
+          mkdir -p .routine/artifacts
+          cp "$RUNNER_TEMP/run.json" .routine/run.json
+          # The last 400 KB of the failed steps' log lines are plenty, and keep the prompt small.
+          gh run view "$RUN" --repo "$REPO" --log-failed | tail -c 400000 > .routine/logs.txt || true
+          gh run download "$RUN" --repo "$REPO" --dir .routine/artifacts || echo "(no artifacts)"
+          # At most 50 MB of artifacts.
+          if [ "$(du -sm .routine/artifacts | cut -f1)" -gt 50 ]; then
+            rm -rf .routine/artifacts
+            mkdir -p .routine/artifacts
+            echo "The artifacts were over 50 MB and are left out." > .routine/artifacts/README.txt
+          fi
+
+      - uses: actions/setup-node@v7
+        if: steps.run.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+
+      - uses: ./.github/actions/routine-agent
+        id: agent
+        if: steps.run.outputs.ready == 'true'
+        with:
+          routine: triage
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude-code-version: ${{ env.CLAUDE_CODE_VERSION }}
+          model: ${{ env.CLAUDE_MODEL }}
+
+  publish:
+    needs: diagnose
+    if: needs.diagnose.outputs.outcome == 'fix' || needs.diagnose.outputs.outcome == 'issue'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      OUTCOME: ${{ needs.diagnose.outputs.outcome }}
+      KEY: ${{ needs.diagnose.outputs.key }}
+      TEST: ${{ needs.diagnose.outputs.test }}
+      RUN: ${{ needs.diagnose.outputs.run }}
+      WORKFLOW: ${{ needs.diagnose.outputs.workflow }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.diagnose.outputs.sha }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: routine-triage
+          path: ${{ runner.temp }}/routine-out
+
+      - name: Write the body
+        run: |
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN"
+          triage_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          {
+            if [ "$OUTCOME" = fix ]; then echo "<!-- ci-triage:$KEY -->"; else echo "<!-- ci-failure:$KEY:$TEST -->"; fi
+            head -c 60000 "$RUNNER_TEMP/routine-out/report.md"
+            echo
+            echo "---"
+            echo "Failed run: $run_url. Triaged by the [Triage workflow]($triage_url)."
+          } > "$RUNNER_TEMP/body.md"
+
+      - name: Open the fix
+        if: env.OUTCOME == 'fix'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="fix/ci-triage-$RUN"
+          git switch -c "$branch"
+          git apply --index "$RUNNER_TEMP/routine-out/change.patch"
+          .github/scripts/routine-diff-check.sh
+          title=$(head -n 1 "$RUNNER_TEMP/routine-out/report.md" | sed -E 's/^#+ *//' | cut -c1-100)
+          [ -n "$title" ] || title="Fix the $WORKFLOW failure"
+          git commit -q -m "fix: $title" -m "Triage of $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$RUN."
+          git push origin "$branch"
+          if ! gh pr create --base dev --head "$branch" --title "fix: $title" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "::error::Could not open the pull request. Is \"Allow GitHub Actions to create and approve pull requests\" on in the repository's Actions settings? The branch $branch is pushed."
+            exit 1
+          fi
+          gh workflow run ci.yml --ref "$branch"
+          case $WORKFLOW in
+            Interop) gh workflow run interop.yml --ref "$branch" ;;
+            Image) gh workflow run image.yml --ref "$branch" ;;
+            Soak) gh workflow run soak.yml --ref "$branch" ;;
+          esac
+
+      - name: Open or update the issue
+        if: env.OUTCOME == 'issue'
+        run: |
+          gh label create ci-failure --color B60205 --description "A CI failure on dev, diagnosed by the Triage workflow" 2>/dev/null || true
+          marker="<!-- ci-failure:$KEY:$TEST -->"
+          number=$(gh issue list --label ci-failure --state open --limit 100 --json number,body,author \
+            | jq -r --arg marker "$marker" '[.[] | select(.author.login == "app/github-actions" and (.body | startswith($marker)))][0].number // empty')
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$RUNNER_TEMP/body.md"
+          else
+            title=$(head -n 1 "$RUNNER_TEMP/routine-out/report.md" | sed -E 's/^#+ *//' | cut -c1-100)
+            [ -n "$title" ] || title="$WORKFLOW failed on dev"
+            gh issue create --title "$title" --label ci-failure --body-file "$RUNNER_TEMP/body.md"
+          fi

@@ -5,6 +5,9 @@ on:
     branches: [main, dev]
   pull_request:
     branches: [main, dev]
+  # The Deps and Triage routines start CI on the branches they push: a pull request
+  # opened with GITHUB_TOKEN starts no workflows on its own.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -29,6 +32,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: scripts/test-health-gh.sh
+      - run: scripts/test-routines.sh
       - name: Build the status page
         run: pnpm --filter @ot-gateway/web build
         env:

@@ -1,0 +1,150 @@
+name: Routine agent
+description: >-
+  Runs Claude Code on a checkout for a routine that changes code (deps.yml, triage.yml)
+  and uploads its report and its change as an artifact. The job that uses it holds no
+  write token; a later job validates the change and publishes it.
+
+inputs:
+  routine:
+    description: "deps or triage: picks the prompt (.github/prompts/<routine>.md) and the Bash guard's command list"
+    required: true
+  oauth-token:
+    description: CLAUDE_CODE_OAUTH_TOKEN
+    required: true
+  claude-code-version:
+    description: The pinned Claude Code version
+    required: true
+  model:
+    description: The model
+    required: true
+
+outputs:
+  outcome:
+    description: The report's OUTCOME
+    value: ${{ steps.collect.outputs.outcome }}
+  test:
+    description: The report's TEST line (triage only)
+    value: ${{ steps.collect.outputs.test }}
+
+runs:
+  using: composite
+  steps:
+    # Code from the checkout and from npm runs as ot-routine (routine-run.sh), not as the
+    # runner user that runs the agent and holds its token. The checkout is writable for
+    # both, except .git, which only the runner user may change.
+    - name: Sandbox
+      shell: bash
+      run: |
+        sudo useradd --create-home --shell /usr/sbin/nologin ot-routine
+        dir=$GITHUB_WORKSPACE
+        while [ "$dir" != / ]; do
+          sudo chmod o+x "$dir"
+          dir=$(dirname "$dir")
+        done
+        chmod -R a+rwX "$GITHUB_WORKSPACE"
+        chmod -R go-w "$GITHUB_WORKSPACE/.git"
+        # The workflow's inputs to the agent stay out of the change.
+        mkdir -p .routine
+        echo "/.routine/" >> .git/info/exclude
+        pnpm_version=$(jq -r '.packageManager | sub("^pnpm@"; "")' package.json)
+        sudo -n -u ot-routine -- env -i HOME=/home/ot-routine PATH="$(dirname "$(command -v node)"):/usr/bin:/bin" \
+          npm install --global --prefix /home/ot-routine/.local --no-fund --no-audit "pnpm@$pnpm_version"
+        .github/scripts/routine-run.sh pnpm --version
+        .github/scripts/routine-run.sh pnpm install --frozen-lockfile
+
+    - name: Run the agent
+      shell: bash
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+        ROUTINE: ${{ inputs.routine }}
+        CLAUDE_CODE_VERSION: ${{ inputs.claude-code-version }}
+        CLAUDE_MODEL: ${{ inputs.model }}
+      run: |
+        # Without pipefail, tee hides a Claude failure (bad token, CLI error) and the job passes.
+        set -o pipefail
+        # What the agent can reach:
+        # - Read, Grep and Glob for the checkout; Edit and Write for the checkout but not
+        #   .git, .github, .claude, repos or packaging/install.sh (and the publishing job
+        #   refuses a change there anyway, routine-diff-check.sh).
+        # - Bash for the commands routine-bash-guard.sh allows: read-only git, and
+        #   routine-run.sh, which runs code as the sandbox user.
+        # - blockReadsOutsideWorkingDirectories keeps the file tools in the checkout.
+        # - dontAsk denies whatever would need approval. No GitHub token is in this job.
+        tools="Read,Grep,Glob,Edit,Write,Bash"
+        allowed=(
+          "Read(./**)" "Edit(./**)" Grep Glob
+          "Bash(.github/scripts/routine-run.sh:*)"
+          "Bash(git diff:*)" "Bash(git status:*)" "Bash(git log:*)" "Bash(git show:*)"
+        )
+        denied=(
+          "Read(./.git/**)" "Read(//proc/**)" "Read(//sys/**)" "Read(/$RUNNER_TEMP/**)" "Read(~/.config/**)"
+          "Edit(./.git/**)" "Edit(./.github/**)" "Edit(./.claude/**)" "Edit(./repos/**)" "Edit(./packaging/install.sh)"
+        )
+        settings=$(jq -cn --arg routine "$ROUTINE" '{
+          permissions: { blockReadsOutsideWorkingDirectories: true },
+          hooks: { PreToolUse: [ { matcher: "Bash", hooks: [
+            { type: "command", command: ("\"$CLAUDE_PROJECT_DIR\"/.github/scripts/routine-bash-guard.sh " + $routine), timeout: 10 }
+          ] } ] }
+        }')
+        npx -y "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+          -p "$(cat ".github/prompts/$ROUTINE.md")" \
+          --model "$CLAUDE_MODEL" \
+          --strict-mcp-config \
+          --settings "$settings" \
+          --permission-mode dontAsk \
+          --tools "$tools" \
+          --allowedTools "${allowed[@]}" \
+          --disallowedTools "${denied[@]}" \
+          --output-format text < /dev/null | tee "$RUNNER_TEMP/report.md"
+
+    - name: Collect the change
+      id: collect
+      shell: bash
+      env:
+        CLAUDE_CODE_OAUTH_TOKEN: ${{ inputs.oauth-token }}
+        ROUTINE: ${{ inputs.routine }}
+      run: |
+        report="$RUNNER_TEMP/report.md"
+        out="$RUNNER_TEMP/routine-out"
+        mkdir -p "$out"
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        outcome=$(grep -E '^OUTCOME: ' "$report" | tail -n 1 | cut -d' ' -f2 | tr -cd 'a-z-')
+        case "$ROUTINE:$outcome" in
+          deps:updates | deps:no-updates | deps:blocked | triage:fix | triage:issue) ;;
+          *)
+            echo "::error::The agent ended without a valid OUTCOME line; see the report."
+            exit 1
+            ;;
+        esac
+        test=$(grep -E '^TEST: ' "$report" | tail -n 1 | cut -c7- | tr -c 'A-Za-z0-9._:/ ()-' '_' | cut -c1-120)
+        # The change, relative to HEAD. .routine/ is excluded (.git/info/exclude).
+        git add --all
+        git diff --cached --binary > "$out/change.patch"
+        # Only what the report says it is: the change is not published when the agent
+        # says there is nothing to publish.
+        if [ "$outcome" != updates ] && [ "$outcome" != fix ] && [ -s "$out/change.patch" ]; then
+          echo "::warning::OUTCOME is $outcome but the checkout changed; the change is dropped."
+          : > "$out/change.patch"
+        fi
+        if [ "$outcome" = updates ] || [ "$outcome" = fix ]; then
+          [ -s "$out/change.patch" ] || { echo "::error::OUTCOME is $outcome but nothing changed."; exit 1; }
+        fi
+        # The report becomes a public pull request or issue: it must not contain the token.
+        for file in "$report" "$out/change.patch"; do
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && grep -qF -- "$CLAUDE_CODE_OAUTH_TOKEN" "$file"; then
+            echo "::error::$(basename "$file") contains the Claude token; nothing is published."
+            exit 1
+          fi
+        done
+        # Everything above the OUTCOME and TEST lines is the body.
+        grep -vE '^(OUTCOME|TEST): ' "$report" > "$out/report.md"
+        printf '%s\n' "$outcome" > "$out/outcome"
+        printf '%s\n' "$test" > "$out/test"
+        echo "outcome=$outcome" >> "$GITHUB_OUTPUT"
+        echo "test=$test" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: routine-${{ inputs.routine }}
+        path: ${{ runner.temp }}/routine-out/
+        retention-days: 7

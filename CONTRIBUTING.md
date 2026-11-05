@@ -68,3 +68,22 @@ The extended preset is for the hardware: SD card, CPU, thermal throttling, NTP s
 ## Reporting device quirks
 
 Real devices deviate from specs. If you hit one, open an issue with the device make and model, the firmware version, and a packet capture if you can. Those reports are gold.
+
+## Routines
+
+Three scheduled agents keep the repository maintained. Each runs Claude Code in GitHub Actions on the `CLAUDE_CODE_OAUTH_TOKEN` secret, skips with a warning without it, and writes only in public, so none of them handles security-audit findings. None merges, touches `main` or releases.
+
+| Routine | Workflow and prompt                       | When                                                                   | What it may write                                                                                                                                  |
+| ------- | ----------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Health  | `health.yml`, `.github/prompts/health.md` | Daily                                                                  | Issues labelled `health`, through `.github/scripts/health-gh.sh`                                                                                   |
+| Deps    | `deps.yml`, `.github/prompts/deps.md`     | Mondays, and by hand                                                   | One pull request against `dev` at a time (`deps/weekly-<date>`): dependency updates within their ranges, Effect and `repos/effect` bumped together |
+| Triage  | `triage.yml`, `.github/prompts/triage.md` | After CI, Soak, Interop or Image fails on `dev`; by hand with a run ID | A fix as a pull request against `dev` (`fix/ci-triage-<run>`), or one issue labelled `ci-failure` per failing job and test                         |
+
+Deps and Triage change code, so they hold no write token while the agent runs:
+
+- The agent edits the checkout and runs tests, builds and package scripts only through `.github/scripts/routine-run.sh`, as a sandbox user without the Claude token, git credentials or sudo.
+- Its Bash calls are checked by `.github/scripts/routine-bash-guard.sh`.
+- A second job applies its patch, refuses one that touches `.github/`, `.claude/`, `repos/` or `packaging/install.sh` (`.github/scripts/routine-diff-check.sh`), and pushes and opens the pull request or issue.
+- `scripts/test-routines.sh` tests those scripts, and CI runs it.
+
+A pull request opened by a workflow starts no other workflows, so the routines start CI, Interop and Image on their branch by `workflow_dispatch`. Those checks test the branch as pushed, not its merge with `dev`: update the branch before merging when `dev` has moved. Opening pull requests needs "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings.
