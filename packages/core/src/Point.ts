@@ -6,6 +6,7 @@
  * addressing (a Modbus register, a BACnet object).
  */
 import { Effect, Schema } from "effect"
+import { Publish } from "./Publish.ts"
 
 /**
  * Identifier used in MQTT topics: lowercase letters, digits, `-` and `_`, at
@@ -64,8 +65,13 @@ export const PointFields = {
   /** Writing is opt-in per point. */
   writable: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   limits: Schema.optionalKey(Limits),
-  /** Minimum change (after scaling) before a new value is published. */
+  /**
+   * Minimum change (after scaling) before a new value is published: the short form of
+   * `publish: { mode: "change", deadband }`. A point has one or the other.
+   */
   deadband: Schema.optionalKey(Schema.Finite.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)))),
+  /** How this point's values go out, instead of its device's `publish` (see `Publish.ts`). */
+  publish: Schema.optionalKey(Publish),
   scaling: Schema.optionalKey(Scaling),
   semantics: Schema.optionalKey(Semantics)
 } as const
@@ -258,6 +264,7 @@ export interface AnyPoint {
   readonly writable: boolean
   readonly limits?: Limits
   readonly deadband?: number
+  readonly publish?: Publish
   readonly scaling?: Scaling
   readonly semantics?: Semantics
 }

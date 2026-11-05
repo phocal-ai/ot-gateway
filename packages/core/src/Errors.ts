@@ -43,7 +43,7 @@ export class PublishError extends Schema.TaggedError<PublishError>()("PublishErr
  */
 export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("PipelineTimeout", {
   device: Schema.String,
-  stage: Schema.Literals(["poll-cycle", "pushed-value"]),
+  stage: Schema.Literals(["poll-cycle", "pushed-value", "publish-window"]),
   timeoutMs: Schema.Number,
   message: Schema.String
 }) {}

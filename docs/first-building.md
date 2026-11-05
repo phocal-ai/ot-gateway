@@ -54,7 +54,7 @@ pnpm ot-gateway import points.csv            # adds the devices to ot-gateway.js
 pnpm ot-gateway import points.csv --dry-run  # only prints them
 ```
 
-Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input needs no `type`), `deadband`, `offset`. BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has a meter and an air handler.
+Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input needs no `type`), `deadband`, `offset`, and `publish` (`sample`, `aggregate` or `change`) with `publish_s` (send the latest value, or an aggregate, every so many seconds: `900` for 15 minutes). BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has a meter and an air handler.
 
 Or add each device by hand under `devices` in `ot-gateway.json`:
 
@@ -77,7 +77,7 @@ Or add each device by hand under `devices` in `ot-gateway.json`:
 }
 ```
 
-`id`s become topic segments, so they are lowercase with `-` (`main-meter`, `active-power`). Units are [QUDT](https://qudt.org) names such as `unit:KiloW`, `unit:DEG_C` or `unit:PERCENT`. [Configuration](configuration.md) has every option: scaling, byte order for meters that swap words, a deadband to send only real changes.
+`id`s become topic segments, so they are lowercase with `-` (`main-meter`, `active-power`). Units are [QUDT](https://qudt.org) names such as `unit:KiloW`, `unit:DEG_C` or `unit:PERCENT`. [Configuration](configuration.md) has every option: scaling, byte order for meters that swap words, and what to send: every read (the default), the latest per interval, 15-minute aggregates or only real changes.
 
 With a coding agent, `/setup` in Claude Code (or the prompt in [Set it up with AI](../README.md#set-it-up-with-ai)) reads a register list or data sheet and drafts these entries for you.
 

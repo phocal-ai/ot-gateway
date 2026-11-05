@@ -666,8 +666,8 @@
     {
       "id": 12,
       "type": "timeseries",
-      "title": "Values published vs suppressed by deadband",
-      "description": "A high suppressed share means the deadband is saving bandwidth; all published means it may be too tight.",
+      "title": "Values published vs held back (change mode)",
+      "description": "Messages published, against reads that change mode held back. Sample and aggregate points never hold back; a sample interval or an aggregate window publishes fewer messages than reads.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
@@ -1687,7 +1687,7 @@
       "id": 34,
       "type": "timeseries",
       "title": "Values pushed by device",
-      "description": "Values devices sent on their own between polls (BACnet change-of-value notifications), before the deadband. Each subscription also sends its current value when it is made or renewed.",
+      "description": "Values devices sent on their own between polls (BACnet change-of-value notifications), before the publish mode. Each subscription also sends its current value when it is made or renewed.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"

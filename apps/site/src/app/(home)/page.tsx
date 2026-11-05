@@ -4,7 +4,7 @@
  */
 import Link from "next/link"
 import type * as React from "react"
-import { DeadbandChart } from "@/components/home/deadband-chart.tsx"
+import { PublishChart } from "@/components/home/publish-chart.tsx"
 import { Flow } from "@/components/home/flow.tsx"
 import { StatusMock } from "@/components/home/status-mock.tsx"
 import { site } from "@/lib/site.ts"
@@ -58,8 +58,8 @@ const features: ReadonlyArray<readonly [string, React.ReactNode]> = [
   [
     "Modbus TCP and BACnet/IP in",
     <>
-      Polling, BACnet change-of-value, scaling, deadband and QUDT units per point. <code>ot-gateway discover</code>{" "}
-      finds BACnet devices and drafts their config.
+      Polling, BACnet change-of-value, scaling and QUDT units per point. <code>ot-gateway discover</code> finds BACnet
+      devices and drafts their config.
     </>
   ],
   [
@@ -159,14 +159,19 @@ const HomePage = () => (
       </p>
     </Section>
 
-    <Section title="Only what changed">
+    <Section title="Read often, send what you need">
       <div className="grid gap-8 md:grid-cols-[2fr_1fr] md:items-center">
-        <DeadbandChart />
-        <p className="text-fd-muted-foreground text-sm">
-          A temperature that barely moves doesn&apos;t need to be sent every 30 seconds. With a deadband of 0.2 °C, the
-          gateway sends the first value and then each one that moved at least that far. Your platform stores changes
-          instead of repetition, and nothing that matters is lost.
-        </p>
+        <PublishChart />
+        <div className="text-fd-muted-foreground space-y-3 text-sm">
+          <p>How often a device is read and what goes to the broker are set separately, per device or per point.</p>
+          <p>
+            <span className="text-fd-foreground font-medium">Every read</span> for live dashboards.{" "}
+            <span className="text-fd-foreground font-medium">Aggregates</span> for energy reports and analytics:
+            minimum, maximum and time-weighted average per window, aligned to the clock like the meter&apos;s 15
+            minutes. <span className="text-fd-foreground font-medium">On change</span> for states, alarms and setpoints
+            that sit still for hours.
+          </p>
+        </div>
       </div>
     </Section>
 

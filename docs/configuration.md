@@ -76,19 +76,20 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 
 `"protocol": "modbus-tcp"`.
 
-| Key                   | Type          | Default   | Meaning                                                                                                                                                          |
-| --------------------- | ------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol`            | `modbus-tcp`  | required  |                                                                                                                                                                  |
-| `id`                  | slug          | required  | Third topic level.                                                                                                                                               |
-| `host`                | string        | required  | IP address or host name.                                                                                                                                         |
-| `port`                | 1–65535       | 502       |                                                                                                                                                                  |
-| `unitId`              | 0–255         | 1         | MBAP unit identifier: 1 or 255 for a plain TCP device, the slave id behind a Modbus gateway.                                                                     |
-| `pollIntervalMs`      | 100–86400000  | 5000      | How often the device is read.                                                                                                                                    |
-| `cycleTimeoutMs`      | 1000–86400000 | see below | How long one cycle (read with retries, then publish) may take before it is abandoned as hung.                                                                    |
-| `requestGapMs`        | 0–10000       | 0         | Minimum pause after each request before the next one. Slow Modbus gateways and serial bridges drop requests sent back to back; 50–200 ms helps.                  |
-| `maxRegistersPerRead` | 1–125         | 125       | Most registers in one read. Lower it for a device that refuses long reads (`illegal_data_value` or `illegal_data_address` on a range that reads fine in pieces). |
-| `maxBitsPerRead`      | 1–2000        | 2000      | Most coils or discrete inputs in one read.                                                                                                                       |
-| `points`              | array         | required  | [Modbus points](#modbus-points), at least one, ids unique.                                                                                                       |
+| Key                   | Type          | Default    | Meaning                                                                                                                                                          |
+| --------------------- | ------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol`            | `modbus-tcp`  | required   |                                                                                                                                                                  |
+| `id`                  | slug          | required   | Third topic level.                                                                                                                                               |
+| `host`                | string        | required   | IP address or host name.                                                                                                                                         |
+| `port`                | 1–65535       | 502        |                                                                                                                                                                  |
+| `unitId`              | 0–255         | 1          | MBAP unit identifier: 1 or 255 for a plain TCP device, the slave id behind a Modbus gateway.                                                                     |
+| `pollIntervalMs`      | 100–86400000  | 5000       | How often the device is read.                                                                                                                                    |
+| `cycleTimeoutMs`      | 1000–86400000 | see below  | How long one cycle (read with retries, then publish) may take before it is abandoned as hung.                                                                    |
+| `publish`             | object        | every read | How the device's points are sent: [publish](#publish). A point's own `publish` or `deadband` overrides it.                                                       |
+| `requestGapMs`        | 0–10000       | 0          | Minimum pause after each request before the next one. Slow Modbus gateways and serial bridges drop requests sent back to back; 50–200 ms helps.                  |
+| `maxRegistersPerRead` | 1–125         | 125        | Most registers in one read. Lower it for a device that refuses long reads (`illegal_data_value` or `illegal_data_address` on a range that reads fine in pieces). |
+| `maxBitsPerRead`      | 1–2000        | 2000       | Most coils or discrete inputs in one read.                                                                                                                       |
+| `points`              | array         | required   | [Modbus points](#modbus-points), at least one, ids unique.                                                                                                       |
 
 `cycleTimeoutMs` defaults to twice `pollIntervalMs`, and at least `pollIntervalMs` plus 30 s.
 
@@ -98,16 +99,17 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 
 `"protocol": "bacnet-ip"`.
 
-| Key              | Type              | Default   | Meaning                                                                                                                                              |
-| ---------------- | ----------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `protocol`       | `bacnet-ip`       | required  |                                                                                                                                                      |
-| `id`             | slug              | required  | Third topic level.                                                                                                                                   |
-| `deviceInstance` | 0–4194302         | required  | The device object's instance.                                                                                                                        |
-| `address`        | `ip` or `ip:port` | none      | Fixed address. Without it the device is found by broadcasting Who-Is. Required when any point is writable, so a spoofed I-Am cannot redirect writes. |
-| `cov`            | boolean           | `true`    | Subscribe to change-of-value notifications where the device supports them, and poll only what they do not cover.                                     |
-| `pollIntervalMs` | 100–86400000      | 5000      |                                                                                                                                                      |
-| `cycleTimeoutMs` | 1000–86400000     | see above |                                                                                                                                                      |
-| `points`         | array             | required  | [BACnet points](#bacnet-points).                                                                                                                     |
+| Key              | Type              | Default    | Meaning                                                                                                                                              |
+| ---------------- | ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `protocol`       | `bacnet-ip`       | required   |                                                                                                                                                      |
+| `id`             | slug              | required   | Third topic level.                                                                                                                                   |
+| `deviceInstance` | 0–4194302         | required   | The device object's instance.                                                                                                                        |
+| `address`        | `ip` or `ip:port` | none       | Fixed address. Without it the device is found by broadcasting Who-Is. Required when any point is writable, so a spoofed I-Am cannot redirect writes. |
+| `cov`            | boolean           | `true`     | Subscribe to change-of-value notifications where the device supports them, and poll only what they do not cover.                                     |
+| `pollIntervalMs` | 100–86400000      | 5000       |                                                                                                                                                      |
+| `cycleTimeoutMs` | 1000–86400000     | see above  |                                                                                                                                                      |
+| `publish`        | object            | every read |                                                                                                                                                      |
+| `points`         | array             | required   | [BACnet points](#bacnet-points).                                                                                                                     |
 
 `node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only. An entry's `address` is where the device's answer came from: before any point of the device becomes writable, confirm it against a source you trust (commissioning sheet, device display, DHCP reservation). When more than one address answers for the same instance (two devices may share the instance, or one device answers on several addresses), `--discover` names them all on stderr and drafts that device without `address` or points: take its address from that source, using the list only to see which hosts to check. A device already in the config with an `address` is read at that address, and its entry in the draft, under its config id, holds only the objects it has no point for yet, to merge into its `points`.
 
@@ -115,13 +117,14 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 
 `"protocol": "simulator"`: waveforms, for demos and tests.
 
-| Key              | Type          | Default   | Meaning                                |
-| ---------------- | ------------- | --------- | -------------------------------------- |
-| `protocol`       | `simulator`   | required  |                                        |
-| `id`             | slug          | required  |                                        |
-| `pollIntervalMs` | 100–86400000  | 5000      |                                        |
-| `cycleTimeoutMs` | 1000–86400000 | see above |                                        |
-| `points`         | array         | required  | [Simulated points](#simulated-points). |
+| Key              | Type          | Default    | Meaning                                |
+| ---------------- | ------------- | ---------- | -------------------------------------- |
+| `protocol`       | `simulator`   | required   |                                        |
+| `id`             | slug          | required   |                                        |
+| `pollIntervalMs` | 100–86400000  | 5000       |                                        |
+| `cycleTimeoutMs` | 1000–86400000 | see above  |                                        |
+| `publish`        | object        | every read |                                        |
+| `points`         | array         | required   | [Simulated points](#simulated-points). |
 
 ## Points
 
@@ -134,7 +137,8 @@ Every point, whatever its protocol, has these keys.
 | `unit`      | string  | none     | A QUDT unit, `unit:DEG_C`, `unit:KiloW`, `unit:KiloW-HR`, `unit:PERCENT`; published with each value.                      |
 | `writable`  | boolean | `false`  | Takes commands on `…/$set`. See the README, "Commands".                                                                   |
 | `limits`    | object  | none     | `{ "min", "max" }` in engineering units, `min` ≤ `max`; required on every writable numeric point.                         |
-| `deadband`  | ≥ 0     | none     | Minimum change, after scaling, before a new value is published.                                                           |
+| `deadband`  | ≥ 0     | none     | Short for `"publish": { "mode": "change", "deadband": … }`. Not together with `publish`.                                  |
+| `publish`   | object  | device's | This point's [publish](#publish) mode, instead of its device's.                                                           |
 | `scaling`   | object  | none     | `{ "factor", "offset" }`: `value = raw × factor + offset`. `factor` defaults to 1 and cannot be 0, `offset` to 0.         |
 | `semantics` | object  | none     | `{ "brick": "Supply_Air_Temperature_Sensor", "haystack": ["discharge", "air", "temp", "sensor"] }`, published on `$meta`. |
 
@@ -167,6 +171,43 @@ A binary object's present value is published as `true` or `false`; a multi-state
 | `min`           | number                     | required |                            |
 | `max`           | number                     | required |                            |
 | `periodSeconds` | number                     | 60       | One cycle of the waveform. |
+
+## publish
+
+How a point's values go out. Reading (`pollIntervalMs`) and sending are separate: a device read every 5 s can send each read, the latest value once a minute, or a 15-minute average. Set it on a device for all its points, or on a point.
+
+| Key            | Type                            | Default               | Meaning                                                                                                                       |
+| -------------- | ------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `mode`         | `sample`, `aggregate`, `change` | `sample`              | `sample`: the value as read. `aggregate`: a summary of each window. `change`: only when it changes.                           |
+| `intervalMs`   | 1000–86400000, divides a day    | every read (`sample`) | `sample`: send the latest value once per interval. `aggregate`: the window, required. At least the device's `pollIntervalMs`. |
+| `deadband`     | ≥ 0                             | any change            | `change` only: minimum change, after scaling, before a value is sent again.                                                   |
+| `maxSilenceMs` | 1000–86400000                   | none                  | `change` only: send the value again after this long without a change, so a consumer can tell a quiet point from a gone one.   |
+
+Windows line up with the clock in UTC: a 15-minute window (`900000`) closes at :00, :15, :30 and :45 on every gateway, so its values line up with meter intervals and with each other. That is why `intervalMs` must divide a day (60000, 300000, 900000, 3600000, …).
+
+An aggregate message replaces the plain `{ value, unit, ts }`:
+
+```json
+{
+  "value": 21.4,
+  "min": 20.9,
+  "max": 22.1,
+  "avg": 21.4,
+  "last": 21.7,
+  "count": 180,
+  "from": 1762344000000,
+  "to": 1762344900000,
+  "ts": 1762344900000,
+  "unit": "unit:DEG_C"
+}
+```
+
+- `avg` is time-weighted: each value counts for as long as it held, so irregular reads (BACnet change-of-value pushes, a retry) do not skew it. `value` is the average, so a consumer that reads only `value` gets a sensible number.
+- A boolean has `avg` as the share of the window it was true (0 to 1), `value` and `last` as its last state, and no `min` or `max`.
+- `count` is the number of reads. A window with no read is sent with `count: 0` when the value held through it (a change-of-value point that stayed put) and the device answers; while the device does not, nothing is sent, and the outage does not count towards the next average.
+- The first window after a start is `"partial": true`, with `from` at the first read.
+
+**What it costs.** Every read is the most traffic: points × 3600 / interval in seconds is the messages per hour, and the [buffer](#buffer) holds `maxRows` of them through a broker outage. 200 points read every 5 s fill a million rows in about 7 hours; as 15-minute aggregates, in about 7 weeks.
 
 ## limits
 

@@ -31,8 +31,8 @@ Follow the supply air temperature of air handler 1:
 
 1. **Ask.** Every 30 seconds the gateway asks the air handler for object `analog-input 1`.
 2. **Clean.** The device answers `21.5`. The gateway applies the scaling you set, if any (a meter that reports tenths of a kW, say), and checks the value is a real number.
-3. **Skip the noise.** If it moved less than the deadband you chose (say 0.2 °C) since the last value it sent, nothing is sent. Your platform gets changes, not repetition.
-4. **Send.** Otherwise it publishes, on a topic named after where the value comes from:
+3. **Decide what to send.** Reading and sending are set separately. By default each read goes out as it is. A point can also send its latest value once a minute, a summary of each 15 minutes (minimum, maximum and average, for energy reports), or only when it changes (for alarms, states and setpoints). Summaries line up with the clock: a 15-minute window closes at :00, :15, :30 and :45, like the meter's.
+4. **Send.** It publishes on a topic named after where the value comes from:
 
    ```text
    vienna-hq/main/ahu-1/supply-air-temp   {"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}

@@ -249,7 +249,7 @@ timeseries(
 )
 y += 8
 timeseries(
-  "Values published vs suppressed by deadband",
+  "Values published vs held back (change mode)",
   [
     { expr: `sum(rate(ot_gateway_values_published_total{${sel}}[$__rate_interval]))`, legendFormat: "published" },
     { expr: `sum(rate(ot_gateway_values_suppressed_total{${sel}}[$__rate_interval]))`, legendFormat: "suppressed" }
@@ -260,7 +260,7 @@ timeseries(
     w: 12,
     stack: true,
     description:
-      "A high suppressed share means the deadband is saving bandwidth; all published means it may be too tight."
+      "Messages published, against reads that change mode held back. Sample and aggregate points never hold back; a sample interval or an aggregate window publishes fewer messages than reads."
   }
 )
 timeseries(
@@ -557,7 +557,7 @@ timeseries(
     x: 0,
     w: 12,
     description:
-      "Values devices sent on their own between polls (BACnet change-of-value notifications), before the deadband. Each subscription also sends its current value when it is made or renewed."
+      "Values devices sent on their own between polls (BACnet change-of-value notifications), before the publish mode. Each subscription also sends its current value when it is made or renewed."
   }
 )
 timeseries(
