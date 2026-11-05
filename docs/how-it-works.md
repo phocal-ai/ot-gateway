@@ -17,12 +17,12 @@ And you know where it should go: a dashboard, an energy report, an analytics pla
 OT Gateway is the translator in between.
 
 ```text
-  in the building                    the gateway                       your software
- ┌──────────────────┐            ┌──────────────────┐            ┌──────────────────────┐
- │ energy meter     │  Modbus    │ asks every 5 s,  │   MQTT     │ dashboards           │
- │ air handler 1    │ ─────────▶ │ cleans the value │ ─────────▶ │ energy reports       │
- │ air handler 2    │  BACnet    │ adds name & unit │            │ analytics, alerts    │
- └──────────────────┘            └──────────────────┘            └──────────────────────┘
+  in the building              the gateway                   your software
+ +-----------------+          +--------------------+         +-------------------+
+ | energy meter    |  Modbus  | asks every 5 s,    |  MQTT   | dashboards        |
+ | air handler 1   | -------> | cleans the value,  | ------> | energy reports    |
+ | air handler 2   |  BACnet  | adds name and unit |         | analytics, alerts |
+ +-----------------+          +--------------------+         +-------------------+
 ```
 
 ## What happens to one value

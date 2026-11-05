@@ -20,6 +20,7 @@ pnpm gateway          # build the status page (cached), then run apps/gateway wi
 pnpm ot-gateway init                       # questions in, ot-gateway.json out (the CLI: apps/gateway/src/Cli.ts)
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
 pnpm ot-gateway status                     # the running gateway's devices, one line each
 pnpm --filter @ot-gateway/core test   # one package

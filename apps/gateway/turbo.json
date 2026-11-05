@@ -3,7 +3,7 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      "inputs": ["src/**", "test/**", "../../VERSION", "../../examples/gateway.json"]
+      "inputs": ["src/**", "test/**", "../../VERSION", "../../examples/gateway.json", "../../examples/points.csv"]
     }
   }
 }

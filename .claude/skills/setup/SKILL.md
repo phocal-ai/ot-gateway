@@ -77,7 +77,7 @@ Then ask in plain text, in one message, only for what applies:
 
 ## 5. Modbus: draft from the register list
 
-For each register, write a point:
+If the user already has a points list as CSV (one row per point, with `device` and `point` columns), run `node apps/gateway/src/main.ts import <file> ot-gateway.json --dry-run` first: it maps the list (columns in `docs/first-building.md`, step 3) and names the line of every mistake. Fix the list with the user or draft the points yourself, then run it without `--dry-run`, which adds the devices and validates the config. Otherwise, for each register, write a point:
 
 - `table`: `holding` for 4xxxx/FC03, `input` for 3xxxx/FC04, `coil` for 0xxxx/FC01, `discrete` for 1xxxx/FC02.
 - `address`: **0-based.** Datasheets often list 40001-style numbers or 1-based addresses, so 40001 means holding `address: 0`. When the sheet is unclear, say which you assumed. A wrong guess shows up in step 7 as values that are off, or as exception 2 (illegal data address).

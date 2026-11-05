@@ -34,13 +34,29 @@ It asks for the site and building (the first two parts of every topic, such as `
 
 - **Find BACnet devices now:** the gateway asks the network who is there and drafts every device with its points, names and units. Nothing is written to a device, and no point is made writable.
 - **A simulated device:** to see your broker receive values before any real device is connected.
-- **None yet:** for Modbus devices, which you add in the next step.
+- **From a points list:** a CSV of your devices and points (step 3 shows the columns). Excel's "CSV" export works, with commas or semicolons.
+- **None yet:** to add devices in the next step.
 
 It writes `ot-gateway.json` and checks it. The password is never in that file: put it in `ot-gateway.env` as `MQTT_PASSWORD=…` (or the name you chose).
 
 ## 3. Add your Modbus points
 
-Modbus devices can't describe themselves, so their points come from your list. Add each device under `devices` in `ot-gateway.json`:
+Modbus devices can't describe themselves, so their points come from your list. The quickest way is the list itself, saved as CSV with one row per point:
+
+| device     | point           | unit | interval_s | host         | register | type    | byte_order | scale |
+| ---------- | --------------- | ---- | ---------- | ------------ | -------- | ------- | ---------- | ----- |
+| Main meter | Active power    | kW   | 5          | 192.168.1.50 | 100      | float32 | CDAB       |       |
+| Main meter | Energy          | kWh  | 5          | 192.168.1.50 | 102      | uint32  | CDAB       | 0.1   |
+| Main meter | Breaker tripped |      | 5          | 192.168.1.50 | 0        |         |            |       |
+
+```bash
+pnpm ot-gateway import points.csv            # adds the devices to ot-gateway.json
+pnpm ot-gateway import points.csv --dry-run  # only prints them
+```
+
+Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input needs no `type`), `deadband`, `offset`. BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has a meter and an air handler.
+
+Or add each device by hand under `devices` in `ot-gateway.json`:
 
 ```json
 {
