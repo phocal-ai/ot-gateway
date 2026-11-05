@@ -247,15 +247,17 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 
 ## Roadmap
 
-| Version          | Focus                                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| v0.1 Foundation  | Core, Schema config, Modbus TCP, MQTT publish                                                                                                   |
-| v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI                                                                                      |
-| v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscriptions                                                                                                      |
-| v0.4 Write-back  | MQTT commands, range limits, BACnet priority; brought forward from v1.0: local status page, packaging (container, systemd), `/setup` quickstart |
-| v1.0 Production  | A 12-hour real-time soak on a Raspberry Pi, a first real building, docs                                                                         |
+| Version              | Focus                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| v0.1 Foundation      | Core, Schema config, Modbus TCP, MQTT publish                                                                                                   |
+| v0.2 Reliability     | SQLite store-and-forward, health topics, simulators and CI                                                                                      |
+| v0.3 BACnet/IP       | Discovery, ReadProperty, COV subscriptions                                                                                                      |
+| v0.4 Write-back      | MQTT commands, range limits, BACnet priority; brought forward from v1.0: local status page, packaging (container, systemd), `/setup` quickstart |
+| v0.5 Field hardening | Modbus field quirks, shared connections, host telemetry, the Pi test plan                                                                       |
+| v0.6 OT Gateway      | Renamed from Plenum, Pi power monitoring, install from a blank SD card, security audit fixes                                                    |
+| v1.0 Production      | Project and docs site, a measured 15-minute first run, status page UX, a first real building                                                    |
 
-After v1.0 comes a Next.js configuration app, as a separate package.
+After v1.0 comes a Next.js configuration app, as a separate package. [docs/VISION.md](docs/VISION.md#the-path-to-v10-in-order) has the path to v1.0 in order.
 
 ## Contributing
 
