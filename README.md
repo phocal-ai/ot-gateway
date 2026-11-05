@@ -57,6 +57,8 @@ demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 
 The status page at <http://localhost:8080> shows the broker and buffer, every device with its health and latest values, and the recent commands; `GET /api/status` has the same as JSON.
 
+To watch the data arrive on a real broker, `pnpm demo --public` (or `demo --public` in the `docker run` line) publishes the same simulated data to a public test broker: the first of broker.hivemq.com, broker.emqx.io and test.mosquitto.org that answers, under a site id of its own such as `demo-3e15e2`. It prints the `mosquitto_sub` command and the MQTT Explorer settings to watch it with. Anyone can read a public broker, so the gateway refuses one for any device that is not simulated on this machine.
+
 The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, `node apps/gateway/src/main.ts …` anywhere):
 
 | Command                        | What it does                                                                          |

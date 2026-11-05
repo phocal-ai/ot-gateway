@@ -76,6 +76,28 @@ describe("parseConfig", () => {
     })
   )
 
+  it.effect("takes a public test broker only for devices on this machine", () =>
+    Effect.gen(function* () {
+      const mqtt = { url: "mqtt://test.mosquitto.org:1883" }
+      const [device] = minimal.devices
+      const onNetwork = yield* Effect.flip(parseConfig(JSON.stringify({ ...minimal, mqtt })))
+      expect(onNetwork.message).toContain("test.mosquitto.org is a public test broker")
+      expect(onNetwork.message).toContain(`at ["devices"][0]`)
+      const bacnetOnNetwork = yield* Effect.flip(
+        parseConfig(JSON.stringify({ ...minimal, mqtt, devices: [bacnetDevice("192.168.1.20")] }))
+      )
+      expect(bacnetOnNetwork.message).toContain(`Use your own broker for "ahu-2"`)
+      const local = yield* parseConfig(
+        JSON.stringify({
+          ...minimal,
+          mqtt: { url: "mqtt://Broker.HiveMQ.com" },
+          devices: [{ ...device, host: "127.0.0.1" }, bacnetDevice("127.0.0.1:47809")]
+        })
+      )
+      expect(local.devices).toHaveLength(2)
+    })
+  )
+
   it.effect("rejects out-of-range register addresses", () =>
     Effect.gen(function* () {
       const [device] = minimal.devices

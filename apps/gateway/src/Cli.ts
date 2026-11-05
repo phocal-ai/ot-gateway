@@ -12,7 +12,7 @@
 import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
-import { runDemo } from "./Demo.ts"
+import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover } from "./Discover.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
@@ -81,13 +81,26 @@ const demo = Command.make(
       Flag.withDescription("Address of the status page: 127.0.0.1, or 0.0.0.0 to reach it through a published port"),
       Flag.withFallbackConfig(Config.String("OT_GATEWAY_DEMO_LISTEN")),
       Flag.withDefault("127.0.0.1")
+    ),
+    public: Flag.Boolean("public").pipe(
+      Flag.withDescription(
+        "Publish the simulated data to a public test broker (broker.hivemq.com, …), to watch it from any MQTT client"
+      ),
+      Flag.withDefault(false)
     )
   },
-  ({ listen }) => Effect.scoped(runDemo({ listen }, runConfigured))
+  (flags) =>
+    Effect.gen(function* () {
+      const remote = flags.public
+        ? { broker: yield* pickPublicBroker(acceptsConnections), site: yield* randomDemoSite }
+        : undefined
+      yield* runDemo({ listen: flags.listen, public: remote }, runConfigured)
+    }).pipe(Effect.scoped)
 ).pipe(
   Command.withDescription("See it work: the gateway with a test MQTT broker and simulated devices, in one process"),
   Command.withExamples([
-    { command: "ot-gateway demo", description: "Run the demo; the status page is at http://localhost:8080" }
+    { command: "ot-gateway demo", description: "Run the demo; the status page is at http://localhost:8080" },
+    { command: "ot-gateway demo --public", description: "The same, published to a public test broker" }
   ])
 )
 

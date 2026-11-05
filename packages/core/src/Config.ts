@@ -277,6 +277,44 @@ export const StatusSettings = Schema.Struct({
 })
 export type StatusSettings = typeof StatusSettings.Type
 
+/**
+ * Public test brokers: anyone can subscribe to every topic on them, and publish to any. They are for seeing the
+ * gateway work (`ot-gateway demo --public`), so a config that names one may only have devices on this machine,
+ * which are simulated; a device in a building would publish its data to the internet and take commands from it.
+ */
+export const publicTestBrokers: ReadonlySet<string> = new Set([
+  "test.mosquitto.org",
+  "broker.hivemq.com",
+  "broker.emqx.io",
+  "mqtt.eclipseprojects.io"
+])
+
+const onThisMachine = (host: string) => host === "localhost" || host === "::1" || loopbackIpv4.test(host)
+
+const isOnThisMachine = (device: Device) =>
+  device.protocol === "simulator" ||
+  (device.protocol === "modbus-tcp"
+    ? onThisMachine(device.host)
+    : device.address !== undefined && onThisMachine(device.address.split(":")[0] ?? ""))
+
+const publicBrokerOnlyForLocalDevices = Schema.makeFilter<{
+  readonly mqtt: { readonly url: string }
+  readonly devices: ReadonlyArray<Device>
+}>((config) => {
+  const host = URL.parse(config.mqtt.url)?.hostname.toLowerCase()
+  if (host === undefined || !publicTestBrokers.has(host)) return []
+  return config.devices.flatMap((device, index) =>
+    isOnThisMachine(device)
+      ? []
+      : [
+          {
+            path: ["devices", index],
+            issue: `${host} is a public test broker: anyone can read and write there, so it only takes simulated devices on this machine. Use your own broker for "${device.id}".`
+          }
+        ]
+  )
+})
+
 export const GatewayConfig = Schema.Struct({
   site: Slug,
   building: Slug,
@@ -292,7 +330,7 @@ export const GatewayConfig = Schema.Struct({
   status: Schema.optionalKey(StatusSettings),
   bacnet: BacnetSettings.pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
   devices: Schema.Array(Device).pipe(Schema.check(uniqueIds("device")))
-})
+}).pipe(Schema.check(publicBrokerOnlyForLocalDevices))
 export type GatewayConfig = typeof GatewayConfig.Type
 
 /**

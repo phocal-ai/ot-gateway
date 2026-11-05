@@ -37,6 +37,8 @@ The top level of the document.
 | `username`    | string, ≤ 1024 | none                    | Broker username.                                                                                                                  |
 | `passwordEnv` | string         | none                    | Name of the environment variable holding the password (`/etc/ot-gateway/gateway.env` under systemd). Never put the password here. |
 
+A public test broker (`broker.hivemq.com`, `broker.emqx.io`, `test.mosquitto.org`, `mqtt.eclipseprojects.io`) lets anyone read and write every topic, so a config that names one may only have devices on this machine, which are simulated: a device in a building on one is refused, by `check` and at start-up. `ot-gateway demo --public` uses one this way.
+
 A password over `mqtt://` is sent in clear text, so unless the broker is on the same machine (`localhost`, `127.0.0.0/8`, `::1`) the gateway warns about it at start-up and in `--check`: use `mqtts://`.
 
 The session is clean: nothing sent while the gateway was offline is delivered later, commands included.
