@@ -68,6 +68,24 @@ export const HostStatus = Schema.Struct({
 })
 export type HostStatus = typeof HostStatus.Type
 
+/**
+ * The latest message the gateway published on one topic under its site and building: values, `$meta`, health and
+ * command results. What a subscriber to `site/building/#` would see, kept on the gateway so the page can show it.
+ */
+export const MessageStatus = Schema.Struct({
+  topic: Schema.String,
+  /** The payload, cut to its first 2,000 characters (`truncated` says so). */
+  payload: Schema.String,
+  truncated: Schema.Boolean,
+  /** Retained: the broker keeps it and hands it to every subscriber that connects later. */
+  retained: Schema.Boolean,
+  /** Unix ms of the latest message on this topic, from the gateway's wall clock. */
+  at: Schema.Number,
+  /** Messages on this topic since the gateway started. */
+  count: Schema.Number
+})
+export type MessageStatus = typeof MessageStatus.Type
+
 export const GatewayStatus = Schema.Struct({
   site: Schema.String,
   building: Schema.String,
@@ -86,8 +104,16 @@ export const GatewayStatus = Schema.Struct({
 })
 export type GatewayStatus = typeof GatewayStatus.Type
 
-export class StatusGroup extends HttpApiGroup.make("status").add(
-  HttpApiEndpoint.get("status", "/api/status", { success: GatewayStatus })
-) {}
+/** The latest message per topic, sorted by topic; a separate endpoint, so the page asks only while it shows them. */
+export const Messages = Schema.Struct({
+  messages: Schema.Array(MessageStatus),
+  /** Topics left out because the gateway keeps at most this many. */
+  droppedTopics: Schema.Number
+})
+export type Messages = typeof Messages.Type
+
+export class StatusGroup extends HttpApiGroup.make("status")
+  .add(HttpApiEndpoint.get("status", "/api/status", { success: GatewayStatus }))
+  .add(HttpApiEndpoint.get("messages", "/api/messages", { success: Messages })) {}
 
 export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup) {}

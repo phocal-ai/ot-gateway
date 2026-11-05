@@ -7,6 +7,10 @@ INPUT=$(cat)
 # Re-prompted once already: let Claude stop and report the failure itself.
 [ "$(jq -r '.stop_hook_active // false' <<<"$INPUT")" = "true" ] && exit 0
 
+# In GitHub Actions (the deps and triage routines) the agent has no pnpm on its PATH and runs the
+# check itself through .github/scripts/routine-run.sh, and CI checks the pull request again.
+[ -n "${GITHUB_ACTIONS:-}" ] && exit 0
+
 cd "$(jq -r '.cwd' <<<"$INPUT")"
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null || true)
 [ -n "$ROOT" ] && [ -d "$ROOT/node_modules" ] || exit 0

@@ -15,14 +15,21 @@ pnpm format           # oxfmt --write .
 pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
 pnpm test
-pnpm gateway          # run apps/gateway with examples/gateway.json
-node apps/gateway/src/main.ts --check ot-gateway.json      # validate a config without connecting
-node apps/gateway/src/main.ts --discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
+pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
+pnpm ot-gateway init                       # questions in, ot-gateway.json out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
+pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
+pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
+pnpm ot-gateway status                     # the running gateway's devices, one line each
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
 scripts/interop.sh [mqtt|bacnet|modbus]   # against Mosquitto, EMQX, the BACnet Stack server and pymodbus (Docker, Python)
 ```
+
+Turborepo caches `typecheck` and `test` locally and in a remote cache on Vercel (team `wimluks-projects`; `pnpm exec turbo login` and `turbo link` once per machine, `TURBO_TOKEN` in CI). A cached task is replayed only when none of its declared inputs changed, so **a test that reads a file outside its package must list that file in the package's `turbo.json` inputs**, as `packages/core` does for `docs/configuration.md`. Otherwise a change to that file replays a stale pass. Before changing Turborepo config, read `AGENTS.md`: turbo keeps a block there that points at the docs bundled with the installed version.
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
 
@@ -39,6 +46,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/api`: the local HTTP API's contract (`HttpApi`), shared by the gateway and the status page
 - `apps/gateway`: the runnable gateway
 - `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @ot-gateway/web build`) that the gateway serves; no Next server at runtime
+- `apps/site`: the project and docs site, Fumadocs as a static export hosted on Vercel. Its docs pages are generated from `docs/*.md` and the README at build time, so edit those, never `apps/site/content/`
 - `examples/`: sample configs
 - `packaging/`: `compose.yaml` (the recommended install), the systemd unit and `install.sh`; the container image is the root `Dockerfile`
 - `docs/`: vision, the configuration reference (`configuration.md`, kept in step with the schema by `packages/core/test/ConfigDocs.test.ts`), operations and troubleshooting

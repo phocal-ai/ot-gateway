@@ -2,7 +2,7 @@
  * The gateway's status, through the typed client for `OtGatewayApi`: the same
  * schema the gateway encodes with decodes the answer here.
  */
-import { type GatewayStatus, OtGatewayApi } from "@ot-gateway/api"
+import { type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
 import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -12,22 +12,36 @@ export class StatusUnavailable extends Schema.TaggedError<StatusUnavailable>()("
   message: Schema.String
 }) {}
 
-/**
- * The status, within three seconds. The page is served by the gateway, so
- * the API is on the same origin. Every way of not getting it (unreachable,
- * a timeout, an answer that does not decode) means one thing here.
- */
-export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = HttpApiClient.make(OtGatewayApi, {
+/** The typed client for the gateway that served this page: the API is on the same origin. */
+const gateway = HttpApiClient.make(OtGatewayApi, {
   baseUrl: typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin
-}).pipe(
+})
+
+/**
+ * An answer within three seconds, or `StatusUnavailable`: every way of not getting it (unreachable, a timeout, an
+ * answer that does not decode) means one thing here.
+ */
+const withinThreeSeconds = <A, E extends { readonly message: string }, R>(request: Effect.Effect<A, E, R>) =>
+  request.pipe(
+    Effect.mapError((error) => new StatusUnavailable({ message: error.message })),
+    Effect.timeoutOrElse({
+      duration: "3 seconds",
+      orElse: () => Effect.fail(new StatusUnavailable({ message: "no answer within 3 s" }))
+    })
+  )
+
+/** The status, for the whole page. */
+export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = gateway.pipe(
   Effect.flatMap((client) => client.status.status()),
   Effect.provide(FetchHttpClient.layer),
-  // The client's failures (transport, status, decoding) all mean one thing to the page.
-  Effect.mapError((error) => new StatusUnavailable({ message: error.message })),
-  Effect.timeoutOrElse({
-    duration: "3 seconds",
-    orElse: () => Effect.fail(new StatusUnavailable({ message: "no answer within 3 s" }))
-  })
+  withinThreeSeconds
+)
+
+/** The latest message per topic, for the messages view; asked for only while it is open. */
+export const fetchMessages: Effect.Effect<Messages, StatusUnavailable> = gateway.pipe(
+  Effect.flatMap((client) => client.status.messages()),
+  Effect.provide(FetchHttpClient.layer),
+  withinThreeSeconds
 )
 
 /** QUDT unit names (`unit:DEG_C`) as people write them. */
@@ -79,4 +93,16 @@ export const formatBytes = (bytes: number) => {
     unit++
   }
   return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
+}
+
+/** What a topic under `site/building/` carries, by its shape (README, "Topics"). */
+export type TopicKind = "value" | "metadata" | "health" | "command result" | "other"
+
+export const topicKind = (topic: string): TopicKind => {
+  const parts = topic.split("/")
+  if (parts[2] === "$gateway" && parts[4] === "health") return "health"
+  if (parts.length === 4) return "value"
+  if (parts.length === 5 && parts[4] === "$meta") return "metadata"
+  if (parts.length === 6 && parts[4] === "$set" && parts[5] === "result") return "command result"
+  return "other"
 }

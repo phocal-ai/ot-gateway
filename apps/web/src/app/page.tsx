@@ -2,16 +2,17 @@
 
 /**
  * The status page: the gateway, its broker and buffer, every device with its
- * health and latest values, and the recent commands. Polls `/api/status`
- * every two seconds; read-only.
+ * health and latest values, the messages it publishes and the recent commands.
+ * Polls `/api/status` every two seconds, and `/api/messages` while the
+ * messages are shown; read-only.
  */
-import type { DeviceStatus, GatewayStatus, HostStatus } from "@ot-gateway/api"
+import type { DeviceStatus, GatewayStatus, HostStatus, Messages as MessageList } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ago, fetchStatus, formatBytes, formatValue, unitLabel } from "@/lib/status"
+import { ago, fetchMessages, fetchStatus, formatBytes, formatValue, topicKind, unitLabel } from "@/lib/status"
 
 const POLL_MS = 2000
 
@@ -192,6 +193,134 @@ const Host = ({ host }: { readonly host: HostStatus }) => {
   )
 }
 
+/** Polls `fetchMessages` every two seconds while mounted; the last answer, or undefined before the first. */
+const useMessages = () => {
+  const [messages, setMessages] = useState<MessageList | undefined>(undefined)
+  useEffect(() => {
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = () =>
+      Effect.runPromise(Effect.result(fetchMessages)).then((result) => {
+        if (cancelled) return
+        if (result._tag === "Success") setMessages(result.success)
+        timer = setTimeout(() => void poll(), POLL_MS)
+      })
+    void poll()
+    return () => {
+      cancelled = true
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [])
+  return messages
+}
+
+const kindBadge = {
+  value: "default",
+  metadata: "secondary",
+  health: "outline",
+  "command result": "warning",
+  other: "outline"
+} as const
+
+const MessageTable = ({ now, prefix }: { readonly now: number; readonly prefix: string }) => {
+  const list = useMessages()
+  if (list === undefined) return <p className="text-sm text-muted-foreground">Loading…</p>
+  if (list.messages.length === 0) return <p className="text-sm text-muted-foreground">Nothing published yet.</p>
+  return (
+    <>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Topic</TableHead>
+            <TableHead>Latest payload</TableHead>
+            <TableHead className="text-right">Messages</TableHead>
+            <TableHead className="text-right">Latest</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {list.messages.map((message) => {
+            const kind = topicKind(message.topic)
+            return (
+              <TableRow key={message.topic}>
+                <TableCell className="align-top">
+                  <div className="flex flex-col gap-1">
+                    <span className="font-mono text-xs">
+                      <span className="text-muted-foreground">{prefix}</span>
+                      {message.topic.slice(prefix.length)}
+                    </span>
+                    <div className="flex gap-1">
+                      <Badge variant={kindBadge[kind]}>{kind}</Badge>
+                      {message.retained ? (
+                        <Badge
+                          variant="outline"
+                          title="The broker keeps it and gives it to every subscriber that connects later"
+                        >
+                          retained
+                        </Badge>
+                      ) : null}
+                    </div>
+                  </div>
+                </TableCell>
+                <TableCell className="max-w-md align-top">
+                  <code className="block truncate font-mono text-xs" title={message.payload}>
+                    {message.payload}
+                    {message.truncated ? "…" : ""}
+                  </code>
+                </TableCell>
+                <TableCell className="text-right align-top tabular-nums">{message.count.toLocaleString()}</TableCell>
+                <TableCell className="text-right align-top text-muted-foreground">{ago(message.at, now)}</TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
+      {list.droppedTopics > 0 ? (
+        <p className="mt-2 text-sm text-muted-foreground">
+          {list.droppedTopics.toLocaleString()} more topics are not shown: the gateway keeps the latest message of at
+          most {list.messages.length.toLocaleString()}.
+        </p>
+      ) : null}
+    </>
+  )
+}
+
+/** Small setups (the demo) show their messages right away; a building's worth of points waits for a click. */
+const OPEN_UP_TO_POINTS = 50
+
+const Messages = ({ status }: { readonly status: GatewayStatus }) => {
+  const points = status.devices.reduce((sum, device) => sum + device.points.length, 0)
+  const [open, setOpen] = useState(points <= OPEN_UP_TO_POINTS)
+  const prefix = `${status.site}/${status.building}/`
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle>Messages</CardTitle>
+          <button
+            type="button"
+            className="text-sm text-muted-foreground underline-offset-4 hover:underline"
+            onClick={() => setOpen((shown) => !shown)}
+          >
+            {open ? "Hide" : "Show"}
+          </button>
+        </div>
+        <CardDescription>
+          What the gateway publishes to the broker, the latest message on each topic: what a client subscribed to{" "}
+          <code className="font-mono">{prefix}#</code> receives. A value goes to{" "}
+          <code className="font-mono">site/building/device/point</code> when it changes, its metadata (name, unit, Brick
+          class) to <code className="font-mono">…/$meta</code>, and the gateway&apos;s health to{" "}
+          <code className="font-mono">…/$gateway/{status.id}/health</code>.
+        </CardDescription>
+      </CardHeader>
+      {open ? (
+        <CardContent>
+          <MessageTable now={status.now} prefix={prefix} />
+        </CardContent>
+      ) : null}
+    </Card>
+  )
+}
+
 const Commands = ({ status }: { readonly status: GatewayStatus }) => (
   <Card>
     <CardHeader>
@@ -295,6 +424,7 @@ const StatusPage = () => {
               <Device key={device.id} device={device} now={status.now} />
             ))}
           </section>
+          <Messages status={status} />
           <Commands status={status} />
         </>
       )}

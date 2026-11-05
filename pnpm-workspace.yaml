@@ -1,3 +1,8 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# esbuild (through Vite and Next) works from its platform package; its postinstall only double-checks that, so
+# it stays off and pnpm install stays quiet.
+allowBuilds:
+  esbuild: false

@@ -224,7 +224,8 @@ const describeConfigured = (client: BacnetClient, configured: BacnetDevice, addr
   }).pipe(skipOnFailure(configured.deviceInstance))
 
 /** Discover, describe and print the draft; through `network` instead of Node's in a simulation. */
-export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">) =>
+/** The draft `devices` entries for the BACnet devices that answer, with progress and warnings on stderr. */
+export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "udp">) =>
   Effect.gen(function* () {
     const client = yield* makeBacnetNetwork(config.bacnet, network)
     yield* Console.error(`Who-Is to ${config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
@@ -264,5 +265,9 @@ export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">) 
       concurrency: 4
     })
     const existing = config.devices.map((device) => device.id)
-    yield* Console.log(JSON.stringify({ devices: draftDevices(described.flat(), existing) }, null, 2))
+    return draftDevices(described.flat(), existing)
   }).pipe(Effect.scoped)
+
+/** `ot-gateway discover`: the drafts as `{ "devices": [...] }` on stdout, ready to paste into the config. */
+export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">) =>
+  Effect.flatMap(discoverDrafts(config, network), (devices) => Console.log(JSON.stringify({ devices }, null, 2)))

@@ -55,7 +55,7 @@ Stop at the first one that fails, fix it, and start that test again.
 Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`OT_GATEWAY_TAG`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.6.2      # or ot-gateway:test
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.7.0      # or ot-gateway:test
 docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
   | sed 's#./ot-gateway-buffer.sqlite#/var/lib/ot-gateway/buffer.sqlite#' | sudo tee /etc/ot-gateway/gateway.json >/dev/null
 docker run -d --name ot-gateway-bench --network host --log-driver local \
@@ -99,12 +99,12 @@ docker run --rm --privileged --user root -v /var/tmp/soak-disk:/soak -e SOAK_DIR
 
 ### 4. Real-time soak, 12 hours
 
-The release gate: the soak at speed 1, so every timer, NTP correction and SD-card write happens at its real rate.
+The extended preset: the soak at speed 1, so every timer, NTP correction and SD-card write happens at its real rate. A release needs it when it changes a driver, the pipeline, the buffer, MQTT or packaging, and before v1.0 (CONTRIBUTING.md, "Soak"); other releases ship on the quick preset in CI.
 
 ```bash
 docker run -d --name soak --user root -v /var/tmp/soak-12h:/soak -e SOAK_DIR=/soak \
-  -e SOAK_DEVICES=4 -e SOAK_STRICT_HOST=1 \
-  --entrypoint bash ot-gateway:test scripts/soak.sh 12h
+  -e SOAK_DEVICES=4 \
+  --entrypoint bash ot-gateway:test scripts/soak.sh extended
 ```
 
 Read `docker logs soak` and `/var/tmp/soak-12h/summary.txt` at the end, then `docker rm soak` before the next run. Before a Pi goes into its first building, also run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below; a release does not wait for that week.

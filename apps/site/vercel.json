@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/index"
+    },
+    {
+      "source": "/docs.md",
+      "destination": "/llms.mdx/docs/content.md"
+    },
+    {
+      "source": "/docs/:slug*.md",
+      "destination": "/llms.mdx/docs/:slug*/content.md"
+    }
+  ]
+}

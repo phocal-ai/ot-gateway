@@ -2,7 +2,7 @@
 
 **An Effect-native edge gateway for buildings.**
 
-OT Gateway runs on small Linux devices like a Raspberry Pi. It reads building protocols such as Modbus TCP and BACnet/IP, publishes clean, normalized data to MQTT, and carries commands back safely.
+OT Gateway gets the values you care about out of a building's meters and controllers and into your software. It runs on any always-on computer in the building (a mini PC, a server, a NAS, a Raspberry Pi), reads building protocols such as Modbus TCP and BACnet/IP, publishes clean, named values with units to MQTT, and carries commands back safely. [How it works](docs/how-it-works.md) explains it with one example building.
 
 It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable, not hidden in callbacks or flow graphs. OT Gateway is both a library you compose in code and a ready-to-run gateway you configure with one JSON file.
 
@@ -30,18 +30,26 @@ OT Gateway treats field reality as normal: devices time out, brokers go offline,
 
 ## Quick start
 
-Requirements: Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
+Three steps, each a little closer to your own building.
+
+### 1. See it work
+
+One minute, no devices needed. With [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or any Docker):
+
+```bash
+docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
+```
+
+Or from a checkout, with Node.js 22.18 or newer (24 LTS recommended) and pnpm 10:
 
 ```bash
 git clone https://github.com/phocal-ai/ot-gateway
 cd ot-gateway
 pnpm install
-pnpm check      # typecheck + tests across the workspace (Turborepo)
-pnpm bench      # terminal 1: a local MQTT test broker, a Modbus TCP and a BACnet/IP simulator
-pnpm gateway    # terminal 2: run the gateway with examples/gateway.json
+pnpm demo
 ```
 
-The bench prints every message the gateway publishes, from a simulated air handler, a simulated Modbus meter and a simulated BACnet air handler:
+The demo is a tiny building on your computer: a simulated energy meter (Modbus), a simulated air handler (BACnet) and a built-in sensor, the gateway reading them, and a test MQTT broker receiving what it sends. Nothing leaves your machine. The terminal prints every message the broker receives:
 
 ```text
 [retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
@@ -51,17 +59,35 @@ demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
-The gateway also serves a status page at <http://127.0.0.1:8080>: broker and buffer, every device with its health and latest values, and the recent commands. Build it once with `pnpm --filter @ot-gateway/web build`; until then the gateway serves only its JSON API, `GET /api/status`.
+### 2. Look around
 
-Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
+Open the status page at <http://localhost:8080>. It shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands; `GET /api/status` and `GET /api/messages` have the same as JSON.
+
+To watch the data arrive on a real broker, `pnpm demo --public` (or `demo --public` in the `docker run` line) publishes the same simulated data to a public test broker: the first of broker.hivemq.com, broker.emqx.io and test.mosquitto.org that answers, under a site id of its own such as `demo-3e15e2`. It prints the `mosquitto_sub` command and the MQTT Explorer settings to watch it with. Anyone can read a public broker, so the gateway refuses one for any device that is not simulated on this machine.
+
+### 3. Your own building
+
+You know which values you want, from which devices, and how often. `ot-gateway init` turns that into a config in a few questions, and finds BACnet devices on its own: [Your first building](docs/first-building.md) walks through it, from a points list to values on your broker. Or let a coding agent do it: [Set it up with AI](#set-it-up-with-ai).
+
+The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere):
+
+| Command                            | What it does                                                                                                    |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `ot-gateway demo`                  | the demo above                                                                                                  |
+| `ot-gateway init [config]`         | ask for the site, broker and devices, and write a config; the default is `ot-gateway.json`                      |
+| `ot-gateway run [config]`          | run the gateway with that config                                                                                |
+| `ot-gateway check [config]`        | validate a config without connecting to anything, listing every mistake with its path                           |
+| `ot-gateway discover [config]`     | find BACnet devices and print a draft of their config (below)                                                   |
+| `ot-gateway import <csv> [config]` | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)) |
+| `ot-gateway watch [config]`        | print every message under the config's site and building as it reaches the broker                               |
+| `ot-gateway status [--url]`        | the running gateway's broker, buffer and devices, one line each                                                 |
+| `ot-gateway --help`                | every command and flag; `--log-level debug` works with all of them                                              |
+
+### Working on the gateway
+
+To work on the gateway itself, run the bench and the gateway as two processes instead: `pnpm bench` in one terminal (the broker and the simulated devices, printing every message) and `pnpm gateway` in another (the gateway with `examples/gateway.json`, after building the status page; Turborepo replays that build from its cache unless the page changed). Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer. `pnpm check` runs the format check, lint, typecheck and every test (about 30 s).
 
 OT Gateway runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
-
-To check a config without connecting to anything:
-
-```bash
-node apps/gateway/src/main.ts --check path/to/gateway.json
-```
 
 ## Set it up with AI
 
@@ -82,19 +108,19 @@ commands yourself, ask me only what you cannot find out, never write to a device
 of the JSON config. Stop when values from my devices reach the broker.
 ```
 
-To draft BACnet points yourself, `--discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
+To draft BACnet points yourself, `discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
 
 ```bash
-node apps/gateway/src/main.ts --discover path/to/gateway.json
+pnpm ot-gateway discover path/to/gateway.json
 ```
 
-Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `--discover` reads it there and drafts the points it does not have yet.
+Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.
 
 ## Running it for real
 
-[docs/raspberry-pi-install.md](docs/raspberry-pi-install.md) takes a Raspberry Pi from a blank SD card to a running gateway. [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
+Once values flow, the gateway belongs on a machine that stays on in the building: any Linux machine with Docker (a mini PC, an industrial PC, a NAS, a server, a VM) or a Raspberry Pi. [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/raspberry-pi-install.md](docs/raspberry-pi-install.md) takes a Raspberry Pi from a blank SD card to a running gateway; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
 
-The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for a Raspberry Pi on the 64-bit OS as much as for an industrial PC.
+The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for an industrial PC as much as for a Raspberry Pi on the 64-bit OS.
 
 ```bash
 docker compose -f packaging/compose.yaml up -d
@@ -212,6 +238,7 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | [`@ot-gateway/api`](packages/api)             | The local HTTP API's contract (Effect `HttpApi`), shared by the gateway and the status page          | Working |
 | [`@ot-gateway/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                 | Working |
 | [`@ot-gateway/web`](apps/web)                 | The local status page: Next.js and shadcn/ui, a static export the gateway serves                     | Working |
+| [`@ot-gateway/site`](apps/site)               | The project and docs site: Fumadocs, a static export on Vercel, with the docs rendered from `docs/`  | Working |
 
 ## Architecture
 
@@ -247,15 +274,17 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 
 ## Roadmap
 
-| Version          | Focus                                                                                                                                           |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| v0.1 Foundation  | Core, Schema config, Modbus TCP, MQTT publish                                                                                                   |
-| v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI                                                                                      |
-| v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscriptions                                                                                                      |
-| v0.4 Write-back  | MQTT commands, range limits, BACnet priority; brought forward from v1.0: local status page, packaging (container, systemd), `/setup` quickstart |
-| v1.0 Production  | A 12-hour real-time soak on a Raspberry Pi, a first real building, docs                                                                         |
+| Version              | Focus                                                                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| v0.1 Foundation      | Core, Schema config, Modbus TCP, MQTT publish                                                                                                   |
+| v0.2 Reliability     | SQLite store-and-forward, health topics, simulators and CI                                                                                      |
+| v0.3 BACnet/IP       | Discovery, ReadProperty, COV subscriptions                                                                                                      |
+| v0.4 Write-back      | MQTT commands, range limits, BACnet priority; brought forward from v1.0: local status page, packaging (container, systemd), `/setup` quickstart |
+| v0.5 Field hardening | Modbus field quirks, shared connections, host telemetry, the Pi test plan                                                                       |
+| v0.6 OT Gateway      | Renamed from Plenum, Pi power monitoring, install from a blank SD card, security audit fixes                                                    |
+| v1.0 Production      | Project and docs site, a measured 15-minute first run, status page UX, a first real building                                                    |
 
-After v1.0 comes a Next.js configuration app, as a separate package.
+After v1.0 comes a Next.js configuration app, as a separate package. [docs/VISION.md](docs/VISION.md#the-path-to-v10-in-order) has the path to v1.0 in order.
 
 ## Contributing
 

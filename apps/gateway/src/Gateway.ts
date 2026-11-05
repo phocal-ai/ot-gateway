@@ -236,7 +236,9 @@ const northbound = (
       return Publisher.of({
         publish: (topic, payload, publishOptions) =>
           // The status page sees every value read, delivered or not: it matters most while the broker is down.
-          Effect.sync(() => status?.recordPublish(topic, payload)).pipe(
+          Effect.flatMap(Clock.currentTimeMillis, (at) =>
+            Effect.sync(() => status?.recordPublish(topic, payload, { retained: publishOptions?.retain === true, at }))
+          ).pipe(
             Effect.andThen(inner.publish(topic, payload, publishOptions)),
             Effect.tap(() => Effect.sync(() => onAccepted?.(topic, payload, publishOptions)))
           )

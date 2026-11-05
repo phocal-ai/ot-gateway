@@ -14,7 +14,15 @@ import { Effect, Schema } from "effect"
  * health topic that is also the MQTT will) stays far below MQTT's 65,535-byte
  * limit, past which the CONNECT packet could not even be encoded.
  */
-export const Slug = Schema.String.pipe(Schema.check(Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/), Schema.isMaxLength(64)))
+export const Slug = Schema.String.pipe(
+  Schema.check(
+    Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/, {
+      message:
+        "Expected a slug: lowercase letters, digits, - and _, starting with a letter or digit (vienna-hq, not Vienna HQ)"
+    }),
+    Schema.isMaxLength(64)
+  )
+)
 export type Slug = typeof Slug.Type
 
 /** Optional semantic tagging. Brick is primary, Haystack tags are for integrators. */

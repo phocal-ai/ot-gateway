@@ -13,6 +13,10 @@
 # does not strip types under node_modules, and workspace packages are
 # symlinks out of it). The status page (apps/web) is a static export, built
 # once on the build host and copied in.
+#
+# To see it work without a config, broker or devices:
+#
+#   docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
 ARG NODE_VERSION=24
 
 FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS web
@@ -58,6 +62,8 @@ ARG OT_GATEWAY_VERSION=dev
 RUN mkdir -p /etc/ot-gateway /var/lib/ot-gateway && chown node:node /var/lib/ot-gateway && echo "$OT_GATEWAY_VERSION" > VERSION
 USER node
 ENV NODE_ENV=production
+# `demo` serves its status page on every interface of the container, so `-p 127.0.0.1:8080:8080` reaches it.
+ENV OT_GATEWAY_DEMO_LISTEN=0.0.0.0
 # A smaller young generation than V8's default: about 40 MB less resident, no measurable CPU cost.
 ENTRYPOINT ["node", "--max-semi-space-size=4", "--env-file-if-exists=/etc/ot-gateway/gateway.env", "apps/gateway/src/main.ts"]
 CMD ["/etc/ot-gateway/gateway.json"]

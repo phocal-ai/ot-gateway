@@ -1,0 +1,246 @@
+name: Deps
+
+# Weekly dependency update. Claude Code updates the dependencies within their
+# ranges (prompt: .github/prompts/deps.md), and when a newer Effect 4 release
+# exists, this workflow first pulls repos/effect to its tag (CLAUDE.md,
+# "Reference repos") so the agent bumps effect and @effect/* to match. The result
+# is a pull request against dev for a person to review and merge.
+#
+# Two jobs, so the agent never holds a write token:
+# - update: read-only token, used only to check for an open update PR. The agent
+#   runs code only through .github/scripts/routine-run.sh, as a sandbox user
+#   without the Claude token (.github/actions/routine-agent). Its Bash calls are
+#   checked by .github/scripts/routine-bash-guard.sh.
+# - publish: repeats the Effect subtree pull, applies the agent's patch, refuses it
+#   when it touches .github/, .claude/, repos/ or packaging/install.sh
+#   (.github/scripts/routine-diff-check.sh), pushes deps/weekly-<date> and opens
+#   the pull request. Tests for the scripts: scripts/test-routines.sh.
+#
+# Pushing and opening the pull request use ROUTINE_TOKEN, a fine-grained token
+# limited to this repository (Contents and Pull requests: read and write), so the
+# pull request starts CI, Interop and Image like a person's. publish then waits for
+# every check and merges the update into dev when all of them pass, updating the
+# branch first if dev moved; a failed check leaves the pull request open for a
+# person (CONTRIBUTING.md, "Routines"). Nothing here touches main or releases.
+#
+# Without ROUTINE_TOKEN it falls back to GITHUB_TOKEN: the pull request still
+# opens (with "Allow GitHub Actions to create and approve pull requests" on), but
+# GitHub holds its CI until a person approves it, and nothing merges on its own.
+#
+# Secrets: CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`; the job skips with
+# a warning without it) and ROUTINE_TOKEN.
+#
+# Cost: public repo, so Actions minutes are free; about 15 minutes a week, more in
+# a week with an Effect release (the subtree fetch). Nothing here exports telemetry.
+
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deps
+  cancel-in-progress: false
+
+env:
+  CLAUDE_CODE_VERSION: 2.1.316
+  CLAUDE_MODEL: claude-sonnet-5-5
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      outcome: ${{ steps.agent.outputs.outcome }}
+      base: ${{ steps.effect.outputs.base }}
+      effect: ${{ steps.effect.outputs.effect }}
+      effect-tree: ${{ steps.effect.outputs.tree }}
+    steps:
+      - name: Check secrets and open update PRs
+        id: ready
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "::warning::Dependency update skipped, missing secret: CLAUDE_CODE_OAUTH_TOKEN"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # One open update at a time: a new one waits until the last is merged or closed.
+          open=$(gh pr list --repo "$REPO" --state open --base dev --json headRefName \
+            -q '[.[] | select(.headRefName | startswith("deps/weekly-"))] | length')
+          if [ "$open" != 0 ]; then
+            echo "::notice::An update pull request is still open; skipped."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.ready.outputs.ready == 'true'
+        with:
+          ref: dev
+          # The subtree pull needs history; the agent needs no credentials.
+          fetch-depth: 0
+          persist-credentials: false
+
+      # No dependency cache: the agent's job must not write a cache that other workflows restore.
+      - uses: actions/setup-node@v7
+        if: steps.ready.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+
+      - name: Pull repos/effect to the newest Effect 4 release
+        id: effect
+        if: steps.ready.outputs.ready == 'true'
+        run: |
+          echo "base=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          mkdir -p .routine
+          current=$(jq -r '.dependencies.effect' packages/core/package.json)
+          latest=$(npm view 'effect@4' version --json | jq -r 'if type == "array" then .[-1] else . end')
+          if [[ ! $latest =~ ^4\.[0-9]+\.[0-9]+$ ]]; then
+            echo "skipped: npm did not answer with an Effect 4 version" > .routine/effect.txt
+          elif [ "$latest" = "$current" ] || [ "$(printf '%s\n%s\n' "$current" "$latest" | sort -V | tail -n 1)" = "$current" ]; then
+            echo "current effect@$current" > .routine/effect.txt
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git "effect@$latest" --squash \
+              -m "repos/effect: pull effect@$latest"
+            echo "pulled effect@$latest from effect@$current" > .routine/effect.txt
+            echo "effect=$latest" >> "$GITHUB_OUTPUT"
+            echo "tree=$(git rev-parse HEAD:repos/effect)" >> "$GITHUB_OUTPUT"
+          fi
+          cat .routine/effect.txt
+
+      - uses: ./.github/actions/routine-agent
+        id: agent
+        if: steps.ready.outputs.ready == 'true'
+        with:
+          routine: deps
+          oauth-token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude-code-version: ${{ env.CLAUDE_CODE_VERSION }}
+          model: ${{ env.CLAUDE_MODEL }}
+
+      - name: Blocked
+        if: steps.agent.outputs.outcome == 'blocked'
+        run: |
+          echo "::error::The update could not pass pnpm check; the report is in the step summary."
+          exit 1
+
+  publish:
+    needs: update
+    if: needs.update.outputs.outcome == 'updates'
+    runs-on: ubuntu-latest
+    # Long enough to wait for Image, the slowest check, and one branch update.
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.update.outputs.base }}
+          fetch-depth: 0
+          # The push must not come from GITHUB_TOKEN, or the pull request's checks never start.
+          token: ${{ secrets.ROUTINE_TOKEN || github.token }}
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: routine-deps
+          path: ${{ runner.temp }}/routine-out
+
+      - name: Commit the update
+        id: commit
+        env:
+          EFFECT: ${{ needs.update.outputs.effect }}
+          EFFECT_TREE: ${{ needs.update.outputs.effect-tree }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="deps/weekly-$(date -u +%Y-%m-%d)"
+          git switch -c "$branch"
+          # The subtree pull again, here rather than from the agent's job, so repos/ holds
+          # exactly the upstream tag. Its tree must match what the agent worked on.
+          if [ -n "$EFFECT" ]; then
+            git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git "effect@$EFFECT" --squash \
+              -m "repos/effect: pull effect@$EFFECT"
+            if [ "$(git rev-parse HEAD:repos/effect)" != "$EFFECT_TREE" ]; then
+              echo "::error::repos/effect differs from the tree the agent worked on; nothing is published."
+              exit 1
+            fi
+          fi
+          git apply --index "$RUNNER_TEMP/routine-out/change.patch"
+          .github/scripts/routine-diff-check.sh
+          git commit -q -m "deps: weekly update" -m "$(head -n 1 "$RUNNER_TEMP/routine-out/report.md")"
+          git push origin "$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Open the pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.ROUTINE_TOKEN || github.token }}
+          HAS_ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN != '' }}
+          BRANCH: ${{ steps.commit.outputs.branch }}
+        run: |
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "<!-- routine:deps -->"
+            head -c 60000 "$RUNNER_TEMP/routine-out/report.md"
+            echo
+            echo "---"
+            if [ "$HAS_ROUTINE_TOKEN" = true ]; then
+              echo "Opened by the weekly [Deps workflow]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID). It merges into dev when every check passes; a failed check leaves it for a person."
+            else
+              echo "Opened by the weekly [Deps workflow]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) without ROUTINE_TOKEN: approve its workflows to start CI, and merge by hand."
+            fi
+          } > "$body"
+          if ! gh pr create --base dev --head "$BRANCH" --title "deps: weekly update $(date -u +%Y-%m-%d)" --body-file "$body"; then
+            echo "::error::Could not open the pull request. Without ROUTINE_TOKEN, \"Allow GitHub Actions to create and approve pull requests\" must be on in the repository's Actions settings. The branch $BRANCH is pushed."
+            exit 1
+          fi
+          echo "number=$(gh pr view "$BRANCH" --json number -q .number)" >> "$GITHUB_OUTPUT"
+
+      - name: Merge when every check passes
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.ROUTINE_TOKEN }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::No ROUTINE_TOKEN: pull request #$PR waits for a person."
+            exit 0
+          fi
+          # Up to three rounds: wait for the checks, then merge, or update the branch when dev
+          # moved and wait again. Merging names the head commit the checks passed on, so a
+          # commit pushed in the meantime is never merged unchecked.
+          for _ in 1 2 3; do
+            sleep 60
+            if ! gh pr checks "$PR" --watch --fail-fast --interval 30; then
+              echo "::warning::A check failed on #$PR; it stays open for a person."
+              exit 0
+            fi
+            head=$(gh pr view "$PR" --json headRefOid -q .headRefOid)
+            state=$(gh pr view "$PR" --json mergeStateStatus -q .mergeStateStatus)
+            case $state in
+              CLEAN)
+                gh pr merge "$PR" --merge --delete-branch --match-head-commit "$head"
+                echo "Merged #$PR into dev." >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+                ;;
+              BEHIND) gh pr update-branch "$PR" ;;
+              *)
+                echo "::warning::#$PR is $state; it stays open for a person."
+                exit 0
+                ;;
+            esac
+          done
+          echo "::warning::#$PR is still behind dev after three updates; it stays open for a person."

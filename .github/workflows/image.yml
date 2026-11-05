@@ -69,12 +69,22 @@ jobs:
           # The status page and its API, from the image's built web app.
           curl -sf http://127.0.0.1:8080/ | grep -q "<html"
           curl -sf http://127.0.0.1:8080/api/status | grep -q '"id":"main-meter"'
+          # `ot-gateway demo`, as the README has it: everything in one container, the page through a published port.
+          docker rm -f bench gateway > /dev/null
+          docker run -d --name demo -p 127.0.0.1:8080:8080 ot-gateway:smoke demo
+          for _ in $(seq 30); do
+            if curl -sf http://127.0.0.1:8080/api/status > "$work/demo.json" && grep -q '"status":"ok"' "$work/demo.json"; then break; fi
+            sleep 1
+          done
+          grep -q '"status":"ok"' "$work/demo.json"
+          curl -sf http://127.0.0.1:8080/ | grep -q "<html"
 
       - name: Container logs
         if: failure()
         run: |
           echo "--- bench"; docker logs bench 2>&1 | tail -40 || true
           echo "--- gateway"; docker logs gateway 2>&1 | tail -40 || true
+          echo "--- demo"; docker logs demo 2>&1 | tail -40 || true
 
       - name: Build for arm64 (Raspberry Pi 4 and 5), and load it for its smoke test
         uses: docker/build-push-action@v7

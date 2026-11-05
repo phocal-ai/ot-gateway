@@ -14,7 +14,12 @@
     "observability/grafana/dashboards/**",
     "apps/web/.next/**",
     "apps/web/out/**",
-    "apps/web/next-env.d.ts"
+    "apps/web/next-env.d.ts",
+    "apps/site/.next/**",
+    "apps/site/out/**",
+    "apps/site/.source/**",
+    "apps/site/content/**",
+    "apps/site/next-env.d.ts"
   ],
   "rules": {
     "typescript/no-explicit-any": "error",
