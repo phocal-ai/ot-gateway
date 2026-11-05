@@ -60,6 +60,10 @@ COPY examples examples
 COPY scripts/soak.sh scripts/soak.sh
 # The build, for telemetry and the status page: the release tag when the image is published.
 ARG OT_GATEWAY_VERSION=dev
+LABEL org.opencontainers.image.title="OT Gateway" \
+      org.opencontainers.image.source="https://github.com/phocal-ai/ot-gateway" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="$OT_GATEWAY_VERSION"
 RUN mkdir -p /etc/ot-gateway /var/lib/ot-gateway && chown node:node /var/lib/ot-gateway && echo "$OT_GATEWAY_VERSION" > VERSION
 USER node
 ENV NODE_ENV=production

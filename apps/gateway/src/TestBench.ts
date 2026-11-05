@@ -36,6 +36,25 @@ const paceOf = (speed: number): Pace => ({
 })
 
 /** Simulated seconds since the epoch: wall time, sped up. */
+/**
+ * The range a simulated analog value swings through, by its unit, so a bench reads like a building (a supply air
+ * temperature of 12 to 24 °C, not 97); anything else 0 to 100.
+ */
+const rangeByUnit: Readonly<Record<string, readonly [number, number]>> = {
+  "unit:DEG_C": [12, 24],
+  "unit:DEG_F": [54, 75],
+  "unit:PERCENT_RelativeHumidity": [30, 60],
+  "unit:PPM": [400, 1200],
+  "unit:PA": [100, 400]
+}
+
+/** A float that follows a two-minute sine through its unit's range, phase-shifted by `index` so points differ. */
+export const benchValue = (unit: string | undefined, seconds: number, index: number) => {
+  const [low, high] = (unit === undefined ? undefined : rangeByUnit[unit]) ?? [0, 100]
+  const value = low + (high - low) * (0.5 + 0.5 * Math.sin((2 * Math.PI * seconds) / 120 + index))
+  return Math.round(value * 100) / 100
+}
+
 const simulatedSeconds = (pace: Pace) => Effect.map(Clock.currentTimeMillis, (millis) => (millis / 1000) * pace.speed)
 
 const runBroker = Effect.fn("runBroker")(function* (
@@ -95,10 +114,10 @@ const simulateDevice = Effect.fn("simulateDevice")(function* (device: ModbusDevi
     device.points.forEach((point, index) => {
       if (point.writable) return
       if (point.dataType === "bool") return setPointValue(bank, point, Math.floor(seconds / 30) % 2 === 0)
-      // Integers count up like a meter; floats follow a sine between 0 and 100, phase-shifted so points differ.
+      // Integers count up like a meter; floats swing through their unit's range.
       const value =
         point.dataType === "float32" || point.dataType === "float64"
-          ? 50 + 50 * Math.sin((2 * Math.PI * seconds) / 120 + index)
+          ? benchValue(point.unit, seconds, index)
           : Math.floor(seconds / 10) % 32_768
       setPointValue(bank, point, value)
     })
@@ -124,8 +143,7 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
       if (point.objectType.startsWith("binary-")) {
         setPresentValue(simulated, object, { type: "enumerated", value: Math.floor(seconds / 30) % 2 })
       } else {
-        const value = Math.round((50 + 50 * Math.sin((2 * Math.PI * seconds) / 120 + index)) * 100) / 100
-        setPresentValue(simulated, object, { type: "real", value })
+        setPresentValue(simulated, object, { type: "real", value: benchValue(point.unit, seconds, index) })
       }
     })
   })
