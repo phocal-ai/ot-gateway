@@ -1,0 +1,23 @@
+{
+  "name": "@ot-gateway/history",
+  "version": "0.0.0",
+  "description": "On-device history of OT Gateway's reads, in SQLite: every read for a day, per minute for a week.",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect/sql-sqlite-node": "4.1.2",
+    "@ot-gateway/api": "workspace:*",
+    "@ot-gateway/core": "workspace:*",
+    "effect": "4.1.2"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "4.1.2"
+  }
+}

@@ -234,6 +234,30 @@ export const bufferDisabled = Metric.gauge("ot_gateway_buffer_disabled", {
   attributes: { unit: "{state}" }
 })
 
+/** Reads written to the on-device history. */
+export const historyWritten = Metric.counter("ot_gateway_history_written", {
+  description: "Reads written to the on-device history",
+  incremental: true
+})
+
+/** Reads the history gave up on: more piled up while it could not write than it holds in memory. */
+export const historyDropped = Metric.counter("ot_gateway_history_dropped", {
+  description: "Reads dropped from the on-device history",
+  incremental: true
+})
+
+/** History operations that failed, by `operation`: `write`, `prune` or `read`. A full disk shows up here first. */
+export const historyFailures = Metric.counter("ot_gateway_history_failures", {
+  description: "On-device history operations that failed, by operation",
+  incremental: true
+})
+
+/** 1 while the gateway runs without its history because the file could not be opened, else 0. */
+export const historyDisabled = Metric.gauge("ot_gateway_history_disabled", {
+  description: "Whether the gateway runs without its on-device history",
+  attributes: { unit: "{state}" }
+})
+
 /**
  * Commands received on `.../$set`, by `outcome`: `written`, `rejected` (the
  * command guard refused it: not writable, out of range, wrong type, a

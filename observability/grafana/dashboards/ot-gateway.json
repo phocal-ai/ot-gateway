@@ -1534,7 +1534,7 @@
     {
       "id": 31,
       "type": "row",
-      "title": "Freshness",
+      "title": "History",
       "collapsed": false,
       "gridPos": {
         "h": 1,
@@ -1546,6 +1546,141 @@
     },
     {
       "id": 32,
+      "type": "timeseries",
+      "title": "History writes",
+      "description": "Reads written to the on-device history (history.path), every 5 s in one batch. Failed writes keep up to 20,000 reads in memory; past that the oldest are dropped. Only the status page's charts lose them: reading and publishing go on.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 75
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum(increase(ot_gateway_history_written_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "written"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum(increase(ot_gateway_history_dropped_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "dropped"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "sum by (operation) (increase(ot_gateway_history_failures_total{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__rate_interval]))",
+          "legendFormat": "failed: {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 33,
+      "type": "timeseries",
+      "title": "Running without history",
+      "description": "1 while the history file could not be opened at start, so no reads are kept. The error log says why.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "grafanacloud-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 75
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "grafanacloud-prom"
+          },
+          "expr": "max by (service_instance_id) (ot_gateway_history_disabled{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "legendFormat": "{{service_instance_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bool_yes_no",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "stacking": {
+              "mode": "none"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 34,
+      "type": "row",
+      "title": "Freshness",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 83
+      },
+      "panels": []
+    },
+    {
+      "id": 35,
       "type": "table",
       "title": "Device freshness",
       "description": "Seconds since each device last completed a successful cycle. Orange after 1 minute, red after 5. There is no per-point age (one series per point would not fit the free plan); a point that stops reading inside a working device shows in Points not read and in the log.",
@@ -1557,7 +1692,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 75
+        "y": 84
       },
       "targets": [
         {
@@ -1632,7 +1767,7 @@
       }
     },
     {
-      "id": 33,
+      "id": 36,
       "type": "timeseries",
       "title": "Points not read by device",
       "description": "Points a device did not deliver, by reason. refused: it answered without a value (unknown object or property, a value that is not a number). not_finite: the value was NaN or Infinity, also after scaling, and was not published. The gateway log names each point once when it starts and stops failing. not_read: the device stopped answering or was busy partway through a cycle, so the rest waited for the next one. A device that does not answer at all is counted under read failures, not per point.",
@@ -1644,7 +1779,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 75
+        "y": 84
       },
       "targets": [
         {
@@ -1684,7 +1819,7 @@
       }
     },
     {
-      "id": 34,
+      "id": 37,
       "type": "timeseries",
       "title": "Values pushed by device",
       "description": "Values devices sent on their own between polls (BACnet change-of-value notifications), before the publish mode. Each subscription also sends its current value when it is made or renewed.",
@@ -1696,7 +1831,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 83
+        "y": 92
       },
       "targets": [
         {
@@ -1736,7 +1871,7 @@
       }
     },
     {
-      "id": 35,
+      "id": 38,
       "type": "timeseries",
       "title": "Points pushed instead of polled",
       "description": "Points kept up to date by a live change-of-value subscription, which the polling cycle skips. A drop means the device refused or stopped sending notifications, and those points are polled again.",
@@ -1748,7 +1883,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 83
+        "y": 92
       },
       "targets": [
         {
@@ -1788,7 +1923,7 @@
       }
     },
     {
-      "id": 36,
+      "id": 39,
       "type": "row",
       "title": "Host",
       "collapsed": false,
@@ -1796,12 +1931,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 91
+        "y": 100
       },
       "panels": []
     },
     {
-      "id": 37,
+      "id": 40,
       "type": "timeseries",
       "title": "Gateway memory",
       "description": "Resident memory (rss) and V8 heap in use. Both should level off within an hour of a start; a steady climb over days is a leak.",
@@ -1813,7 +1948,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 92
+        "y": 101
       },
       "targets": [
         {
@@ -1853,7 +1988,7 @@
       }
     },
     {
-      "id": 38,
+      "id": 41,
       "type": "timeseries",
       "title": "Event loop lag",
       "description": "The worst event-loop delay of the last minute. Every device, keepalive and deadline shares the loop: a p99 above 50 ms on a Pi is worth a look, a max above 1 s is logged as a stall.",
@@ -1865,7 +2000,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 92
+        "y": 101
       },
       "targets": [
         {
@@ -1905,7 +2040,7 @@
       }
     },
     {
-      "id": 39,
+      "id": 42,
       "type": "timeseries",
       "title": "Gateway CPU",
       "description": "Share of one CPU core the gateway process uses, user and system time together.",
@@ -1917,7 +2052,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 92
+        "y": 101
       },
       "targets": [
         {
@@ -1957,7 +2092,7 @@
       }
     },
     {
-      "id": 40,
+      "id": 43,
       "type": "timeseries",
       "title": "SoC temperature",
       "description": "The first thermal zone. A Raspberry Pi 4 starts throttling at 80 °C; the log warns at 80 °C.",
@@ -1969,7 +2104,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 100
+        "y": 109
       },
       "targets": [
         {
@@ -2009,7 +2144,7 @@
       }
     },
     {
-      "id": 41,
+      "id": 44,
       "type": "timeseries",
       "title": "Power and thermal conditions (Raspberry Pi)",
       "description": "What the Raspberry Pi firmware reports: under_voltage (a weak power supply or cable, the most common cause of SD corruption), frequency_capped, throttled, soft_temperature_limit. On Raspberry Pi kernel 6.12 and later only under_voltage (the kernel shows no more); empty off a Pi.",
@@ -2021,7 +2156,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 100
+        "y": 109
       },
       "targets": [
         {
@@ -2061,7 +2196,7 @@
       }
     },
     {
-      "id": 42,
+      "id": 45,
       "type": "timeseries",
       "title": "Outbox disk free",
       "description": "Free space on the filesystem that holds the store-and-forward outbox. The log warns below 64 MiB.",
@@ -2073,7 +2208,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 100
+        "y": 109
       },
       "targets": [
         {
@@ -2113,7 +2248,7 @@
       }
     },
     {
-      "id": 43,
+      "id": 46,
       "type": "timeseries",
       "title": "Storage writes",
       "description": "Bytes the gateway writes to storage: what wears an SD card. Near zero while the broker is up (the outbox is only written during outages), high while it buffers.",
@@ -2125,7 +2260,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 100
+        "y": 109
       },
       "targets": [
         {
@@ -2165,7 +2300,7 @@
       }
     },
     {
-      "id": 44,
+      "id": 47,
       "type": "timeseries",
       "title": "Open files",
       "description": "File descriptors the gateway holds, sockets included. Flat in a healthy gateway; a slow climb is a leak.",
@@ -2177,7 +2312,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 108
+        "y": 117
       },
       "targets": [
         {
@@ -2217,7 +2352,7 @@
       }
     },
     {
-      "id": 45,
+      "id": 48,
       "type": "timeseries",
       "title": "Wall-clock steps",
       "description": "NTP setting the time of a machine without a real-time clock: normal once after boot. Timestamps jump with each step; deadlines and backoffs do not, they use the monotonic clock.",
@@ -2229,7 +2364,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 108
+        "y": 117
       },
       "targets": [
         {
@@ -2269,7 +2404,7 @@
       }
     },
     {
-      "id": 46,
+      "id": 49,
       "type": "table",
       "title": "Gateways: version and start",
       "description": "Which build each gateway runs, and when it last started. A start time that keeps changing is a gateway that restarts.",
@@ -2281,7 +2416,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 108
+        "y": 117
       },
       "targets": [
         {
@@ -2319,7 +2454,7 @@
       }
     },
     {
-      "id": 47,
+      "id": 50,
       "type": "row",
       "title": "Logs and traces",
       "collapsed": false,
@@ -2327,12 +2462,12 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 116
+        "y": 125
       },
       "panels": []
     },
     {
-      "id": 48,
+      "id": 51,
       "type": "logs",
       "title": "Warnings and errors",
       "datasource": {
@@ -2343,7 +2478,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 117
+        "y": 126
       },
       "targets": [
         {
@@ -2363,7 +2498,7 @@
       }
     },
     {
-      "id": 49,
+      "id": 52,
       "type": "table",
       "title": "Failed polling cycles (traces)",
       "description": "Device.pollCycle spans annotated with ot_gateway.outcome. Click a trace ID for the span and its logs.",
@@ -2375,7 +2510,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 125
+        "y": 134
       },
       "targets": [
         {
