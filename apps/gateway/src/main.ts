@@ -60,15 +60,16 @@ const describe = (config: GatewayConfig) => {
 setDefaultAutoSelectFamilyAttemptTimeout(2000)
 
 /**
- * How a failed run ends. An expected failure (a config mistake, a port in use) prints its message and nothing
- * else: a stack trace into Effect's internals does not help anyone fix a config. A defect, which is a bug, is
- * logged with its whole cause. The exit code is 1 either way.
+ * How a failed run ends. An expected failure (a config mistake, a port in use) is logged as its message and
+ * nothing else: a stack trace into Effect's internals does not help anyone fix a config. A defect, which is a
+ * bug, is logged with its whole cause. Both go through the logger, as the runtime's own report did, and the
+ * exit code is 1 either way.
  */
 const reportFailure = <E extends { readonly message: string }>(cause: Cause.Cause<E>) => {
   if (Cause.hasInterruptsOnly(cause)) return Effect.void
   const error = Cause.findError(cause)
   return Result.isSuccess(error) && !Cause.hasDies(cause)
-    ? Console.error(`ot-gateway: ${error.success.message}`)
+    ? Effect.logError(error.success.message)
     : Effect.logError(cause)
 }
 
