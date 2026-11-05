@@ -158,7 +158,7 @@ const BufferCard = ({ buffer, stale }: { readonly buffer: GatewayStatus["buffer"
             buffer.dropped > 0
               ? `${buffer.dropped.toLocaleString()} dropped since start`
               : buffer.rows === 0
-                ? `holds up to ${buffer.maxRows.toLocaleString()} messages if the broker goes down`
+                ? `room for ${buffer.maxRows.toLocaleString()} messages offline`
                 : `${fillPercent(buffer.rows, buffer.maxRows)} of ${buffer.maxRows.toLocaleString()} used`
           )}
         </CardDescription>
@@ -175,14 +175,16 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
       <Card>
         <CardHeader>
           <CardDescription>Broker</CardDescription>
-          <CardTitle className="flex items-center gap-2">
-            {status.broker.connected ? (
-              <Badge variant="success">connected</Badge>
-            ) : (
-              <Badge variant="destructive">disconnected</Badge>
-            )}
+          <CardTitle className={`text-2xl ${status.broker.connected ? "" : "text-destructive"}`}>
+            {status.broker.connected ? "connected" : "disconnected"}
           </CardTitle>
-          <CardDescription className="truncate font-mono text-xs">{status.broker.url}</CardDescription>
+          <CardDescription className="truncate" title={status.broker.url}>
+            {status.broker.connected
+              ? status.broker.url
+              : status.buffer === undefined
+                ? `${status.broker.url}: values are lost until it is back`
+                : `${status.broker.url}: values wait in the buffer`}
+          </CardDescription>
         </CardHeader>
       </Card>
       <Card>
