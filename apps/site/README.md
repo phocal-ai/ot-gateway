@@ -14,17 +14,14 @@ Each docs page also exists as Markdown. The build writes it to `/llms.mdx/docs/<
 
 ## Vercel
 
-The site is the Vercel project `ot-gateway` (team `wimluks-projects`), live at https://ot-gateway.vercel.app. Its settings live in this directory, not in the dashboard:
+The site is the Vercel project `ot-gateway` (team `wimluks-projects`), live at https://ot-gateway.vercel.app. Vercel's GitHub integration builds it:
 
-- `vercel.json` sets the Next.js framework. Without it, a project created from the CLI uses the static builder, which serves every page but `/`. It also rewrites `/` to the exported `index` page and serves the `.md` twins.
+- a push to `main` (a release) deploys production, so the public docs match the latest release;
+- every pull request gets a preview deployment and a `Vercel` check.
+
+Project settings: root directory `apps/site` and Node.js 24.x. The rest lives in this directory, so it is reviewed with the code:
+
+- `vercel.json` sets the Next.js framework, rewrites `/` to the exported `index` page (without it, `/` is a 404 under clean URLs) and serves the `.md` twins.
 - `package.json` pins `engines.node` to `24.x`, the version in `.nvmrc`. Vercel otherwise resolves the root's `>=22.18` to a Node version it does not support.
-
-Deploy from a checkout of the branch to publish, in this directory. The build runs locally and only `.vercel/output` is uploaded:
-
-```bash
-vercel link --yes --project ot-gateway --scope wimluks-projects   # once per checkout
-VERCEL_GIT_COMMIT_SHA=$(git rev-parse HEAD) vercel build --prod --yes
-vercel deploy --prebuilt --prod --yes
-```
 
 Links to GitHub point at the commit being built (`VERCEL_GIT_COMMIT_SHA`), or at `dev` in a local build.
