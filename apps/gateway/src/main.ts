@@ -15,6 +15,7 @@
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { Cause, Effect, Result } from "effect"
+import { CliError } from "effect/cli"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { runCli } from "./Cli.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
@@ -34,9 +35,10 @@ setDefaultAutoSelectFamilyAttemptTimeout(2000)
 const reportFailure = <E extends { readonly message: string }>(cause: Cause.Cause<E>) => {
   if (Cause.hasInterruptsOnly(cause)) return Effect.void
   const error = Cause.findError(cause)
-  return Result.isSuccess(error) && !Cause.hasDies(cause)
-    ? Effect.logError(error.success.message)
-    : Effect.logError(cause)
+  if (Result.isFailure(error) || Cause.hasDies(cause)) return Effect.logError(cause)
+  // A usage mistake (an unknown flag, a missing argument): the CLI has printed it with the help already.
+  if (CliError.isCliError(error.success)) return Effect.void
+  return Effect.logError(error.success.message)
 }
 
 const program = runCli(process.argv.slice(2))
