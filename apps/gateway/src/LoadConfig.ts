@@ -19,7 +19,7 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
       Effect.fail(
         new ConfigFileError({
           path,
-          message: `no config at ${path}. Pass the path of one (node apps/gateway/src/main.ts path/to/gateway.json), copy examples/gateway.json to start from, or run /setup to write one.`
+          message: `no config at ${path}. To see the gateway work first, run ot-gateway demo. To start your own, copy examples/gateway.json or run /setup in Claude Code. ot-gateway --help lists every command.`
         })
       )
     )

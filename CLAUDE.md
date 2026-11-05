@@ -15,9 +15,10 @@ pnpm format           # oxfmt --write .
 pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
 pnpm test
-pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json
-node apps/gateway/src/main.ts --check ot-gateway.json      # validate a config without connecting
-node apps/gateway/src/main.ts --discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
+pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
+pnpm ot-gateway check ot-gateway.json      # validate a config without connecting (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
