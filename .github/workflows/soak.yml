@@ -3,9 +3,18 @@ name: Soak
 # An accelerated soak (scripts/soak.sh): about a day of broker and device
 # outages, full disks and COV renewals in half an hour, against the bench.
 # Telemetry is off (no OTEL_* variables), so it costs nothing on Grafana Cloud.
+#
+# When it runs (CONTRIBUTING.md, "Soak"):
+# - every night: the simulation only, with new seeds; it is cheap and finds the most
+# - Sundays: the simulation, the 30-minute soak and the arm64 soak
+# - a pull request into main (a release): the quick soak, `scripts/soak.sh quick`
+# - by hand: any of them, on the branch it was started on
 on:
   schedule:
-    - cron: "23 3 * * *"
+    - cron: "23 3 * * 1-6"
+    - cron: "23 3 * * 0"
+  pull_request:
+    branches: [main]
   workflow_dispatch:
     inputs:
       duration:
@@ -50,6 +59,7 @@ jobs:
   # Emulation is several times slower than a Pi, so the speed is lower; what it shows is the ARM build and
   # the memory and CPU headroom under the same faults, not the SD card, heat or the real network.
   soak-arm64:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '23 3 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -102,12 +112,13 @@ jobs:
           retention-days: 7
 
   soak:
+    if: github.event_name != 'schedule' || github.event.schedule == '23 3 * * 0'
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v7
         with:
-          # The nightly run soaks dev; a manual run soaks the branch it was started on.
+          # The weekly run soaks dev; a pull request soaks its merge; a manual run soaks the branch it was started on.
           ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
@@ -116,7 +127,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Soak
-        run: scripts/soak.sh "$DURATION"
+        # A release pull request runs the quick preset; the other runs take their settings from below.
+        run: scripts/soak.sh "${{ github.event_name == 'pull_request' && 'quick' || '$DURATION' }}"
         env:
           DURATION: ${{ inputs.duration || '30m' }}
           SOAK_SPEED: ${{ inputs.speed || '60' }}
