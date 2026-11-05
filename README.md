@@ -30,19 +30,22 @@ OT Gateway treats field reality as normal: devices time out, brokers go offline,
 
 ## Quick start
 
-Requirements: Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
+See it work in one command, with Docker (images from v0.7.0 on):
+
+```bash
+docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
+```
+
+Or from a checkout, with Node.js 22.18 or newer (24 LTS recommended) and pnpm 10:
 
 ```bash
 git clone https://github.com/phocal-ai/ot-gateway
 cd ot-gateway
 pnpm install
-pnpm bench      # terminal 1: a local MQTT test broker, a Modbus TCP and a BACnet/IP simulator
-pnpm gateway    # terminal 2: run the gateway with examples/gateway.json
+pnpm demo
 ```
 
-`pnpm check` runs the format check, lint, typecheck and every test (about 30 s); you don't need it to try the gateway.
-
-The bench prints every message the gateway publishes, from a simulated air handler, a simulated Modbus meter and a simulated BACnet air handler:
+The demo runs the gateway with everything it talks to in one process: a local MQTT test broker, a simulated Modbus meter, a simulated BACnet air handler and a built-in simulated device. It prints every message the broker receives:
 
 ```text
 [retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
@@ -52,17 +55,21 @@ demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
-The gateway also serves a status page at <http://127.0.0.1:8080>: broker and buffer, every device with its health and latest values, and the recent commands, with the same data as JSON at `GET /api/status`. `pnpm gateway` builds the page first; after the first time, Turborepo replays the build from its cache unless the page changed.
+The status page at <http://localhost:8080> shows the broker and buffer, every device with its health and latest values, and the recent commands; `GET /api/status` has the same as JSON.
 
-Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
+The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, `node apps/gateway/src/main.ts …` anywhere):
+
+| Command                        | What it does                                                                          |
+| ------------------------------ | ------------------------------------------------------------------------------------- |
+| `ot-gateway demo`              | the demo above                                                                        |
+| `ot-gateway run [config]`      | run the gateway; the config defaults to `ot-gateway.json`                             |
+| `ot-gateway check [config]`    | validate a config without connecting to anything, listing every mistake with its path |
+| `ot-gateway discover [config]` | find BACnet devices and print a draft of their config (below)                         |
+| `ot-gateway --help`            | every command and flag; `--log-level debug` works with all of them                    |
+
+To work on the gateway, run the bench and the gateway as two processes instead: `pnpm bench` in one terminal (the broker and the simulated devices, printing every message) and `pnpm gateway` in another (the gateway with `examples/gateway.json`, after building the status page; Turborepo replays that build from its cache unless the page changed). Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer. `pnpm check` runs the format check, lint, typecheck and every test (about 30 s).
 
 OT Gateway runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
-
-To check a config without connecting to anything (every mistake is listed with its path, in one run):
-
-```bash
-node apps/gateway/src/main.ts --check path/to/gateway.json
-```
 
 ## Set it up with AI
 
@@ -83,13 +90,13 @@ commands yourself, ask me only what you cannot find out, never write to a device
 of the JSON config. Stop when values from my devices reach the broker.
 ```
 
-To draft BACnet points yourself, `--discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
+To draft BACnet points yourself, `discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
 
 ```bash
-node apps/gateway/src/main.ts --discover path/to/gateway.json
+pnpm ot-gateway discover path/to/gateway.json
 ```
 
-Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `--discover` reads it there and drafts the points it does not have yet.
+Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.
 
 ## Running it for real
 
