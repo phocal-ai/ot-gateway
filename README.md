@@ -2,7 +2,7 @@
 
 **An Effect-native edge gateway for buildings.**
 
-OT Gateway runs on small Linux devices like a Raspberry Pi. It reads building protocols such as Modbus TCP and BACnet/IP, publishes clean, normalized data to MQTT, and carries commands back safely.
+OT Gateway gets the values you care about out of a building's meters and controllers and into your software. It runs on any always-on computer in the building (a mini PC, a server, a NAS, a Raspberry Pi), reads building protocols such as Modbus TCP and BACnet/IP, publishes clean, named values with units to MQTT, and carries commands back safely. [How it works](docs/how-it-works.md) explains it with one example building.
 
 It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable, not hidden in callbacks or flow graphs. OT Gateway is both a library you compose in code and a ready-to-run gateway you configure with one JSON file.
 
@@ -30,7 +30,11 @@ OT Gateway treats field reality as normal: devices time out, brokers go offline,
 
 ## Quick start
 
-See it work in one command, with Docker (images from v0.7.0 on):
+Three steps, each a little closer to your own building.
+
+### 1. See it work
+
+One minute, no devices needed. With [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or any Docker; images from v0.7.0 on):
 
 ```bash
 docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
@@ -45,7 +49,7 @@ pnpm install
 pnpm demo
 ```
 
-The demo runs the gateway with everything it talks to in one process: a local MQTT test broker, a simulated Modbus meter, a simulated BACnet air handler and a built-in simulated device. It prints every message the broker receives:
+The demo is a tiny building on your computer: a simulated energy meter (Modbus), a simulated air handler (BACnet) and a built-in sensor, the gateway reading them, and a test MQTT broker receiving what it sends. Nothing leaves your machine. The terminal prints every message the broker receives:
 
 ```text
 [retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
@@ -55,11 +59,17 @@ demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
-The status page at <http://localhost:8080> shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands; `GET /api/status` and `GET /api/messages` have the same as JSON.
+### 2. Look around
+
+Open the status page at <http://localhost:8080>. It shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands; `GET /api/status` and `GET /api/messages` have the same as JSON.
 
 To watch the data arrive on a real broker, `pnpm demo --public` (or `demo --public` in the `docker run` line) publishes the same simulated data to a public test broker: the first of broker.hivemq.com, broker.emqx.io and test.mosquitto.org that answers, under a site id of its own such as `demo-3e15e2`. It prints the `mosquitto_sub` command and the MQTT Explorer settings to watch it with. Anyone can read a public broker, so the gateway refuses one for any device that is not simulated on this machine.
 
-The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere). For your own building, `pnpm ot-gateway init` is the quickest start without an agent:
+### 3. Your own building
+
+You know which values you want, from which devices, and how often. `ot-gateway init` turns that into a config in a few questions, and finds BACnet devices on its own: [Your first building](docs/first-building.md) walks through it, from a points list to values on your broker. Or let a coding agent do it: [Set it up with AI](#set-it-up-with-ai).
+
+The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere):
 
 | Command                        | What it does                                                                               |
 | ------------------------------ | ------------------------------------------------------------------------------------------ |
@@ -72,7 +82,9 @@ The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, whi
 | `ot-gateway status [--url]`    | the running gateway's broker, buffer and devices, one line each                            |
 | `ot-gateway --help`            | every command and flag; `--log-level debug` works with all of them                         |
 
-To work on the gateway, run the bench and the gateway as two processes instead: `pnpm bench` in one terminal (the broker and the simulated devices, printing every message) and `pnpm gateway` in another (the gateway with `examples/gateway.json`, after building the status page; Turborepo replays that build from its cache unless the page changed). Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer. `pnpm check` runs the format check, lint, typecheck and every test (about 30 s).
+### Working on the gateway
+
+To work on the gateway itself, run the bench and the gateway as two processes instead: `pnpm bench` in one terminal (the broker and the simulated devices, printing every message) and `pnpm gateway` in another (the gateway with `examples/gateway.json`, after building the status page; Turborepo replays that build from its cache unless the page changed). Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer. `pnpm check` runs the format check, lint, typecheck and every test (about 30 s).
 
 OT Gateway runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
 
@@ -105,9 +117,9 @@ Before you make any point of a device writable, confirm its drafted `address` ag
 
 ## Running it for real
 
-[docs/raspberry-pi-install.md](docs/raspberry-pi-install.md) takes a Raspberry Pi from a blank SD card to a running gateway. [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
+Once values flow, the gateway belongs on a machine that stays on in the building: any Linux machine with Docker (a mini PC, an industrial PC, a NAS, a server, a VM) or a Raspberry Pi. [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/raspberry-pi-install.md](docs/raspberry-pi-install.md) takes a Raspberry Pi from a blank SD card to a running gateway; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
 
-The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for a Raspberry Pi on the 64-bit OS as much as for an industrial PC.
+The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for an industrial PC as much as for a Raspberry Pi on the 64-bit OS.
 
 ```bash
 docker compose -f packaging/compose.yaml up -d

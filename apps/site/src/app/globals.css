@@ -4,3 +4,68 @@
 @import "fumadocs-ui/css/preset.css";
 
 @source "../";
+
+/*
+ * The home page's diagrams. Series colors are the dataviz reference palette's first two slots, validated for
+ * colour-blind separation and contrast in both modes; status colors are its fixed good and critical steps.
+ */
+.viz {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --viz-grid: #e4e3df;
+  --status-good: #0ca30c;
+  --status-critical: #d03b3b;
+}
+.dark .viz {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --viz-grid: #383835;
+}
+
+/* A message travelling along a pipe of the flow diagram: across on wide screens, down on narrow ones. */
+@keyframes flow-across {
+  from {
+    left: 0%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  to {
+    left: 100%;
+    opacity: 0;
+  }
+}
+@keyframes flow-down {
+  from {
+    top: 0%;
+    opacity: 0;
+  }
+  15% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  to {
+    top: 100%;
+    opacity: 0;
+  }
+}
+.flow-dot {
+  animation: flow-down 2.4s linear infinite;
+}
+@media (min-width: 768px) {
+  .flow-dot {
+    animation-name: flow-across;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .flow-dot {
+    animation: none;
+    opacity: 1;
+  }
+}
