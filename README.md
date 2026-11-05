@@ -55,7 +55,7 @@ demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
-The status page at <http://localhost:8080> shows the broker and buffer, every device with its health and latest values, and the recent commands; `GET /api/status` has the same as JSON.
+The status page at <http://localhost:8080> shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands; `GET /api/status` and `GET /api/messages` have the same as JSON.
 
 The `ot-gateway` command does the rest (`pnpm ot-gateway …` in a checkout, `node apps/gateway/src/main.ts …` anywhere):
 
