@@ -151,11 +151,11 @@ scp ot-gateway.json ot-gateway:
 On the Pi, fetch the Compose file of the release you install, put the config in place, and check it with the gateway itself:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.1/packaging/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.2/packaging/compose.yaml
 sudo install -d -m 755 /etc/ot-gateway && sudo install -d -o 1000 -g 1000 /var/lib/ot-gateway
 sudo install -m 644 ~/ot-gateway.json /etc/ot-gateway/gateway.json
 [ -e /etc/ot-gateway/gateway.env ] || sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/ot-gateway/gateway.env
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.6.1 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.6.2 --check /etc/ot-gateway/gateway.json
 ```
 
 The check prints `config ok` and what it will poll; anything else names the field to fix. The fourth line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner), and leaves an existing one alone. If the config names a broker password or other secrets (`/setup` puts them in `ot-gateway.env`), add those lines:
