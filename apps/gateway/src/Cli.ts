@@ -2,18 +2,24 @@
  * The `ot-gateway` command line, on `effect/cli`:
  *
  *   ot-gateway demo                 the gateway with a test broker and simulated devices, in one process
+ *   ot-gateway init [config]        answer a few questions, get a config (config defaults to ot-gateway.json)
  *   ot-gateway run [config]         run the gateway (config defaults to ot-gateway.json)
  *   ot-gateway check [config]       validate a config without connecting to anything
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
+ *   ot-gateway watch [config]       print what arrives at the config's broker
+ *   ot-gateway status [--url]       the running gateway's status, one line per device
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Effect } from "effect"
+import { Config, Console, Effect, Option } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover } from "./Discover.ts"
+import { nextSteps, runInit } from "./Init.ts"
+import { statusReport } from "./StatusReport.ts"
+import { watch } from "./Watch.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
 import { loadConfig } from "./LoadConfig.ts"
@@ -104,12 +110,54 @@ const demo = Command.make(
   ])
 )
 
-export const cli = Command.make("ot-gateway").pipe(
-  Command.withDescription("OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back"),
-  Command.withSubcommands([demo, run, check, discoverCommand])
+const init = Command.make("init", { config: configPath }, ({ config }) =>
+  Effect.gen(function* () {
+    const written = yield* runInit(config)
+    if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
+    yield* Console.log(describeConfig(written))
+    yield* Console.log(nextSteps(config, written))
+  }).pipe(Effect.catchTag("QuitError", () => Console.error("init cancelled, nothing written")))
+).pipe(
+  Command.withDescription("Answer a few questions (site, broker, devices) and get a config that check accepts"),
+  Command.withExamples([{ command: "ot-gateway init", description: "Write ot-gateway.json in this directory" }])
 )
 
-const subcommands = new Set(["demo", "run", "check", "discover"])
+const watchCommand = Command.make(
+  "watch",
+  {
+    config: configPath,
+    topic: Flag.String("topic").pipe(
+      Flag.withDescription("A topic filter instead of site/building/# (# for everything on the broker)"),
+      Flag.optional
+    )
+  },
+  ({ config, topic }) =>
+    Effect.flatMap(loadConfig(config), (decoded) => watch(decoded, { topic: Option.getOrUndefined(topic) }))
+).pipe(
+  Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
+  Command.withExamples([
+    { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
+    { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" }
+  ])
+)
+
+const status = Command.make(
+  "status",
+  {
+    url: Flag.String("url").pipe(
+      Flag.withDescription("Where the gateway's status page is"),
+      Flag.withDefault("http://127.0.0.1:8080")
+    )
+  },
+  ({ url }) => statusReport(url)
+).pipe(Command.withDescription("The running gateway's status: its broker, buffer and one line per device"))
+
+export const cli = Command.make("ot-gateway").pipe(
+  Command.withDescription("OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back"),
+  Command.withSubcommands([demo, init, run, check, discoverCommand, watchCommand, status])
+)
+
+const subcommands = new Set(["demo", "init", "run", "check", "discover", "watch", "status"])
 
 /**
  * The arguments for `cli`, with the forms from before the subcommands translated: no arguments or a config path
