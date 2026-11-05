@@ -14,4 +14,14 @@ Each docs page also exists as Markdown. The build writes it to `/llms.mdx/docs/<
 
 ## Vercel
 
-The Vercel project uses root directory `apps/site` and the Next.js preset; Vercel detects pnpm and installs the workspace. Links to GitHub point at the commit being built (`VERCEL_GIT_COMMIT_SHA`), or at `dev` in a local build.
+The site is the Vercel project `ot-gateway` (team `wimluks-projects`), live at https://ot-gateway.vercel.app. Vercel's GitHub integration builds it:
+
+- a push to `main` (a release) deploys production, so the public docs match the latest release;
+- every pull request gets a preview deployment and a `Vercel` check.
+
+Project settings: root directory `apps/site` and Node.js 24.x. The rest lives in this directory, so it is reviewed with the code:
+
+- `vercel.json` sets the Next.js framework, rewrites `/` to the exported `index` page (without it, `/` is a 404 under clean URLs) and serves the `.md` twins.
+- `package.json` pins `engines.node` to `24.x`, the version in `.nvmrc`. Vercel otherwise resolves the root's `>=22.18` to a Node version it does not support.
+
+Links to GitHub point at the commit being built (`VERCEL_GIT_COMMIT_SHA`), or at `dev` in a local build.

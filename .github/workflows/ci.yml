@@ -15,6 +15,13 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-latest
+    env:
+      # Turborepo remote cache on Vercel (team wimluks-projects), for pushes to dev and main only. A Vercel
+      # token cannot be limited to the cache, and a pull request runs its own code, which could read it.
+      # So pull requests, including the bots' (deps.yml, triage.yml), build without the remote cache.
+      TURBO_TOKEN: ${{ github.event_name == 'push' && secrets.TURBO_TOKEN || '' }}
+      TURBO_TEAM: wimluks-projects
+      TURBO_TELEMETRY_DISABLED: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
