@@ -9,10 +9,12 @@
  */
 import { GatewayConfig, parseConfig, Slug } from "@ot-gateway/core"
 import { parseBrokerUrl } from "@ot-gateway/mqtt"
-import { Console, Effect, FileSystem, Schema } from "effect"
+import { Console, Effect, FileSystem, Schema, type Terminal } from "effect"
 import { Prompt } from "effect/cli"
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os"
 import { discoverDrafts, type draftDevices } from "./Discover.ts"
+import { readPointsList } from "./Import.ts"
+import { devicesFromPointsList, type PointsListDevice } from "./PointsList.ts"
 
 /** A simulated device with two points, to see values flow before any real device is connected. */
 export const simulatedDevice = {
@@ -42,9 +44,9 @@ export const simulatedDevice = {
   ]
 } as const
 
-export type InitDevice = typeof simulatedDevice | ReturnType<typeof draftDevices>[number]
+export type InitDevice = typeof simulatedDevice | ReturnType<typeof draftDevices>[number] | PointsListDevice
 
-export type DeviceSource = "simulated" | "discover" | "none"
+export type DeviceSource = "simulated" | "discover" | "list" | "none"
 
 export interface InitAnswers {
   readonly site: string
@@ -130,6 +132,11 @@ const deviceSource = Prompt.Select<DeviceSource>({
   choices: [
     { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" },
     { title: "Find BACnet devices now", value: "discover", description: "Who-Is on the LAN, read-only" },
+    {
+      title: "From a points list",
+      value: "list",
+      description: "a CSV of devices and points, e.g. exported from Excel"
+    },
     { title: "None yet", value: "none", description: "add Modbus or BACnet devices to the file later" }
   ]
 })
@@ -144,10 +151,31 @@ const broadcastAddress = (lans: ReadonlyArray<LanInterface>) => {
   })
 }
 
+const retry = (message: string) =>
+  Console.error(`  ${message}`).pipe(Effect.andThen(Effect.suspend(() => devicesFromList)))
+
+/** Asks for a points list until one reads without a mistake; each mistake is shown with its line. */
+const devicesFromList: Effect.Effect<
+  ReadonlyArray<PointsListDevice>,
+  Terminal.QuitError,
+  Prompt.Environment
+> = Effect.gen(function* () {
+  const path = yield* Prompt.String({ message: "Points list (CSV, see docs/first-building.md)", default: "points.csv" })
+  return yield* readPointsList(path).pipe(
+    Effect.flatMap((text) => devicesFromPointsList(text)),
+    Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
+    Effect.catchTags({
+      PointsListError: (error) => retry(error.message),
+      PlatformError: (error) => retry(error.message)
+    })
+  )
+})
+
 /** The devices for the chosen source; discovery runs with the answers so far. */
 const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, answers: InitAnswers) {
   if (source === "none") return []
   if (source === "simulated") return [simulatedDevice]
+  if (source === "list") return yield* devicesFromList
   const probe = yield* Schema.decodeUnknownEffect(GatewayConfig)(initConfig(answers, []))
   const drafts = yield* discoverDrafts(probe)
   // A device needs a point: one without (no readable objects, or more than one address answered) is left out.

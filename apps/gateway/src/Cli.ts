@@ -6,6 +6,7 @@
  *   ot-gateway run [config]         run the gateway (config defaults to ot-gateway.json)
  *   ot-gateway check [config]       validate a config without connecting to anything
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
+ *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
  *   ot-gateway watch [config]       print what arrives at the config's broker
  *   ot-gateway status [--url]       the running gateway's status, one line per device
  *
@@ -17,6 +18,7 @@ import { Config, Console, Effect, Option } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover } from "./Discover.ts"
+import { importPointsList } from "./Import.ts"
 import { nextSteps, runInit } from "./Init.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -122,6 +124,36 @@ const init = Command.make("init", { config: configPath }, ({ config }) =>
   Command.withExamples([{ command: "ot-gateway init", description: "Write ot-gateway.json in this directory" }])
 )
 
+const importCommand = Command.make(
+  "import",
+  {
+    list: Argument.String("points-list").pipe(
+      Argument.withDescription("A CSV with a device and a point column, one row per point")
+    ),
+    config: configPath,
+    dryRun: Flag.Boolean("dry-run").pipe(
+      Flag.withDescription("Print the devices instead of adding them to the config"),
+      Flag.withDefault(false)
+    )
+  },
+  ({ list, config, dryRun }) =>
+    Effect.gen(function* () {
+      const { added, config: written } = yield* importPointsList(list, config, { dryRun })
+      if (written === undefined) return
+      const points = added.reduce((total, device) => total + device.points.length, 0)
+      yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${config}, none writable`)
+      yield* Console.log(describeConfig(written))
+    })
+).pipe(
+  Command.withDescription(
+    "Add the devices of a points list (CSV: device, point, host, register, type, unit, …) to the config"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway import points.csv", description: "Add them to ot-gateway.json" },
+    { command: "ot-gateway import points.csv --dry-run", description: "Only print them" }
+  ])
+)
+
 const watchCommand = Command.make(
   "watch",
   {
@@ -154,10 +186,10 @@ const status = Command.make(
 
 export const cli = Command.make("ot-gateway").pipe(
   Command.withDescription("OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back"),
-  Command.withSubcommands([demo, init, run, check, discoverCommand, watchCommand, status])
+  Command.withSubcommands([demo, init, run, check, discoverCommand, importCommand, watchCommand, status])
 )
 
-const subcommands = new Set(["demo", "init", "run", "check", "discover", "watch", "status"])
+const subcommands = new Set(["demo", "init", "run", "check", "discover", "import", "watch", "status"])
 
 /**
  * The arguments for `cli`, with the forms from before the subcommands translated: no arguments or a config path

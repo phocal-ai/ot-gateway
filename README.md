@@ -71,16 +71,17 @@ You know which values you want, from which devices, and how often. `ot-gateway i
 
 The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere):
 
-| Command                        | What it does                                                                               |
-| ------------------------------ | ------------------------------------------------------------------------------------------ |
-| `ot-gateway demo`              | the demo above                                                                             |
-| `ot-gateway init [config]`     | ask for the site, broker and devices, and write a config; the default is `ot-gateway.json` |
-| `ot-gateway run [config]`      | run the gateway with that config                                                           |
-| `ot-gateway check [config]`    | validate a config without connecting to anything, listing every mistake with its path      |
-| `ot-gateway discover [config]` | find BACnet devices and print a draft of their config (below)                              |
-| `ot-gateway watch [config]`    | print every message under the config's site and building as it reaches the broker          |
-| `ot-gateway status [--url]`    | the running gateway's broker, buffer and devices, one line each                            |
-| `ot-gateway --help`            | every command and flag; `--log-level debug` works with all of them                         |
+| Command                            | What it does                                                                                                    |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `ot-gateway demo`                  | the demo above                                                                                                  |
+| `ot-gateway init [config]`         | ask for the site, broker and devices, and write a config; the default is `ot-gateway.json`                      |
+| `ot-gateway run [config]`          | run the gateway with that config                                                                                |
+| `ot-gateway check [config]`        | validate a config without connecting to anything, listing every mistake with its path                           |
+| `ot-gateway discover [config]`     | find BACnet devices and print a draft of their config (below)                                                   |
+| `ot-gateway import <csv> [config]` | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)) |
+| `ot-gateway watch [config]`        | print every message under the config's site and building as it reaches the broker                               |
+| `ot-gateway status [--url]`        | the running gateway's broker, buffer and devices, one line each                                                 |
+| `ot-gateway --help`                | every command and flag; `--log-level debug` works with all of them                                              |
 
 ### Working on the gateway
 
