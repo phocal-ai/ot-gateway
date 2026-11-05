@@ -12,14 +12,25 @@ import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ago, fetchMessages, fetchStatus, formatBytes, formatValue, topicKind, unitLabel } from "@/lib/status"
+import {
+  ago,
+  fetchMessages,
+  gatewayNow,
+  fetchStatus,
+  formatBytes,
+  formatValue,
+  topicKind,
+  unitLabel
+} from "@/lib/status"
 
 const POLL_MS = 2000
+/** "ago" labels move on this often, between polls. */
+const TICK_MS = 1000
 
 type Load =
   | { readonly _tag: "loading" }
-  | { readonly _tag: "ok"; readonly status: GatewayStatus }
-  | { readonly _tag: "unreachable"; readonly last?: GatewayStatus }
+  | { readonly _tag: "ok"; readonly status: GatewayStatus; readonly receivedAt: number }
+  | { readonly _tag: "unreachable"; readonly last?: { readonly status: GatewayStatus; readonly receivedAt: number } }
 
 const deviceBadge = (device: DeviceStatus) => {
   switch (device.status) {
@@ -287,7 +298,7 @@ const MessageTable = ({ now, prefix }: { readonly now: number; readonly prefix: 
 /** Small setups (the demo) show their messages right away; a building's worth of points waits for a click. */
 const OPEN_UP_TO_POINTS = 50
 
-const Messages = ({ status }: { readonly status: GatewayStatus }) => {
+const Messages = ({ status, now }: { readonly status: GatewayStatus; readonly now: number }) => {
   const points = status.devices.reduce((sum, device) => sum + device.points.length, 0)
   const [open, setOpen] = useState(points <= OPEN_UP_TO_POINTS)
   const prefix = `${status.site}/${status.building}/`
@@ -314,14 +325,14 @@ const Messages = ({ status }: { readonly status: GatewayStatus }) => {
       </CardHeader>
       {open ? (
         <CardContent>
-          <MessageTable now={status.now} prefix={prefix} />
+          <MessageTable now={now} prefix={prefix} />
         </CardContent>
       ) : null}
     </Card>
   )
 }
 
-const Commands = ({ status }: { readonly status: GatewayStatus }) => (
+const Commands = ({ status, now }: { readonly status: GatewayStatus; readonly now: number }) => (
   <Card>
     <CardHeader>
       <CardTitle>Recent commands</CardTitle>
@@ -342,7 +353,7 @@ const Commands = ({ status }: { readonly status: GatewayStatus }) => (
           <TableBody>
             {status.commands.map((command) => (
               <TableRow key={`${command.at}-${command.device}-${command.point}`}>
-                <TableCell className="text-muted-foreground">{ago(command.at, status.now)}</TableCell>
+                <TableCell className="text-muted-foreground">{ago(command.at, now)}</TableCell>
                 <TableCell className="font-mono">
                   {command.device}/{command.point}
                 </TableCell>
@@ -369,6 +380,16 @@ const Commands = ({ status }: { readonly status: GatewayStatus }) => (
   </Card>
 )
 
+/** The browser's clock, read again every second, so the page re-renders its ages between polls. */
+const useClientClock = () => {
+  const [clientNow, setClientNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = setInterval(() => setClientNow(Date.now()), TICK_MS)
+    return () => clearInterval(timer)
+  }, [])
+  return clientNow
+}
+
 const StatusPage = () => {
   const [load, setLoad] = useState<Load>({ _tag: "loading" })
   useEffect(() => {
@@ -380,11 +401,11 @@ const StatusPage = () => {
         if (cancelled) return
         setLoad((previous) =>
           result._tag === "Success"
-            ? { _tag: "ok", status: result.success }
+            ? { _tag: "ok", status: result.success, receivedAt: Date.now() }
             : {
                 _tag: "unreachable",
                 ...(previous._tag === "ok"
-                  ? { last: previous.status }
+                  ? { last: { status: previous.status, receivedAt: previous.receivedAt } }
                   : previous._tag === "unreachable" && previous.last !== undefined
                     ? { last: previous.last }
                     : {})
@@ -399,7 +420,10 @@ const StatusPage = () => {
     }
   }, [])
 
-  const status = load._tag === "ok" ? load.status : load._tag === "unreachable" ? load.last : undefined
+  const clientNow = useClientClock()
+  const shown = load._tag === "ok" ? load : load._tag === "unreachable" ? load.last : undefined
+  const status = shown?.status
+  const now = shown === undefined ? clientNow : gatewayNow(shown.status.now, shown.receivedAt, clientNow)
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -421,11 +445,11 @@ const StatusPage = () => {
           {status.host === undefined ? null : <Host host={status.host} />}
           <section className="grid gap-4 lg:grid-cols-2">
             {status.devices.map((device) => (
-              <Device key={device.id} device={device} now={status.now} />
+              <Device key={device.id} device={device} now={now} />
             ))}
           </section>
-          <Messages status={status} />
-          <Commands status={status} />
+          <Messages status={status} now={now} />
+          <Commands status={status} now={now} />
         </>
       )}
     </main>

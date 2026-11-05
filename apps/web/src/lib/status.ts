@@ -73,6 +73,14 @@ export const formatValue = (value: number | boolean | undefined) => {
   return Math.abs(value) >= 1000 || Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2)
 }
 
+/**
+ * The gateway's clock now: its `now` from the last answer, moved on by the time since that answer arrived. Ages
+ * then count up every second between polls, and keep counting while the gateway does not answer, while a browser
+ * whose own clock is off still shows them right.
+ */
+export const gatewayNow = (serverNow: number, receivedAt: number, clientNow: number) =>
+  serverNow + Math.max(0, clientNow - receivedAt)
+
 /** "12 s ago", "4 min ago", from two Unix ms timestamps. */
 export const ago = (then: number | undefined, now: number) => {
   if (then === undefined) return "never"
