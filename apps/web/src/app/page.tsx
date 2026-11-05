@@ -151,15 +151,15 @@ const BufferCard = ({ buffer, stale }: { readonly buffer: GatewayStatus["buffer"
       <CardHeader>
         <CardDescription>Buffer</CardDescription>
         <CardTitle className="text-2xl tabular-nums">
-          {buffer.rows === 0 ? "empty" : `${buffer.rows.toLocaleString()} waiting`}
+          {buffer.rows.toLocaleString()}/{buffer.maxRows.toLocaleString()}
         </CardTitle>
         <CardDescription className={buffer.dropped > 0 && !stale ? "text-destructive" : ""}>
           {note(
             buffer.dropped > 0
               ? `${buffer.dropped.toLocaleString()} dropped since start`
               : buffer.rows === 0
-                ? `room for ${buffer.maxRows.toLocaleString()} messages offline`
-                : `${fillPercent(buffer.rows, buffer.maxRows)} of ${buffer.maxRows.toLocaleString()} used`
+                ? "messages waiting for the broker"
+                : `messages waiting for the broker (${fillPercent(buffer.rows, buffer.maxRows)} full)`
           )}
         </CardDescription>
       </CardHeader>
