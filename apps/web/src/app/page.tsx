@@ -151,15 +151,15 @@ const BufferCard = ({ buffer, stale }: { readonly buffer: GatewayStatus["buffer"
       <CardHeader>
         <CardDescription>Buffer</CardDescription>
         <CardTitle className="text-2xl tabular-nums">
-          {buffer.rows === 0 ? "empty" : `${buffer.rows.toLocaleString()} waiting`}
+          {buffer.rows.toLocaleString()}/{buffer.maxRows.toLocaleString()}
         </CardTitle>
         <CardDescription className={buffer.dropped > 0 && !stale ? "text-destructive" : ""}>
           {note(
             buffer.dropped > 0
               ? `${buffer.dropped.toLocaleString()} dropped since start`
               : buffer.rows === 0
-                ? `holds up to ${buffer.maxRows.toLocaleString()} messages if the broker goes down`
-                : `${fillPercent(buffer.rows, buffer.maxRows)} of ${buffer.maxRows.toLocaleString()} used`
+                ? "messages waiting for the broker"
+                : `messages waiting for the broker (${fillPercent(buffer.rows, buffer.maxRows)} full)`
           )}
         </CardDescription>
       </CardHeader>
@@ -175,28 +175,30 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
       <Card>
         <CardHeader>
           <CardDescription>Broker</CardDescription>
-          <CardTitle className="flex items-center gap-2">
-            {status.broker.connected ? (
-              <Badge variant="success">connected</Badge>
-            ) : (
-              <Badge variant="destructive">disconnected</Badge>
-            )}
+          <CardTitle className={`text-2xl ${status.broker.connected ? "" : "text-destructive"}`}>
+            {status.broker.connected ? "connected" : "disconnected"}
           </CardTitle>
-          <CardDescription className="truncate font-mono text-xs">{status.broker.url}</CardDescription>
+          <CardDescription className="truncate" title={status.broker.url}>
+            {status.broker.connected
+              ? `to ${status.broker.url}`
+              : status.buffer === undefined
+                ? `${status.broker.url}: values are lost until it is back`
+                : `${status.broker.url}: values wait in the buffer`}
+          </CardDescription>
         </CardHeader>
       </Card>
       <Card>
         <CardHeader>
           <CardDescription>Devices</CardDescription>
           <CardTitle className="text-2xl tabular-nums">
-            {ok}/{status.devices.length} ok
+            {ok}/{status.devices.length}
           </CardTitle>
-          <CardDescription>
+          <CardDescription className={failing > 0 ? "text-destructive" : ""}>
             {failing > 0
-              ? `${failing} failing`
+              ? `devices answering, ${failing} failing`
               : ok === status.devices.length
-                ? "every device answers"
-                : `${status.devices.length - ok} starting`}
+                ? "devices answering"
+                : `devices answering, ${status.devices.length - ok} starting`}
           </CardDescription>
         </CardHeader>
       </Card>
