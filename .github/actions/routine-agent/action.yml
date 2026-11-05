@@ -108,7 +108,7 @@ runs:
         out="$RUNNER_TEMP/routine-out"
         mkdir -p "$out"
         cat "$report" >> "$GITHUB_STEP_SUMMARY"
-        outcome=$(grep -E '^OUTCOME: ' "$report" | tail -n 1 | cut -d' ' -f2 | tr -cd 'a-z-')
+        outcome=$({ grep -E '^OUTCOME: ' "$report" || true; } | tail -n 1 | cut -d' ' -f2 | tr -cd 'a-z-')
         case "$ROUTINE:$outcome" in
           deps:updates | deps:no-updates | deps:blocked | triage:fix | triage:issue) ;;
           *)
@@ -116,7 +116,8 @@ runs:
             exit 1
             ;;
         esac
-        test=$(grep -E '^TEST: ' "$report" | tail -n 1 | cut -c7- | tr -c 'A-Za-z0-9._:/ ()-' '_' | cut -c1-120)
+        # Only triage writes a TEST line; under pipefail a grep without a match would end the step.
+        test=$({ grep -E '^TEST: ' "$report" || true; } | tail -n 1 | cut -c7- | tr -c 'A-Za-z0-9._:/ ()-' '_' | cut -c1-120)
         # The change, relative to HEAD. .routine/ is excluded (.git/info/exclude).
         git add --all
         git diff --cached --binary > "$out/change.patch"
