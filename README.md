@@ -62,7 +62,7 @@ demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 
 ### 2. Look around
 
-Open the status page at <http://localhost:8080>. It shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands; `GET /api/status` and `GET /api/messages` have the same as JSON.
+Open the status page at <http://localhost:8080>. It shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands. Click a device to open its points' history over 15 minutes to 7 days, updated live. `GET /api/status`, `GET /api/messages` and `GET /api/history` have the same as JSON.
 
 To watch the data arrive on a real broker, `pnpm demo --public` (or `demo --public` in the `docker run` line) publishes the same simulated data to a public test broker: the first of broker.hivemq.com, broker.emqx.io and test.mosquitto.org that answers, under a site id of its own such as `demo-3e15e2`. It prints the `mosquitto_sub` command and the MQTT Explorer settings to watch it with. Anyone can read a public broker, so the gateway refuses one for any device that is not simulated on this machine.
 

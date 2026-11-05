@@ -15,6 +15,8 @@
 import type { DeviceStatus, GatewayStatus, HostStatus, Messages as MessageList } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { useEffect, useState } from "react"
+import { flushSync } from "react-dom"
+import { DeviceDialog } from "@/components/device-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -88,46 +90,89 @@ const PointValue = ({ point, now }: { readonly point: DeviceStatus["points"][num
 
 const protocolName = { "modbus-tcp": "Modbus TCP", "bacnet-ip": "BACnet/IP", simulator: "Simulated" } as const
 
-const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: number }) => {
+const DeviceHeading = ({ device, now }: { readonly device: DeviceStatus; readonly now: number }) => {
   const state = freshness(device, now)
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <CardTitle className="font-mono">{device.id}</CardTitle>
-          {deviceBadge(state)}
-        </div>
-        <CardDescription>
-          {protocolName[device.protocol]} · {deviceLine(device, state, now)}
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Point</TableHead>
-              <TableHead className="text-right">Value</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {device.points.map((point) => (
-              <TableRow key={point.id}>
-                <TableCell>
-                  <div className="flex items-center gap-2">
-                    <span title={point.name}>{point.id}</span>
-                    {point.writable ? <Badge variant="outline">writable</Badge> : null}
-                  </div>
-                </TableCell>
-                <TableCell className="text-right font-mono tabular-nums">
-                  <PointValue key={point.id} point={point} now={now} />
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </CardContent>
-    </Card>
+    <>
+      <div className="flex items-center justify-between gap-2">
+        <CardTitle className="font-mono">{device.id}</CardTitle>
+        {deviceBadge(state)}
+      </div>
+      <CardDescription>
+        {protocolName[device.protocol]} · {deviceLine(device, state, now)}
+      </CardDescription>
+    </>
   )
+}
+
+/** The name both the card and its dialog carry, so a view transition morphs one into the other. */
+const transitionName = (device: DeviceStatus) => `device-${device.id}`
+
+/** A device's card; clicking it (or Enter or Space on it) opens the device. */
+const Device = ({
+  device,
+  now,
+  open,
+  onOpen
+}: {
+  readonly device: DeviceStatus
+  readonly now: number
+  readonly open: boolean
+  readonly onOpen: () => void
+}) => (
+  <Card
+    aria-haspopup="dialog"
+    aria-label={`${device.id}: open history`}
+    className="cursor-pointer transition-shadow hover:shadow-md hover:ring-1 hover:ring-ring/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    onClick={onOpen}
+    onKeyDown={(event) => {
+      if (event.key !== "Enter" && event.key !== " ") return
+      event.preventDefault()
+      onOpen()
+    }}
+    role="button"
+    style={{ viewTransitionName: open ? "none" : transitionName(device) }}
+    tabIndex={0}
+  >
+    <CardHeader>
+      <DeviceHeading device={device} now={now} />
+    </CardHeader>
+    <CardContent>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Point</TableHead>
+            <TableHead className="text-right">Value</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {device.points.map((point) => (
+            <TableRow key={point.id}>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  <span title={point.name}>{point.id}</span>
+                  {point.writable ? <Badge variant="outline">writable</Badge> : null}
+                </div>
+              </TableCell>
+              <TableCell className="text-right font-mono tabular-nums">
+                <PointValue key={point.id} point={point} now={now} />
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </CardContent>
+  </Card>
+)
+
+/** Whether the browser morphs the card into the dialog: it has view transitions and the user allows motion. */
+const canMorph = () =>
+  typeof document.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+/** Runs a state change inside a view transition where the browser has them, and plainly elsewhere. */
+const withTransition = (update: () => void) => {
+  if (!canMorph()) return update()
+  document.startViewTransition(() => flushSync(update))
 }
 
 /**
@@ -393,8 +438,9 @@ const Messages = ({ status }: { readonly status: GatewayStatus }) => {
         <CardDescription>
           What the gateway publishes to the broker, the latest message on each topic: what a client subscribed to{" "}
           <code className="font-mono">{prefix}#</code> receives. A value goes to{" "}
-          <code className="font-mono">site/building/device/point</code> when it changes, its metadata (name, unit, Brick
-          class) to <code className="font-mono">…/$meta</code>, and the gateway&apos;s health to{" "}
+          <code className="font-mono">site/building/device/point</code> as its publish mode says (every read, once per
+          interval, or when it changes), its metadata (name, unit, Brick class) to{" "}
+          <code className="font-mono">…/$meta</code>, and the gateway&apos;s health to{" "}
           <code className="font-mono">…/$gateway/{status.id}/health</code>.
         </CardDescription>
       </CardHeader>
@@ -474,6 +520,7 @@ const LiveBadge = ({ load }: { readonly load: Load }) => {
 
 const StatusPage = () => {
   const [load, setLoad] = useState<Load>({ _tag: "loading" })
+  const [openId, setOpenId] = useState<string | undefined>(undefined)
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -503,6 +550,7 @@ const StatusPage = () => {
   }, [])
 
   const status = load._tag === "ok" ? load.status : load._tag === "unreachable" ? load.last : undefined
+  const opened = status?.devices.find((device) => device.id === openId)
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -524,9 +572,24 @@ const StatusPage = () => {
           {status.host === undefined ? null : <Host host={status.host} />}
           <section className="grid gap-4 lg:grid-cols-2">
             {status.devices.map((device) => (
-              <Device key={device.id} device={device} now={status.now} />
+              <Device
+                device={device}
+                key={device.id}
+                now={status.now}
+                onOpen={() => withTransition(() => setOpenId(device.id))}
+                open={device.id === openId}
+              />
             ))}
           </section>
+          {opened === undefined ? null : (
+            <DeviceDialog
+              device={opened}
+              header={<DeviceHeading device={opened} now={status.now} />}
+              morph={canMorph()}
+              onClose={() => withTransition(() => setOpenId(undefined))}
+              transitionName={transitionName(opened)}
+            />
+          )}
           <Messages status={status} />
           <Commands status={status} />
         </>
