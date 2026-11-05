@@ -39,6 +39,7 @@ Linting is oxlint (`.oxlintrc.json`, type-aware through `oxlint-tsgolint`) and f
 - `packages/api`: the local HTTP API's contract (`HttpApi`), shared by the gateway and the status page
 - `apps/gateway`: the runnable gateway
 - `apps/web`: the status page, Next.js and shadcn/ui as a static export (`pnpm --filter @ot-gateway/web build`) that the gateway serves; no Next server at runtime
+- `apps/site`: the project and docs site, Fumadocs as a static export hosted on Vercel. Its docs pages are generated from `docs/*.md` and the README at build time, so edit those, never `apps/site/content/`
 - `examples/`: sample configs
 - `packaging/`: `compose.yaml` (the recommended install), the systemd unit and `install.sh`; the container image is the root `Dockerfile`
 - `docs/`: vision, the configuration reference (`configuration.md`, kept in step with the schema by `packages/core/test/ConfigDocs.test.ts`), operations and troubleshooting

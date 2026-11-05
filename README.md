@@ -212,6 +212,7 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | [`@ot-gateway/api`](packages/api)             | The local HTTP API's contract (Effect `HttpApi`), shared by the gateway and the status page          | Working |
 | [`@ot-gateway/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                 | Working |
 | [`@ot-gateway/web`](apps/web)                 | The local status page: Next.js and shadcn/ui, a static export the gateway serves                     | Working |
+| [`@ot-gateway/site`](apps/site)               | The project and docs site: Fumadocs, a static export on Vercel, with the docs rendered from `docs/`  | Working |
 
 ## Architecture
 

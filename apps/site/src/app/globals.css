@@ -1,0 +1,6 @@
+@import "tailwindcss";
+/* Fumadocs' neutral theme and its layout preset. */
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+@source "../";

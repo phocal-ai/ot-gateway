@@ -1,0 +1,22 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "typecheck": {
+      "inputs": [
+        "src/**",
+        "test/**",
+        "scripts/**",
+        "source.config.ts",
+        "next.config.ts",
+        "tsconfig.json",
+        "../../tsconfig.base.json",
+        "../../docs/*.md",
+        "../../README.md"
+      ]
+    },
+    "test": {
+      "inputs": ["src/**", "test/**", "../../docs/*.md", "../../README.md"]
+    }
+  }
+}
