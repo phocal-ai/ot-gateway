@@ -112,6 +112,7 @@ export const makeStatusState = (
           id: device.id,
           protocol: device.protocol,
           status: state.status,
+          pollIntervalMs: device.pollIntervalMs,
           ...(state.reason === undefined ? {} : { reason: state.reason }),
           ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
           points: device.points.map((point) => {

@@ -99,6 +99,7 @@ describe("status", () => {
           id: "meter",
           protocol: "modbus-tcp",
           status: "ok",
+          pollIntervalMs: 5000,
           lastSuccess: 1_000,
           points: [
             { id: "power", name: "Power", unit: "unit:KiloW", writable: false, value: 12.5, ts: 900 },

@@ -81,3 +81,13 @@
     @apply bg-background text-foreground antialiased;
   }
 }
+
+/* A value that just changed lights up and fades back (PointValue in page.tsx; motion-safe only). */
+@keyframes value-changed {
+  from {
+    background-color: color-mix(in oklch, var(--success) 35%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}

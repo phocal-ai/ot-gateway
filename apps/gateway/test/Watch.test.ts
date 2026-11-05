@@ -42,8 +42,15 @@ describe("status", () => {
       broker: { url: "mqtt://localhost:1883", connected: false },
       buffer: { path: "buf.sqlite", rows: 42 },
       devices: [
-        { id: "ahu-1", protocol: "simulator", status: "ok", lastSuccess: 598_000, points: [] },
-        { id: "main-meter", protocol: "modbus-tcp", status: "failing", reason: "Timeout", points: [] }
+        { id: "ahu-1", protocol: "simulator", status: "ok", pollIntervalMs: 2000, lastSuccess: 598_000, points: [] },
+        {
+          id: "main-meter",
+          protocol: "modbus-tcp",
+          status: "failing",
+          pollIntervalMs: 5000,
+          reason: "Timeout",
+          points: []
+        }
       ],
       commands: []
     }
