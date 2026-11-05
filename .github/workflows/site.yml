@@ -1,0 +1,84 @@
+name: Site
+
+# Deploys apps/site to https://ot-gateway.vercel.app when main changes, so the
+# public docs always match the latest release. The build runs here and only
+# its output (.vercel/output) is uploaded; apps/site/README.md, "Vercel", has
+# the same steps for a deploy by hand. No agent runs here.
+#
+# Secret (the job skips with a warning until it exists):
+#   VERCEL_TOKEN  a Vercel access token scoped to the wimluks-projects team
+# The org and project IDs below are identifiers, not credentials.
+#
+# Cost: public repo, so Actions minutes are free; about 3 min per release.
+# Vercel Hobby: one production deploy per release.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_CLI_VERSION: 62.2.0
+      VERCEL_ORG_ID: team_H8UdLRpL7ibcqgXl3ShNOpka
+      VERCEL_PROJECT_ID: prj_hbFTUjzU6BwWAhIDVXSVeaehs2sv
+      VERCEL_TELEMETRY_DISABLED: "1"
+    steps:
+      - name: Check secrets
+        id: secrets
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::warning::Site deploy skipped, missing secret: VERCEL_TOKEN"
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        if: steps.secrets.outputs.ready == 'true'
+      - uses: actions/setup-node@v7
+        if: steps.secrets.outputs.ready == 'true'
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - if: steps.secrets.outputs.ready == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and deploy
+        if: steps.secrets.outputs.ready == 'true'
+        working-directory: apps/site
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          # Links to GitHub point at the commit being deployed.
+          VERCEL_GIT_COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -o pipefail
+          vercel=(pnpm dlx "vercel@${VERCEL_CLI_VERSION}")
+          "${vercel[@]}" pull --yes --environment=production --token="$VERCEL_TOKEN"
+          "${vercel[@]}" build --prod --yes --token="$VERCEL_TOKEN"
+          "${vercel[@]}" deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN" | tee "$RUNNER_TEMP/deploy.txt"
+
+      - name: Check the live site
+        if: steps.secrets.outputs.ready == 'true'
+        run: |
+          for path in / /docs /docs/configuration /docs/configuration.md /llms.txt; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "https://ot-gateway.vercel.app$path")
+            echo "$path $code" | tee -a "$GITHUB_STEP_SUMMARY"
+            [ "$code" = 200 ] || { echo "::error::$path returned $code"; exit 1; }
+          done
