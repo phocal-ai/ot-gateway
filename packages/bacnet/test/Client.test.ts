@@ -1,24 +1,33 @@
 /**
  * The BACnet/IP client over real UDP on loopback, against simulated devices
- * and against hand-written peers that drop, delay or misdirect answers.
+ * and against hand-written peers that drop, delay or misdirect answers;
+ * discovery with several devices on one broadcast, on an in-memory network.
  */
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
-import { driverRequests, withMetricAttributes } from "@ot-gateway/core"
-import { Effect, Exit, Metric, Queue, Result, Schedule } from "effect"
+import { driverRequests, makeMemoryNetwork, type MemoryNetwork, withMetricAttributes } from "@ot-gateway/core"
+import { Effect, Exit, Fiber, Metric, Queue, Result, Schedule } from "effect"
+import { TestClock } from "effect/testing"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
+
 import {
   type Apdu,
   type BacnetClientOptions,
   checkReadPropertyMultipleAck,
   type CovNotification,
   decodeFrame,
+  type DeviceAddress,
+  type DiscoveredDevice,
   encodeIAm,
   encodeFrame,
   ErrorCode,
   makeBacnetClient,
+  makeDiscoveryCollector,
   makeSimulatedDevice,
+  MAX_CONFLICTS,
+  MAX_DEVICES,
+  type NetworkAddress,
   ObjectType,
   PropertyId,
   serveSimulatedDevice,
@@ -504,5 +513,142 @@ describe("ReadPropertyMultiple answers", () => {
       [{ object: supplyTemp, results: [emptyValue(presentValue), emptyValue(presentValue)] }]
     ].map((answer) => checkReadPropertyMultipleAck(asked, answer))
     expect(failures.every(Result.isFailure)).toBe(true)
+  })
+})
+
+const at = (ip: string) => NetAddress.inetAddressFromIpStringUnsafe(ip, 47_808)
+
+/** An I-Am for `instance`, from a device behind a router when `source` is given. */
+const iAmFrame = (instance: number, source?: NetworkAddress) =>
+  encodeFrame(
+    {
+      _tag: "UnconfirmedRequest",
+      service: UnconfirmedService.IAm,
+      body: encodeIAm({
+        device: { objectType: ObjectType.device, instance },
+        maxApdu: 480,
+        segmentation: 3,
+        vendorId: 1
+      })
+    },
+    source === undefined ? {} : { source }
+  )
+
+const routed = (network: number, mac: number): NetworkAddress => ({ network, address: new Uint8Array([mac]) })
+
+/** Sent after the test's frames: once the client has located it, it has read every frame before it. */
+const SENTINEL = 4_000_000
+
+/**
+ * Discover from 10.0.0.1 on `network`, under the test clock, while a peer at
+ * 10.0.2.9 (a device, or a router for the devices behind it) sends the
+ * client `frames`. The window closes only after the client has read them.
+ */
+const discoverHearing = Effect.fnUntraced(function* (network: MemoryNetwork, frames: ReadonlyArray<Uint8Array>) {
+  const peer = yield* network.host("10.0.2.9").udp({ address: "10.0.2.9", port: 47_808 })
+  yield* peer.reader
+  const peerWriter = yield* peer.writer
+  const socket = yield* network.host("10.0.0.1").udp({ address: "10.0.0.1", port: 47_808 })
+  const client = yield* makeBacnetClient(socket, {
+    broadcastAddress: at("255.255.255.255"),
+    requestTimeout: "1 second"
+  })
+  const discovering = yield* client.discover({ within: "1 second" }).pipe(Effect.forkChild)
+  const located = yield* client.locate(SENTINEL).pipe(Effect.forkChild)
+  yield* TestClock.adjust("10 millis")
+  yield* Effect.forEach([...frames, iAmFrame(SENTINEL)], (payload) =>
+    peerWriter.write({ payload, address: at("10.0.0.1") })
+  )
+  yield* Fiber.join(located)
+  yield* TestClock.adjust("1 second")
+  const found = yield* Fiber.join(discovering)
+  return found.filter((device) => device.instance !== SENTINEL)
+})
+
+const sourceOf = (source: DeviceAddress) => ({ at: NetAddress.formatInet(source.address), network: source.network })
+
+describe("discover on an in-memory network", () => {
+  it.effect("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
+    Effect.gen(function* () {
+      const network = makeMemoryNetwork()
+      const serve = (ip: string, instance: number) =>
+        Effect.flatMap(network.host(ip).udp({ address: ip, port: 47_808 }), (socket) =>
+          serveSimulatedDevice(socket, makeDevice(instance))
+        )
+      yield* serve("10.0.2.1", 2001)
+      yield* serve("10.0.2.2", 2001)
+      yield* serve("10.0.2.3", 3001)
+      // 4001 says I-Am twice from one address, as a device does when it hears Who-Is twice.
+      const found = yield* discoverHearing(network, [iAmFrame(4001), iAmFrame(4001)])
+
+      const byInstance = new Map(found.map((device) => [device.instance, device]))
+      expect([...byInstance.keys()].toSorted((left, right) => left - right)).toEqual([2001, 3001, 4001])
+      const claimed = byInstance.get(2001)
+      const sources = claimed === undefined ? [] : [claimed, ...claimed.conflicts]
+      expect(sources.map((source) => NetAddress.formatInet(source.address)).toSorted()).toEqual([
+        "10.0.2.1:47808",
+        "10.0.2.2:47808"
+      ])
+      expect(byInstance.get(3001)?.conflicts).toEqual([])
+      expect(byInstance.get(4001)?.conflicts).toEqual([])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("tells sources behind one router apart by network and address there", () =>
+    Effect.gen(function* () {
+      const found = yield* discoverHearing(makeMemoryNetwork(), [
+        iAmFrame(5001, routed(5, 7)),
+        iAmFrame(5001, routed(5, 7)),
+        iAmFrame(5001, routed(5, 8)),
+        iAmFrame(5001, routed(6, 7)),
+        iAmFrame(5001)
+      ])
+      expect(found).toHaveLength(1)
+      const [device] = found
+      expect(device === undefined ? undefined : sourceOf(device)).toEqual({
+        at: "10.0.2.9:47808",
+        network: routed(5, 7)
+      })
+      expect(device?.conflicts.map(sourceOf)).toEqual([
+        { at: "10.0.2.9:47808", network: routed(5, 8) },
+        { at: "10.0.2.9:47808", network: routed(6, 7) },
+        { at: "10.0.2.9:47808", network: undefined }
+      ])
+    }).pipe(Effect.scoped)
+  )
+})
+
+/** An I-Am as the client hands it to the collector: from 10.0.2.9, or from behind it as a router. */
+const answer = (instance: number, mac?: number): DiscoveredDevice => ({
+  instance,
+  address: at("10.0.2.9"),
+  ...(mac === undefined ? {} : { network: routed(5, mac) }),
+  maxApdu: 480,
+  segmentation: 3,
+  vendorId: 1
+})
+
+describe("makeDiscoveryCollector", () => {
+  it("keeps the first instances up to its device limit, and other sources up to its conflict limit", () => {
+    const collector = makeDiscoveryCollector({ maxDevices: 4, maxConflicts: 2 })
+    for (const mac of [1, 2, 3, 4]) collector.add(answer(6001, mac))
+    for (const instance of [7001, 7002, 7003, 7004, 7005]) collector.add(answer(instance))
+    // An instance already kept still collects sources once the device limit is reached.
+    collector.add(answer(7001, 9))
+    const devices = collector.devices()
+    expect(devices.map((device) => device.instance)).toEqual([6001, 7001, 7002, 7003])
+    expect(devices[0]?.network).toEqual(routed(5, 1))
+    expect(devices[0]?.conflicts.map((source) => source.network)).toEqual([routed(5, 2), routed(5, 3)])
+    expect(devices[1]?.conflicts.map((source) => source.network)).toEqual([routed(5, 9)])
+  })
+
+  it("defaults to MAX_DEVICES instances and MAX_CONFLICTS other sources", () => {
+    expect([MAX_DEVICES, MAX_CONFLICTS]).toEqual([4_096, 16])
+    const collector = makeDiscoveryCollector()
+    for (let mac = 0; mac < MAX_CONFLICTS + 3; mac++) collector.add(answer(6001, mac))
+    for (let instance = 0; instance < MAX_DEVICES + 3; instance++) collector.add(answer(10_000 + instance))
+    const devices = collector.devices()
+    expect(devices).toHaveLength(MAX_DEVICES)
+    expect(devices[0]?.conflicts).toHaveLength(MAX_CONFLICTS)
   })
 })

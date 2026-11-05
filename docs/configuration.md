@@ -32,10 +32,12 @@ The top level of the document.
 
 | Key           | Type           | Default                 | Meaning                                                                                                                           |
 | ------------- | -------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `url`         | string         | required                | `mqtt://host:port` or `mqtts://host:port` (TLS). No credentials in it: they would be printed and logged with it.                  |
+| `url`         | string         | required                | `mqtts://host:port` (TLS) or `mqtt://host:port`. No credentials in it: they would be printed and logged with it.                  |
 | `clientId`    | string, ≤ 1024 | `ot-gateway-<hostname>` | The MQTT client identifier. Two gateways with the same one keep disconnecting each other.                                         |
 | `username`    | string, ≤ 1024 | none                    | Broker username.                                                                                                                  |
 | `passwordEnv` | string         | none                    | Name of the environment variable holding the password (`/etc/ot-gateway/gateway.env` under systemd). Never put the password here. |
+
+A password over `mqtt://` is sent in clear text, so unless the broker is on the same machine (`localhost`, `127.0.0.0/8`, `::1`) the gateway warns about it at start-up and in `--check`: use `mqtts://`.
 
 The session is clean: nothing sent while the gateway was offline is delivered later, commands included.
 
@@ -105,7 +107,7 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 | `cycleTimeoutMs` | 1000–86400000     | see above |                                                                                                                                                      |
 | `points`         | array             | required  | [BACnet points](#bacnet-points).                                                                                                                     |
 
-`node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only.
+`node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only. An entry's `address` is where the device's answer came from: before any point of the device becomes writable, confirm it against a source you trust (commissioning sheet, device display, DHCP reservation). When more than one address answers for the same instance (two devices may share the instance, or one device answers on several addresses), `--discover` names them all on stderr and drafts that device without `address` or points: take its address from that source, using the list only to see which hosts to check. A device already in the config with an `address` is read at that address, and its entry in the draft, under its config id, holds only the objects it has no point for yet, to merge into its `points`.
 
 ## Simulated devices
 

@@ -111,6 +111,23 @@ export interface DiscoveredDevice extends DeviceAddress, Omit<IAm, "device"> {
   readonly instance: number
 }
 
+/** Most other sources `discover` keeps for one instance. */
+export const MAX_CONFLICTS = 16
+
+/** Most instances one `discover` keeps; answers for further instances are dropped. */
+export const MAX_DEVICES = 4_096
+
+/** What `discover` found for one instance: the first answer, and every other source that answered for it. */
+export interface FoundDevice extends DiscoveredDevice {
+  /**
+   * The other addresses (with their networks) that answered for the same
+   * instance, in the order they answered, at most `MAX_CONFLICTS`; empty
+   * when only one did. When there are any, the instance alone does not say
+   * which host is the device.
+   */
+  readonly conflicts: ReadonlyArray<DeviceAddress>
+}
+
 export interface BacnetClientOptions {
   /** Where Who-Is goes when no device address is given, e.g. the subnet broadcast on port 47808. */
   readonly broadcastAddress: NetAddress.InetAddress
@@ -150,8 +167,13 @@ export interface BacnetClient {
     target: DeviceAddress,
     specifications: ReadonlyArray<ReadAccessSpecification>
   ) => Effect.Effect<ReadonlyArray<ReadAccessResult>, BacnetRequestError>
-  /** Broadcast Who-Is (or ask `target` only) and collect the devices that answer, one entry per instance. */
-  readonly discover: (options?: DiscoverOptions) => Effect.Effect<ReadonlyArray<DiscoveredDevice>, BacnetSocketError>
+  /**
+   * Broadcast Who-Is (or ask `target` only) and collect the devices that
+   * answer, one entry per instance, with every other source that answered
+   * for the same instance in its `conflicts`. At most `MAX_DEVICES`
+   * instances, the first to answer.
+   */
+  readonly discover: (options?: DiscoverOptions) => Effect.Effect<ReadonlyArray<FoundDevice>, BacnetSocketError>
   /**
    * Find one device by instance: Who-Is for exactly that instance, resent
    * like a request. With a `target`, only an I-Am from that address counts,
@@ -220,6 +242,41 @@ const sameNetwork = (left: NetworkAddress | undefined, right: NetworkAddress | u
 /** Whether `device` answered from `target`: the same IP address and port, and the same network behind a router. */
 const sameDevice = (device: DeviceAddress, target: DeviceAddress) =>
   keyOf(device.address) === keyOf(target.address) && sameNetwork(device.network, target.network)
+
+export interface DiscoveryLimits {
+  /** Most instances kept (default `MAX_DEVICES`); answers for further instances are dropped. */
+  readonly maxDevices?: number
+  /** Most other sources kept per instance (default `MAX_CONFLICTS`). */
+  readonly maxConflicts?: number
+}
+
+/**
+ * What `discover` does with each I-Am it accepts: one entry per instance,
+ * the first answer, and every other source that answered for the instance
+ * in `conflicts`. The same source again (a resent I-Am) is not a conflict.
+ */
+export const makeDiscoveryCollector = (limits: DiscoveryLimits = {}) => {
+  const maxDevices = limits.maxDevices ?? MAX_DEVICES
+  const maxConflicts = limits.maxConflicts ?? MAX_CONFLICTS
+  const found = new Map<number, { readonly device: DiscoveredDevice; readonly conflicts: Array<DeviceAddress> }>()
+  return {
+    add: (device: DiscoveredDevice): void => {
+      const first = found.get(device.instance)
+      if (first === undefined) {
+        if (found.size < maxDevices) found.set(device.instance, { device, conflicts: [] })
+        return
+      }
+      const known = sameDevice(device, first.device) || first.conflicts.some((other) => sameDevice(device, other))
+      if (known || first.conflicts.length >= maxConflicts) return
+      first.conflicts.push({
+        address: device.address,
+        ...(device.network === undefined ? {} : { network: device.network })
+      })
+    },
+    devices: (): ReadonlyArray<FoundDevice> =>
+      Array.from(found.values(), ({ device, conflicts }) => ({ ...device, conflicts }))
+  }
+}
 
 const sameObject = (asked: ObjectId, answered: ObjectId) =>
   asked.objectType === answered.objectType &&
@@ -702,19 +759,19 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
       ),
     discover: (discoverOptions = {}) =>
       Effect.suspend(() => {
-        const found = new Map<number, DiscoveredDevice>()
+        const found = makeDiscoveryCollector()
         const whoIs: WhoIs = discoverOptions.range === undefined ? {} : { range: discoverOptions.range }
         const target = discoverOptions.target
         return listening(
           (device) => {
             // Asked one address: an I-Am from anywhere else answers someone else's Who-Is.
             if (target !== undefined && !sameDevice(device, target)) return
-            if (whoIsMatches(whoIs, device.instance)) found.set(device.instance, device)
+            if (whoIsMatches(whoIs, device.instance)) found.add(device)
           },
           sendWhoIs(whoIs, discoverOptions.target).pipe(
             Effect.andThen(Effect.sleep(discoverOptions.within ?? requestTimeout))
           )
-        ).pipe(Effect.map(() => [...found.values()]))
+        ).pipe(Effect.map(found.devices))
       }),
     writeProperty: (target, writeRequest) =>
       request(
