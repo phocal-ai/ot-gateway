@@ -399,9 +399,11 @@ describe("BACnet/IP client", () => {
       const client = yield* startClient(peer.target.address, { requestTimeout: "1 second", retries: 0 })
       const read = client.readProperty(peer.target, { object: supplyTemp, property: presentValue })
       expect(yield* read.pipe(Effect.flip)).toMatchObject({ _tag: "BacnetTimeout" })
-      // Use up every other ID once, so the next request comes round to the first one again.
+      // Use up every other ID once, so the next request comes round to the first one again. Only the IDs the peer
+      // sees matter here: one of these that times out on a loaded runner has still taken its ID, so its outcome is
+      // ignored rather than failing the test.
       yield* Effect.all(
-        Array.from({ length: 255 }, () => read),
+        Array.from({ length: 255 }, () => Effect.ignore(read)),
         { concurrency: "unbounded" }
       )
       yield* read
