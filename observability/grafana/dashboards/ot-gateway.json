@@ -125,7 +125,7 @@
       "id": 2,
       "type": "stat",
       "title": "Devices reporting",
-      "description": "Devices that completed at least one successful cycle in the range.",
+      "description": "Devices that completed at least one successful cycle in the range. Counted per site, building and device, so a gateway upgrade (a new service.version) does not count its devices twice.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"
@@ -143,7 +143,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "count(max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "count(max by (site, building, device) (max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])))",
           "instant": true
         }
       ],
@@ -201,7 +201,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max(time() - max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range]))",
+          "expr": "max(time() - max by (site, building, device) (max_over_time(ot_gateway_device_last_success_timestamp_seconds{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"}[$__range])))",
           "instant": true
         }
       ],

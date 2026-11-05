@@ -150,14 +150,19 @@ const staleness = (
   })
 
 row("Health")
-stat("Devices reporting", `count(max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range]))`, {
-  unit: "short",
-  x: 0,
-  description: "Devices that completed at least one successful cycle in the range."
-})
+stat(
+  "Devices reporting",
+  `count(max by (site, building, device) (max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range])))`,
+  {
+    unit: "short",
+    x: 0,
+    description:
+      "Devices that completed at least one successful cycle in the range. Counted per site, building and device, so a gateway upgrade (a new service.version) does not count its devices twice."
+  }
+)
 stat(
   "Stalest device",
-  `max(time() - max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range]))`,
+  `max(time() - max by (site, building, device) (max_over_time(ot_gateway_device_last_success_timestamp_seconds{${sel}}[$__range])))`,
   {
     unit: "s",
     x: 4,
