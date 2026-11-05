@@ -28,7 +28,12 @@ export const formatStatus = (status: GatewayStatus) => {
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)}`,
     `  broker ${status.broker.url}: ${status.broker.connected ? "connected" : "NOT CONNECTED"}`,
-    ...(status.buffer === undefined ? [] : [`  buffer: ${status.buffer.rows} message(s) waiting`]),
+    ...(status.buffer === undefined
+      ? []
+      : [
+          `  buffer: ${status.buffer.rows} of ${status.buffer.maxRows} message(s) waiting` +
+            (status.buffer.dropped > 0 ? `, ${status.buffer.dropped} DROPPED since start` : "")
+        ]),
     `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}`,
     ...status.devices.map((device) => {
       const lastRead =

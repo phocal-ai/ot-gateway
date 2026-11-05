@@ -5,8 +5,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { OtGatewayApi } from "@ot-gateway/api"
-import { makeHealthRegistry, parseConfig } from "@ot-gateway/core"
-import { Effect, Fiber } from "effect"
+import { bufferDropped, makeHealthRegistry, parseConfig, withMetricAttributes } from "@ot-gateway/core"
+import { Effect, Fiber, Metric } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
@@ -68,6 +68,28 @@ const freePort = Effect.promise(
 )
 
 describe("status", () => {
+  it.effect("says how full the buffer is and adds up what it dropped, whatever the reason", () =>
+    Effect.gen(function* () {
+      const buffered = yield* parseConfig(
+        JSON.stringify({
+          site: "s",
+          building: "b",
+          mqtt: { url: "mqtt://localhost:1883", clientId: "status-buffer-test" },
+          buffer: { path: "./buffer.sqlite", maxRows: 500 },
+          devices: []
+        })
+      )
+      const state = makeStatusState(buffered, makeHealthRegistry([]), 0)
+      expect((yield* state.snapshot).buffer).toEqual({ path: "./buffer.sqlite", rows: 0, maxRows: 500, dropped: 0 })
+      // As the buffer counts them: under the gateway's site and building, one series per reason.
+      yield* Effect.gen(function* () {
+        yield* Metric.update(Metric.withAttributes(bufferDropped, { reason: "overflow" }), 5)
+        yield* Metric.update(Metric.withAttributes(bufferDropped, { reason: "rejected" }), 2)
+      }).pipe(withMetricAttributes({ site: "s", building: "b" }))
+      expect((yield* state.snapshot).buffer?.dropped).toBe(7)
+    })
+  )
+
   it.effect("keeps each point's last value and the newest 50 commands", () =>
     Effect.gen(function* () {
       const parsed = yield* config

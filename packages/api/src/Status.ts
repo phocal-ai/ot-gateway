@@ -96,8 +96,13 @@ export const GatewayStatus = Schema.Struct({
   since: Schema.Number,
   now: Schema.Number,
   broker: Schema.Struct({ url: Schema.String, connected: Schema.Boolean }),
-  /** Absent without a `buffer` in the config. */
-  buffer: Schema.optionalKey(Schema.Struct({ path: Schema.String, rows: Schema.Number })),
+  /**
+   * Absent without a `buffer` in the config. `rows` wait for the broker, out of `maxRows`; `dropped` counts the
+   * messages the buffer gave up on since the gateway started (overflow past `maxRows`, refused, unreadable, ...).
+   */
+  buffer: Schema.optionalKey(
+    Schema.Struct({ path: Schema.String, rows: Schema.Number, maxRows: Schema.Number, dropped: Schema.Number })
+  ),
   /** Absent until the host monitor's first sample. */
   host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),

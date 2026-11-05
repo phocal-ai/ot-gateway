@@ -128,6 +128,12 @@ export const clockTime = (at: number, now: number) => {
     : `${moment.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`
 }
 
+/** "0.4 %", "37 %": how full the buffer is; under 1 % keeps a decimal, so a filling buffer never reads 0 %. */
+export const fillPercent = (rows: number, maxRows: number) => {
+  const percent = (rows / maxRows) * 100
+  return percent < 1 ? `${Math.max(percent, 0.1).toFixed(1)} %` : `${Math.round(percent)} %`
+}
+
 /** Bytes as people read them: 312 MB, 1.4 GB. */
 export const formatBytes = (bytes: number) => {
   const units = ["B", "KB", "MB", "GB", "TB"]
