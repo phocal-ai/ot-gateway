@@ -33,7 +33,7 @@ Without Compose, the same as one command:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v /etc/ot-gateway:/etc/ot-gateway:ro -v /var/lib/ot-gateway:/var/lib/ot-gateway \
-  ghcr.io/phocal-ai/ot-gateway:v0.6.2
+  ghcr.io/phocal-ai/ot-gateway:v0.7.0
 ```
 
 ### systemd, without Docker
@@ -93,7 +93,7 @@ Or run `install.sh` again with the new file: it checks it before replacing the o
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.6.2
+git fetch --tags && git checkout v0.7.0
 ```
 
 ```bash
@@ -148,18 +148,18 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.6.2 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.7.0 --check /etc/ot-gateway/gateway.json
 ```
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.2/packaging/compose.yaml && docker compose -f compose.yaml up -d
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml && docker compose -f compose.yaml up -d
 ```
 
 Fetching `compose.yaml` replaces the one in the current directory: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.6.2 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.7.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -174,7 +174,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.6.2
+git fetch --tags && git checkout v0.7.0
 ```
 
 ```bash

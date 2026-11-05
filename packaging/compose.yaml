@@ -10,7 +10,7 @@
 services:
   gateway:
     # A release tag, not latest: an upgrade is a decision, and going back is setting the old tag again.
-    image: ghcr.io/phocal-ai/ot-gateway:${OT_GATEWAY_TAG:-v0.6.2}
+    image: ghcr.io/phocal-ai/ot-gateway:${OT_GATEWAY_TAG:-v0.7.0}
     container_name: ot-gateway
     # BACnet discovery and change-of-value need the building network's broadcasts, which a bridge network drops.
     network_mode: host
