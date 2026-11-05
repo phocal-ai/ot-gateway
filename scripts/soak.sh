@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # Soak test: the gateway against the bench, with faults injected.
 #
-#   scripts/soak.sh [duration]                      # 12h (the release gate) by default: 12h, 90m, 600s, or hours
+#   scripts/soak.sh quick                           # 10 min at speed 60 with disk faults: about 10 hours of events
+#   scripts/soak.sh extended                        # 12 h in real time with SOAK_STRICT_HOST=1, on a Raspberry Pi
+#   scripts/soak.sh [duration]                      # 12h by default: 12h, 90m, 600s, or hours
 #   SOAK_SPEED=60 scripts/soak.sh 30m               # about a day of events in half an hour
+#
+# The presets only set defaults: SOAK_DEVICES=2 scripts/soak.sh quick still
+# runs two copies of every device. CONTRIBUTING.md, "Soak", says which one a
+# release needs.
 #
 # What a soak finds depends on how many events happen (poll cycles, outages,
 # COV renewals, buffer fills and drains), not on how long it runs. Real time
@@ -52,9 +58,19 @@
 # file as `pnpm gateway`, so its telemetry reaches the configured backend.
 set -euo pipefail
 
+case ${1:-} in
+  quick)
+    set -- 10m
+    export SOAK_SPEED=${SOAK_SPEED:-60} SOAK_DEVICES=${SOAK_DEVICES:-4} SOAK_DISK_FAULT=${SOAK_DISK_FAULT:-1}
+    ;;
+  extended)
+    set -- 12h
+    export SOAK_SPEED=${SOAK_SPEED:-1} SOAK_STRICT_HOST=${SOAK_STRICT_HOST:-1}
+    ;;
+esac
 duration=${1:-12h}
 if [[ ! $duration =~ ^[0-9]+[hms]?$ ]]; then
-  echo "duration is a number of hours, or a number with h, m or s: 12h, 90m, 600s" >&2
+  echo "duration is quick, extended, a number of hours, or a number with h, m or s: 12h, 90m, 600s" >&2
   exit 2
 fi
 case $duration in

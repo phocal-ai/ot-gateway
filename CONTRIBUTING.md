@@ -48,23 +48,22 @@ SIM_SEEDS=7,8 SIM_HOURS=168 pnpm --filter @ot-gateway/gateway sim
 
 A failing run prints its seed, and the same seed replays the same faults. The `Soak` workflow simulates a week for five new seeds every night. Write a regression as a seed and an assertion, not a sleep.
 
-Changes to drivers, the pipeline, the buffer or MQTT should survive a soak run. What a soak finds depends on how many events happen (poll cycles, outages, COV renewals, buffer fills and drains), not on how many hours pass, so run it accelerated:
+## Soak
 
-```bash
-SOAK_SPEED=60 SOAK_DEVICES=4 scripts/soak.sh 30m
-```
+What a soak finds depends on how many events happen (poll cycles, outages, COV renewals, buffer fills and drains), not on how many hours pass. Only the target hardware needs real time. So there are two presets, and neither runs all the time:
 
-That packs roughly a day of outages and renewals into half an hour: every interval in `examples/gateway.json` is divided by 60 (polls at least 100 ms apart, COV lifetimes at least 30 s), the broker stops every two minutes and the devices every four, and every device runs four times on its own ports. `SOAK_DISK_FAULT=1` also fills the buffer's disk (a disk image on macOS, a tmpfs on Linux, which needs root or passwordless sudo). The run ends without outages so the buffer can drain, and fails if the gateway exits or logs FATAL, a device is not ok in the last health message, rows are left in the buffer, or memory or open files grow from the first half of the run to the second. The script header lists every setting. The `Soak` workflow runs the same thing every night and on demand.
+| Preset   | Command                    | What it is                                                                                                   | When                                                                                      |
+| -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Quick    | `scripts/soak.sh quick`    | 10 minutes at speed 60, four copies of every device, disk faults: about 10 hours of events, 4 broker outages | Every release: the `Soak` workflow runs it on the pull request into `main`                |
+| Extended | `scripts/soak.sh extended` | 12 hours in real time with `SOAK_STRICT_HOST=1`, on a Raspberry Pi                                           | A release that changes a driver, the pipeline, the buffer, MQTT or packaging; before v1.0 |
 
-Until a Pi is on the bench, the `Soak` workflow also runs the soak inside the arm64 container image under QEMU, held to two cores and 1 GB: it shows the ARM build and the memory and CPU headroom, not the SD card or heat.
+Run the quick preset yourself on a branch that changes a driver, the pipeline, the buffer or MQTT. A preset only sets defaults, so `SOAK_DEVICES=2 scripts/soak.sh quick` still works, and any duration still runs: `SOAK_SPEED=60 SOAK_DEVICES=4 scripts/soak.sh 30m` packs about a day of outages into half an hour.
 
-Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi with `SOAK_STRICT_HOST=1`, which also fails on an event-loop stall or a power or thermal condition (under-voltage only on Raspberry Pi kernel 6.12 and later, see docs/operations.md, "The machine"). [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the whole procedure and the pass criteria:
+At speed 60, every interval in `examples/gateway.json` is divided by 60 (polls at least 100 ms apart, COV lifetimes at least 30 s), the broker stops every two minutes and the devices every four. `SOAK_DISK_FAULT=1` also fills the buffer's disk (a disk image on macOS, a tmpfs on Linux, which needs root or passwordless sudo). The run ends without outages so the buffer can drain, and fails if the gateway exits or logs FATAL, a device is not ok in the last health message, rows are left in the buffer, or memory or open files grow from the first half of the run to the second. A run stopped early skips that drain, so it cannot pass the backlog check. The script header lists every setting.
 
-```bash
-SOAK_STRICT_HOST=1 scripts/soak.sh 12h
-```
+The `Soak` workflow simulates every night and runs the 30-minute soak and an arm64 soak every Sunday. The arm64 one runs inside the container image under QEMU, held to two cores and 1 GB: it shows the ARM build and the memory and CPU headroom, not the SD card or heat.
 
-Twelve hours is the gate: half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages (the second and fourth stop the devices too), and a sample every ten minutes for the memory and open-file growth checks. A longer run is welcome before a first building, but a release does not wait for it.
+The extended preset is for the hardware: SD card, CPU, thermal throttling, NTP steps. `SOAK_STRICT_HOST=1` also fails on an event-loop stall or a power or thermal condition (under-voltage only on Raspberry Pi kernel 6.12 and later, see docs/operations.md, "The machine"). Twelve hours is half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages, and a sample every ten minutes for the growth checks. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the procedure and the pass criteria. A release that changes none of those paths, such as config validation, docs or CI, needs only the quick preset.
 
 ## Reporting device quirks
 

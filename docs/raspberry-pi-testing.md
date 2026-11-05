@@ -99,12 +99,12 @@ docker run --rm --privileged --user root -v /var/tmp/soak-disk:/soak -e SOAK_DIR
 
 ### 4. Real-time soak, 12 hours
 
-The release gate: the soak at speed 1, so every timer, NTP correction and SD-card write happens at its real rate.
+The extended preset: the soak at speed 1, so every timer, NTP correction and SD-card write happens at its real rate. A release needs it when it changes a driver, the pipeline, the buffer, MQTT or packaging, and before v1.0 (CONTRIBUTING.md, "Soak"); other releases ship on the quick preset in CI.
 
 ```bash
 docker run -d --name soak --user root -v /var/tmp/soak-12h:/soak -e SOAK_DIR=/soak \
-  -e SOAK_DEVICES=4 -e SOAK_STRICT_HOST=1 \
-  --entrypoint bash ot-gateway:test scripts/soak.sh 12h
+  -e SOAK_DEVICES=4 \
+  --entrypoint bash ot-gateway:test scripts/soak.sh extended
 ```
 
 Read `docker logs soak` and `/var/tmp/soak-12h/summary.txt` at the end, then `docker rm soak` before the next run. Before a Pi goes into its first building, also run the gateway itself with Compose against the bench or real devices for a week, with telemetry on, and read the dashboard's **Host** row against the criteria below; a release does not wait for that week.
