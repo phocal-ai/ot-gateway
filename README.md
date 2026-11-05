@@ -34,7 +34,7 @@ Three steps, each a little closer to your own building.
 
 ### 1. See it work
 
-One minute, no devices needed. With [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or any Docker; images from v0.7.0 on):
+One minute, no devices needed. With [Docker Desktop](https://www.docker.com/products/docker-desktop/) (or any Docker):
 
 ```bash
 docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
