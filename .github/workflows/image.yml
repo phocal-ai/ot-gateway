@@ -1,8 +1,10 @@
 name: Image
 
 # The gateway's container image (Dockerfile), for amd64 and arm64. Pull
-# requests build both and smoke-test the amd64 one against the bench; a
-# release tag (v*) publishes ghcr.io/phocal-ai/ot-gateway.
+# requests build both and smoke-test them against the bench, with a build cache
+# per architecture that only pull requests write. A pushed release tag (v*) on
+# main publishes ghcr.io/phocal-ai/ot-gateway, built from the tagged source
+# without the cache; only a plain vX.Y.Z also moves :latest.
 on:
   pull_request:
     branches: [main, dev]
@@ -17,7 +19,7 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-# Read-only by default: only the publish job, which runs for release tags alone, may write packages.
+# Read-only by default: only the publish job, which runs for release tags on main alone, may write packages.
 permissions:
   contents: read
 
@@ -37,8 +39,9 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ot-gateway:smoke
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=image-amd64
+          # Empty outside pull requests, which exports no cache.
+          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,scope=image-amd64,mode=max' || '' }}
 
       - name: Smoke test against the bench
         run: |
@@ -80,8 +83,8 @@ jobs:
           platforms: linux/arm64
           load: true
           tags: ot-gateway:arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=image-arm64
+          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,scope=image-arm64,mode=max' || '' }}
 
       # The arm64 image under QEMU, bench and gateway in one container on Docker's default network,
       # as the arm64 soak runs them: values must reach the broker within four minutes of emulation.
@@ -112,7 +115,8 @@ jobs:
 
   publish:
     needs: image
-    if: startsWith(github.ref, 'refs/tags/v')
+    # A pushed tag only: a manual run on a tag ref does not publish.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -120,6 +124,34 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Releases are tagged on main (CONTRIBUTING.md), so a tag anywhere else is not one.
+      - name: Check that the tag is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main; tag releases on main only."
+            exit 1
+          fi
+
+      - name: Image tags
+        id: tags
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          image=ghcr.io/phocal-ai/ot-gateway
+          {
+            echo "list<<EOF"
+            echo "$image:$TAG"
+            # A prerelease such as v0.7.0-rc.1 leaves :latest on the last release.
+            if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "$image:latest"; fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
@@ -137,7 +169,6 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: OT_GATEWAY_VERSION=${{ github.ref_name }}
-          tags: |
-            ghcr.io/phocal-ai/ot-gateway:${{ github.ref_name }}
-            ghcr.io/phocal-ai/ot-gateway:latest
-          cache-from: type=gha
+          tags: ${{ steps.tags.outputs.list }}
+          # A release image is built from the tagged source alone, not from a shared build cache.
+          no-cache: true

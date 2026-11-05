@@ -17,7 +17,7 @@ Effect-native MQTT 5 client, implemented in-house: publishing, and subscriptions
   - Respects the broker's CONNACK limits: Receive Maximum, Maximum QoS, Retain Available, Maximum Packet Size and Server Keep Alive.
   - Closing the scope sends DISCONNECT, so the broker discards the last will.
 - **Publisher** (`Publisher.ts`): `MqttPublisher(config.mqtt, { health })` is the core `Publisher` layer.
-  - Parses `mqtt://` and `mqtts://` (TLS) URLs, reads the password from the variable named by `passwordEnv`, and defaults the client ID to `ot-gateway-<hostname>`.
+  - Parses `mqtt://` and `mqtts://` (TLS) URLs, reads the password from the variable named by `passwordEnv`, and defaults the client ID to `ot-gateway-<hostname>`. It logs one warning at start-up when a password goes over `mqtt://` to a host other than this one.
   - With `health`, it publishes the gateway's retained online message on every connect, registers `offline` as the last will, and publishes `offline` itself on a clean shutdown.
   - Remembers the latest retained message per topic and publishes those from earlier connections again after a reconnect, 16 at a time, each on its own, so one the broker refuses does not keep the others off it. Values are not retained, so they are never replayed.
 - **Test broker** (`TestBroker.ts`): `serveMqtt(server, control)` accepts connections, acknowledges and records publishes, and keeps retained payloads. `BrokerControl` refuses connections, withholds PUBACKs or PINGRESPs, refuses messages, or drops the client with DISCONNECT 0x95 on a packet above an unannounced size limit, for fault tests. `pnpm bench` runs it locally.

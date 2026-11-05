@@ -102,7 +102,7 @@ docker compose -f packaging/compose.yaml up -d
 
 The image reads `/etc/ot-gateway/gateway.json`; point `buffer.path` under `/var/lib/ot-gateway` so the outbox outlives the container. Secrets go in `/etc/ot-gateway/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env`. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose … up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page.
 
-On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout:
+On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout owned by you or root (the script refuses one that others can write to):
 
 ```bash
 sudo packaging/install.sh path/to/gateway.json
@@ -123,7 +123,7 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
   "site": "vienna-hq",
   "building": "b1",
   "id": "main",
-  "mqtt": { "url": "mqtt://broker.local:1883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
+  "mqtt": { "url": "mqtts://broker.local:8883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/ot-gateway/buffer.sqlite" },
   "devices": [
     {

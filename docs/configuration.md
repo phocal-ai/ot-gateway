@@ -32,10 +32,12 @@ The top level of the document.
 
 | Key           | Type           | Default                 | Meaning                                                                                                                           |
 | ------------- | -------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `url`         | string         | required                | `mqtt://host:port` or `mqtts://host:port` (TLS). No credentials in it: they would be printed and logged with it.                  |
+| `url`         | string         | required                | `mqtts://host:port` (TLS) or `mqtt://host:port`. No credentials in it: they would be printed and logged with it.                  |
 | `clientId`    | string, ≤ 1024 | `ot-gateway-<hostname>` | The MQTT client identifier. Two gateways with the same one keep disconnecting each other.                                         |
 | `username`    | string, ≤ 1024 | none                    | Broker username.                                                                                                                  |
 | `passwordEnv` | string         | none                    | Name of the environment variable holding the password (`/etc/ot-gateway/gateway.env` under systemd). Never put the password here. |
+
+A password over `mqtt://` is sent in clear text, so unless the broker is on the same machine (`localhost`, `127.0.0.0/8`, `::1`) the gateway warns about it at start-up and in `--check`: use `mqtts://`.
 
 The session is clean: nothing sent while the gateway was offline is delivered later, commands included.
 

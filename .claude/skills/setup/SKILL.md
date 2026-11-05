@@ -50,7 +50,7 @@ Ask these in a single `AskUserQuestion`:
 Then ask in plain text, in one message, only for what applies:
 
 - **Site and building names**, e.g. "Vienna HQ, Building 1". You make the slugs: `vienna-hq`, `b1`.
-- **Broker URL** (`mqtt://` or `mqtts://host:port`, never with credentials in it), and the username if it needs one. For the password, see the ground rules: the user writes it into `ot-gateway.env`.
+- **Broker URL** (`mqtts://host:port`, or `mqtt://` for a broker without TLS; never with credentials in it), and the username if it needs one. For the password, see the ground rules: the user writes it into `ot-gateway.env`.
 - **Modbus:** each device's IP and unit id (often 1, or 255 for a plain TCP device), plus the register list. Accept a pasted table, a CSV, or a path to the datasheet PDF, and read it yourself.
 
 ## 4. BACnet: discover, don't ask
