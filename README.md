@@ -121,7 +121,7 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
   "site": "vienna-hq",
   "building": "b1",
   "id": "main",
-  "mqtt": { "url": "mqtt://broker.local:1883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
+  "mqtt": { "url": "mqtts://broker.local:8883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/ot-gateway/buffer.sqlite" },
   "devices": [
     {
