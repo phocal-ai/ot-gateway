@@ -71,7 +71,7 @@ Real devices deviate from specs. If you hit one, open an issue with the device m
 
 ## Routines
 
-Three scheduled agents keep the repository maintained. Each runs Claude Code in GitHub Actions on the `CLAUDE_CODE_OAUTH_TOKEN` secret, skips with a warning without it, and writes only in public, so none of them handles security-audit findings. None merges, touches `main` or releases.
+Three scheduled agents keep the repository maintained. Each runs Claude Code in GitHub Actions on the `CLAUDE_CODE_OAUTH_TOKEN` secret, skips with a warning without it, and writes only in public, so none of them handles security-audit findings. Only Deps merges, and only into `dev` when every check is green; none touches `main` or releases.
 
 | Routine | Workflow and prompt                       | When                                                                   | What it may write                                                                                                                                  |
 | ------- | ----------------------------------------- | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,4 +86,6 @@ Deps and Triage change code, so they hold no write token while the agent runs:
 - A second job applies its patch, refuses one that touches `.github/`, `.claude/`, `repos/` or `packaging/install.sh` (`.github/scripts/routine-diff-check.sh`), and pushes and opens the pull request or issue.
 - `scripts/test-routines.sh` tests those scripts, and CI runs it.
 
-A pull request opened by a workflow starts no other workflows, so the routines start CI, Interop and Image on their branch by `workflow_dispatch`. Those checks test the branch as pushed, not its merge with `dev`: update the branch before merging when `dev` has moved. Opening pull requests needs "Allow GitHub Actions to create and approve pull requests" in the repository's Actions settings.
+The second job pushes and opens pull requests with `ROUTINE_TOKEN`, a fine-grained token limited to this repository (Contents and Pull requests: read and write, one year), so their checks start like a person's. Deps then waits for every check and merges its update into `dev` when all pass, updating the branch first if `dev` moved. A failed check leaves the pull request open. Triage fixes always wait for a person, because they change code. Without `ROUTINE_TOKEN` both fall back to the workflow's own token: GitHub then holds the pull request's CI until a person approves it, and nothing merges on its own.
+
+To rotate the token, create a new one with the same permissions under GitHub → Settings → Developer settings → Fine-grained tokens, store it with `pbpaste | gh secret set ROUTINE_TOKEN --repo phocal-ai/ot-gateway`, and delete the old one.
