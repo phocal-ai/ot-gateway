@@ -1,15 +1,20 @@
 {
   "$schema": "https://turborepo.com/schema.json",
+  "agentGuidance": true,
+  "globalDependencies": [".nvmrc", "tsconfig.base.json"],
   "tasks": {
     "typecheck": {
+      "description": "tsc (TypeScript 7 with the Effect language service) for the package and what it depends on",
       "dependsOn": ["^typecheck"],
       "inputs": ["src/**", "test/**", "tsconfig.json", "../../tsconfig.base.json"]
     },
     "test": {
+      "description": "Vitest for the package; runs without hardware",
       "dependsOn": ["^typecheck"],
       "inputs": ["src/**", "test/**"]
     },
     "start": {
+      "description": "Runs the package (the gateway); not cached",
       "cache": false,
       "persistent": true
     }
