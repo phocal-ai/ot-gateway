@@ -75,10 +75,12 @@ describe("openHistory", () => {
 
   it.effect("answers from the minute rollups beyond the last day, and prunes both after their time", () =>
     Effect.gen(function* () {
-      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2 })
+      // Flush hourly: the default 5 s would run the writer ~17,000 times per virtual day, each against real SQLite,
+      // so the test's speed would depend on the machine.
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2 }, { flushEveryMs: 3_600_000 })
       for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
-      yield* TestClock.adjust("5 seconds")
-      yield* TestClock.adjust(DAY + 3_600_000)
+      yield* TestClock.adjust("1 hour")
+      yield* TestClock.adjust(DAY)
       const older = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 2 })
       expect(older).toMatchObject({ resolution: "minute", stepMs: 60_000 })
       expect(older.buckets).toEqual([
