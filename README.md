@@ -36,10 +36,11 @@ Requirements: Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 git clone https://github.com/phocal-ai/ot-gateway
 cd ot-gateway
 pnpm install
-pnpm check      # typecheck + tests across the workspace (Turborepo)
 pnpm bench      # terminal 1: a local MQTT test broker, a Modbus TCP and a BACnet/IP simulator
 pnpm gateway    # terminal 2: run the gateway with examples/gateway.json
 ```
+
+`pnpm check` runs the format check, lint, typecheck and every test (about 30 s); you don't need it to try the gateway.
 
 The bench prints every message the gateway publishes, from a simulated air handler, a simulated Modbus meter and a simulated BACnet air handler:
 
@@ -51,13 +52,13 @@ demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
 demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
-The gateway also serves a status page at <http://127.0.0.1:8080>: broker and buffer, every device with its health and latest values, and the recent commands. Build it once with `pnpm --filter @ot-gateway/web build`; until then the gateway serves only its JSON API, `GET /api/status`.
+The gateway also serves a status page at <http://127.0.0.1:8080>: broker and buffer, every device with its health and latest values, and the recent commands, with the same data as JSON at `GET /api/status`. `pnpm gateway` builds the page first; after the first time, Turborepo replays the build from its cache unless the page changed.
 
 Point `mqtt.url` at your own broker to publish there instead; the gateway keeps polling while the broker is down and reconnects on its own. Stop the bench for a few seconds and start it again: the values read in between arrive from the buffer.
 
 OT Gateway runs TypeScript directly on Node's built-in type stripping, so there is no build step during development.
 
-To check a config without connecting to anything:
+To check a config without connecting to anything (every mistake is listed with its path, in one run):
 
 ```bash
 node apps/gateway/src/main.ts --check path/to/gateway.json

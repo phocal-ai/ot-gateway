@@ -319,8 +319,10 @@ const JsonText = Schema.String.pipe(
 /**
  * Decode and validate a config from a JSON string. A key the schema does not
  * know fails decoding, so a typo (`intervall`) is reported instead of
- * silently falling back to the default.
+ * silently falling back to the default. Every problem is reported at once,
+ * each with its path, so a config with three mistakes takes one fix, not three.
  */
 export const parseConfig = Schema.decodeUnknownEffect(JsonText.pipe(Schema.decodeTo(GatewayConfig)), {
-  onExcessProperty: "error"
+  onExcessProperty: "error",
+  errors: "all"
 })
