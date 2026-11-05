@@ -17,6 +17,8 @@ export interface PageSource {
   readonly description: string
   /** For the README: only these H2 sections become the page, in this order. */
   readonly sections?: ReadonlyArray<string>
+  /** Starts a sidebar group with this label: the docs go from a first look to reference. */
+  readonly group?: string
 }
 
 export const repository = "https://github.com/phocal-ai/ot-gateway"
@@ -27,8 +29,26 @@ export const pages: ReadonlyArray<PageSource> = [
     source: "README.md",
     slug: "",
     title: "Getting started",
-    description: "Run the gateway against simulated devices, then set it up for your own building.",
-    sections: ["Quick start", "Set it up with AI", "Running it for real"]
+    description: "See it work in a minute, look around, then set it up for your own building.",
+    sections: ["Quick start", "Set it up with AI", "Running it for real"],
+    group: "Start here"
+  },
+  {
+    source: "docs/how-it-works.md",
+    slug: "how-it-works",
+    description: "What the gateway does, with one example building: from a meter and two air handlers to your software."
+  },
+  {
+    source: "docs/first-building.md",
+    slug: "first-building",
+    description: "From your list of points to values arriving on your broker, in five steps."
+  },
+  {
+    source: "docs/operations.md",
+    slug: "operations",
+    description:
+      "Install, change, upgrade, back up and watch a gateway on any Linux machine with Docker, or with systemd.",
+    group: "Run it"
   },
   {
     source: "docs/raspberry-pi-install.md",
@@ -37,25 +57,22 @@ export const pages: ReadonlyArray<PageSource> = [
     description: "From a blank SD card to a gateway publishing to MQTT."
   },
   {
-    source: "docs/configuration.md",
-    slug: "configuration",
-    description: "Every key of the gateway's JSON config, with its default."
-  },
-  {
-    source: "docs/operations.md",
-    slug: "operations",
-    description: "Install, change, upgrade, back up and watch a gateway on a Raspberry Pi or any Linux host."
-  },
-  {
     source: "docs/troubleshooting.md",
     slug: "troubleshooting",
     description: "From a symptom on the status page or in the log to its cause and fix."
   },
   {
+    source: "docs/configuration.md",
+    slug: "configuration",
+    description: "Every key of the gateway's JSON config, with its default.",
+    group: "Reference"
+  },
+  {
     source: "docs/raspberry-pi-testing.md",
     slug: "raspberry-pi-testing",
     description:
-      "How to test a gateway on a Pi before it goes into a building, and what has to be true to call it ready."
+      "How to test a gateway on a Pi before it goes into a building, and what has to be true to call it ready.",
+    group: "Background"
   },
   {
     source: "docs/VISION.md",
@@ -227,8 +244,18 @@ export const generatePage = (page: PageSource, markdown: string, context: LinkCo
   return { file: page.slug === "" ? "index.md" : `${page.slug}.md`, text: `${frontmatter}\n\n${body.trim()}\n` }
 }
 
-/** The sidebar order, as Fumadocs reads it from `meta.json`. */
+/** The sidebar order, as Fumadocs reads it from `meta.json`, with a `---Label---` separator before each group. */
 export const meta = (): GeneratedPage => ({
   file: "meta.json",
-  text: `${JSON.stringify({ title: "Docs", pages: pages.map((page) => (page.slug === "" ? "index" : page.slug)) }, null, 2)}\n`
+  text: `${JSON.stringify(
+    {
+      title: "Docs",
+      pages: pages.flatMap((page) => [
+        ...(page.group === undefined ? [] : [`---${page.group}---`]),
+        page.slug === "" ? "index" : page.slug
+      ])
+    },
+    null,
+    2
+  )}\n`
 })

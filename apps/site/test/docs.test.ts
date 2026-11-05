@@ -114,11 +114,14 @@ describe("the repository's docs", () => {
     }
   })
 
-  it("lists every page in meta.json, in order", () => {
-    expect(JSON.parse(meta().text)).toEqual({
-      title: "Docs",
-      pages: ["index", ...pages.slice(1).map((page) => page.slug)]
-    })
+  it("lists every page in meta.json, in order, each group behind its separator", () => {
+    const listed: ReadonlyArray<string> = JSON.parse(meta().text).pages
+    expect(listed.filter((entry) => !entry.startsWith("---"))).toEqual([
+      "index",
+      ...pages.slice(1).map((page) => page.slug)
+    ])
+    expect(listed.slice(0, 4)).toEqual(["---Start here---", "index", "how-it-works", "first-building"])
+    expect(listed).toContain("---Reference---")
   })
 
   it("makes heading anchors the way GitHub does", () => {

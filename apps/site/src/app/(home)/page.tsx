@@ -4,21 +4,53 @@
  */
 import Link from "next/link"
 import type * as React from "react"
+import { DeadbandChart } from "@/components/home/deadband-chart.tsx"
+import { Flow } from "@/components/home/flow.tsx"
+import { StatusMock } from "@/components/home/status-mock.tsx"
 import { site } from "@/lib/site.ts"
 
-const problems = [
+const journey = [
+  {
+    step: "1",
+    title: "See it work",
+    time: "1 minute",
+    text: "A small simulated building on your computer: an energy meter, an air handler, the gateway and a test broker. No devices, no accounts.",
+    command: "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo",
+    href: "/docs#quick-start",
+    link: "Quick start"
+  },
+  {
+    step: "2",
+    title: "Describe your building",
+    time: "15 minutes",
+    text: "Say which values you want, from which devices, how often and where to. A few questions write the config; BACnet devices are found for you.",
+    command: "ot-gateway init",
+    href: "/docs/first-building",
+    link: "Your first building"
+  },
+  {
+    step: "3",
+    title: "Leave it running",
+    time: "for months",
+    text: "On any always-on machine with Docker, or a Raspberry Pi. It reconnects, buffers while the network is down, and tells you when a device stops answering.",
+    command: "docker compose -f packaging/compose.yaml up -d",
+    href: "/docs/operations",
+    link: "Running a gateway"
+  }
+] as const
+
+const audiences = [
   [
-    "Flow tools hide failure.",
-    "Node-RED-style gateways are fast to start but hard to test and version. When a device goes quiet, it is often unclear why."
+    "Facility and energy managers",
+    "Meter readings and plant data in the dashboard or energy report you already use, without a vendor project."
   ],
   [
-    "Vendor gateways are closed.",
-    "They are expensive, hard to extend, and keep the point mapping inside a proprietary UI."
+    "System integrators",
+    "One small, scripted install per building: the same config format, status page and health message every time."
   ],
-  ["Scripts don't survive.", "A one-off script works until the first network drop, socket leak or full SD card."],
   [
-    "Field reality is messy.",
-    "Timeouts, CRC errors, rebooting devices, offline brokers and inconsistent register maps are normal, not exceptions."
+    "Platform and software teams",
+    "Clean MQTT with names, units and semantics on every point, so building data looks like any other data."
   ]
 ] as const
 
@@ -26,8 +58,8 @@ const features: ReadonlyArray<readonly [string, React.ReactNode]> = [
   [
     "Modbus TCP and BACnet/IP in",
     <>
-      Polling, BACnet change-of-value, scaling, deadband and QUDT units per point. <code>--discover</code> finds BACnet
-      devices and drafts their config.
+      Polling, BACnet change-of-value, scaling, deadband and QUDT units per point. <code>ot-gateway discover</code>{" "}
+      finds BACnet devices and drafts their config.
     </>
   ],
   [
@@ -43,7 +75,7 @@ const features: ReadonlyArray<readonly [string, React.ReactNode]> = [
   ],
   [
     "Store-and-forward",
-    "While the broker is unreachable, values go to a SQLite outbox on the device and are sent when it returns."
+    "While the broker is unreachable, values go to a SQLite outbox on the gateway and are sent, in order, when it returns."
   ],
   [
     "Observable",
@@ -67,16 +99,8 @@ const positioning = [
   ["Vendor gateways", "Supported, certified", "Open source, extensible, no lock-in"]
 ] as const
 
-const messages = `[retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
-demo-site/b1/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
-demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
-demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}`
-
-const quickStart = `git clone ${site.repository}
-cd ot-gateway
-pnpm install
-pnpm bench      # terminal 1: a test broker and simulated Modbus and BACnet devices
-pnpm gateway    # terminal 2: the gateway, with examples/gateway.json`
+const message = `vienna-hq/main/ahu-1/supply-air-temp
+{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}`
 
 const Section = ({ title, children }: { readonly title: string; readonly children: React.ReactNode }) => (
   <section className="border-t py-14">
@@ -93,20 +117,25 @@ const Code = ({ children }: { readonly children: string }) => (
 
 const HomePage = () => (
   <main className="mx-auto w-full max-w-5xl px-6">
-    <section className="py-20">
+    <section className="py-16 md:py-20">
       <p className="text-fd-muted-foreground mb-3 text-sm font-medium">Open source · MIT · early</p>
-      <h1 className="mb-5 text-4xl font-semibold tracking-tight md:text-5xl">An edge gateway for buildings</h1>
+      <h1 className="mb-5 max-w-3xl text-4xl font-semibold tracking-tight md:text-5xl">
+        Your building&apos;s data, in your software
+      </h1>
       <p className="text-fd-muted-foreground mb-8 max-w-2xl text-lg">
-        OT Gateway reads Modbus TCP and BACnet/IP, publishes clean, normalized data to MQTT 5 and carries commands back
-        safely. It runs unattended on a Raspberry Pi, configured with one JSON file. When something goes wrong, it says
-        what, where and since when.
+        Meters and controllers speak old building protocols. Dashboards and platforms speak MQTT. OT Gateway is the
+        small program in between: it reads the values you choose, names them, and sends them on, unattended and for
+        months.
       </p>
       <div className="flex flex-wrap gap-3">
         <Link
           className="bg-fd-primary text-fd-primary-foreground rounded-md px-4 py-2 text-sm font-medium"
           href="/docs"
         >
-          Get started
+          Try it in one minute
+        </Link>
+        <Link className="hover:bg-fd-accent rounded-md border px-4 py-2 text-sm font-medium" href="/docs/how-it-works">
+          How it works
         </Link>
         <a className="hover:bg-fd-accent rounded-md border px-4 py-2 text-sm font-medium" href={site.repository}>
           GitHub
@@ -114,13 +143,67 @@ const HomePage = () => (
       </div>
     </section>
 
-    <Section title="Getting data out of a building is harder than it should be">
-      <p className="text-fd-muted-foreground mb-6 max-w-2xl">
-        Field devices speak Modbus and BACnet; modern platforms expect MQTT and structured data. The glue in between is
-        usually fragile.
+    <section className="pb-16">
+      <Flow />
+    </section>
+
+    <Section title="You know what you want. It does the rest.">
+      <p className="text-fd-muted-foreground mb-8 max-w-2xl">
+        A points list is usually where it starts: the energy meter&apos;s active power every 5 seconds, each air
+        handler&apos;s supply temperature every 30, all of it to the company broker. That list becomes one config file,
+        and every value arrives under a name that says where it came from:
       </p>
-      <dl className="grid gap-6 md:grid-cols-2">
-        {problems.map(([title, text]) => (
+      <Code>{message}</Code>
+      <p className="text-fd-muted-foreground mt-3 text-sm">
+        site / building / device / point, with the value, the time it was read and its unit.
+      </p>
+    </Section>
+
+    <Section title="Only what changed">
+      <div className="grid gap-8 md:grid-cols-[2fr_1fr] md:items-center">
+        <DeadbandChart />
+        <p className="text-fd-muted-foreground text-sm">
+          A temperature that barely moves doesn&apos;t need to be sent every 30 seconds. With a deadband of 0.2 °C, the
+          gateway sends the first value and then each one that moved at least that far. Your platform stores changes
+          instead of repetition, and nothing that matters is lost.
+        </p>
+      </div>
+    </Section>
+
+    <Section title="You always know whether it works">
+      <div className="grid gap-8 md:grid-cols-[3fr_2fr] md:items-center">
+        <StatusMock />
+        <p className="text-fd-muted-foreground text-sm">
+          Every gateway has a status page: each device green or red, with the reason and when it last answered, and the
+          messages that went out. The same goes to the broker as a health message, so your platform can raise an alert
+          when a device goes quiet instead of showing an old value.
+        </p>
+      </div>
+    </Section>
+
+    <Section title="From first look to a running building">
+      <ol className="grid gap-6 md:grid-cols-3">
+        {journey.map((item) => (
+          <li className="bg-fd-card flex flex-col rounded-xl border p-5" key={item.step}>
+            <p className="text-fd-muted-foreground mb-2 text-xs font-medium">
+              Step {item.step} · {item.time}
+            </p>
+            <h3 className="mb-2 font-semibold">{item.title}</h3>
+            <p className="text-fd-muted-foreground mb-4 flex-1 text-sm">{item.text}</p>
+            <pre className="bg-fd-background mb-4 rounded-md border p-2 text-xs break-all whitespace-pre-wrap">
+              <code>{item.command}</code>
+            </pre>
+            <Link className="text-sm font-medium underline" href={item.href}>
+              {item.link}
+            </Link>
+          </li>
+        ))}
+      </ol>
+    </Section>
+
+    <Section title="Who it is for">
+      <dl className="grid gap-6 md:grid-cols-3">
+        {audiences.map(([title, text]) => (
           <div key={title}>
             <dt className="font-medium">{title}</dt>
             <dd className="text-fd-muted-foreground mt-1 text-sm">{text}</dd>
@@ -129,7 +212,7 @@ const HomePage = () => (
       </dl>
     </Section>
 
-    <Section title="What it does">
+    <Section title="Under the hood">
       <dl className="grid gap-x-8 gap-y-6 md:grid-cols-3">
         {features.map(([title, text]) => (
           <div key={title}>
@@ -138,8 +221,6 @@ const HomePage = () => (
           </div>
         ))}
       </dl>
-      <p className="text-fd-muted-foreground mt-10 mb-3 text-sm">What the gateway publishes from the simulated demo:</p>
-      <Code>{messages}</Code>
     </Section>
 
     <Section title="Where it fits">
@@ -169,28 +250,10 @@ const HomePage = () => (
       </div>
     </Section>
 
-    <Section title="Try it on a laptop">
-      <p className="text-fd-muted-foreground mb-4 max-w-2xl">
-        Node.js 22.18 or newer and pnpm 10. The bench prints every message the gateway publishes, and the status page is
-        at <code>http://127.0.0.1:8080</code>.
-      </p>
-      <Code>{quickStart}</Code>
-      <p className="text-fd-muted-foreground mt-6 text-sm">
-        Then{" "}
-        <Link className="text-fd-foreground underline" href="/docs">
-          set it up for your building
-        </Link>
-        , or{" "}
-        <Link className="text-fd-foreground underline" href="/docs/raspberry-pi-install">
-          install it on a Raspberry Pi
-        </Link>{" "}
-        from a blank SD card.
-      </p>
-    </Section>
-
     <footer className="text-fd-muted-foreground flex flex-wrap gap-6 border-t py-10 text-sm">
       <span>OT Gateway, MIT licensed</span>
       <Link href="/docs">Docs</Link>
+      <Link href="/docs/how-it-works">How it works</Link>
       <Link href="/docs/vision">Vision</Link>
       <a href={site.repository}>GitHub</a>
     </footer>

@@ -92,41 +92,54 @@ export const randomDemoSite = Effect.map(
 )
 
 /** What the demo prints before the first message. */
+const protocolNames = { "modbus-tcp": "Modbus TCP", "bacnet-ip": "BACnet/IP", simulator: "built in" } as const
+
+/**
+ * What the demo prints first: what is running, then where to look, in the order a newcomer needs it, and the
+ * next step towards their own building.
+ */
 export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
   const port = config.status?.port ?? 8080
   const topics = `${config.site}/${config.building}/#`
-  const common = [
-    `  Status page   http://localhost:${port}`,
-    `  Topics        ${topics}: values on site/building/device/point, metadata on .../$meta (retained),`,
-    "                the gateway's health on .../$gateway/<id>/health"
-  ]
+  const devices = config.devices.map((device) => `${device.id} (${protocolNames[device.protocol]})`).join(", ")
   const remote = options.public
-  return remote === undefined
-    ? [
-        "",
-        "OT Gateway demo: a test MQTT broker, three simulated devices and the gateway, all in this process.",
-        "",
-        ...common,
-        `  MQTT broker   ${config.mqtt.url}`,
-        "",
-        "Every message the broker receives follows. Ctrl-C stops the demo.",
-        ""
-      ].join("\n")
-    : [
-        "",
-        `OT Gateway demo: three simulated devices, published to the public test broker ${remote.broker.host}.`,
-        "Anyone can read what is published there. This is simulated data; never point a real device at it.",
-        "",
-        ...common,
-        `  MQTT broker   ${config.mqtt.url}`,
-        "",
-        "Watch the messages arrive from anywhere, with any MQTT client:",
-        `  mosquitto_sub -h ${remote.broker.host} -p ${remote.broker.port} -t '${topics}' -v`,
-        `  MQTT Explorer (mqtt-explorer.com): host ${remote.broker.host}, port ${remote.broker.port}, topic ${topics}`,
-        "",
-        "Ctrl-C stops the demo.",
-        ""
-      ].join("\n")
+  const intro =
+    remote === undefined
+      ? [
+          "OT Gateway demo: a small simulated building on this computer. Nothing leaves this machine.",
+          "",
+          `  Devices   ${devices}, all simulated`,
+          `  Gateway   reads them on schedule and sends each value to the broker`,
+          `  Broker    a test MQTT broker in this process, ${config.mqtt.url}`
+        ]
+      : [
+          `OT Gateway demo: a small simulated building, published to the public test broker ${remote.broker.host}.`,
+          "Anyone can read what is published there. This is simulated data; never point a real device at it.",
+          "",
+          `  Devices   ${devices}, all simulated`,
+          `  Gateway   reads them on schedule and sends each value to the broker`,
+          `  Broker    ${config.mqtt.url}, under the site ${config.site}`
+        ]
+  const watchHere =
+    remote === undefined
+      ? ["  2. Read     the lines below: what the broker receives, as topic and value"]
+      : [
+          "  2. Watch    from any MQTT client, on any machine:",
+          `              mosquitto_sub -h ${remote.broker.host} -p ${remote.broker.port} -t '${topics}' -v`,
+          `              MQTT Explorer (mqtt-explorer.com): host ${remote.broker.host}, port ${remote.broker.port}, topic ${topics}`
+        ]
+  return [
+    "",
+    ...intro,
+    "",
+    `  1. Look     http://localhost:${port}: every device, its latest values and the messages sent`,
+    ...watchHere,
+    "              topics are site/building/device/point; .../$meta describes a point, .../$gateway/<id>/health the gateway",
+    `  3. Next     ${remote === undefined ? "demo --public to watch the same data from any MQTT app, or " : ""}init to describe your own building`,
+    "",
+    remote === undefined ? "Ctrl-C stops the demo. The messages follow." : "Ctrl-C stops the demo.",
+    ""
+  ].join("\n")
 }
 
 /** Runs the demo until interrupted. `runGateway` runs the gateway for a config, as `ot-gateway run` does. */
