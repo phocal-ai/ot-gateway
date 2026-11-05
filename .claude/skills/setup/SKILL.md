@@ -45,6 +45,11 @@ Ask these in a single `AskUserQuestion`:
    - "This machine, for now"
    - "Raspberry Pi / Linux with systemd"
    - "Docker (recommended on a Pi or any edge box)"
+4. **What to send:**
+   - "Every read (Recommended)": each value as it is read; the default, no `publish` needed.
+   - "15-minute aggregates": min, max and average per 15 minutes, for energy reports (`"publish": { "mode": "aggregate", "intervalMs": 900000 }`).
+   - "Only changes": `"publish": { "mode": "change" }`, best for states and setpoints.
+     Set it per device; a point that needs another mode (an alarm on an aggregated meter, say) gets its own `publish`.
 
 Then ask in plain text, in one message, only for what applies:
 
@@ -100,6 +105,7 @@ Fill in `ot-gateway.json`:
 - `"buffer": { "path": "./ot-gateway-buffer.sqlite" }`, so values survive broker outages.
 - `"status": {}` for the status page on 127.0.0.1:8080.
 - `pollIntervalMs` of 5000 to 60000 depending on what the user needs: energy meters rarely need under 15 s.
+- `publish` from question 4. A publish interval must divide a day and be at least `pollIntervalMs`; `check` says so if not. Every read of many points is a lot of traffic: past a few hundred points read every few seconds, suggest an interval or aggregates (`docs/configuration.md`, "publish").
 - `cov` stays at its default for BACnet.
 - No simulator devices unless the user chose "None yet".
 

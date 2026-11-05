@@ -11,6 +11,8 @@ import { importPointsList } from "../src/Import.ts"
 import { initConfig } from "../src/Init.ts"
 import { devicesFromPointsList, parseDelimited, qudtUnit } from "../src/PointsList.ts"
 
+const minimalConfig = { site: "s", building: "b", mqtt: { url: "mqtt://localhost:1883" } }
+
 const examplePoints = exampleConfigPath.replace(/gateway\.json$/, "points.csv")
 const answers = { site: "vienna-hq", building: "main", brokerUrl: "mqtt://broker.lan:1883" }
 
@@ -18,6 +20,12 @@ const mistake = (text: string) =>
   devicesFromPointsList(text).pipe(
     Effect.flip,
     Effect.map((error) => error.message)
+  )
+
+/** A one-point list with these publish columns. */
+const publishRow = (publish: string, seconds: string, deadband: string) =>
+  mistake(
+    `device,point,host,register,type,publish,publish_s,deadband\nm,p,1.2.3.4,1,int16,${publish},${seconds},${deadband}`
   )
 
 describe("parseDelimited", () => {
@@ -120,6 +128,42 @@ describe("devicesFromPointsList", () => {
       )
       expect(yield* mistake("device,point\nm,p")).toContain("give it a host (Modbus TCP) or a device_instance")
       expect(yield* mistake("device,point,device_instance\nm,p,7")).toContain("needs object_type and object_instance")
+    })
+  )
+
+  it.effect("reads each point's publish mode, with the deadband as part of change mode", () =>
+    Effect.gen(function* () {
+      const [device] = yield* devicesFromPointsList(
+        [
+          "device,point,host,register,type,publish,publish_s,deadband",
+          "m,power,1.2.3.4,1,float32,aggregate,900,",
+          "m,temp,1.2.3.4,3,float32,sample,60,",
+          "m,mode,1.2.3.4,5,int16,change,,1",
+          "m,flow,1.2.3.4,6,int16,,,0.5",
+          "m,level,1.2.3.4,7,int16,,,"
+        ].join("\n")
+      )
+      expect(device?.points.map((point) => ({ ...point }))).toMatchObject([
+        { id: "power", publish: { mode: "aggregate", intervalMs: 900_000 } },
+        { id: "temp", publish: { mode: "sample", intervalMs: 60_000 } },
+        { id: "mode", publish: { mode: "change", deadband: 1 } },
+        { id: "flow", deadband: 0.5 },
+        { id: "level" }
+      ])
+      const config = yield* parseConfig(JSON.stringify({ ...minimalConfig, devices: [device] }))
+      expect(config.devices[0]?.points).toHaveLength(5)
+    })
+  )
+
+  it.effect("names the line of a publish mode that does not add up", () =>
+    Effect.gen(function* () {
+      expect(yield* publishRow("hourly", "", "")).toBe(
+        'line 2: publish "hourly" is not one of sample, aggregate, change'
+      )
+      expect(yield* publishRow("aggregate", "", "")).toContain("needs publish_s")
+      expect(yield* publishRow("sample", "60", "1")).toContain("only change mode uses")
+      expect(yield* publishRow("change", "60", "")).toContain("takes no publish_s")
+      expect(yield* publishRow("", "60", "")).toContain("has publish_s but no publish")
     })
   )
 

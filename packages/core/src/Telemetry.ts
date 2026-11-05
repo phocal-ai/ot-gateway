@@ -47,15 +47,15 @@ export const publishFailures = Metric.counter("ot_gateway_publish_failures", {
   incremental: true
 })
 
-/** Point values published because they changed by more than the deadband. */
+/** Point messages published: a read, the latest of an interval, a window's aggregate or a change. */
 export const valuesPublished = Metric.counter("ot_gateway_values_published", {
   description: "Point values published",
   incremental: true
 })
 
-/** Point values read but not published because they stayed inside the deadband. */
+/** Point values read but not published because, in change mode, they did not change past the deadband. */
 export const valuesSuppressed = Metric.counter("ot_gateway_values_suppressed", {
-  description: "Point values suppressed by the deadband",
+  description: "Point values held back in change mode",
   incremental: true
 })
 

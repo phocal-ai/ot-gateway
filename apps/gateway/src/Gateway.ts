@@ -116,6 +116,7 @@ const runOne = (
     building: config.building,
     pollIntervalMs: device.pollIntervalMs,
     cycleTimeoutMs: cycleTimeoutMs(device),
+    ...(device.publish === undefined ? {} : { publish: device.publish }),
     traceSampleRatio: sampleRatio,
     health
   }

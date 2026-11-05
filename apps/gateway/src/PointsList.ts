@@ -7,7 +7,9 @@
  *   point           the point's name                                                   required
  *   unit            kW, °C, %, … or a QUDT name such as unit:KiloW                     optional
  *   interval_s      seconds between reads, for the whole device                         optional (5)
- *   deadband        the smallest change worth sending, in the point's unit              optional
+ *   publish         sample (every read, the default), aggregate or change              optional
+ *   publish_s       seconds per message: the latest value (sample) or a window (aggregate)  optional
+ *   deadband        the smallest change worth sending, in the point's unit (change mode)    optional
  *   scale, offset   value = raw × scale + offset                                       optional
  *
  *   Modbus TCP (a row with `host`):
@@ -126,7 +128,10 @@ const aliases: Record<string, string> = {
   datatype: "type",
   byteorder: "byte_order",
   factor: "scale",
-  object: "object_type"
+  object: "object_type",
+  publish_mode: "publish",
+  publish_interval_s: "publish_s",
+  publish_every_s: "publish_s"
 }
 
 const columnName = (header: string) => {
@@ -152,16 +157,50 @@ const numberIn = Effect.fnUntraced(function* (row: Row, column: string) {
   return value
 })
 
+const publishModes = ["sample", "aggregate", "change"]
+
+/**
+ * The point's `publish` or `deadband` from its `publish`, `publish_s` and `deadband` columns. A deadband alone stays
+ * the short form; ranges and clock alignment are the schema's to check.
+ */
+const publishOf = Effect.fnUntraced(function* (row: Row, name: string) {
+  const mode = row.get("publish")?.toLowerCase()
+  const seconds = yield* numberIn(row, "publish_s")
+  const deadband = yield* numberIn(row, "deadband")
+  const intervalMs = seconds === undefined ? {} : { intervalMs: Math.round(seconds * 1000) }
+  if (mode === undefined) {
+    if (seconds !== undefined) {
+      return yield* fail(`line ${row.line}: "${name}" has publish_s but no publish (sample or aggregate)`)
+    }
+    return deadband === undefined ? {} : { deadband }
+  }
+  if (!publishModes.includes(mode)) {
+    return yield* fail(`line ${row.line}: publish "${mode}" is not one of ${publishModes.join(", ")}`)
+  }
+  if (mode === "change") {
+    if (seconds !== undefined)
+      return yield* fail(`line ${row.line}: "${name}" sends on change, so it takes no publish_s`)
+    return { publish: { mode, ...(deadband === undefined ? {} : { deadband }) } }
+  }
+  if (deadband !== undefined) {
+    return yield* fail(`line ${row.line}: "${name}" has a deadband, which only change mode uses`)
+  }
+  if (mode === "aggregate" && seconds === undefined) {
+    return yield* fail(`line ${row.line}: "${name}" aggregates, so it needs publish_s, the window (900 for 15 minutes)`)
+  }
+  return { publish: { mode, ...intervalMs } }
+})
+
 const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: string) {
   const unit = row.get("unit")
-  const deadband = yield* numberIn(row, "deadband")
+  const publish = yield* publishOf(row, name)
   const factor = yield* numberIn(row, "scale")
   const offset = yield* numberIn(row, "offset")
   return {
     id,
     name,
     ...(unit === undefined ? {} : { unit: qudtUnit(unit) }),
-    ...(deadband === undefined ? {} : { deadband }),
+    ...publish,
     ...(factor === undefined && offset === undefined
       ? {}
       : { scaling: { ...(factor === undefined ? {} : { factor }), ...(offset === undefined ? {} : { offset }) } })

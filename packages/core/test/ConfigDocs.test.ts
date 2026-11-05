@@ -14,6 +14,7 @@ import {
   Limits,
   ModbusDevice,
   ModbusPoint,
+  Publish,
   MqttSettings,
   PointFields,
   Scaling,
@@ -57,6 +58,7 @@ const sections: ReadonlyArray<readonly [string, ReadonlyArray<string>]> = [
   ["Modbus points", own(ModbusPoint.fields)],
   ["BACnet points", own(BacnetPoint.fields)],
   ["Simulated points", own(SimulatedPoint.fields)],
+  ["publish", [...new Set(Publish.members.flatMap((mode) => Object.keys(mode.fields)))]],
   ["limits", Object.keys(Limits.fields)],
   ["scaling", Object.keys(Scaling.fields)],
   ["semantics", Object.keys(Semantics.fields)]

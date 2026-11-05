@@ -56,7 +56,7 @@ Typical use cases:
 
 - Modbus TCP first, then BACnet/IP, both implemented in-house on Effect
 - MQTT 5 northbound with an in-house client and `site/building/device/point` topics
-- Polling, change-of-value, deadband and scaling per point
+- Polling and BACnet change-of-value in; per point, scaling, and a publish mode out: each read, the latest per interval, clock-aligned aggregates (min, max, time-weighted average) or on change with a deadband
 - Command write-back from MQTT with safety controls
 - Store-and-forward in SQLite during outages
 - JSON config validated with Effect Schema, loadable from a file or a database
@@ -80,7 +80,7 @@ Typical use cases:
 Field protocols plug in as drivers. One typed core handles scheduling, normalization and write safety, and MQTT is the only way out.
 
 - **Drivers:** Modbus driver, BACnet driver, simulators
-- **Core:** point map (Schema-checked config), scheduler (polling, COV, retry schedules), normalizer (scale, deadband, units), command guard (allowlist, range limits)
+- **Core:** point map (Schema-checked config), scheduler (polling, COV, retry schedules), normalizer (scale, units), publish modes (sample, aggregate, change), command guard (allowlist, range limits)
 - **Northbound:** store and forward (local SQLite buffer), MQTT 5 client (publish, last will, commands)
 - **Observability** across all layers: health topics, point freshness, error counts, traces
 
