@@ -15,7 +15,7 @@ export const StatusMock = () => (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
       <span className="font-medium">vienna-hq / main</span>
       <span className="text-fd-muted-foreground flex items-center gap-1.5 text-xs">
-        <CircleCheck className="size-4 text-[var(--status-good)]" /> broker connected · 0 waiting in the buffer
+        <CircleCheck className="size-4 text-[var(--status-good)]" /> broker connected · buffer empty
       </span>
     </div>
     <ul>

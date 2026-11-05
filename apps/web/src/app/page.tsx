@@ -24,6 +24,7 @@ import {
   fetchMessages,
   fetchStatus,
   formatBytes,
+  fillPercent,
   formatValue,
   freshness,
   type Freshness,
@@ -129,6 +130,43 @@ const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
   )
 }
 
+/**
+ * Whether values are safe while the broker is away: how full the buffer is against its limit, and whether it
+ * has had to give any up. Empty is the normal state; rows mean the broker is (or was just) unreachable.
+ */
+const BufferCard = ({ buffer, stale }: { readonly buffer: GatewayStatus["buffer"]; readonly stale: boolean }) => {
+  const note = (text: string) => (stale ? "page is not reaching the gateway" : text)
+  if (buffer === undefined)
+    return (
+      <Card>
+        <CardHeader>
+          <CardDescription>Buffer</CardDescription>
+          <CardTitle className="text-2xl">off</CardTitle>
+          <CardDescription>{note("values are lost while the broker is down")}</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  return (
+    <Card>
+      <CardHeader>
+        <CardDescription>Buffer</CardDescription>
+        <CardTitle className="text-2xl tabular-nums">
+          {buffer.rows === 0 ? "empty" : `${buffer.rows.toLocaleString()} waiting`}
+        </CardTitle>
+        <CardDescription className={buffer.dropped > 0 && !stale ? "text-destructive" : ""}>
+          {note(
+            buffer.dropped > 0
+              ? `${buffer.dropped.toLocaleString()} dropped since start`
+              : buffer.rows === 0
+                ? `holds up to ${buffer.maxRows.toLocaleString()} messages if the broker goes down`
+                : `${fillPercent(buffer.rows, buffer.maxRows)} of ${buffer.maxRows.toLocaleString()} used`
+          )}
+        </CardDescription>
+      </CardHeader>
+    </Card>
+  )
+}
+
 const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly stale: boolean }) => {
   const failing = status.devices.filter((device) => device.status === "failing").length
   const ok = status.devices.filter((device) => device.status === "ok").length
@@ -162,17 +200,7 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
           </CardDescription>
         </CardHeader>
       </Card>
-      <Card>
-        <CardHeader>
-          <CardDescription>Buffer</CardDescription>
-          <CardTitle className="text-2xl tabular-nums">
-            {status.buffer === undefined ? "off" : `${status.buffer.rows.toLocaleString()} waiting`}
-          </CardTitle>
-          <CardDescription>
-            {stale ? "page is not reaching the gateway" : `up since ${new Date(status.since).toLocaleString()}`}
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <BufferCard buffer={status.buffer} stale={stale} />
     </div>
   )
 }
@@ -480,7 +508,7 @@ const StatusPage = () => {
           <h1 className="text-2xl font-semibold tracking-tight">OT Gateway</h1>
           {status === undefined ? null : (
             <p className="text-sm text-muted-foreground">
-              {status.site} / {status.building} · gateway {status.id}
+              {status.site} / {status.building} · gateway {status.id} · up {since(status.since, status.now)}
             </p>
           )}
         </div>

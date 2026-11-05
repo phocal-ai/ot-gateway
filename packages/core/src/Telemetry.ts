@@ -202,6 +202,9 @@ export const bufferDrained = Metric.counter("ot_gateway_buffer_drained", {
  * poison message) or `lost` (rows in a file that was replaced or corrupted
  * while the gateway ran).
  */
+export const bufferDropReasons = ["overflow", "rejected", "unreadable", "undeliverable", "lost"] as const
+export type BufferDropReason = (typeof bufferDropReasons)[number]
+
 export const bufferDropped = Metric.counter("ot_gateway_buffer_dropped", {
   description: "Messages dropped from the outbox, by reason",
   incremental: true

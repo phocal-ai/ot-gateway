@@ -40,7 +40,7 @@ describe("status", () => {
       since: 0,
       now: 600_000,
       broker: { url: "mqtt://localhost:1883", connected: false },
-      buffer: { path: "buf.sqlite", rows: 42 },
+      buffer: { path: "buf.sqlite", rows: 42, maxRows: 1000, dropped: 3 },
       devices: [
         { id: "ahu-1", protocol: "simulator", status: "ok", pollIntervalMs: 2000, lastSuccess: 598_000, points: [] },
         {
@@ -57,7 +57,7 @@ describe("status", () => {
     expect(formatStatus(status).split("\n")).toEqual([
       "s/b gateway main, up 10 min",
       "  broker mqtt://localhost:1883: NOT CONNECTED",
-      "  buffer: 42 message(s) waiting",
+      "  buffer: 42 of 1000 message(s) waiting, 3 DROPPED since start",
       "  2 device(s), 1 failing",
       "    ahu-1       ok       simulator, 0 point(s), read 2 s ago",
       "    main-meter  failing  modbus-tcp, 0 point(s), no read yet (Timeout)"

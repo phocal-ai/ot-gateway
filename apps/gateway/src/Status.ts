@@ -8,6 +8,8 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
 import { type CommandStatus, type DeviceStatus, type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
 import type { HostSnapshot } from "./Host.ts"
 import {
+  bufferDropped,
+  bufferDropReasons,
   bufferRows,
   type CommandOutcome,
   type GatewayConfig,
@@ -106,6 +108,10 @@ export const makeStatusState = (
       const now = yield* Clock.currentTimeMillis
       const connected = (yield* Metric.value(Metric.withAttributes(mqttConnected, attributes))).value === 1
       const rows = (yield* Metric.value(Metric.withAttributes(bufferRows, attributes))).value
+      let dropped = 0
+      for (const reason of bufferDropReasons) {
+        dropped += (yield* Metric.value(Metric.withAttributes(bufferDropped, { ...attributes, reason }))).count
+      }
       const devices = config.devices.map((device): DeviceStatus => {
         const state = health.devices.get(device.id) ?? { status: "starting" as const }
         return {
@@ -137,7 +143,9 @@ export const makeStatusState = (
         since,
         now,
         broker: { url: config.mqtt.url, connected },
-        ...(config.buffer === undefined ? {} : { buffer: { path: config.buffer.path, rows: Math.max(0, rows) } }),
+        ...(config.buffer === undefined
+          ? {}
+          : { buffer: { path: config.buffer.path, rows: Math.max(0, rows), maxRows: config.buffer.maxRows, dropped } }),
         ...(host === undefined || sample === undefined
           ? {}
           : { host: { version: host.version, node: process.versions.node, ...sample } }),
