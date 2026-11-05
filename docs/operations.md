@@ -50,7 +50,8 @@ sudo packaging/install.sh ot-gateway.json
 
 The script:
 
-- refuses a checkout with symlinks among the files it copies;
+- refuses a checkout that is not owned by you (the user running `sudo`) or root, or that group or others can write to, and says which path to `chown` or `chmod`; `git describe`, for the version, runs as the checkout's owner;
+- refuses a checkout with symlinks among the files it copies or installs;
 - builds the runtime files (and the built status page, if there is one) with their production dependencies in `/opt/ot-gateway.new`;
 - creates the system user `ot-gateway`;
 - checks the config against the new build as that user, and only then swaps the build in for `/opt/ot-gateway` and the config in as `/etc/ot-gateway/gateway.json`, with the outbox at `/var/lib/ot-gateway/buffer.sqlite`;
