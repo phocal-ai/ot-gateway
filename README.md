@@ -108,7 +108,7 @@ sudo packaging/install.sh path/to/gateway.json
 
 It installs the gateway to `/opt/ot-gateway` with its production dependencies, creates the `ot-gateway` user, validates the config into `/etc/ot-gateway/gateway.json` (with the outbox in `/var/lib/ot-gateway`), and starts the `ot-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u ot-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/ot-gateway/gateway.env`. Build the status page first (`pnpm --filter @ot-gateway/web build`, on any machine) and the script installs it too.
 
-Either way, the gateway watches the machine it runs on (memory, event-loop lag, temperature, Raspberry Pi under-voltage and throttling, though only under-voltage on kernels 6.18 and later, disk, clock steps) and reports it on the status page, in the health message and in telemetry. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) is how to test it on a Pi before it goes into a building.
+Either way, the gateway watches the machine it runs on (memory, event-loop lag, temperature, Raspberry Pi under-voltage and throttling, though only under-voltage on Raspberry Pi kernel 6.12 and later, disk, clock steps) and reports it on the status page, in the health message and in telemetry. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) is how to test it on a Pi before it goes into a building.
 
 The status page listens on `127.0.0.1` only, by default, and then answers only requests addressed to a loopback name, so a web page cannot reach it through DNS rebinding. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page is read-only, but it has no login.
 
@@ -251,7 +251,7 @@ Telemetry flows down from devices to the broker. Commands travel back up and mus
 | v0.2 Reliability | SQLite store-and-forward, health topics, simulators and CI                                                                                      |
 | v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscriptions                                                                                                      |
 | v0.4 Write-back  | MQTT commands, range limits, BACnet priority; brought forward from v1.0: local status page, packaging (container, systemd), `/setup` quickstart |
-| v1.0 Production  | A 24-hour soak on a Raspberry Pi, a first real building, docs                                                                                   |
+| v1.0 Production  | A 12-hour real-time soak on a Raspberry Pi, a first real building, docs                                                                         |
 
 After v1.0 comes a Next.js configuration app, as a separate package.
 

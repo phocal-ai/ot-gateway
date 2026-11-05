@@ -2012,7 +2012,7 @@
       "id": 41,
       "type": "timeseries",
       "title": "Power and thermal conditions (Raspberry Pi)",
-      "description": "What the Raspberry Pi firmware reports: under_voltage (a weak power supply or cable, the most common cause of SD corruption), frequency_capped, throttled, soft_temperature_limit. On kernel 6.18 and later only under_voltage (the kernel shows no more); empty off a Pi.",
+      "description": "What the Raspberry Pi firmware reports: under_voltage (a weak power supply or cable, the most common cause of SD corruption), frequency_capped, throttled, soft_temperature_limit. On Raspberry Pi kernel 6.12 and later only under_voltage (the kernel shows no more); empty off a Pi.",
       "datasource": {
         "type": "prometheus",
         "uid": "grafanacloud-prom"

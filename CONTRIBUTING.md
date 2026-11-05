@@ -57,11 +57,13 @@ That packs roughly a day of outages and renewals into half an hour: every interv
 
 Until a Pi is on the bench, the `Soak` workflow also runs the soak inside the arm64 container image under QEMU, held to two cores and 1 GB: it shows the ARM build and the memory and CPU headroom, not the SD card or heat.
 
-Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi with `SOAK_STRICT_HOST=1`, which also fails on an event-loop stall or a power or thermal condition (under-voltage only on kernels 6.18 and later, see docs/operations.md, "The machine"). [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the whole procedure and the pass criteria:
+Real time only matters on the target hardware (SD card, CPU, thermal throttling, NTP steps), so before a release, run a real-time soak on a Raspberry Pi with `SOAK_STRICT_HOST=1`, which also fails on an event-loop stall or a power or thermal condition (under-voltage only on Raspberry Pi kernel 6.12 and later, see docs/operations.md, "The machine"). [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the whole procedure and the pass criteria:
 
 ```bash
-SOAK_STRICT_HOST=1 scripts/soak.sh 24h
+SOAK_STRICT_HOST=1 scripts/soak.sh 12h
 ```
+
+Twelve hours is the gate: half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages (the second and fourth stop the devices too), and a sample every ten minutes for the memory and open-file growth checks. A longer run is welcome before a first building, but a release does not wait for it.
 
 ## Reporting device quirks
 

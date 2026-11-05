@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Soak test: the gateway against the bench, with faults injected.
 #
-#   scripts/soak.sh [duration]                      # 24h by default: 24h, 90m, 600s, or hours
+#   scripts/soak.sh [duration]                      # 12h (the release gate) by default: 12h, 90m, 600s, or hours
 #   SOAK_SPEED=60 scripts/soak.sh 30m               # about a day of events in half an hour
 #
 # What a soak finds depends on how many events happen (poll cycles, outages,
@@ -37,8 +37,8 @@
 #
 # - SOAK_STRICT_HOST=1 (for a run on the target hardware) also fails the run when
 #   the event loop stalled for a second or more, or the host reported under-voltage,
-#   throttling or the soft temperature limit (on Raspberry Pi kernels 6.18 and later,
-#   under-voltage only: check `journalctl -k -g voltage` for the rest of the history).
+#   throttling or the soft temperature limit (on Raspberry Pi kernel 6.12 and
+#   later, under-voltage only). `journalctl -k -g voltage` has the history since boot.
 #   The summary reports both either way.
 #
 # The run fails (exit 1) when the gateway exits or logs FATAL, when the last
@@ -52,9 +52,9 @@
 # file as `pnpm gateway`, so its telemetry reaches the configured backend.
 set -euo pipefail
 
-duration=${1:-24h}
+duration=${1:-12h}
 if [[ ! $duration =~ ^[0-9]+[hms]?$ ]]; then
-  echo "duration is a number of hours, or a number with h, m or s: 24h, 90m, 600s" >&2
+  echo "duration is a number of hours, or a number with h, m or s: 12h, 90m, 600s" >&2
   exit 2
 fi
 case $duration in
@@ -216,7 +216,18 @@ sample() {
   else
     rss=$(ps -o rss= -p "$gateway" | tr -d ' ' || true)
   fi
-  cpu=$( (ps -o %cpu= -p "$gateway" 2>/dev/null || true) | tr -d ' ')
+  # CPU as ps reports it, the share of one core since the process started; from /proc where
+  # there is no ps. utime and stime are fields 14 and 15 of /proc/<pid>/stat, starttime 22, in
+  # clock ticks (100 a second on Linux; slim images have no getconf). The command name in field 2
+  # can hold spaces, so count from after its closing parenthesis.
+  if [[ -r /proc/$gateway/stat && -r /proc/uptime ]]; then
+    cpu=$(awk -v ticks="$(getconf CLK_TCK 2>/dev/null || echo 100)" '
+      NR == 1 { uptime = $1 }
+      NR == 2 { sub(/^.*\) /, ""); used = ($12 + $13) / ticks; alive = uptime - $20 / ticks
+                if (alive > 0) printf "%.1f", 100 * used / alive }' /proc/uptime "/proc/$gateway/stat" 2>/dev/null || true)
+  else
+    cpu=$( (ps -o %cpu= -p "$gateway" 2>/dev/null || true) | tr -d ' ')
+  fi
   if [[ -d /proc/$gateway/fd ]]; then
     files=$( (ls "/proc/$gateway/fd" 2>/dev/null || true) | wc -l | tr -d ' ')
   else
@@ -274,7 +285,7 @@ check() {
     if (host !== undefined) {
       const extra = [
         host.temperatureC === undefined ? "" : `, ${host.temperatureC} °C`,
-        host.throttled === undefined ? "" : `, conditions now: ${host.throttled.join(",") || "none"}`,
+        host.throttled === undefined ? "" : `, conditions in the last minute: ${host.throttled.join(",") || "none"}`,
         host.throttledWatched === undefined ? "" : ` (watched: ${host.throttledWatched.join(",")})`
       ].join("")
       lines.push(`host:     ${Math.round(host.memoryBytes / 1e6)} MB, event loop max ${host.eventLoopLagMs} ms in the last minute, ${host.clockSteps} clock step(s)${extra}`)

@@ -33,7 +33,7 @@ Without Compose, the same as one command:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v /etc/ot-gateway:/etc/ot-gateway:ro -v /var/lib/ot-gateway:/var/lib/ot-gateway \
-  ghcr.io/phocal-ai/ot-gateway:v0.6.0
+  ghcr.io/phocal-ai/ot-gateway:v0.6.1
 ```
 
 ### systemd, without Docker
@@ -92,7 +92,7 @@ Or run `install.sh` again with the new file: it checks it before replacing the o
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.6.0
+git fetch --tags && git checkout v0.6.1
 ```
 
 ```bash
@@ -147,18 +147,18 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.6.0 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.6.1 --check /etc/ot-gateway/gateway.json
 ```
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.0/packaging/compose.yaml && docker compose -f compose.yaml up -d
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.6.1/packaging/compose.yaml && docker compose -f compose.yaml up -d
 ```
 
 Fetching `compose.yaml` replaces the one in the current directory: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.6.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.6.1 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -173,7 +173,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.6.0
+git fetch --tags && git checkout v0.6.1
 ```
 
 ```bash
@@ -230,16 +230,15 @@ The `online` message also carries `host`, the machine's last sample (below): `me
 
 Every 15 seconds the gateway samples itself and the machine under it, natively and in a container alike (it reads `/proc/self`, `/sys` and Node, needs no privileges and runs no commands). The status page shows the sample; telemetry exports it (`ot_gateway_process_*`, `ot_gateway_event_loop_lag_seconds`, `ot_gateway_host_*`, `ot_gateway_clock_steps_total`, `ot_gateway_buffer_disk_free_bytes`, and per device `ot_gateway_driver_request_seconds_total`); the health message carries the essentials. Each problem is logged when it starts and when it ends:
 
-| Log line                                                   | What it means                                                                                                                                                                                                                                                                    |
-| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `event loop stalled`                                       | Something blocked the gateway's one thread for a second or more: every device, keepalive and deadline waited. On a Pi, usually a slow SD card under a large outbox write, or swapping.                                                                                           |
-| `host reports a power or thermal condition`                | The Raspberry Pi firmware reports under-voltage, a capped frequency, throttling or the soft temperature limit. Under-voltage is a weak power supply or cable, and the most common cause of a corrupted SD card: fix it before anything else. Cleared after a minute without one. |
-| `host has reported power or thermal conditions since boot` | The same, but before the gateway started or between two samples. The firmware remembers it until the next reboot.                                                                                                                                                                |
-| `host is hot`                                              | The SoC reached 80 °C (a Pi 4 throttles from there). Use a case with a heatsink, or a fan.                                                                                                                                                                                       |
-| `the outbox's disk is nearly full`                         | Less than 64 MiB free where the outbox lives. The gateway keeps publishing directly while the broker takes values, but cannot buffer an outage.                                                                                                                                  |
-| `wall clock stepped`                                       | NTP set the time: normal once after boot on a machine without a real-time clock. Timestamps jump with it; deadlines and retries do not. Steps without a reboot mean a flaky time source.                                                                                         |
+| Log line                                    | What it means                                                                                                                                                                                                                                                                    |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `event loop stalled`                        | Something blocked the gateway's one thread for a second or more: every device, keepalive and deadline waited. On a Pi, usually a slow SD card under a large outbox write, or swapping.                                                                                           |
+| `host reports a power or thermal condition` | The Raspberry Pi firmware reports under-voltage, a capped frequency, throttling or the soft temperature limit. Under-voltage is a weak power supply or cable, and the most common cause of a corrupted SD card: fix it before anything else. Cleared after a minute without one. |
+| `host is hot`                               | The SoC reached 80 °C (a Pi 4 throttles from there). Use a case with a heatsink, or a fan.                                                                                                                                                                                       |
+| `the outbox's disk is nearly full`          | Less than 64 MiB free where the outbox lives. The gateway keeps publishing directly while the broker takes values, but cannot buffer an outage.                                                                                                                                  |
+| `wall clock stepped`                        | NTP set the time: normal once after boot on a machine without a real-time clock. Timestamps jump with it; deadlines and retries do not. Steps without a reboot mean a flaky time source.                                                                                         |
 
-On Raspberry Pi OS 13 (kernel 6.18 and later) the kernel no longer passes on the firmware's whole report, only whether there was under-voltage in the last two seconds, which the gateway reads every second, and it clears what the firmware remembers since boot. There the gateway reports under-voltage alone (`throttled.watched` in the status and `throttledWatched` in the health message are `["under_voltage"]`, the status page says so, and the log says so in one line when the gateway finds the sensor), never the since-boot warning, and `ot_gateway_host_throttled` has no series for the other conditions rather than a 0. The kernel log keeps the history: `journalctl -k -g voltage`.
+The gateway reads the firmware's flags every second, so a dip between two samples is not missed. What it can read depends on the kernel. The kernel's voltage driver asks the firmware every two seconds and clears what the firmware remembered each time, so neither the gateway nor `vcgencmd get_throttled` sees anything older than two seconds, on any Raspberry Pi kernel. Raspberry Pi kernel 6.12 and later (6.12 builds since March 2025, and so all of Raspberry Pi OS 13) also stopped showing programs the firmware's whole report, and pass on only the under-voltage alarm; 6.6 and older still show it, and the kernel logs a one-time `deprecated, use hwmon sysfs instead` warning with a backtrace when the gateway first reads it, which is harmless. There the gateway reports under-voltage alone (`throttled.watched` in the status and `throttledWatched` in the health message are `["under_voltage"]`, the status page says so, and the log says so in one line when the gateway finds the sensor), and `ot_gateway_host_throttled` has no series for the other conditions rather than a 0. On every kernel the record since boot is the kernel log: `journalctl -k -g voltage`.
 
 [raspberry-pi-testing.md](raspberry-pi-testing.md) is how to test a gateway on a Pi before it goes into a building.
 

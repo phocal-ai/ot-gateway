@@ -143,27 +143,24 @@ const Figure = ({
 /** The machine under the gateway: what to look at first when a Pi misbehaves. */
 const Host = ({ host }: { readonly host: HostStatus }) => {
   const conditions = host.throttled?.now ?? []
-  const sinceBoot = host.throttled?.sinceBoot ?? []
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle>Host</CardTitle>
           <div className="flex flex-wrap gap-2">
+            {conditions.length > 0 ? <span className="text-xs text-muted-foreground">in the last minute</span> : null}
             {conditions.map((condition) => (
               <Badge key={condition} variant="destructive">
                 {condition.replaceAll("_", " ")}
               </Badge>
             ))}
-            {conditions.length === 0 && sinceBoot.length > 0 ? (
-              <Badge variant="warning">since boot: {sinceBoot.map((c) => c.replaceAll("_", " ")).join(", ")}</Badge>
-            ) : null}
           </div>
         </div>
         <CardDescription>
           gateway {host.version} · Node {host.node}
           {host.throttled !== undefined && !host.throttled.watched.includes("throttled")
-            ? " · power: under-voltage only (this kernel shows no throttling; check vcgencmd get_throttled)"
+            ? " · power: under-voltage only (this kernel shows no throttling; vcgencmd get_throttled does)"
             : null}
         </CardDescription>
       </CardHeader>
