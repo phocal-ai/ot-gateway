@@ -180,7 +180,7 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
           </CardTitle>
           <CardDescription className="truncate" title={status.broker.url}>
             {status.broker.connected
-              ? status.broker.url
+              ? `to ${status.broker.url}`
               : status.buffer === undefined
                 ? `${status.broker.url}: values are lost until it is back`
                 : `${status.broker.url}: values wait in the buffer`}
@@ -191,14 +191,14 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
         <CardHeader>
           <CardDescription>Devices</CardDescription>
           <CardTitle className="text-2xl tabular-nums">
-            {ok}/{status.devices.length} ok
+            {ok}/{status.devices.length}
           </CardTitle>
-          <CardDescription>
+          <CardDescription className={failing > 0 ? "text-destructive" : ""}>
             {failing > 0
-              ? `${failing} failing`
+              ? `devices answering, ${failing} failing`
               : ok === status.devices.length
-                ? "every device answers"
-                : `${status.devices.length - ok} starting`}
+                ? "devices answering"
+                : `devices answering, ${status.devices.length - ok} starting`}
           </CardDescription>
         </CardHeader>
       </Card>
