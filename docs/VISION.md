@@ -1,6 +1,6 @@
 # OT Gateway — Vision
 
-As of 2026-11-02. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
+As of 2026-11-05. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
 
 ## Elevator pitch
 
@@ -63,6 +63,7 @@ Typical use cases:
 - Built-in health, metrics and tracing
 - A simulator for each driver
 - A local status page in v1.0
+- A public project and docs site, rendered from `docs/` so there is one source of truth
 - Deployment as a single Node process, as a container image or a systemd service
 
 **Non-goals (for now)**
@@ -99,15 +100,30 @@ OT Gateway aims at the gap between visual flow tools and closed vendor gateways:
 
 ## Roadmap
 
-Modbus TCP to MQTT ships end to end first, because it is the simplest protocol and proves the core. BACnet follows once the core is reliable. Write-back comes last on purpose, after read paths have run unattended in the field.
+Modbus TCP to MQTT shipped end to end first, because it is the simplest protocol and proves the core. BACnet followed once the core was reliable. Write-back came after the read paths had run unattended.
 
-| Version          | Focus                                         |
-| ---------------- | --------------------------------------------- |
-| v0.1 Foundation  | Core + Schema, Modbus TCP, MQTT publish       |
-| v0.2 Reliability | Buffering, health topics, simulators + CI     |
-| v0.3 BACnet/IP   | Discovery, ReadProperty, COV subscribe        |
-| v0.4 Write-back  | MQTT commands, range limits, BACnet priority  |
-| v1.0 Production  | Status page, packaging + docs, first building |
+| Version              | Focus                                                                                           | Status  |
+| -------------------- | ----------------------------------------------------------------------------------------------- | ------- |
+| v0.1 Foundation      | Core + Schema, Modbus TCP, MQTT publish                                                         | Shipped |
+| v0.2 Reliability     | Buffering, health topics, simulators + CI                                                       | Shipped |
+| v0.3 BACnet/IP       | Discovery, ReadProperty, COV subscribe                                                          | Shipped |
+| v0.4 Write-back      | MQTT commands, range limits, BACnet priority; brought forward: status page, packaging, `/setup` | Shipped |
+| v0.5 Field hardening | Modbus field quirks, shared connections, host telemetry, the Pi test plan                       | Shipped |
+| v0.6 OT Gateway      | Renamed from Plenum, Pi power monitoring, install from a blank SD card, security audit fixes    | Shipped |
+| v1.0 Production      | Project and docs site, a measured 15-minute first run, a first real building                    | Next    |
+
+### Where we are (2026-11-05)
+
+A Raspberry Pi has run the gateway for 12 hours in real time against simulated devices with injected broker and device faults, with no errors, flat memory and no data loss. Every v1.0 feature in the original plan exists: the status page, the container image and systemd unit, and the `/setup` quickstart. What is missing is proof outside the lab, and a way for people to find and evaluate the project without reading the repo.
+
+### The path to v1.0, in order
+
+1. **Project and docs site.** A static site, hosted on Vercel, that explains what OT Gateway is for, who it is for and how it differs (see Positioning). The docs pages are rendered from `docs/*.md` and the README rather than copied, so `ConfigDocs.test.ts` keeps guarding the configuration reference.
+2. **A measured first run.** Time the path from "I found the site" to "Modbus readings in MQTT" on a fresh Pi and on a laptop, and fix what costs the most time: `/setup`, the messages from `--check` and `--discover`, the install steps and the status page. The success criterion is 15 minutes; the measurement says where the minutes go.
+3. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays read-only and on `127.0.0.1` by default.
+4. **A first real building** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
+
+After v1.0: the Next.js configuration app, a Brick or 223P exporter generated from the config, and loading the config from a database.
 
 ## Success criteria
 
@@ -131,6 +147,7 @@ Modbus TCP to MQTT ships end to end first, because it is the simplest protocol a
 | Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                       | Uses Node's built-in `node:sqlite`, so no native build on ARM      |
 | Monorepo         | pnpm workspaces + Turborepo                                                |                                                                    |
 | Web UI           | Local status page in v1.0; Next.js configuration app after v1.0            | Separate package                                                   |
+| Project site     | Static site on Vercel, docs rendered from `docs/`                          | Hobby plan now, Pro with the first customer                        |
 | License          | MIT                                                                        |                                                                    |
 | Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point    | See below                                                          |
 | Commands         | Live only on `.../point/$set`, one result each, never retained or replayed | Limits required on writable numeric points; BACnet priority 8      |
