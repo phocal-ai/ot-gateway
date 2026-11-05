@@ -107,7 +107,7 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 | `cycleTimeoutMs` | 1000–86400000     | see above |                                                                                                                                                      |
 | `points`         | array             | required  | [BACnet points](#bacnet-points).                                                                                                                     |
 
-`node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only.
+`node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only. An entry's `address` is where the device's answer came from: before any point of the device becomes writable, confirm it against a source you trust (commissioning sheet, device display, DHCP reservation). When more than one address answers for the same instance (two devices may share the instance, or one device answers on several addresses), `--discover` names them all on stderr and drafts that device without `address` or points: take its address from that source, using the list only to see which hosts to check. A device already in the config with an `address` is read at that address, and its entry in the draft, under its config id, holds only the objects it has no point for yet, to merge into its `points`.
 
 ## Simulated devices
 

@@ -88,6 +88,8 @@ To draft BACnet points yourself, `--discover` finds the devices through the conf
 node apps/gateway/src/main.ts --discover path/to/gateway.json
 ```
 
+Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `--discover` reads it there and drafts the points it does not have yet.
+
 ## Running it for real
 
 [docs/raspberry-pi-install.md](docs/raspberry-pi-install.md) takes a Raspberry Pi from a blank SD card to a running gateway. [docs/operations.md](docs/operations.md) covers installing, upgrading, the outbox, logs and the status page in full; [docs/troubleshooting.md](docs/troubleshooting.md) goes from symptom to cause.
