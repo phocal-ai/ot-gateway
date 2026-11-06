@@ -1,6 +1,6 @@
 # OT Gateway — Vision
 
-As of 2026-11-05. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
+As of 2026-11-06. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
 
 ## Elevator pitch
 
@@ -49,6 +49,8 @@ Typical use cases:
 6. **Safe writes.** Writing is opt-in, allowlisted, range-checked and logged. Reading is the default.
 7. **Effect-native, small footprint.** Built on the Effect 4 ecosystem and nothing else where possible; protocol stacks are our own. Runs comfortably on a Raspberry Pi 4/5 and is gentle on SD cards.
 8. **Library first, product second.** The core is a composable library; the gateway is a thin, opinionated assembly of it.
+9. **One CLI for people and agents.** One `ot-gateway` binary installs, sets up, runs and diagnoses the gateway. Every command has plain-text output for people, `--json` for agents and flags in place of questions, so an AI assistant uses the same commands a person would.
+10. **AI translates, the CLI decides.** An AI assistant turns whatever the user has into the standard points list. Checking it, turning it into a config and running it are deterministic, so the AI's work passes the same checks as a list made by hand.
 
 ## Scope
 
@@ -64,7 +66,8 @@ Typical use cases:
 - A simulator for each driver
 - A local status page in v1.0
 - A public project and docs site, rendered from `docs/` so there is one source of truth
-- Deployment as a single Node process, as a container image or a systemd service
+- One `ot-gateway` binary for Linux (arm64, x64) and macOS that is the gateway, its setup tool and its diagnostics, installed with one command; the container image stays for people who run everything in containers
+- A standard points list as the input format for setting up without AI, with BACnet EDE import and device profiles for common Modbus devices
 
 **Non-goals (for now)**
 
@@ -85,6 +88,36 @@ Field protocols plug in as drivers. One typed core handles scheduling, normaliza
 - **Observability** across all layers: health topics, point freshness, error counts, traces
 
 Telemetry flows down from devices to the broker. Commands travel back up and must pass the command guard before they reach a device.
+
+## Setup: one CLI, one points list
+
+Most projects start with a points list: what to read, from which device, how often. Setting up a gateway should take that list and nothing else, with or without AI.
+
+```
+ot-gateway points template   (fill it in) ───────────┐
+BACnet network      ── ot-gateway discover ──────────┤
+BACnet EDE file     ── ot-gateway import ────────────┼─▶ standard points list ─▶ ot-gateway import ─▶ ot-gateway.json ─▶ ot-gateway up
+any other list, PDF ── AI assistant ─────────────────┘   (a CSV you can read,     (checks every row,
+                                                           fix and run again)       writes nothing until valid)
+```
+
+On the machine:
+
+```bash
+curl -fsSL https://<site>/install | sh   # one binary, no Node, no git
+ot-gateway demo                          # see it work without devices
+ot-gateway import points.csv             # or: ot-gateway init, for a few questions
+ot-gateway up                            # checks the config, installs and starts the service
+ot-gateway status                        # one line per device
+```
+
+- **The binary.** Node with the gateway bundled into a single executable, so the runtime stays Node and Effect. SQLite is Node's built-in `node:sqlite`, so there are no native addons to build per platform. The status page is embedded. The binary replaces the clone-and-`install.sh` path; the container image stays as the other way to run it.
+- **The folder.** One folder per gateway holds `ot-gateway.json` and `ot-gateway.env`. `up` installs a systemd unit that runs the binary on that folder (`up --docker` writes a compose file instead), and `down` and `logs` go with it.
+- **The points list is the public input format.** Its columns are versioned and documented, and `ot-gateway points schema` prints them, so an agent learns the format from the CLI rather than from the repository. Commas, semicolons or tabs, column names in any order and case. CSV only: reading `.xlsx` would need a non-Effect dependency, so Excel lists are saved as CSV.
+- **BACnet often needs no AI.** `discover` writes a draft points list to trim, and EDE files, the CSV export most BACnet engineering tools produce, import directly.
+- **Device profiles for Modbus.** Modbus register maps are vendor PDFs in vendor layouts, which is where AI helps most. To avoid parsing the same meter twice, a profile describes one device model's registers, and a row in the points list names the profile and picks points by name. An AI assistant writes a profile from a datasheet once; reviewed profiles go into a shared library, so the common meters need no AI over time. Profiles need a format and a review process before they are accepted from outside.
+- **With AI.** The assistant translates the user's list into the standard one and runs `import --dry-run` until it is clean, then `up`. The prompt to paste is short (install the CLI, read `points schema`, translate, check, start) and works in any agent that runs commands; the `/setup` skill is the fuller version for Claude Code, and an MCP server later offers the same commands as tools.
+- **Writes stay a decision.** No list, profile or AI makes a point writable: that is set in the config, on purpose.
 
 ## Positioning
 
@@ -119,11 +152,18 @@ A Raspberry Pi has run the gateway for 12 hours in real time against simulated d
 ### The path to v1.0, in order
 
 1. **Project and docs site.** A static site, hosted on Vercel, that explains what OT Gateway is for, who it is for and how it differs (see Positioning). The docs pages are rendered from `docs/*.md` and the README rather than copied, so `ConfigDocs.test.ts` keeps guarding the configuration reference.
-2. **A measured first run.** Time the path from "I found the site" to "Modbus readings in MQTT" on a fresh Pi and on a laptop, and fix what costs the most time: `/setup`, the messages from `--check` and `--discover`, the install steps and the status page. The success criterion is 15 minutes; the measurement says where the minutes go.
-3. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays read-only and on `127.0.0.1` by default.
-4. **A first real building** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
+2. **One CLI** (see "Setup: one CLI, one points list"), one step at a time:
+   1. the single-executable binary in CI, attached to each release, and an install script;
+   2. `ot-gateway up`, `down` and `logs`, replacing `install.sh` and the two install paths;
+   3. `points schema` and `points template`, `--json` output and flags for every question, and `discover` writing a points list;
+   4. EDE import;
+   5. device profiles, then a reviewed profile library;
+   6. `/setup` and the "Set it up with AI" prompt rewritten on top of the CLI, without a clone.
+3. **A measured first run.** Time the path from "I found the site" to "Modbus readings in MQTT" on a fresh Pi and on a laptop, and fix what costs the most time: `/setup`, the messages from `--check` and `--discover`, the install steps and the status page. The success criterion is 15 minutes; the measurement says where the minutes go.
+4. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays read-only and on `127.0.0.1` by default.
+5. **A first real building** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
 
-After v1.0: the Next.js configuration app, a Brick or 223P exporter generated from the config, and loading the config from a database.
+After v1.0: an MCP server with the CLI's commands as tools, the Next.js configuration app, a Brick or 223P exporter generated from the config, and loading the config from a database.
 
 ## Success criteria
 
@@ -136,21 +176,23 @@ After v1.0: the Next.js configuration app, a Brick or 223P exporter generated fr
 
 ## Decisions
 
-| Topic            | Decision                                                                   | Notes                                                              |
-| ---------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| Runtime          | Node.js (LTS)                                                              | Bun is not a target                                                |
-| Effect version   | Latest Effect 4.x                                                          | Stable since late Sep 2026, bug fixes until at least Sep 2029      |
-| Dependencies     | Effect-native: `effect` plus `@effect/*` packages                          | Use what Effect offers first; protocol stacks are written in-house |
-| MQTT             | MQTT 5                                                                     | In-house client on Effect sockets                                  |
-| Topic convention | `site/building/device/point`                                               | Metadata on retained `.../point/$meta`                             |
-| Config format    | JSON, validated with Effect Schema                                         | Storable in a file or a database                                   |
-| Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                       | Uses Node's built-in `node:sqlite`, so no native build on ARM      |
-| Monorepo         | pnpm workspaces + Turborepo                                                |                                                                    |
-| Web UI           | Local status page in v1.0; Next.js configuration app after v1.0            | Separate package                                                   |
-| Project site     | Static site on Vercel, docs rendered from `docs/`                          | Hobby plan now, Pro with the first customer                        |
-| License          | MIT                                                                        |                                                                    |
-| Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point    | See below                                                          |
-| Commands         | Live only on `.../point/$set`, one result each, never retained or replayed | Limits required on writable numeric points; BACnet priority 8      |
+| Topic            | Decision                                                                   | Notes                                                                   |
+| ---------------- | -------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| Runtime          | Node.js (LTS)                                                              | Bun is not a target                                                     |
+| Distribution     | One `ot-gateway` binary: Node single executable with the gateway bundled   | Container image as the alternative; no clone needed to run or set up    |
+| Setup input      | A versioned points list (CSV), BACnet EDE files, device profiles           | AI translates into the points list; it never writes the config directly |
+| Effect version   | Latest Effect 4.x                                                          | Stable since late Sep 2026, bug fixes until at least Sep 2029           |
+| Dependencies     | Effect-native: `effect` plus `@effect/*` packages                          | Use what Effect offers first; protocol stacks are written in-house      |
+| MQTT             | MQTT 5                                                                     | In-house client on Effect sockets                                       |
+| Topic convention | `site/building/device/point`                                               | Metadata on retained `.../point/$meta`                                  |
+| Config format    | JSON, validated with Effect Schema                                         | Storable in a file or a database                                        |
+| Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                       | Uses Node's built-in `node:sqlite`, so no native build on ARM           |
+| Monorepo         | pnpm workspaces + Turborepo                                                |                                                                         |
+| Web UI           | Local status page in v1.0; Next.js configuration app after v1.0            | Separate package                                                        |
+| Project site     | Static site on Vercel, docs rendered from `docs/`                          | Hobby plan now, Pro with the first customer                             |
+| License          | MIT                                                                        |                                                                         |
+| Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point    | See below                                                               |
+| Commands         | Live only on `.../point/$set`, one result each, never retained or replayed | Limits required on writable numeric points; BACnet priority 8           |
 
 ## Semantic model
 
