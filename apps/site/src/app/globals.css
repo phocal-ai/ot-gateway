@@ -69,3 +69,100 @@
     opacity: 1;
   }
 }
+
+/* A read landing in the gateway's window: the bars light up one after another, like polls through 15 minutes. */
+@keyframes read-tick {
+  0% {
+    opacity: 0.15;
+  }
+  4% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.15;
+  }
+}
+.read-tick {
+  opacity: 0.15;
+  animation: read-tick 3.6s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .read-tick {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* The poll demo: a packet crossing between two panels once per step, and content arriving as it is sent. */
+@keyframes packet-right {
+  0% {
+    left: 0;
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: 100%;
+    opacity: 0;
+  }
+}
+@keyframes packet-left {
+  0% {
+    left: 100%;
+    opacity: 0;
+  }
+  15%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    left: 0;
+    opacity: 0;
+  }
+}
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes value-flash {
+  0% {
+    background-color: color-mix(in oklab, var(--series-1) 35%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.packet-right {
+  animation: packet-right 700ms ease-in-out both;
+}
+.packet-left {
+  animation: packet-left 700ms ease-in-out both;
+}
+.reveal {
+  animation: reveal 450ms ease-out 450ms both;
+}
+.value-flash {
+  animation: value-flash 1.2s ease-out 500ms both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .packet-right,
+  .packet-left {
+    animation: none;
+    opacity: 0;
+  }
+  .reveal,
+  .value-flash {
+    animation: none;
+  }
+}

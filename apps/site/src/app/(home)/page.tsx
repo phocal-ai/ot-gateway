@@ -5,39 +5,13 @@
 import Link from "next/link"
 import type * as React from "react"
 import { PublishChart } from "@/components/home/publish-chart.tsx"
+import { ConfigFlow } from "@/components/home/config-flow.tsx"
 import { Flow } from "@/components/home/flow.tsx"
+import { HowItWorks, SeeItWork } from "@/components/home/how-it-works.tsx"
+import { PollDemo } from "@/components/home/poll-demo.tsx"
+import { SetupCompare } from "@/components/home/setup-compare.tsx"
 import { StatusMock } from "@/components/home/status-mock.tsx"
 import { site } from "@/lib/site.ts"
-
-const journey = [
-  {
-    step: "1",
-    title: "See it work",
-    time: "1 minute",
-    text: "A small simulated building on your computer: an energy meter, an air handler, the gateway and a test broker. No devices, no accounts.",
-    command: "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo",
-    href: "/docs#quick-start",
-    link: "Quick start"
-  },
-  {
-    step: "2",
-    title: "Describe your building",
-    time: "15 minutes",
-    text: "Say which values you want, from which devices, how often and where to. A few questions write the config; BACnet devices are found for you.",
-    command: "ot-gateway init",
-    href: "/docs/first-building",
-    link: "Your first building"
-  },
-  {
-    step: "3",
-    title: "Leave it running",
-    time: "for months",
-    text: "On any always-on machine with Docker, or a Raspberry Pi. It reconnects, buffers while the network is down, and tells you when a device stops answering.",
-    command: "docker compose -f packaging/compose.yaml up -d",
-    href: "/docs/operations",
-    link: "Running a gateway"
-  }
-] as const
 
 const audiences = [
   [
@@ -99,8 +73,45 @@ const positioning = [
   ["Vendor gateways", "Supported, certified", "Open source, extensible, no lock-in"]
 ] as const
 
-const message = `vienna-hq/main/ahu-1/supply-air-temp
-{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}`
+/** A config that `ot-gateway check` accepts (the docs' configuration reference), trimmed to one point. */
+const exampleConfig = `{
+  "site": "vienna-hq",
+  "building": "main",
+  "mqtt": { "url": "mqtt://broker.example.com:1883" },
+  "devices": [{
+    "protocol": "bacnet-ip",
+    "id": "ahu-1",
+    "address": "10.0.4.21",
+    "deviceInstance": 1001,
+    "pollIntervalMs": 30000,
+    "publish": {
+      "mode": "aggregate",
+      "intervalMs": 900000
+    },
+    "points": [{
+      "id": "supply-air-temp",
+      "name": "Supply air temperature",
+      "objectType": "analog-input",
+      "instance": 1,
+      "unit": "unit:DEG_C"
+    }]
+  }]
+}`
+
+/** What that config publishes every 15 minutes: an aggregate message, as closeWindow in packages/core builds it. */
+const exampleTopic = "vienna-hq/main/ahu-1/supply-air-temp"
+const exampleMessage = `{
+  "value": 21.38,
+  "min": 20.9,
+  "max": 21.8,
+  "avg": 21.38,
+  "last": 21.6,
+  "count": 30,
+  "from": 1793872800000,
+  "to": 1793873700000,
+  "ts": 1793873700000,
+  "unit": "unit:DEG_C"
+}`
 
 const Section = ({ title, children }: { readonly title: string; readonly children: React.ReactNode }) => (
   <section className="border-t py-14">
@@ -119,13 +130,15 @@ const HomePage = () => (
   <main className="mx-auto w-full max-w-5xl px-6">
     <section className="py-16 md:py-20">
       <p className="text-fd-muted-foreground mb-3 text-sm font-medium">Open source · MIT · early</p>
-      <h1 className="mb-5 max-w-3xl text-4xl font-semibold tracking-tight md:text-5xl">
-        Your building&apos;s data, in your software
+      <h1 className="mb-5 max-w-3xl tracking-tight">
+        <span className="block text-4xl font-semibold md:text-5xl">OT Gateway</span>
+        <span className="text-fd-muted-foreground mt-2 block text-2xl font-medium md:text-3xl">
+          Building protocols in. MQTT out.
+        </span>
       </h1>
       <p className="text-fd-muted-foreground mb-8 max-w-2xl text-lg">
-        Meters and controllers speak old building protocols. Dashboards and platforms speak MQTT. OT Gateway is the
-        small program in between: it reads the values you choose, names them, and sends them on, unattended and for
-        months.
+        It polls devices on a schedule and publishes their data to MQTT. Built AI-native: your AI assistant sets it up
+        with you, from finding the devices to the first values.
       </p>
       <div className="flex flex-wrap gap-3">
         <Link
@@ -147,16 +160,23 @@ const HomePage = () => (
       <Flow />
     </section>
 
-    <Section title="You know what you want. It does the rest.">
-      <p className="text-fd-muted-foreground mb-8 max-w-2xl">
-        A points list is usually where it starts: the energy meter&apos;s active power every 5 seconds, each air
-        handler&apos;s supply temperature every 30, all of it to the company broker. That list becomes one config file,
-        and every value arrives under a name that says where it came from:
-      </p>
-      <Code>{message}</Code>
-      <p className="text-fd-muted-foreground mt-3 text-sm">
-        site / building / device / point, with the value, the time it was read and its unit.
-      </p>
+    <Section title="How it works">
+      <HowItWorks />
+    </Section>
+
+    <Section title="See it work in less than a minute">
+      <SeeItWork />
+    </Section>
+
+    <Section title="You always know whether it works">
+      <div className="grid gap-8 md:grid-cols-[3fr_2fr] md:items-center">
+        <StatusMock />
+        <p className="text-fd-muted-foreground text-sm">
+          Every gateway has a status page: each device green or red, with the reason and when it last answered, and the
+          messages that went out. The same goes to the broker as a health message, so your platform can raise an alert
+          when a device goes quiet instead of showing an old value.
+        </p>
+      </div>
     </Section>
 
     <Section title="Read often, send what you need">
@@ -175,35 +195,34 @@ const HomePage = () => (
       </div>
     </Section>
 
-    <Section title="You always know whether it works">
-      <div className="grid gap-8 md:grid-cols-[3fr_2fr] md:items-center">
-        <StatusMock />
-        <p className="text-fd-muted-foreground text-sm">
-          Every gateway has a status page: each device green or red, with the reason and when it last answered, and the
-          messages that went out. The same goes to the broker as a health message, so your platform can raise an alert
-          when a device goes quiet instead of showing an old value.
-        </p>
-      </div>
+    <Section title="One poll, step by step">
+      <PollDemo />
     </Section>
 
-    <Section title="From first look to a running building">
-      <ol className="grid gap-6 md:grid-cols-3">
-        {journey.map((item) => (
-          <li className="bg-fd-card flex flex-col rounded-xl border p-5" key={item.step}>
-            <p className="text-fd-muted-foreground mb-2 text-xs font-medium">
-              Step {item.step} · {item.time}
-            </p>
-            <h3 className="mb-2 font-semibold">{item.title}</h3>
-            <p className="text-fd-muted-foreground mb-4 flex-1 text-sm">{item.text}</p>
-            <pre className="bg-fd-background mb-4 rounded-md border p-2 text-xs break-all whitespace-pre-wrap">
-              <code>{item.command}</code>
-            </pre>
-            <Link className="text-sm font-medium underline" href={item.href}>
-              {item.link}
-            </Link>
-          </li>
-        ))}
-      </ol>
+    <Section title="Config in, MQTT out">
+      <ConfigFlow />
+      <p className="text-fd-muted-foreground mt-4 max-w-2xl text-sm">
+        That is the whole mapping: which device, which datapoint, how often to poll and what to send. No code, no flows.
+      </p>
+      <details className="mt-4 text-sm">
+        <summary className="text-fd-muted-foreground hover:text-fd-foreground cursor-pointer">
+          Show the config and the message as JSON
+        </summary>
+        <div className="mt-3 grid gap-4 md:grid-cols-2">
+          <Code>{exampleConfig}</Code>
+          <Code>{`${exampleTopic}\n${exampleMessage}`}</Code>
+        </div>
+      </details>
+    </Section>
+
+    <Section title="Set it up by hand, or let your AI assistant do it">
+      <SetupCompare />
+      <p className="text-fd-muted-foreground mt-4 text-sm">
+        <Link className="text-fd-foreground font-medium underline" href="/docs#set-it-up-with-ai">
+          Set it up with AI
+        </Link>{" "}
+        works with Claude Code, Cursor, Codex or any agent that can run commands.
+      </p>
     </Section>
 
     <Section title="Who it is for">

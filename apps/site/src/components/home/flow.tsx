@@ -19,18 +19,32 @@ const devices: ReadonlyArray<Item> = [
 
 const software: ReadonlyArray<Item> = [
   { icon: ChartLine, title: "Dashboards", detail: "live values" },
-  { icon: FileChartColumn, title: "Energy reports", detail: "kWh per month" },
+  { icon: FileChartColumn, title: "Energy reports", detail: "kWh a month" },
   { icon: Bell, title: "Alerts", detail: "a fan stopped" }
 ]
 
-const Column = ({ title, items }: { readonly title: string; readonly items: ReadonlyArray<Item> }) => (
+const Column = ({
+  title,
+  note,
+  items
+}: {
+  readonly title: string
+  /** A line under the title, saying what the items are. */
+  readonly note?: string
+  readonly items: ReadonlyArray<Item>
+}) => (
   <div className="bg-fd-card rounded-xl border p-4">
-    <p className="text-fd-muted-foreground mb-3 text-xs font-medium tracking-wide uppercase">{title}</p>
+    <p className="text-fd-muted-foreground text-xs font-medium tracking-wide uppercase">{title}</p>
+    {note === undefined ? (
+      <div className="mb-3" />
+    ) : (
+      <p className="text-fd-muted-foreground mt-1 mb-3 text-xs">{note}</p>
+    )}
     <ul className="space-y-3">
       {items.map(({ icon: Icon, title: itemTitle, detail }) => (
         <li className="flex items-center gap-3" key={itemTitle}>
           <Icon className="text-fd-muted-foreground size-5 shrink-0" />
-          <span className="text-sm">
+          <span className="text-sm md:whitespace-nowrap">
             {itemTitle} <span className="text-fd-muted-foreground">· {detail}</span>
           </span>
         </li>
@@ -58,17 +72,17 @@ const Pipe = ({ label }: { readonly label: string }) => (
 export const Flow = () => (
   <div className="viz grid items-center md:grid-cols-[1fr_auto_1fr_auto_1fr]">
     <Column items={devices} title="In the building" />
-    <Pipe label="read every few seconds" />
+    <Pipe label="polls" />
     <div className="rounded-xl border-2 border-[var(--series-1)] p-4">
-      <p className="mb-3 text-sm font-semibold">OT Gateway</p>
-      <ul className="text-fd-muted-foreground space-y-2 text-sm">
-        <li>asks each device on schedule</li>
-        <li>adds names and units</li>
-        <li>sends only real changes</li>
-        <li>keeps values while offline</li>
+      <p className="mb-3 text-sm font-semibold whitespace-nowrap">OT Gateway</p>
+      <ul className="text-fd-muted-foreground space-y-2 text-sm md:whitespace-nowrap">
+        <li>collects data from devices</li>
+        <li>aggregates or sends changes</li>
+        <li>buffers while offline</li>
+        <li>keeps a history on site</li>
       </ul>
     </div>
-    <Pipe label="MQTT" />
-    <Column items={software} title="Your software" />
+    <Pipe label="publishes" />
+    <Column items={software} note="for whatever subscribes:" title="Your MQTT broker" />
   </div>
 )
