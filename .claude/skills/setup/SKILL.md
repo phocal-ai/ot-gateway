@@ -12,9 +12,11 @@ Say in one line what is about to happen, then start with step 1. Keep the user p
 Everything goes through the `ot-gateway` command. Call it `otg` below:
 
 - in a checkout of the ot-gateway repository: `pnpm ot-gateway` (after `pnpm install`), from the repository root;
-- anywhere else: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`).
+- anywhere else with Node: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`);
+- with Docker and no Node (a Raspberry Pi, most edge boxes): the image, from that folder. No `-t`, since you have no terminal:
+  `docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:latest` (the latest release, as `npx` runs). Define it as a shell function in each command you run; aliases do not carry over between them.
 
-The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema` and `status` to get the result as JSON on stdout, a failure as `{"ok": false, "error": …}` (exit code 1); logs go to stderr. `--dry-run` on `init` and `import` writes nothing.
+The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema` and `status` to get the result as JSON on stdout, a failure as `{"ok": false, "error": …}` (exit code 1); logs go to stderr. `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running.
 
 ## Ground rules
 
@@ -26,9 +28,9 @@ The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to ru
 
 ## 1. Preflight (no questions)
 
-- `node --version` must be 22.18 or later. If it's older or missing, stop and give the one install command for their OS: `fnm install 24` or `nvm install 24` if one is present. On a Raspberry Pi or Debian, use NodeSource: `curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash - && sudo apt-get install -y nodejs`.
+- `docker compose version` says whether Docker Compose (2.24 or newer) is there. That decides step 8's default.
+- `node --version` must be 22.18 or later for `npx`. Without it, and with Docker there, use the image as `otg` (above) rather than install Node. With neither, stop and give the one install command for their OS: `fnm install 24` or `nvm install 24` if one is present; on a Raspberry Pi or Debian, Docker (`curl -fsSL https://get.docker.com | sudo sh`, docs/raspberry-pi-install.md part 5).
 - `otg --version` prints the version.
-- `docker compose version` says whether Docker Compose (2.24 or newer) is there. That decides step 8's default; it is not needed before then.
 
 ## 2. Demo, about 2 minutes
 
@@ -37,7 +39,7 @@ Skip this if the user says they've seen it. Otherwise:
 1. Start `otg demo` in the background: the gateway with a local MQTT test broker and simulated Modbus and BACnet devices, in one process.
 2. Within a few seconds it prints messages like `demo-site/b1/main-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
 3. Mention the status page at http://localhost:8080.
-4. Stop it before going on. It holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080.
+4. Stop it before going on. It holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway or test bench already running), skip the demo.
 
 ## 3. Questions, one round
 
@@ -64,13 +66,13 @@ Add `--dry-run --json` first to see the config and the files it would write with
 - With a points list or EDE file already in hand, check it as in step 5 first, then use `--points <file>` instead of `--devices none`.
 - "None yet (simulated)": `--devices simulated`.
 
-It writes `ot-gateway.json`, `compose.yaml` and, with a login, `ot-gateway.env`, and it never replaces a `compose.yaml` or `ot-gateway.env` that is already there. An existing `ot-gateway.json` is replaced only with `--force`: ask first. Ask the user to put the broker password into `ot-gateway.env` now.
+It writes `ot-gateway.json`, `compose.yaml` and `ot-gateway.env`, and it never replaces a `compose.yaml` or `ot-gateway.env` that is already there. An existing `ot-gateway.json` is replaced only with `--force`: ask first. Ask the user to put the broker password into `ot-gateway.env` now, and the `OTEL_*` lines there (commented out) if they want telemetry.
 
 ## 5. Points: everything becomes the standard points list
 
 Read `otg points schema --json` once. Then, by what the user has:
 
-- **BACnet devices on the network:** `otg discover --points-list points.csv`. Nothing else may hold UDP 47808 (stop the demo or another BACnet tool first). Show a short summary per device (name, instance, point count) and remove the rows the user doesn't need; past about 5 devices or 50 points, ask which to keep. If nothing answered: check the broadcast address; devices on another subnet need a BBMD (`bacnet.bbmdAddress` in the config); a firewall can drop UDP 47808.
+- **BACnet devices on the network:** `otg discover --points-list points.csv`. Nothing else may hold UDP 47808 (stop the demo or another BACnet tool first). Show a short summary per device (name, instance, point count) and remove the rows the user doesn't need; past about 5 devices or 50 points, ask which to keep. If nothing answered: check the broadcast address; devices on another subnet need a BBMD (`bacnet.bbmdAddress` in the config); a firewall can drop UDP 47808. With a device's IP (and port, when not 47808) from a device list, `otg discover --address <ip[:port]> --points-list points.csv` asks that device alone.
 - **An EDE file:** it imports as it is. `otg points from-ede <file> > points.csv` gives a list to trim first; it says how many objects it skipped (schedules, trend logs).
 - **A points list in some other layout** (other column names, an Excel export, several sheets): translate it into `points.csv` with the schema's columns. Save Excel as CSV first; `.xlsx` is not read. Keep the user's device and point names.
 - **A Modbus model in the profile library** (`otg profiles list --json`): one row per device with `profile` set and `point` `*` (or one row per point it needs), plus its `host` and `unit_id`. `otg profiles show <id>` lists its points.
@@ -99,8 +101,8 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 
 ## 7. First run: values must flow
 
-1. Start the gateway in the background from the folder: `otg run`. It reads `ot-gateway.env` from the folder itself.
-2. After about 15 s, run `otg status --json`. Every device should be ok and its points should have values. To show what reaches the broker, run `otg watch` for a few seconds (it runs until stopped).
+1. Start the gateway in the background from the folder. With Docker Compose: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise `otg run`. Either reads `ot-gateway.env` from the folder.
+2. After about 15 s, run `otg status --json`. Every device should be ok and its points should have values (a point published as an aggregate gets its first value at the end of its first window). To show what reaches the broker, run `otg watch --seconds 10`.
 3. Diagnose what isn't working, fix `points.csv` or the config, and run again. Repeat until every device is ok or the cause is outside your reach:
 
    | Symptom                       | Likely cause                                                                                                                                                                             |
@@ -114,7 +116,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
    To redo the devices from a fixed list, run `init` again with `--force` and the same flags (it keeps `compose.yaml` and `ot-gateway.env`), then import the list again.
 
 4. Show the user a few real values with units, and the status page URL.
-5. Stop the gateway before step 8.
+5. Stop the gateway before step 8 (`docker stop ot-gateway-test`, which also removes it).
 
 ## 8. Run it for real
 

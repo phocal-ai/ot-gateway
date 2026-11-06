@@ -53,10 +53,10 @@ A failing run prints its seed, and the same seed replays the same faults. The `S
 
 What a soak finds depends on how many events happen (poll cycles, outages, COV renewals, buffer fills and drains), not on how many hours pass. Only the target hardware needs real time. So there are two presets, and neither runs all the time:
 
-| Preset   | Command                    | What it is                                                                                                   | When                                                                                      |
-| -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
-| Quick    | `scripts/soak.sh quick`    | 10 minutes at speed 60, four copies of every device, disk faults: about 10 hours of events, 4 broker outages | Every release: the `Soak` workflow runs it on the pull request into `main`                |
-| Extended | `scripts/soak.sh extended` | 12 hours in real time with `SOAK_STRICT_HOST=1`, on a Raspberry Pi                                           | A release that changes a driver, the pipeline, the buffer, MQTT or packaging; before v1.0 |
+| Preset   | Command                    | What it is                                                                                                   | When                                                                                                                                    |
+| -------- | -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Quick    | `scripts/soak.sh quick`    | 10 minutes at speed 60, four copies of every device, disk faults: about 10 hours of events, 4 broker outages | Before a release that changes a driver, the pipeline, the buffer or MQTT: locally, or the `Soak` workflow by hand with duration `quick` |
+| Extended | `scripts/soak.sh extended` | 12 hours in real time with `SOAK_STRICT_HOST=1`, on a Raspberry Pi                                           | A release that changes a driver, the pipeline, the buffer, MQTT or packaging; before v1.0                                               |
 
 Run the quick preset yourself on a branch that changes a driver, the pipeline, the buffer or MQTT. A preset only sets defaults, so `SOAK_DEVICES=2 scripts/soak.sh quick` still works, and any duration still runs: `SOAK_SPEED=60 SOAK_DEVICES=4 scripts/soak.sh 30m` packs about a day of outages into half an hour.
 

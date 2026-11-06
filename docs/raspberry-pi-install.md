@@ -136,32 +136,33 @@ cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 
 ## 6. The config and secrets
 
-Write the config as `ot-gateway.json`: with `/setup` and an AI assistant in a clone of this repository (README, "Set it up with AI"), or by hand from [configuration.md](configuration.md) and `examples/gateway.json`. Three things matter on a Pi:
-
-- `mqtt.url` and every device's address must be reachable from the Pi. `localhost` means the Pi itself, not your laptop.
-- `buffer.path` can stay as `ot-gateway init` writes it (`./ot-gateway-buffer.sqlite`): relative paths land in the container's data volume, so the outbox outlives the container.
-- `"status": {}` is there, or the status page in part 8 stays off.
-
-Copy it to the Pi:
-
-```bash
-scp ot-gateway.json ot-gateway:
-```
-
-On the Pi, make a folder for the gateway, fetch the Compose file of the release you install, move the config next to it, and check it with the gateway itself:
+The Pi has no Node.js, and needs none: the gateway's image is the `ot-gateway` command too. On the Pi, make a folder for the gateway and give the command a short name (the second line keeps it for the next login):
 
 ```bash
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.0/packaging/compose.yaml
-mv ~/ot-gateway.json .
-docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
+alias ot-gateway='docker run --rm -it --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:v0.8.1'
+alias ot-gateway >> ~/.bashrc
 ```
 
-The check prints `config ok` and what it will poll; anything else names the field to fix. No `sudo` is needed: the outbox and the history go to a Docker volume. If the config names a broker password or other secrets (`/setup` puts them in `ot-gateway.env`), copy that file next to the config too, readable by you only:
+Then let it ask for the site, the broker and the devices, and write the folder:
 
 ```bash
-chmod 600 ~/ot-gateway/ot-gateway.env
+ot-gateway init .
 ```
+
+It writes `ot-gateway.json`, `compose.yaml` and `ot-gateway.env`. Three things matter on a Pi:
+
+- `mqtt.url` and every device's address must be reachable from the Pi. `localhost` means the Pi itself, not your laptop.
+- Secrets go in `ot-gateway.env`, never in the config: the broker password after `MQTT_PASSWORD=` when the broker needs a login, and the telemetry variables, commented out until you fill them in. `nano ot-gateway.env` edits it; it stays readable by you only.
+- Devices come from a points list: `ot-gateway points template > points.csv` starts one, `ot-gateway discover --points-list points.csv` fills one in from the BACnet devices that answer, and `ot-gateway import points.csv` adds it to the config ([first-building.md](first-building.md) walks through it).
+
+Check it with the gateway itself:
+
+```bash
+ot-gateway check
+```
+
+It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI assistant (README, "Set it up with AI"), the assistant runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
 
 ## 7. Start it
 

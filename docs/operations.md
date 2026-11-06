@@ -14,13 +14,22 @@ One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much 
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 
-With Node.js on the machine, `npx ot-gateway init .` in that folder (or `npx ot-gateway init ~/ot-gateway`, which makes the folder too) asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. Fill in the password, then go on with the check below. Without Node, fetch `compose.yaml` yourself:
+`ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login and the telemetry variables commented out. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.0/packaging/compose.yaml
+alias ot-gateway='docker run --rm -it --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:v0.8.1'
+ot-gateway init .
 ```
 
-Copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
+`--network host` lets `discover`, `watch` and `status` reach the building network and the gateway's status page, and `--user` makes the files it writes yours. Add the line to `~/.bashrc` to keep it. In a script or for an AI agent, which have no terminal, leave out the `t` of `-it`, and give `watch` a `--seconds`: stopping the `docker` command does not stop the container.
+
+Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.1/packaging/compose.yaml
+```
+
+and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
 
 ```bash
 docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
@@ -39,7 +48,7 @@ Without Compose, the same as one command, from the same folder:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v "$PWD/ot-gateway.json:/etc/ot-gateway/gateway.json:ro" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.8.0
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.8.1
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -123,7 +132,7 @@ Under systemd, you can also run `install.sh` again with the new file: it checks 
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.8.0
+git fetch --tags && git checkout v0.8.1
 ```
 
 ```bash
@@ -139,7 +148,7 @@ Read the release notes for config changes first. If the new version refuses the 
 With Docker Compose, name the new tag, from the folder with `compose.yaml`; going back is the same with the old one. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
-OT_GATEWAY_TAG=v0.8.0 docker compose up -d
+OT_GATEWAY_TAG=v0.8.1 docker compose up -d
 ```
 
 ### From the `/etc/ot-gateway` layout (v0.7.0 and earlier)
@@ -161,11 +170,11 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.0/packaging/compose.yaml && docker compose create
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.1/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
-docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.8.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.8.1 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
 ```
 
 ```bash
@@ -210,14 +219,14 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.8.0 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.8.1 --check /etc/ot-gateway/gateway.json
 ```
 
 Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.8.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.8.1 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -232,7 +241,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.8.0
+git fetch --tags && git checkout v0.8.1
 ```
 
 ```bash

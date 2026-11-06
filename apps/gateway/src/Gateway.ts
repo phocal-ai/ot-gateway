@@ -17,6 +17,7 @@ import {
   type GatewayConfig,
   type HealthRegistry,
   healthTopic,
+  type HistorySink,
   makeHealthRegistry,
   type Network,
   onlinePayload,
@@ -33,9 +34,10 @@ import { makeSimulatorDriver } from "@ot-gateway/simulator"
 import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { historyHandler, makeStatusState, serveStatus, type StatusState } from "./Status.ts"
-import { type History, openHistory } from "@ot-gateway/history"
+import { openHistory } from "@ot-gateway/history"
 import { traceSampleRatio } from "./Telemetry.ts"
 
 export interface GatewayOptions {
@@ -109,7 +111,7 @@ const runOne = (
   network: Network | undefined,
   drivers: DriverRegistry,
   modbusLinks: ReadonlyMap<string, ModbusLink>,
-  history: History | undefined
+  reads: HistorySink | undefined
 ) => {
   /** Poll the device, and take commands for it while doing so. */
   const run = (driver: Driver) => Effect.andThen(drivers.register(driver), runDevice(ctx, driver))
@@ -121,7 +123,7 @@ const runOne = (
     ...(device.publish === undefined ? {} : { publish: device.publish }),
     traceSampleRatio: sampleRatio,
     health,
-    ...(history === undefined ? {} : { history: history.sink })
+    ...(reads === undefined ? {} : { history: reads })
   }
   switch (device.protocol) {
     case "simulator":
@@ -164,11 +166,18 @@ const runDevices = Effect.fn("runGateway")(function* (
   network: Network | undefined,
   commands: Commands,
   status: StatusState | undefined,
-  host: HostMonitor | undefined
+  host: HostMonitor | undefined,
+  staleMeta: StaleMetaCleaner
 ) {
   const sampleRatio = yield* traceSampleRatio
   // Open before the devices start, so their first reads are kept; closed after they stop, writing what waits.
   const history = config.history === undefined ? undefined : yield* openHistory(config.history)
+  // Every read goes to the history and to the status page, whichever are on.
+  const sinks = [history?.sink, status?.reads].filter((sink) => sink !== undefined)
+  const reads: HistorySink | undefined =
+    sinks.length === 0
+      ? undefined
+      : { record: (device, point, value, ts) => sinks.forEach((sink) => sink.record(device, point, value, ts)) }
   yield* Effect.log(`OT Gateway starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
     Effect.annotateLogs({ traceSampleRatio: sampleRatio, health: health.topic })
   )
@@ -194,22 +203,13 @@ const runDevices = Effect.fn("runGateway")(function* (
       ...config.devices.map((device) =>
         superviseDevice(
           Effect.suspend(() =>
-            runOne(
-              config,
-              device,
-              sampleRatio,
-              health.registry,
-              bacnet,
-              network,
-              commands.drivers,
-              modbusLinks,
-              history
-            )
+            runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers, modbusLinks, reads)
           ),
           { deviceId: device.id, health: health.registry }
         )
       ),
       ...(host === undefined ? [] : [keepRunning("host monitor", host.run)]),
+      keepRunning("stale metadata", staleMeta.run),
       // A command at a time per device, each with its own deadline; devices do not wait for each other.
       ...(commands.routing === undefined ? [] : [keepRunning("command guard", commands.routing.run)])
     ],
@@ -223,23 +223,35 @@ const northbound = (
   health: GatewayHealth,
   options: GatewayOptions,
   routing: CommandRouting | undefined,
-  status: StatusState | undefined
+  status: StatusState | undefined,
+  staleMeta: StaleMetaCleaner
 ) => {
+  // Retain As Published, so a command published retained is seen as such even live, and refused.
+  // No Local, so nothing the gateway publishes itself is ever taken for a command.
+  const commandSubscriptions =
+    routing === undefined
+      ? []
+      : [
+          {
+            filter: commandFilter(config.site, config.building),
+            qos: 1 as const,
+            retainAsPublished: true,
+            noLocal: true
+          }
+        ]
   const mqtt = MqttPublisher(config.mqtt, {
     health: { topic: health.topic, online: health.online },
     // With a buffer, a value that cannot go out now is stored, so waiting for the broker would only stall reads.
     waitForConnection: config.buffer === undefined,
     ...(options.network === undefined ? {} : { network: options.network }),
-    ...(routing === undefined
-      ? {}
-      : {
-          // Retain As Published, so a command published retained is seen as such even live, and refused.
-          // No Local, so nothing the gateway publishes itself is ever taken for a command.
-          subscriptions: [
-            { filter: commandFilter(config.site, config.building), qos: 1, retainAsPublished: true, noLocal: true }
-          ],
-          onMessage: routing.onMessage
-        })
+    subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions],
+    // A `$meta` topic is never a command topic (`.../$set`), so each message has one taker.
+    onMessage: (message) =>
+      message.topic.endsWith("/$meta")
+        ? staleMeta.onMessage(message)
+        : routing === undefined
+          ? Effect.void
+          : routing.onMessage(message)
   })
   const publisher =
     config.buffer === undefined ? mqtt : BufferedPublisher(config.buffer, options.buffer).pipe(Layer.provide(mqtt))
@@ -303,11 +315,12 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     drivers,
     routing: writable ? yield* makeCommandRouting(config, guard.handle) : undefined
   }
-  return yield* runDevices(config, health, options.network, commands, status, host).pipe(
+  const staleMeta = yield* makeStaleMetaCleaner(config)
+  return yield* runDevices(config, health, options.network, commands, status, host, staleMeta).pipe(
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
-    Effect.provide(northbound(config, health, options, commands.routing, status)),
+    Effect.provide(northbound(config, health, options, commands.routing, status, staleMeta)),
     withMetricAttributes({ site: config.site, building: config.building })
   )
 })

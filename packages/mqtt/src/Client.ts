@@ -431,7 +431,9 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                   ? subscriptions.filter((_, index) => (suback.success.reasonCodes[index] ?? 0x80) >= 0x80)
                   : subscriptions
                 if (refused.length > 0) {
-                  yield* Effect.logError("MQTT broker refused a subscription, commands on it will not arrive").pipe(
+                  yield* Effect.logError(
+                    "MQTT broker refused a subscription; nothing published on it will arrive"
+                  ).pipe(
                     Effect.annotateLogs({ filters: refused.map((subscription) => subscription.filter).join(", ") })
                   )
                 }
