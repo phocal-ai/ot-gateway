@@ -33,9 +33,14 @@ permissions:
 jobs:
   # The whole gateway on an in-memory network under virtual time (apps/gateway/test/Simulation.test.ts):
   # a simulated week per seed in a few minutes, with new seeds every night. A failure names its seed.
+  # One job per seed, side by side, so a release pull request waits for the slowest seed, not for all five.
   simulate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [0, 1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -48,8 +53,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Simulate
         run: |
-          base=$((GITHUB_RUN_NUMBER * 10))
-          export SIM_SEEDS=$(seq -s, "$base" "$((base + 4))")
+          export SIM_SEEDS=$((GITHUB_RUN_NUMBER * 10 + ${{ matrix.seed }}))
           echo "seeds $SIM_SEEDS" | tee -a "$GITHUB_STEP_SUMMARY"
           pnpm --filter @ot-gateway/gateway sim
         env:
