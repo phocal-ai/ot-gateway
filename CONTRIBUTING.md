@@ -23,6 +23,7 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 - `dev` is the integration branch. Branch off `dev` and open pull requests against `dev`.
 - `main` holds releases only. It moves forward when `dev` is merged into it for a release, and each release is tagged on `main` (`vX.Y.Z`).
 - Pushing the tag publishes the image (`.github/workflows/image.yml`), only when the tagged commit is on `main`, and builds it from the tagged source without the pull requests' build cache. A plain `vX.Y.Z` also moves `:latest`; a prerelease such as `v0.7.0-rc.1` does not.
+- Pushing the tag also publishes the `ot-gateway` npm package (`.github/workflows/package.yml`, `scripts/build-package.sh`), the CLI and the gateway bundled into one file, with npm trusted publishing and provenance. A prerelease tag goes to the `next` dist-tag, so `npx ot-gateway` keeps the last release.
 - A release also moves the default tag in `packaging/compose.yaml` (`OT_GATEWAY_TAG`), the `docker run` example in `docs/operations.md` and the tag in the commands of `docs/raspberry-pi-install.md` and `docs/raspberry-pi-testing.md` to the new tag.
 - The first release under a new image name (v0.6.0, `ghcr.io/phocal-ai/ot-gateway`) creates a new, private package: make it public in the package's settings (the organization must allow public packages for that moment), then check `docker pull` without logging in.
 - Urgent fixes for a release branch off `main`, merge back into `main`, then get merged into `dev` so the two don't drift.
@@ -64,6 +65,18 @@ At speed 60, every interval in `examples/gateway.json` is divided by 60 (polls a
 The `Soak` workflow simulates every night and runs the 30-minute soak and an arm64 soak every Sunday. The arm64 one runs inside the container image under QEMU, held to two cores and 1 GB: it shows the ARM build and the memory and CPU headroom, not the SD card or heat.
 
 The extended preset is for the hardware: SD card, CPU, thermal throttling, NTP steps. `SOAK_STRICT_HOST=1` also fails on an event-loop stall or a power or thermal condition (under-voltage only on Raspberry Pi kernel 6.12 and later, see docs/operations.md, "The machine"). Twelve hours is half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages, and a sample every ten minutes for the growth checks. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the procedure and the pass criteria. A release that changes none of those paths, such as config validation, docs or CI, needs only the quick preset.
+
+## Device profiles
+
+A profile in [`profiles/`](profiles) describes one Modbus device model's registers, so points lists can name the model instead of copying its register map (docs/first-building.md, "Meters with a profile"). An assistant can draft one from a register map; `ot-gateway profiles schema --json` gives the format and `profiles/eastron-sdm630.json` is a complete example. A pull request that adds or changes one:
+
+1. **Names its source.** `source` gives the register map's title, revision and, where public, its URL. A profile from memory or from another project's code alone is not accepted; another project can serve as a cross-check, named in `notes`.
+2. **Checks every register against that source.** The reviewer does the same, point by point: address (0-based: 30001 is input register 0), table, type, word order, scale and unit. The tests check the shape, unique names and overlapping registers, not the numbers.
+3. **Says whether it was read from a device.** `verified: true` only when someone read the values from a real device and they made sense; the pull request says which device and firmware. Profiles from the register map alone are welcome with `verified: false`, and `profiles list` says so.
+4. **Starts small.** The values people use (energy, power, voltages, currents, temperatures, states), not all of a 300-register map; more can follow.
+5. **Writes nothing.** A profile has no `writable`; writes stay a decision in the config.
+
+The file name is the profile's `id`, `vendor-model` as a slug. A correction to a verified profile needs the same evidence as a new one.
 
 ## Reporting device quirks
 

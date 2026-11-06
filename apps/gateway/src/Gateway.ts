@@ -34,7 +34,8 @@ import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { keepRunning } from "./KeepRunning.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
-import { makeStatusState, serveStatus, type StatusState } from "./Status.ts"
+import { historyHandler, makeStatusState, serveStatus, type StatusState } from "./Status.ts"
+import { type History, openHistory } from "@ot-gateway/history"
 import { traceSampleRatio } from "./Telemetry.ts"
 
 export interface GatewayOptions {
@@ -107,7 +108,8 @@ const runOne = (
   bacnet: BacnetNetwork,
   network: Network | undefined,
   drivers: DriverRegistry,
-  modbusLinks: ReadonlyMap<string, ModbusLink>
+  modbusLinks: ReadonlyMap<string, ModbusLink>,
+  history: History | undefined
 ) => {
   /** Poll the device, and take commands for it while doing so. */
   const run = (driver: Driver) => Effect.andThen(drivers.register(driver), runDevice(ctx, driver))
@@ -116,8 +118,10 @@ const runOne = (
     building: config.building,
     pollIntervalMs: device.pollIntervalMs,
     cycleTimeoutMs: cycleTimeoutMs(device),
+    ...(device.publish === undefined ? {} : { publish: device.publish }),
     traceSampleRatio: sampleRatio,
-    health
+    health,
+    ...(history === undefined ? {} : { history: history.sink })
   }
   switch (device.protocol) {
     case "simulator":
@@ -163,6 +167,8 @@ const runDevices = Effect.fn("runGateway")(function* (
   host: HostMonitor | undefined
 ) {
   const sampleRatio = yield* traceSampleRatio
+  // Open before the devices start, so their first reads are kept; closed after they stop, writing what waits.
+  const history = config.history === undefined ? undefined : yield* openHistory(config.history)
   yield* Effect.log(`OT Gateway starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
     Effect.annotateLogs({ traceSampleRatio: sampleRatio, health: health.topic })
   )
@@ -177,7 +183,7 @@ const runDevices = Effect.fn("runGateway")(function* (
     network === undefined ? {} : { network }
   )
   if (config.status !== undefined && status !== undefined)
-    yield* serveStatus(config.status, status).pipe(Effect.forkScoped)
+    yield* serveStatus(config.status, status, historyHandler(config, history)).pipe(Effect.forkScoped)
   yield* Effect.all(
     [
       keepRunning(
@@ -188,7 +194,17 @@ const runDevices = Effect.fn("runGateway")(function* (
       ...config.devices.map((device) =>
         superviseDevice(
           Effect.suspend(() =>
-            runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers, modbusLinks)
+            runOne(
+              config,
+              device,
+              sampleRatio,
+              health.registry,
+              bacnet,
+              network,
+              commands.drivers,
+              modbusLinks,
+              history
+            )
           ),
           { deviceId: device.id, health: health.registry }
         )

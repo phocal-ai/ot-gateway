@@ -53,6 +53,9 @@ importers:
       '@ot-gateway/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@ot-gateway/history':
+        specifier: workspace:*
+        version: link:../../packages/history
       '@ot-gateway/modbus':
         specifier: workspace:*
         version: link:../../packages/modbus
@@ -65,6 +68,10 @@ importers:
       effect:
         specifier: 4.1.2
         version: 4.1.2
+    devDependencies:
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
 
   apps/site:
     dependencies:
@@ -191,6 +198,25 @@ importers:
       effect:
         specifier: 4.1.2
         version: 4.1.2
+
+  packages/history:
+    dependencies:
+      '@effect/sql-sqlite-node':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)
+      '@ot-gateway/api':
+        specifier: workspace:*
+        version: link:../api
+      '@ot-gateway/core':
+        specifier: workspace:*
+        version: link:../core
+      effect:
+        specifier: 4.1.2
+        version: 4.1.2
+    devDependencies:
+      '@effect/platform-node':
+        specifier: 4.1.2
+        version: 4.1.2(effect@4.1.2)(redis@6.3.1)
 
   packages/modbus:
     dependencies:
@@ -4080,6 +4106,7 @@ snapshots:
   '@types/node@26.6.6':
     dependencies:
       undici-types: 8.9.0
+    optional: true
 
   '@types/react-dom@19.3.0(@types/react@19.3.0)':
     dependencies:
@@ -4095,7 +4122,7 @@ snapshots:
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 26.6.6
+      '@types/node': 22.20.5
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -5607,7 +5634,8 @@ snapshots:
 
   undici-types@6.21.0: {}
 
-  undici-types@8.9.0: {}
+  undici-types@8.9.0:
+    optional: true
 
   undici@8.12.4: {}
 

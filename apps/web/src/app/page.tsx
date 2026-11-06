@@ -5,14 +5,35 @@
  * health and latest values, the messages it publishes and the recent commands.
  * Polls `/api/status` every two seconds, and `/api/messages` while the
  * messages are shown; read-only.
+ *
+ * Freshness is shown as a state, not as numbers that count up: the header says
+ * Live while answers arrive, a device says how often it is read and gets a time
+ * only once it is late or failing, a value lights up briefly when it changes,
+ * and messages carry their clock time. The page renders when data arrives and
+ * at no other time.
  */
 import type { DeviceStatus, GatewayStatus, HostStatus, Messages as MessageList } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { useEffect, useState } from "react"
+import { flushSync } from "react-dom"
+import { DeviceDialog } from "@/components/device-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { ago, fetchMessages, fetchStatus, formatBytes, formatValue, topicKind, unitLabel } from "@/lib/status"
+import {
+  clockTime,
+  every,
+  fetchMessages,
+  fetchStatus,
+  formatBytes,
+  fillPercent,
+  formatValue,
+  freshness,
+  type Freshness,
+  since,
+  topicKind,
+  unitLabel
+} from "@/lib/status"
 
 const POLL_MS = 2000
 
@@ -21,29 +42,100 @@ type Load =
   | { readonly _tag: "ok"; readonly status: GatewayStatus }
   | { readonly _tag: "unreachable"; readonly last?: GatewayStatus }
 
-const deviceBadge = (device: DeviceStatus) => {
-  switch (device.status) {
-    case "ok":
+const deviceBadge = (state: Freshness) => {
+  switch (state._tag) {
+    case "live":
       return <Badge variant="success">ok</Badge>
     case "starting":
       return <Badge variant="secondary">starting</Badge>
+    case "late":
+      return <Badge variant="warning">late</Badge>
     case "failing":
-      return <Badge variant="destructive">{device.reason ?? "failing"}</Badge>
+      return <Badge variant="destructive">{state.reason}</Badge>
   }
+}
+
+/** Under the device's name: how often it is read, and since when it hasn't been once that matters. */
+const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
+  const read = `read ${every(device.pollIntervalMs)}`
+  switch (state._tag) {
+    case "live":
+    case "starting":
+      return read
+    case "late":
+    case "failing":
+      return state.lastSuccess === undefined
+        ? `${read} · no answer yet`
+        : `${read} · no answer for ${since(state.lastSuccess, now)}`
+  }
+}
+
+/**
+ * A point's value, lit up for a moment when it changes, so the page shows that data moves without a column of
+ * counting seconds. The first value on screen does not light up; hovering says when it last changed.
+ */
+const PointValue = ({ point, now }: { readonly point: DeviceStatus["points"][number]; readonly now: number }) => {
+  const [firstTs] = useState(point.ts)
+  const changed = point.ts !== undefined && point.ts !== firstTs
+  return (
+    <span
+      key={point.ts}
+      className={`rounded px-1 ${changed ? "motion-safe:animate-[value-changed_1.2s_ease-out]" : ""}`}
+      title={point.ts === undefined ? "nothing sent yet" : `changed ${clockTime(point.ts, now)}`}
+    >
+      {formatValue(point.value)} <span className="text-muted-foreground">{unitLabel(point.unit)}</span>
+    </span>
+  )
 }
 
 const protocolName = { "modbus-tcp": "Modbus TCP", "bacnet-ip": "BACnet/IP", simulator: "Simulated" } as const
 
-const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: number }) => (
-  <Card>
-    <CardHeader>
+const DeviceHeading = ({ device, now }: { readonly device: DeviceStatus; readonly now: number }) => {
+  const state = freshness(device, now)
+  return (
+    <>
       <div className="flex items-center justify-between gap-2">
         <CardTitle className="font-mono">{device.id}</CardTitle>
-        {deviceBadge(device)}
+        {deviceBadge(state)}
       </div>
       <CardDescription>
-        {protocolName[device.protocol]} · last read {ago(device.lastSuccess, now)}
+        {protocolName[device.protocol]} · {deviceLine(device, state, now)}
       </CardDescription>
+    </>
+  )
+}
+
+/** The name both the card and its dialog carry, so a view transition morphs one into the other. */
+const transitionName = (device: DeviceStatus) => `device-${device.id}`
+
+/** A device's card; clicking it (or Enter or Space on it) opens the device. */
+const Device = ({
+  device,
+  now,
+  open,
+  onOpen
+}: {
+  readonly device: DeviceStatus
+  readonly now: number
+  readonly open: boolean
+  readonly onOpen: () => void
+}) => (
+  <Card
+    aria-haspopup="dialog"
+    aria-label={`${device.id}: open history`}
+    className="cursor-pointer transition-shadow hover:shadow-md hover:ring-1 hover:ring-ring/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    onClick={onOpen}
+    onKeyDown={(event) => {
+      if (event.key !== "Enter" && event.key !== " ") return
+      event.preventDefault()
+      onOpen()
+    }}
+    role="button"
+    style={{ viewTransitionName: open ? "none" : transitionName(device) }}
+    tabIndex={0}
+  >
+    <CardHeader>
+      <DeviceHeading device={device} now={now} />
     </CardHeader>
     <CardContent>
       <Table>
@@ -51,7 +143,6 @@ const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
           <TableRow>
             <TableHead>Point</TableHead>
             <TableHead className="text-right">Value</TableHead>
-            <TableHead className="text-right">Updated</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -64,9 +155,8 @@ const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
                 </div>
               </TableCell>
               <TableCell className="text-right font-mono tabular-nums">
-                {formatValue(point.value)} <span className="text-muted-foreground">{unitLabel(point.unit)}</span>
+                <PointValue key={point.id} point={point} now={now} />
               </TableCell>
-              <TableCell className="text-right text-muted-foreground">{ago(point.ts, now)}</TableCell>
             </TableRow>
           ))}
         </TableBody>
@@ -74,6 +164,53 @@ const Device = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
     </CardContent>
   </Card>
 )
+
+/** Whether the browser morphs the card into the dialog: it has view transitions and the user allows motion. */
+const canMorph = () =>
+  typeof document.startViewTransition === "function" && !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+
+/** Runs a state change inside a view transition where the browser has them, and plainly elsewhere. */
+const withTransition = (update: () => void) => {
+  if (!canMorph()) return update()
+  document.startViewTransition(() => flushSync(update))
+}
+
+/**
+ * Whether values are safe while the broker is away: how full the buffer is against its limit, and whether it
+ * has had to give any up. Empty is the normal state; rows mean the broker is (or was just) unreachable.
+ */
+const BufferCard = ({ buffer, stale }: { readonly buffer: GatewayStatus["buffer"]; readonly stale: boolean }) => {
+  const note = (text: string) => (stale ? "page is not reaching the gateway" : text)
+  if (buffer === undefined)
+    return (
+      <Card>
+        <CardHeader>
+          <CardDescription>Buffer</CardDescription>
+          <CardTitle className="text-2xl">off</CardTitle>
+          <CardDescription>{note("values are lost while the broker is down")}</CardDescription>
+        </CardHeader>
+      </Card>
+    )
+  return (
+    <Card>
+      <CardHeader>
+        <CardDescription>Buffer</CardDescription>
+        <CardTitle className="text-2xl tabular-nums">
+          {buffer.rows.toLocaleString()}/{buffer.maxRows.toLocaleString()}
+        </CardTitle>
+        <CardDescription className={buffer.dropped > 0 && !stale ? "text-destructive" : ""}>
+          {note(
+            buffer.dropped > 0
+              ? `${buffer.dropped.toLocaleString()} dropped since start`
+              : buffer.rows === 0
+                ? "messages waiting for the broker"
+                : `messages waiting for the broker (${fillPercent(buffer.rows, buffer.maxRows)} full)`
+          )}
+        </CardDescription>
+      </CardHeader>
+    </Card>
+  )
+}
 
 const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly stale: boolean }) => {
   const failing = status.devices.filter((device) => device.status === "failing").length
@@ -83,42 +220,34 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
       <Card>
         <CardHeader>
           <CardDescription>Broker</CardDescription>
-          <CardTitle className="flex items-center gap-2">
-            {status.broker.connected ? (
-              <Badge variant="success">connected</Badge>
-            ) : (
-              <Badge variant="destructive">disconnected</Badge>
-            )}
+          <CardTitle className={`text-2xl ${status.broker.connected ? "" : "text-destructive"}`}>
+            {status.broker.connected ? "connected" : "disconnected"}
           </CardTitle>
-          <CardDescription className="truncate font-mono text-xs">{status.broker.url}</CardDescription>
+          <CardDescription className="truncate" title={status.broker.url}>
+            {status.broker.connected
+              ? `to ${status.broker.url}`
+              : status.buffer === undefined
+                ? `${status.broker.url}: values are lost until it is back`
+                : `${status.broker.url}: values wait in the buffer`}
+          </CardDescription>
         </CardHeader>
       </Card>
       <Card>
         <CardHeader>
           <CardDescription>Devices</CardDescription>
           <CardTitle className="text-2xl tabular-nums">
-            {ok}/{status.devices.length} ok
+            {ok}/{status.devices.length}
           </CardTitle>
-          <CardDescription>
+          <CardDescription className={failing > 0 ? "text-destructive" : ""}>
             {failing > 0
-              ? `${failing} failing`
+              ? `devices answering, ${failing} failing`
               : ok === status.devices.length
-                ? "every device answers"
-                : `${status.devices.length - ok} starting`}
+                ? "devices answering"
+                : `devices answering, ${status.devices.length - ok} starting`}
           </CardDescription>
         </CardHeader>
       </Card>
-      <Card>
-        <CardHeader>
-          <CardDescription>Buffer</CardDescription>
-          <CardTitle className="text-2xl tabular-nums">
-            {status.buffer === undefined ? "off" : `${status.buffer.rows.toLocaleString()} waiting`}
-          </CardTitle>
-          <CardDescription>
-            {stale ? "page is not reaching the gateway" : `up since ${new Date(status.since).toLocaleString()}`}
-          </CardDescription>
-        </CardHeader>
-      </Card>
+      <BufferCard buffer={status.buffer} stale={stale} />
     </div>
   )
 }
@@ -234,7 +363,7 @@ const MessageTable = ({ now, prefix }: { readonly now: number; readonly prefix: 
             <TableHead>Topic</TableHead>
             <TableHead>Latest payload</TableHead>
             <TableHead className="text-right">Messages</TableHead>
-            <TableHead className="text-right">Latest</TableHead>
+            <TableHead className="text-right">Sent at</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -268,7 +397,9 @@ const MessageTable = ({ now, prefix }: { readonly now: number; readonly prefix: 
                   </code>
                 </TableCell>
                 <TableCell className="text-right align-top tabular-nums">{message.count.toLocaleString()}</TableCell>
-                <TableCell className="text-right align-top text-muted-foreground">{ago(message.at, now)}</TableCell>
+                <TableCell className="text-right align-top text-muted-foreground">
+                  {clockTime(message.at, now)}
+                </TableCell>
               </TableRow>
             )
           })}
@@ -307,8 +438,9 @@ const Messages = ({ status }: { readonly status: GatewayStatus }) => {
         <CardDescription>
           What the gateway publishes to the broker, the latest message on each topic: what a client subscribed to{" "}
           <code className="font-mono">{prefix}#</code> receives. A value goes to{" "}
-          <code className="font-mono">site/building/device/point</code> when it changes, its metadata (name, unit, Brick
-          class) to <code className="font-mono">…/$meta</code>, and the gateway&apos;s health to{" "}
+          <code className="font-mono">site/building/device/point</code> as its publish mode says (every read, once per
+          interval, or when it changes), its metadata (name, unit, Brick class) to{" "}
+          <code className="font-mono">…/$meta</code>, and the gateway&apos;s health to{" "}
           <code className="font-mono">…/$gateway/{status.id}/health</code>.
         </CardDescription>
       </CardHeader>
@@ -342,7 +474,7 @@ const Commands = ({ status }: { readonly status: GatewayStatus }) => (
           <TableBody>
             {status.commands.map((command) => (
               <TableRow key={`${command.at}-${command.device}-${command.point}`}>
-                <TableCell className="text-muted-foreground">{ago(command.at, status.now)}</TableCell>
+                <TableCell className="text-muted-foreground">{clockTime(command.at, status.now)}</TableCell>
                 <TableCell className="font-mono">
                   {command.device}/{command.point}
                 </TableCell>
@@ -369,8 +501,26 @@ const Commands = ({ status }: { readonly status: GatewayStatus }) => (
   </Card>
 )
 
+/** The page's own freshness, once for everything on it: live while the gateway answers every two seconds. */
+const LiveBadge = ({ load }: { readonly load: Load }) => {
+  switch (load._tag) {
+    case "loading":
+      return null
+    case "unreachable":
+      return <Badge variant="destructive">gateway unreachable</Badge>
+    case "ok":
+      return (
+        <Badge variant="outline" title={`The page asks the gateway every ${POLL_MS / 1000} s`}>
+          <span aria-hidden="true" className="size-2 rounded-full bg-success motion-safe:animate-pulse" />
+          Live
+        </Badge>
+      )
+  }
+}
+
 const StatusPage = () => {
   const [load, setLoad] = useState<Load>({ _tag: "loading" })
+  const [openId, setOpenId] = useState<string | undefined>(undefined)
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -400,6 +550,7 @@ const StatusPage = () => {
   }, [])
 
   const status = load._tag === "ok" ? load.status : load._tag === "unreachable" ? load.last : undefined
+  const opened = status?.devices.find((device) => device.id === openId)
   return (
     <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-8">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -407,11 +558,11 @@ const StatusPage = () => {
           <h1 className="text-2xl font-semibold tracking-tight">OT Gateway</h1>
           {status === undefined ? null : (
             <p className="text-sm text-muted-foreground">
-              {status.site} / {status.building} · gateway {status.id}
+              {status.site} / {status.building} · gateway {status.id} · up {since(status.since, status.now)}
             </p>
           )}
         </div>
-        {load._tag === "unreachable" ? <Badge variant="destructive">gateway unreachable</Badge> : null}
+        <LiveBadge load={load} />
       </header>
       {status === undefined ? (
         <p className="text-muted-foreground">{load._tag === "loading" ? "Loading…" : "The gateway does not answer."}</p>
@@ -421,9 +572,24 @@ const StatusPage = () => {
           {status.host === undefined ? null : <Host host={status.host} />}
           <section className="grid gap-4 lg:grid-cols-2">
             {status.devices.map((device) => (
-              <Device key={device.id} device={device} now={status.now} />
+              <Device
+                device={device}
+                key={device.id}
+                now={status.now}
+                onOpen={() => withTransition(() => setOpenId(device.id))}
+                open={device.id === openId}
+              />
             ))}
           </section>
+          {opened === undefined ? null : (
+            <DeviceDialog
+              device={opened}
+              header={<DeviceHeading device={opened} now={status.now} />}
+              morph={canMorph()}
+              onClose={() => withTransition(() => setOpenId(undefined))}
+              transitionName={transitionName(opened)}
+            />
+          )}
           <Messages status={status} />
           <Commands status={status} />
         </>

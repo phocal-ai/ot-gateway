@@ -4,6 +4,7 @@
  */
 import { Effect, Schema, SchemaIssue, SchemaTransformation } from "effect"
 import { BacnetPoint, ModbusPoint, SimulatedPoint, Slug } from "./Point.ts"
+import { Publish, publishOf, windowIntervalMs } from "./Publish.ts"
 
 const pollIntervalMs = Schema.Int.pipe(
   Schema.check(Schema.isBetween({ minimum: 100, maximum: 86_400_000 })),
@@ -26,9 +27,56 @@ const uniqueIds = (what: "device" | "point") =>
     return duplicates
   })
 
+/** `deadband` is the short form of change mode, so a point that also has `publish` would say two things. */
+const oneWayToPublish = Schema.makeFilter<ReadonlyArray<{ readonly deadband?: number; readonly publish?: Publish }>>(
+  (points) =>
+    points.flatMap((point, index) =>
+      point.deadband !== undefined && point.publish !== undefined
+        ? [
+            {
+              path: [index, "deadband"],
+              issue: 'set the deadband inside publish ({ "mode": "change", "deadband": … }), not next to it'
+            }
+          ]
+        : []
+    )
+)
+
 /** A device's points: at least one, with unique ids. */
-const pointsOf = <S extends Schema.Top & { readonly Type: { readonly id: string } }>(point: S) =>
-  Schema.Array(point).pipe(Schema.check(Schema.isMinLength(1), uniqueIds("point")))
+const pointsOf = <
+  S extends Schema.Top & {
+    readonly Type: { readonly id: string; readonly deadband?: number; readonly publish?: Publish }
+  }
+>(
+  point: S
+) => Schema.Array(point).pipe(Schema.check(Schema.isMinLength(1), uniqueIds("point"), oneWayToPublish))
+
+/** How the device's points go out, unless a point says otherwise (default: every read). */
+const devicePublish = Schema.optionalKey(Publish)
+
+/**
+ * A window shorter than the poll interval would close without a read in it, or send one value several times:
+ * every publish interval, the device's and each point's, is at least the poll interval.
+ */
+const publishNotFasterThanPolling = Schema.makeFilter<{
+  readonly pollIntervalMs: number
+  readonly publish?: Publish
+  readonly points: ReadonlyArray<{ readonly deadband?: number; readonly publish?: Publish }>
+}>((device) => {
+  const tooFast = (publish: Publish | undefined) => {
+    const interval = publish === undefined ? undefined : windowIntervalMs(publish)
+    return interval !== undefined && interval < device.pollIntervalMs
+  }
+  const issue = `is shorter than the device's pollIntervalMs (${device.pollIntervalMs}); read more often or send less often`
+  return [
+    ...(tooFast(device.publish) ? [{ path: ["publish", "intervalMs"], issue }] : []),
+    ...device.points.flatMap((point, index) =>
+      point.publish !== undefined && tooFast(publishOf(device.publish, point))
+        ? [{ path: ["points", index, "publish", "intervalMs"], issue }]
+        : []
+    )
+  ]
+})
 
 /**
  * How long one polling cycle (reading the device, retries included, and
@@ -62,6 +110,7 @@ export const ModbusDevice = Schema.Struct({
   ),
   pollIntervalMs,
   cycleTimeoutMs: cycleTimeoutMsField,
+  publish: devicePublish,
   /**
    * Minimum pause between the end of one request and the start of the next
    * on this device's connection (default 0). Slow Modbus gateways and serial
@@ -82,7 +131,7 @@ export const ModbusDevice = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed(2_000))
   ),
   points: pointsOf(ModbusPoint)
-})
+}).check(publishNotFasterThanPolling)
 export type ModbusDevice = typeof ModbusDevice.Type
 
 const octet = "(25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)"
@@ -112,8 +161,10 @@ export const BacnetDevice = Schema.Struct({
   cov: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(true))),
   pollIntervalMs,
   cycleTimeoutMs: cycleTimeoutMsField,
+  publish: devicePublish,
   points: pointsOf(BacnetPoint)
 }).check(
+  publishNotFasterThanPolling,
   // Found by broadcast, a device is wherever an I-Am says it is, and anyone on the LAN can send one.
   // Reads from the wrong host are wrong values; writes to it are commands to someone else's equipment.
   Schema.makeFilter(
@@ -132,8 +183,9 @@ export const SimulatorDevice = Schema.Struct({
   id: Slug,
   pollIntervalMs,
   cycleTimeoutMs: cycleTimeoutMsField,
+  publish: devicePublish,
   points: pointsOf(SimulatedPoint)
-})
+}).check(publishNotFasterThanPolling)
 export type SimulatorDevice = typeof SimulatorDevice.Type
 
 export const Device = Schema.Union([ModbusDevice, BacnetDevice, SimulatorDevice])
@@ -205,6 +257,18 @@ export const BufferSettings = Schema.Struct({
   )
 })
 export type BufferSettings = typeof BufferSettings.Type
+
+/** The on-device history of every read: raw for the last day, per minute for `retentionDays`. */
+export const HistorySettings = Schema.Struct({
+  /** SQLite file of the history; its own file, apart from the outbox. */
+  path: Schema.String,
+  /** Days of per-minute minimum, maximum and average kept (default 7). */
+  retentionDays: Schema.Int.pipe(
+    Schema.check(Schema.isBetween({ minimum: 1, maximum: 30 })),
+    Schema.withDecodingDefaultKey(Effect.succeed(7))
+  )
+})
+export type HistorySettings = typeof HistorySettings.Type
 
 /** The gateway's own BACnet/IP endpoint, shared by every `bacnet-ip` device. */
 export const BacnetSettings = Schema.Struct({
@@ -327,6 +391,7 @@ export const GatewayConfig = Schema.Struct({
   ),
   mqtt: MqttSettings,
   buffer: Schema.optionalKey(BufferSettings),
+  history: Schema.optionalKey(HistorySettings),
   status: Schema.optionalKey(StatusSettings),
   bacnet: BacnetSettings.pipe(Schema.withDecodingDefaultKey(Effect.succeed({}))),
   devices: Schema.Array(Device).pipe(Schema.check(uniqueIds("device")))

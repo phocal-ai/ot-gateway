@@ -5,9 +5,20 @@
  * reach devices only through MQTT and the command guard.
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
-import { type CommandStatus, type DeviceStatus, type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
+import {
+  type CommandStatus,
+  type DeviceStatus,
+  type GatewayStatus,
+  HistoryQueryInvalid,
+  HistoryUnavailable,
+  type Messages,
+  OtGatewayApi
+} from "@ot-gateway/api"
+import type { History } from "@ot-gateway/history"
 import type { HostSnapshot } from "./Host.ts"
 import {
+  bufferDropped,
+  bufferDropReasons,
   bufferRows,
   type CommandOutcome,
   type GatewayConfig,
@@ -106,12 +117,17 @@ export const makeStatusState = (
       const now = yield* Clock.currentTimeMillis
       const connected = (yield* Metric.value(Metric.withAttributes(mqttConnected, attributes))).value === 1
       const rows = (yield* Metric.value(Metric.withAttributes(bufferRows, attributes))).value
+      let dropped = 0
+      for (const reason of bufferDropReasons) {
+        dropped += (yield* Metric.value(Metric.withAttributes(bufferDropped, { ...attributes, reason }))).count
+      }
       const devices = config.devices.map((device): DeviceStatus => {
         const state = health.devices.get(device.id) ?? { status: "starting" as const }
         return {
           id: device.id,
           protocol: device.protocol,
           status: state.status,
+          pollIntervalMs: device.pollIntervalMs,
           ...(state.reason === undefined ? {} : { reason: state.reason }),
           ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
           points: device.points.map((point) => {
@@ -136,7 +152,9 @@ export const makeStatusState = (
         since,
         now,
         broker: { url: config.mqtt.url, connected },
-        ...(config.buffer === undefined ? {} : { buffer: { path: config.buffer.path, rows: Math.max(0, rows) } }),
+        ...(config.buffer === undefined
+          ? {}
+          : { buffer: { path: config.buffer.path, rows: Math.max(0, rows), maxRows: config.buffer.maxRows, dropped } }),
         ...(host === undefined || sample === undefined
           ? {}
           : { host: { version: host.version, node: process.versions.node, ...sample } }),
@@ -160,12 +178,54 @@ export const makeStatusState = (
   }
 }
 
+/** The range a history request asks for when it names none: the last hour. */
+const DEFAULT_HISTORY_MS = 3_600_000
+
+export interface HistoryRequest {
+  readonly device: string
+  readonly point: string
+  readonly from?: number | undefined
+  readonly to?: number | undefined
+  readonly buckets?: number | undefined
+}
+
+/** `/api/history`: a configured point's history, the last hour unless the request names a range. */
+export const historyHandler =
+  (config: GatewayConfig, history: History | undefined) =>
+  (request: HistoryRequest): Effect.Effect<HistorySeriesOf, HistoryUnavailable | HistoryQueryInvalid> =>
+    Effect.gen(function* () {
+      if (history === undefined) {
+        return yield* new HistoryUnavailable({ message: "the config has no history block, so no reads are kept" })
+      }
+      const device = config.devices.find((candidate) => candidate.id === request.device)
+      if (device === undefined || !device.points.some((point) => point.id === request.point)) {
+        return yield* new HistoryQueryInvalid({ message: `no point ${request.device}/${request.point} in the config` })
+      }
+      const now = yield* Clock.currentTimeMillis
+      const to = request.to ?? now
+      const from = request.from ?? to - DEFAULT_HISTORY_MS
+      if (!(from < to)) return yield* new HistoryQueryInvalid({ message: "from must be before to" })
+      return yield* history.series({
+        device: request.device,
+        point: request.point,
+        from,
+        to,
+        ...(request.buckets === undefined ? {} : { buckets: request.buckets })
+      })
+    })
+type HistorySeriesOf = Effect.Success<ReturnType<History["series"]>>
+
 /**
  * Serve the API and, when it is built, the web app, until the scope closes.
  * A port that is taken is logged and the gateway runs on without its page:
  * the page must never cost the readings.
  */
-export const serveStatus = (settings: StatusSettings, state: StatusState) =>
+export const serveStatus = (
+  settings: StatusSettings,
+  state: StatusState,
+  history: (request: HistoryRequest) => Effect.Effect<HistorySeriesOf, HistoryUnavailable | HistoryQueryInvalid> = () =>
+    Effect.fail(new HistoryUnavailable({ message: "this server keeps no history" }))
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const webRoot = settings.webRoot ?? defaultWebRoot
@@ -173,7 +233,10 @@ export const serveStatus = (settings: StatusSettings, state: StatusState) =>
     const api = HttpApiBuilder.layer(OtGatewayApi).pipe(
       Layer.provide(
         HttpApiBuilder.group(OtGatewayApi, "status", (handlers) =>
-          handlers.handle("status", () => state.snapshot).handle("messages", () => state.messages)
+          handlers
+            .handle("status", () => state.snapshot)
+            .handle("messages", () => state.messages)
+            .handle("history", ({ query }) => history(query))
         )
       )
     )

@@ -1,25 +1,44 @@
 # The gateway as a container, for a Raspberry Pi or any Linux edge box with Docker (amd64 or arm64).
+# Put this file in a folder of its own, with the config next to it:
 #
-#   sudo install -d -m 755 /etc/ot-gateway /var/lib/ot-gateway && sudo chown 1000:1000 /var/lib/ot-gateway
-#   sudo install -m 644 ot-gateway.json /etc/ot-gateway/gateway.json        # buffer.path under /var/lib/ot-gateway
-#   sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env
-#   docker compose -f packaging/compose.yaml up -d
+#   curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+#   # ot-gateway.json next to it, and ot-gateway.env for secrets if the config names any
+#   docker compose up -d
 #
-# Upgrade with OT_GATEWAY_TAG=<new tag> docker compose -f packaging/compose.yaml up -d, and go back the same way.
+# No sudo and no folders to make: the outbox and the history live in the `ot-gateway_data` volume, which is
+# also the gateway's working directory, so relative paths in the config (`./ot-gateway-buffer.sqlite`, as
+# `ot-gateway init` writes them) end up in it and outlive the container.
+#
+# Upgrade with OT_GATEWAY_TAG=<new tag> docker compose up -d, and go back the same way.
 # docs/operations.md has the rest: logs, backups and what to watch.
+name: ot-gateway
 services:
   gateway:
     # A release tag, not latest: an upgrade is a decision, and going back is setting the old tag again.
-    image: ghcr.io/phocal-ai/ot-gateway:${OT_GATEWAY_TAG:-v0.7.0}
+    image: ghcr.io/phocal-ai/ot-gateway:${OT_GATEWAY_TAG:-v0.8.0}
     container_name: ot-gateway
     # BACnet discovery and change-of-value need the building network's broadcasts, which a bridge network drops.
     network_mode: host
     restart: unless-stopped
     # Time to flush the outbox and say goodbye to the broker before the container is killed.
     stop_grace_period: 30s
+    # Relative paths in the config resolve here, in the volume. The entrypoint is absolute, so this is safe.
+    working_dir: /var/lib/ot-gateway
     volumes:
-      - /etc/ot-gateway:/etc/ot-gateway:ro
-      - /var/lib/ot-gateway:/var/lib/ot-gateway
+      # Fails with a clear error when ot-gateway.json is missing, instead of mounting an empty folder in its place.
+      - type: bind
+        source: ./ot-gateway.json
+        target: /etc/ot-gateway/gateway.json
+        read_only: true
+        bind:
+          create_host_path: false
+      # A named volume starts with the image's ownership (the gateway's user), so nothing needs a chown.
+      - data:/var/lib/ot-gateway
+    # Secrets (the broker password the config's mqtt.passwordEnv names) and OTEL_* variables. Compose reads the
+    # file as you, so it can stay readable by you only (chmod 600).
+    env_file:
+      - path: ./ot-gateway.env
+        required: false
     # Docker keeps container logs forever by default, on the SD card. Three files of 10 MB at most,
     # and the gateway logs transitions, not states, so that is days to weeks of history.
     logging:
@@ -29,3 +48,5 @@ services:
         max-file: "3"
     # A bounded heap: a leak shows as a restart and a metric, not as a Pi that swaps until it stops answering.
     mem_limit: 768m
+volumes:
+  data:

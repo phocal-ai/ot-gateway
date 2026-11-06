@@ -5,9 +5,9 @@
 import { CircleCheck, CircleX } from "lucide-react"
 
 const rows = [
-  { device: "main-meter", protocol: "Modbus TCP", ok: true, value: "active power 32.7 kW", seen: "2 s ago" },
-  { device: "ahu-1", protocol: "BACnet/IP", ok: true, value: "supply air 21.4 °C", seen: "12 s ago" },
-  { device: "ahu-2", protocol: "BACnet/IP", ok: false, value: "timeout: no answer", seen: "4 min ago" }
+  { device: "main-meter", protocol: "Modbus TCP", ok: true, value: "active power 32.7 kW", read: "read every 5 s" },
+  { device: "ahu-1", protocol: "BACnet/IP", ok: true, value: "supply air 21.4 °C", read: "read every 30 s" },
+  { device: "ahu-2", protocol: "BACnet/IP", ok: false, value: "timeout: no answer", read: "no answer for 4 min" }
 ] as const
 
 export const StatusMock = () => (
@@ -15,7 +15,7 @@ export const StatusMock = () => (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
       <span className="font-medium">vienna-hq / main</span>
       <span className="text-fd-muted-foreground flex items-center gap-1.5 text-xs">
-        <CircleCheck className="size-4 text-[var(--status-good)]" /> broker connected · 0 waiting in the buffer
+        <CircleCheck className="size-4 text-[var(--status-good)]" /> broker connected · buffer empty
       </span>
     </div>
     <ul>
@@ -35,7 +35,7 @@ export const StatusMock = () => (
               {row.ok ? "ok" : "failing"} · {row.protocol} · {row.value}
             </span>
           </span>
-          <span className="text-fd-muted-foreground text-xs">read {row.seen}</span>
+          <span className="text-fd-muted-foreground text-xs">{row.read}</span>
         </li>
       ))}
     </ul>

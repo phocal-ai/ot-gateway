@@ -126,12 +126,13 @@ elif [[ ! -f /etc/ot-gateway/gateway.json ]]; then
   cp "$repo/examples/gateway.json" /etc/ot-gateway/gateway.json.new
 fi
 if [[ -f /etc/ot-gateway/gateway.json.new ]]; then
-  # The outbox lives in the service's state directory.
+  # The outbox and the history live in the service's state directory.
   node -e '
     const fs = require("fs")
     const path = "/etc/ot-gateway/gateway.json.new"
     const config = JSON.parse(fs.readFileSync(path, "utf8"))
     if (config.buffer !== undefined) config.buffer.path = "/var/lib/ot-gateway/buffer.sqlite"
+    if (config.history !== undefined) config.history.path = "/var/lib/ot-gateway/history.sqlite"
     fs.writeFileSync(path, JSON.stringify(config, null, 2) + "\n")
   '
   # As the service user: checking loads the gateway's dependencies, and root has no business running them.

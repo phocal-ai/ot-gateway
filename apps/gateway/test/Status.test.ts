@@ -5,14 +5,15 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { OtGatewayApi } from "@ot-gateway/api"
-import { makeHealthRegistry, parseConfig } from "@ot-gateway/core"
-import { Effect, Fiber } from "effect"
+import { bufferDropped, makeHealthRegistry, parseConfig, withMetricAttributes } from "@ot-gateway/core"
+import { openHistory } from "@ot-gateway/history"
+import { Effect, FileSystem, Fiber, Metric } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
 import { createServer } from "node:net"
 import type { HostSnapshot } from "../src/Host.ts"
-import { makeStatusState, serveStatus } from "../src/Status.ts"
+import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
 
 const config = parseConfig(
   JSON.stringify({
@@ -68,6 +69,28 @@ const freePort = Effect.promise(
 )
 
 describe("status", () => {
+  it.effect("says how full the buffer is and adds up what it dropped, whatever the reason", () =>
+    Effect.gen(function* () {
+      const buffered = yield* parseConfig(
+        JSON.stringify({
+          site: "s",
+          building: "b",
+          mqtt: { url: "mqtt://localhost:1883", clientId: "status-buffer-test" },
+          buffer: { path: "./buffer.sqlite", maxRows: 500 },
+          devices: []
+        })
+      )
+      const state = makeStatusState(buffered, makeHealthRegistry([]), 0)
+      expect((yield* state.snapshot).buffer).toEqual({ path: "./buffer.sqlite", rows: 0, maxRows: 500, dropped: 0 })
+      // As the buffer counts them: under the gateway's site and building, one series per reason.
+      yield* Effect.gen(function* () {
+        yield* Metric.update(Metric.withAttributes(bufferDropped, { reason: "overflow" }), 5)
+        yield* Metric.update(Metric.withAttributes(bufferDropped, { reason: "rejected" }), 2)
+      }).pipe(withMetricAttributes({ site: "s", building: "b" }))
+      expect((yield* state.snapshot).buffer?.dropped).toBe(7)
+    })
+  )
+
   it.effect("keeps each point's last value and the newest 50 commands", () =>
     Effect.gen(function* () {
       const parsed = yield* config
@@ -99,6 +122,7 @@ describe("status", () => {
           id: "meter",
           protocol: "modbus-tcp",
           status: "ok",
+          pollIntervalMs: 5000,
           lastSuccess: 1_000,
           points: [
             { id: "power", name: "Power", unit: "unit:KiloW", writable: false, value: 12.5, ts: 900 },
@@ -223,5 +247,47 @@ describe("status", () => {
       expect(yield* statusCodeFor(port, `localhost:${port}`)).toBe(200)
       yield* Fiber.interrupt(server)
     }).pipe(Effect.provide(FetchHttpClient.layer))
+  )
+
+  it.live("serves a point's history on /api/history, and says why when it cannot", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      const port = yield* freePort
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-status-history-" })
+      const history = yield* openHistory({ path: `${dir}/history.sqlite`, retentionDays: 7 }, { flushEveryMs: 50 })
+      const now = Date.now()
+      history.sink.record("meter", "power", 3, now - 2_000)
+      history.sink.record("meter", "power", 5, now - 1_000)
+      const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
+      const server = yield* serveStatus(
+        { bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" },
+        state,
+        historyHandler(parsed, history)
+      ).pipe(Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
+      const series = yield* client.status.history({ query: { device: "meter", point: "power", buckets: 1 } })
+      expect(series.resolution).toBe("read")
+      expect(series.buckets).toEqual([expect.objectContaining({ min: 3, max: 5, avg: 4, count: 2 })])
+      const unknown = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "nope" } }))
+      expect(unknown._tag).toBe("HistoryQueryInvalid")
+      const backwards = yield* Effect.flip(
+        client.status.history({ query: { device: "meter", point: "power", from: now, to: now - 1 } })
+      )
+      expect(backwards._tag).toBe("HistoryQueryInvalid")
+      yield* Fiber.interrupt(server)
+
+      // Without a history block, the endpoint answers 404 with the reason.
+      const bare = yield* serveStatus(
+        { bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" },
+        state,
+        historyHandler(parsed, undefined)
+      ).pipe(Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      const none = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "power" } }))
+      expect(none._tag).toBe("HistoryUnavailable")
+      yield* Fiber.interrupt(bare)
+    }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer]))
   )
 })

@@ -3,7 +3,16 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      "inputs": ["src/**", "test/**", "../../VERSION", "../../examples/gateway.json", "../../examples/points.csv"]
+      "inputs": [
+        "src/**",
+        "test/**",
+        "../../VERSION",
+        "../../examples/gateway.json",
+        "../../examples/points.csv",
+        "../../packaging/compose.yaml",
+        "../../examples/building.ede.csv",
+        "../../profiles/**"
+      ]
     }
   }
 }

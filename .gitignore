@@ -24,6 +24,9 @@ next-env.d.ts
 # A local gateway config and its secrets (/setup writes these)
 /ot-gateway.json
 /ot-gateway.env
+/compose.yaml
+# What ot-gateway init writes when given no folder and --yes
+/ot-gateway/
 
 # apps/site: docs pages generated from docs/ and the README, and Fumadocs' generated collections
 /apps/site/content/

@@ -74,10 +74,12 @@ describe("chaos: wall clock steps back an hour", () => {
           deviceConfig([supplyTemp], { address: "10.0.0.5" }),
           scripted.client
         )
-        const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
-          Effect.provide(layer),
-          Effect.forkChild
-        )
+        // Change mode: a value equal to the last one sent is held back, so a value read after the step that
+        // were mistaken for older would be missing here.
+        const fiber = yield* runDevice(
+          { site: "s", building: "b", pollIntervalMs: 1000, publish: { mode: "change" } },
+          driver
+        ).pipe(Effect.provide(layer), Effect.forkChild)
         const values = () =>
           messages
             .filter((message) => !message.topic.endsWith("$meta"))

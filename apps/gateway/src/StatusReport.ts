@@ -28,7 +28,12 @@ export const formatStatus = (status: GatewayStatus) => {
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)}`,
     `  broker ${status.broker.url}: ${status.broker.connected ? "connected" : "NOT CONNECTED"}`,
-    ...(status.buffer === undefined ? [] : [`  buffer: ${status.buffer.rows} message(s) waiting`]),
+    ...(status.buffer === undefined
+      ? []
+      : [
+          `  buffer: ${status.buffer.rows} of ${status.buffer.maxRows} message(s) waiting` +
+            (status.buffer.dropped > 0 ? `, ${status.buffer.dropped} DROPPED since start` : "")
+        ]),
     `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}`,
     ...status.devices.map((device) => {
       const lastRead =
@@ -59,7 +64,11 @@ export const fetchGatewayStatus = (url: string) =>
   )
 
 /** Prints the report for the gateway at `url`. */
-export const statusReport = Effect.fn("statusReport")(function* (url: string) {
+export const statusReport = Effect.fn("statusReport")(function* (
+  url: string,
+  options: { readonly json?: boolean } = {}
+) {
   const status = yield* fetchGatewayStatus(url)
-  yield* Console.log(formatStatus(status))
+  // --json: the status page's own /api/status answer, as checked against its contract.
+  yield* Console.log(options.json === true ? JSON.stringify(status, null, 2) : formatStatus(status))
 })

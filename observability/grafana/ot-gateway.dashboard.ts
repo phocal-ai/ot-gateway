@@ -249,7 +249,7 @@ timeseries(
 )
 y += 8
 timeseries(
-  "Values published vs suppressed by deadband",
+  "Values published vs held back (change mode)",
   [
     { expr: `sum(rate(ot_gateway_values_published_total{${sel}}[$__rate_interval]))`, legendFormat: "published" },
     { expr: `sum(rate(ot_gateway_values_suppressed_total{${sel}}[$__rate_interval]))`, legendFormat: "suppressed" }
@@ -260,7 +260,7 @@ timeseries(
     w: 12,
     stack: true,
     description:
-      "A high suppressed share means the deadband is saving bandwidth; all published means it may be too tight."
+      "Messages published, against reads that change mode held back. Sample and aggregate points never hold back; a sample interval or an aggregate window publishes fewer messages than reads."
   }
 )
 timeseries(
@@ -516,6 +516,48 @@ timeseries(
 )
 y += 8
 
+row("History")
+timeseries(
+  "History writes",
+  [
+    {
+      expr: `sum(increase(ot_gateway_history_written_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "written"
+    },
+    {
+      expr: `sum(increase(ot_gateway_history_dropped_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "dropped"
+    },
+    {
+      expr: `sum by (operation) (increase(ot_gateway_history_failures_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "failed: {{operation}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    description:
+      "Reads written to the on-device history (history.path), every 5 s in one batch. Failed writes keep up to 20,000 reads in memory; past that the oldest are dropped. Only the status page's charts lose them: reading and publishing go on."
+  }
+)
+timeseries(
+  "Running without history",
+  [
+    {
+      expr: `max by (service_instance_id) (ot_gateway_history_disabled{${sel}})`,
+      legendFormat: "{{service_instance_id}}"
+    }
+  ],
+  {
+    unit: "bool_yes_no",
+    x: 12,
+    w: 12,
+    description: "1 while the history file could not be opened at start, so no reads are kept. The error log says why."
+  }
+)
+y += 8
+
 row("Freshness")
 staleness(
   "Device freshness",
@@ -557,7 +599,7 @@ timeseries(
     x: 0,
     w: 12,
     description:
-      "Values devices sent on their own between polls (BACnet change-of-value notifications), before the deadband. Each subscription also sends its current value when it is made or renewed."
+      "Values devices sent on their own between polls (BACnet change-of-value notifications), before the publish mode. Each subscription also sends its current value when it is made or renewed."
   }
 )
 timeseries(

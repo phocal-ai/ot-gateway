@@ -45,6 +45,7 @@ COPY packages/modbus/package.json packages/modbus/
 COPY packages/mqtt/package.json packages/mqtt/
 COPY packages/bacnet/package.json packages/bacnet/
 COPY packages/buffer/package.json packages/buffer/
+COPY packages/history/package.json packages/history/
 # Runtime dependencies of the gateway and the packages it uses; no dev tools, no lifecycle scripts.
 RUN pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@ot-gateway/gateway..."
 
@@ -56,14 +57,21 @@ COPY apps/gateway/src apps/gateway/src
 COPY apps/gateway/package.json apps/gateway/
 COPY --from=web /opt/ot-gateway/apps/web/out apps/web/out
 COPY examples examples
+# What `ot-gateway init` writes next to ot-gateway.json when it runs in the container.
+COPY packaging/compose.yaml packaging/compose.yaml
 COPY scripts/soak.sh scripts/soak.sh
 # The build, for telemetry and the status page: the release tag when the image is published.
 ARG OT_GATEWAY_VERSION=dev
+LABEL org.opencontainers.image.title="OT Gateway" \
+      org.opencontainers.image.source="https://github.com/phocal-ai/ot-gateway" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="$OT_GATEWAY_VERSION"
 RUN mkdir -p /etc/ot-gateway /var/lib/ot-gateway && chown node:node /var/lib/ot-gateway && echo "$OT_GATEWAY_VERSION" > VERSION
 USER node
 ENV NODE_ENV=production
 # `demo` serves its status page on every interface of the container, so `-p 127.0.0.1:8080:8080` reaches it.
 ENV OT_GATEWAY_DEMO_LISTEN=0.0.0.0
 # A smaller young generation than V8's default: about 40 MB less resident, no measurable CPU cost.
-ENTRYPOINT ["node", "--max-semi-space-size=4", "--env-file-if-exists=/etc/ot-gateway/gateway.env", "apps/gateway/src/main.ts"]
+# An absolute path, so a container may run from another working directory (compose.yaml uses the data volume).
+ENTRYPOINT ["node", "--max-semi-space-size=4", "--env-file-if-exists=/etc/ot-gateway/gateway.env", "/opt/ot-gateway/apps/gateway/src/main.ts"]
 CMD ["/etc/ot-gateway/gateway.json"]

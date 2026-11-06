@@ -44,6 +44,7 @@ import {
   bufferDisabled,
   bufferDrained,
   bufferDropped,
+  type BufferDropReason,
   bufferFailures,
   bufferRows,
   bufferWritten,
@@ -83,7 +84,7 @@ const maxStrikes = 3
 /** After a failed insert, values skip the outbox this long, so a locked file does not slow every publish. */
 const storeBackoffMillis = 1_000
 
-type DropReason = "rejected" | "unreadable" | "undeliverable" | "lost"
+type DropReason = Exclude<BufferDropReason, "overflow">
 type Operation = "insert" | "delete" | "read" | "open"
 
 /** One open outbox and what the drainer knows about it. Replaced as a whole when the file is reopened. */

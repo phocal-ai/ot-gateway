@@ -65,9 +65,9 @@ export interface DemoOptions {
   readonly public?: { readonly broker: PublicBroker; readonly site: string } | undefined
 }
 
-/** The example config, with the outbox in `directory`, the status page on `listen` and the broker it is told. */
+/** The example config, with the outbox and history in `directory`, the status page on `listen` and the broker it is told. */
 export const demoConfig = (example: GatewayConfig, directory: string, options: DemoOptions): GatewayConfig => {
-  const { buffer, status, ...rest } = example
+  const { buffer, history, status, ...rest } = example
   const site = options.public?.site ?? example.site
   return {
     ...rest,
@@ -81,6 +81,7 @@ export const demoConfig = (example: GatewayConfig, directory: string, options: D
           }
         }),
     ...(buffer === undefined ? {} : { buffer: { ...buffer, path: `${directory}/buffer.sqlite` } }),
+    ...(history === undefined ? {} : { history: { ...history, path: `${directory}/history.sqlite` } }),
     ...(status === undefined ? {} : { status: { ...status, bindAddress: options.listen } })
   }
 }

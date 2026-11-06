@@ -55,15 +55,15 @@ Stop at the first one that fails, fix it, and start that test again.
 Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`OT_GATEWAY_TAG`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.7.0      # or ot-gateway:test
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.8.0      # or ot-gateway:test
 docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
   | sed 's#./ot-gateway-buffer.sqlite#/var/lib/ot-gateway/buffer.sqlite#' | sudo tee /etc/ot-gateway/gateway.json >/dev/null
-docker run -d --name ot-gateway-bench --network host --log-driver local \
+docker run -d --name ot-gateway-bench --network host --log-driver local --restart unless-stopped \
   -v /etc/ot-gateway/gateway.json:/etc/ot-gateway/gateway.json:ro \
   --entrypoint node $IMAGE apps/gateway/src/bench.ts /etc/ot-gateway/gateway.json
 ```
 
-Remove it when the smoke test is done (`docker rm -f ot-gateway-bench`): the soak brings its own broker and devices, on the same ports.
+Like the gateway, it comes back after a reboot, so a Pi that restarts doesn't show its devices as failing. Remove it when the smoke test is done (`docker rm -f ot-gateway-bench`): the soak brings its own broker and devices, on the same ports.
 
 On the status page:
 

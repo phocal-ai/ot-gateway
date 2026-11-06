@@ -47,15 +47,15 @@ export const publishFailures = Metric.counter("ot_gateway_publish_failures", {
   incremental: true
 })
 
-/** Point values published because they changed by more than the deadband. */
+/** Point messages published: a read, the latest of an interval, a window's aggregate or a change. */
 export const valuesPublished = Metric.counter("ot_gateway_values_published", {
   description: "Point values published",
   incremental: true
 })
 
-/** Point values read but not published because they stayed inside the deadband. */
+/** Point values read but not published because, in change mode, they did not change past the deadband. */
 export const valuesSuppressed = Metric.counter("ot_gateway_values_suppressed", {
-  description: "Point values suppressed by the deadband",
+  description: "Point values held back in change mode",
   incremental: true
 })
 
@@ -202,6 +202,9 @@ export const bufferDrained = Metric.counter("ot_gateway_buffer_drained", {
  * poison message) or `lost` (rows in a file that was replaced or corrupted
  * while the gateway ran).
  */
+export const bufferDropReasons = ["overflow", "rejected", "unreadable", "undeliverable", "lost"] as const
+export type BufferDropReason = (typeof bufferDropReasons)[number]
+
 export const bufferDropped = Metric.counter("ot_gateway_buffer_dropped", {
   description: "Messages dropped from the outbox, by reason",
   incremental: true
@@ -228,6 +231,30 @@ export const bufferBypassed = Metric.counter("ot_gateway_buffer_bypassed", {
  */
 export const bufferDisabled = Metric.gauge("ot_gateway_buffer_disabled", {
   description: "Whether the gateway runs without its store-and-forward outbox",
+  attributes: { unit: "{state}" }
+})
+
+/** Reads written to the on-device history. */
+export const historyWritten = Metric.counter("ot_gateway_history_written", {
+  description: "Reads written to the on-device history",
+  incremental: true
+})
+
+/** Reads the history gave up on: more piled up while it could not write than it holds in memory. */
+export const historyDropped = Metric.counter("ot_gateway_history_dropped", {
+  description: "Reads dropped from the on-device history",
+  incremental: true
+})
+
+/** History operations that failed, by `operation`: `write`, `prune` or `read`. A full disk shows up here first. */
+export const historyFailures = Metric.counter("ot_gateway_history_failures", {
+  description: "On-device history operations that failed, by operation",
+  incremental: true
+})
+
+/** 1 while the gateway runs without its history because the file could not be opened, else 0. */
+export const historyDisabled = Metric.gauge("ot_gateway_history_disabled", {
+  description: "Whether the gateway runs without its on-device history",
   attributes: { unit: "{state}" }
 })
 

@@ -22,7 +22,8 @@ OT Gateway treats field reality as normal: devices time out, brokers go offline,
 - **Effect-native.** Built on the Effect 4 ecosystem. The Modbus, BACnet/IP and MQTT 5 stacks are implemented in-house on Effect, with no third-party protocol libraries.
 - **One JSON config**, validated with Effect Schema at startup. It can live in a file or a database and be edited by a web app.
 - **Clean topics.** Values go to `site/building/device/point`, and metadata is retained on `.../point/$meta`.
-- **Normalization.** Scaling, deadband and units (QUDT) are set per point.
+- **Normalization.** Scaling and units (QUDT) are set per point.
+- **Read and send on their own schedules.** Poll every 5 seconds and send each read, the latest once a minute, clock-aligned 15-minute aggregates (min, max, time-weighted average), or only changes beyond a deadband: per device or per point.
 - **Semantic tagging.** Each point can carry an optional Brick class and Haystack tags.
 - **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite.
 - **Safe writes.** Writing is opt-in per point, range-checked, live-only and logged: a command is written once or not at all, never replayed.
@@ -61,7 +62,7 @@ demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
 
 ### 2. Look around
 
-Open the status page at <http://localhost:8080>. It shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands; `GET /api/status` and `GET /api/messages` have the same as JSON.
+Open the status page at <http://localhost:8080>. It shows the broker and buffer, every device with its health and latest values, the messages the gateway publishes (the latest on each topic, as a subscriber sees them) and the recent commands. Click a device to open its points' history over 15 minutes to 7 days, updated live. `GET /api/status`, `GET /api/messages` and `GET /api/history` have the same as JSON.
 
 To watch the data arrive on a real broker, `pnpm demo --public` (or `demo --public` in the `docker run` line) publishes the same simulated data to a public test broker: the first of broker.hivemq.com, broker.emqx.io and test.mosquitto.org that answers, under a site id of its own such as `demo-3e15e2`. It prints the `mosquitto_sub` command and the MQTT Explorer settings to watch it with. Anyone can read a public broker, so the gateway refuses one for any device that is not simulated on this machine.
 
@@ -71,17 +72,21 @@ You know which values you want, from which devices, and how often. `ot-gateway i
 
 The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere):
 
-| Command                            | What it does                                                                                                    |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `ot-gateway demo`                  | the demo above                                                                                                  |
-| `ot-gateway init [config]`         | ask for the site, broker and devices, and write a config; the default is `ot-gateway.json`                      |
-| `ot-gateway run [config]`          | run the gateway with that config                                                                                |
-| `ot-gateway check [config]`        | validate a config without connecting to anything, listing every mistake with its path                           |
-| `ot-gateway discover [config]`     | find BACnet devices and print a draft of their config (below)                                                   |
-| `ot-gateway import <csv> [config]` | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)) |
-| `ot-gateway watch [config]`        | print every message under the config's site and building as it reaches the broker                               |
-| `ot-gateway status [--url]`        | the running gateway's broker, buffer and devices, one line each                                                 |
-| `ot-gateway --help`                | every command and flag; `--log-level debug` works with all of them                                              |
+| Command                              | What it does                                                                                                                                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ot-gateway demo`                    | the demo above                                                                                                                                                                                            |
+| `ot-gateway init [folder]`           | ask for the site, broker and devices (or take them as flags with `--yes`), and write `ot-gateway.json`, `compose.yaml` and `ot-gateway.env` in the folder (`.` for this one); `--dry-run` only shows them |
+| `ot-gateway run [config]`            | run the gateway with that config                                                                                                                                                                          |
+| `ot-gateway check [config]`          | validate a config without connecting to anything, listing every mistake with its path (`--json` for agents)                                                                                               |
+| `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config, or write it as a points list with `--points-list` (below)                                                                                          |
+| `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)); `--dry-run` only checks it                                                               |
+| `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one                                                                                 |
+| `ot-gateway profiles list\|show`     | the device profiles a points list can name in its `profile` column, so one row takes a meter's registers (`--json` for agents)                                                                            |
+| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker                                                                                                                         |
+| `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                                                     |
+| `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                                                                                        |
+
+For scripts and AI agents: nothing asks without a terminal, and `--json` on `init`, `check`, `discover`, `import`, `points schema` and `status` prints the result as JSON on stdout, a failure too (`{"ok": false, "error": …}`, exit code 1); logs go to stderr. A mistyped command gets the one you probably meant.
 
 ### Working on the gateway
 
@@ -97,21 +102,29 @@ The fastest way to your own building is to let a coding agent do it. In [Claude 
 /setup
 ```
 
-The skill checks Node and pnpm, shows the demo, then asks about your devices and broker in one round. It discovers BACnet devices on the network and drafts Modbus points from a register list or datasheet you give it. Then it writes `ot-gateway.json` and validates it, runs the gateway until values flow, and on request installs it as a service or container. It never makes a point writable unless you ask.
+The skill checks Node, shows the demo, then asks about your devices and broker in one round. It writes the gateway's folder with `ot-gateway init`, turns BACnet discovery, an EDE file, your points list or Modbus datasheets into the standard points list, and checks it with the CLI. Then it runs the gateway until values flow and, on request, starts it with Docker Compose. It never makes a point writable unless you ask.
 
 With any other agent that can run commands (Cursor, Codex, Gemini CLI, …), paste:
 
 ```text
-Set up an OT Gateway for my building. Clone https://github.com/phocal-ai/ot-gateway if this is not
-already a checkout of it, then read .claude/skills/setup/SKILL.md and follow it step by step: run the
-commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out
-of the JSON config. Stop when values from my devices reach the broker.
+Set up an OT Gateway for my building. Read
+https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it
+step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot
+find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my
+devices reach the broker.
+```
+
+To have your agent reach for the CLI on its own, add one line to its instructions (`AGENTS.md`, `CLAUDE.md`):
+
+```text
+For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start with `npx ot-gateway --help`.
 ```
 
 To draft BACnet points yourself, `discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
 
 ```bash
 pnpm ot-gateway discover path/to/gateway.json
+pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it
 ```
 
 Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.
@@ -123,10 +136,11 @@ Once values flow, the gateway belongs on a machine that stays on in the building
 The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for an industrial PC as much as for a Raspberry Pi on the 64-bit OS.
 
 ```bash
-docker compose -f packaging/compose.yaml up -d
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+docker compose up -d
 ```
 
-The image reads `/etc/ot-gateway/gateway.json`; point `buffer.path` under `/var/lib/ot-gateway` so the outbox outlives the container. Secrets go in `/etc/ot-gateway/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env`. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose … up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page.
+Run both in a folder with your `ot-gateway.json` (and `ot-gateway.env` for secrets, if the config names any). No `sudo` and no folders to make: the outbox and the history go to a Docker volume, and relative paths in the config land in it. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page. An install from v0.7.0 or earlier, with the config in `/etc/ot-gateway`, moves over as [docs/operations.md](docs/operations.md#from-the-etcot-gateway-layout-v070-and-earlier) shows.
 
 On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout owned by you or root (the script refuses one that others can write to):
 
@@ -151,12 +165,14 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
   "id": "main",
   "mqtt": { "url": "mqtts://broker.local:8883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/ot-gateway/buffer.sqlite" },
+  "history": { "path": "/var/lib/ot-gateway/history.sqlite" },
   "devices": [
     {
       "protocol": "modbus-tcp",
       "id": "main-meter",
       "host": "192.168.1.50",
       "pollIntervalMs": 5000,
+      "publish": { "mode": "aggregate", "intervalMs": 900000 },
       "points": [
         {
           "id": "active-power",
@@ -165,7 +181,6 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
           "table": "holding",
           "address": 100,
           "dataType": "float32",
-          "deadband": 0.1,
           "semantics": { "brick": "Active_Power_Sensor", "haystack": ["elec", "power", "active", "sensor"] }
         }
       ]
@@ -175,13 +190,23 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
       "id": "ahu-2",
       "deviceInstance": 2001,
       "points": [
-        { "id": "supply-air-temp", "name": "AHU 2 supply air temperature", "objectType": "analog-input", "instance": 1 }
+        {
+          "id": "supply-air-temp",
+          "name": "AHU 2 supply air temperature",
+          "objectType": "analog-input",
+          "instance": 1,
+          "deadband": 0.2
+        }
       ]
     }
   ],
   "bacnet": { "broadcastAddress": "192.168.1.255" }
 }
 ```
+
+`publish` decides what goes out, apart from how often the device is read. Without it, every read is sent. `{ "mode": "sample", "intervalMs": 60000 }` sends the latest value once a minute; `{ "mode": "aggregate", "intervalMs": 900000 }` sends minimum, maximum, time-weighted average, last value and count for each 15 minutes, in windows aligned to the clock; `{ "mode": "change", "deadband": 0.2, "maxSilenceMs": 3600000 }` sends when the value moves at least 0.2 and at least hourly. A point's own `publish` or `deadband` (short for change mode) overrides its device's. Above, the meter sends 15-minute aggregates and the air handler's temperature its changes. See [publish](docs/configuration.md#publish), with what each mode costs in traffic and buffer.
+
+With `history`, every read is kept on the gateway, each one for a day and per minute for `retentionDays` (7), for the status page's charts and `GET /api/history`. See [history](docs/configuration.md#history).
 
 With `buffer`, values read while the broker is unreachable are kept in that SQLite file (up to `maxRows`, default 1,000,000, oldest dropped first) and delivered in order once it is back, also after a gateway restart. Without it, they are lost. See [`@ot-gateway/buffer`](packages/buffer).
 
@@ -193,17 +218,17 @@ With `status`, the gateway serves its local status page and `GET /api/status` on
 
 Every device has an optional `cycleTimeoutMs`: how long one polling cycle (the read with its retries, and publishing the values) may take before it is abandoned as hung, counted as `timed_out` and reported as `cycle-timeout` in the health topic. It defaults to twice `pollIntervalMs` and at least `pollIntervalMs` plus 30 seconds; raise it for a slow device with many points.
 
-IDs must be lowercase slugs of at most 64 characters, so they are always valid MQTT topic segments. Device ids are unique within the gateway and point ids within their device, since each names a topic. The config is checked strictly: a key the schema does not know (a typo such as `intervall`) fails the start with its path instead of being ignored, every device needs at least one point, `host` and the broker `url` must not be empty, a `deadband` cannot be negative and a scaling `factor` cannot be 0. A JSON syntax error reports its position. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
+IDs must be lowercase slugs of at most 64 characters, so they are always valid MQTT topic segments. Device ids are unique within the gateway and point ids within their device, since each names a topic. The config is checked strictly: a key the schema does not know (a typo such as `intervall`) fails the start with its path instead of being ignored, every device needs at least one point, `host` and the broker `url` must not be empty, a `deadband` cannot be negative, a publish interval must divide a day and be no shorter than the device's poll interval, and a scaling `factor` cannot be 0. A JSON syntax error reports its position. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
 
 ## Topics
 
-| Topic                                    | Retained | Payload                                                                                          |
-| ---------------------------------------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `site/building/device/point`             | no       | `{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}` when the value moves beyond the deadband |
-| `site/building/device/point/$meta`       | yes      | name, unit, writability and Brick/Haystack semantics                                             |
-| `site/building/$gateway/<id>/health`     | yes      | `online` with per-device status, or `offline` (see below)                                        |
-| `site/building/device/point/$set`        | never    | a command to the gateway: `{"value":21.5}` (see Commands)                                        |
-| `site/building/device/point/$set/result` | no       | the command's result, with the command's correlation data                                        |
+| Topic                                    | Retained | Payload                                                                                                                                                        |
+| ---------------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `site/building/device/point`             | no       | `{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}`, when the point's publish mode says; aggregates add `min`, `max`, `avg`, `last`, `count`, `from`, `to` |
+| `site/building/device/point/$meta`       | yes      | name, unit, writability, publish mode and Brick/Haystack semantics                                                                                             |
+| `site/building/$gateway/<id>/health`     | yes      | `online` with per-device status, or `offline` (see below)                                                                                                      |
+| `site/building/device/point/$set`        | never    | a command to the gateway: `{"value":21.5}` (see Commands)                                                                                                      |
+| `site/building/device/point/$set/result` | no       | the command's result, with the command's correlation data                                                                                                      |
 
 The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`: the driver's `timeout`, `connection`, `protocol`, …, `cycle-timeout` when a polling cycle hung past its deadline, or `crashed` when the device's pipeline hit a bug and is being restarted). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back.
 
@@ -256,7 +281,7 @@ flowchart TB
   subgraph Core["Core (typed, supervised)"]
     PM[Point map / Schema config]
     SC[Scheduler: polling, COV, retries]
-    NO[Normalizer: scale, deadband, units]
+    NO[Normalizer: scale, units, publish mode]
     CG[Command guard: allowlist, limits]
   end
   subgraph North[Northbound]

@@ -2,11 +2,24 @@
  * `init`: every combination of answers makes a config the gateway's schema accepts, and the BACnet broadcast
  * address is the subnet's.
  */
+import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
-import { Effect } from "effect"
+import { Effect, FileSystem } from "effect"
 import type { NetworkInterfaceInfo } from "node:os"
-import { initConfig, lanInterfaces, nextSteps, simulatedDevice } from "../src/Init.ts"
+import { configSummary } from "../src/Cli.ts"
+import {
+  defaultFolder,
+  type InitFlags,
+  initConfig,
+  initTarget,
+  isInteractive,
+  lanInterfaces,
+  nextSteps,
+  runInit,
+  simulatedDevice
+} from "../src/Init.ts"
+import { pointsListTemplate } from "../src/PointsSchema.ts"
 
 const answers = { site: "vienna-hq", building: "main", brokerUrl: "mqtt://broker.lan:1883" }
 
@@ -88,4 +101,124 @@ describe("nextSteps", () => {
       expect(steps).toContain("ot-gateway watch site.json")
     })
   )
+})
+
+/** `body` with a temporary folder, removed afterwards. */
+const inFolder = <A, E>(
+  body: (folder: string) => Effect.Effect<A, E, FileSystem.FileSystem | NodeServices.NodeServices>
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    return yield* body(yield* fs.makeTempDirectoryScoped())
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+
+describe("runInit with flags", () => {
+  it.effect("works out the config on a dry run and writes nothing, not even the folder", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = `${folder}/vienna-hq/ot-gateway.json`
+        const config = yield* runInit(path, { yes: true, dryRun: true, site: "vienna-hq", username: "gateway" })
+        expect(config?.site).toBe("vienna-hq")
+        expect(config?.mqtt.passwordEnv).toBe("MQTT_PASSWORD")
+        expect(yield* fs.exists(`${folder}/vienna-hq`)).toBe(false)
+      })
+    )
+  )
+
+  it.effect("asks nothing with --yes, takes the flags' answers and the defaults for the rest", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.writeFileString(`${folder}/points.csv`, pointsListTemplate())
+        const path = `${folder}/ot-gateway.json`
+        const config = yield* runInit(path, {
+          yes: true,
+          site: "vienna-hq",
+          broker: "mqtts://broker.example:8883",
+          username: "gateway",
+          points: `${folder}/points.csv`
+        })
+        expect(config?.building).toBe("main")
+        expect(config?.mqtt.passwordEnv).toBe("MQTT_PASSWORD")
+        expect(config?.devices.map((device) => device.id)).toEqual(["main-meter", "sub-meter", "ahu-2"])
+        expect(yield* fs.exists(path)).toBe(true)
+
+        const again = yield* runInit(path, { yes: true }).pipe(Effect.flip)
+        expect(again.message).toBe(`${path} exists; --force replaces it`)
+        const replaced = yield* runInit(path, { yes: true, force: true })
+        expect(replaced?.devices.map((device) => device.id)).toEqual(["sim-1"])
+      })
+    )
+  )
+
+  it.effect("checks each flag as its question would, and says which flag is wrong", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const path = `${folder}/ot-gateway.json`
+        const failure = (flags: InitFlags) => runInit(path, { yes: true, ...flags }).pipe(Effect.flip)
+        expect((yield* failure({ site: "Vienna HQ" })).message).toContain("--site Vienna HQ: lowercase letters")
+        expect((yield* failure({ broker: "http://broker" })).message).toContain("--broker http://broker:")
+        expect((yield* failure({ passwordEnv: "PW" })).message).toBe("--password-env needs --username")
+        expect((yield* failure({ username: "u", passwordEnv: "pw" })).message).toContain(
+          "--password-env pw: upper case"
+        )
+        expect((yield* failure({ points: "p.csv", devices: "simulated" })).message).toContain("leave out --devices")
+        expect((yield* failure({ points: `${folder}/absent.csv` })).message).toContain("no points list at")
+      })
+    )
+  )
+})
+
+describe("configSummary", () => {
+  it.effect("is what check prints, as data", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig(answers, [simulatedDevice]))
+      expect(configSummary(config)).toEqual({
+        ok: true,
+        site: "vienna-hq",
+        building: "main",
+        gateway: "main",
+        broker: "mqtt://broker.lan:1883",
+        buffer: "./ot-gateway-buffer.sqlite",
+        warnings: [],
+        devices: [{ id: "sim-1", protocol: "simulator", points: 2, writable: 0, pollIntervalMs: 2000 }]
+      })
+    })
+  )
+})
+
+describe("initTarget", () => {
+  it.effect("takes a folder as create-next-app does, the default one with --yes, and a .json path as the config", () =>
+    Effect.gen(function* () {
+      expect(yield* initTarget("vienna-hq", false)).toBe("vienna-hq/ot-gateway.json")
+      expect(yield* initTarget(".", false)).toBe("ot-gateway.json")
+      expect(yield* initTarget(undefined, true)).toBe(`${defaultFolder}/ot-gateway.json`)
+      expect(yield* initTarget("site.json", false)).toBe("site.json")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("makes a missing folder, and the next steps start with cd and need no config argument", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* initTarget(`${folder}/new/vienna-hq`, true)
+        const config = yield* runInit(path, { yes: true })
+        expect(yield* fs.exists(path)).toBe(true)
+        if (config === undefined) return expect.unreachable()
+        const steps = nextSteps(path, config, { written: [path, `${folder}/new/vienna-hq/compose.yaml`], kept: [] })
+        expect(steps).toContain(`cd ${folder}/new/vienna-hq`)
+        expect(steps).toMatch(/ot-gateway check {2,}validate/)
+      })
+    )
+  )
+})
+
+describe("isInteractive", () => {
+  it("asks only with a terminal and without --yes", () => {
+    expect(isInteractive(false, true)).toBe(true)
+    expect(isInteractive(true, true)).toBe(false)
+    expect(isInteractive(false, false)).toBe(false)
+    expect(isInteractive(false, undefined)).toBe(false)
+  })
 })

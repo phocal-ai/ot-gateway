@@ -23,6 +23,8 @@ export const DeviceStatus = Schema.Struct({
   id: Schema.String,
   protocol: Schema.Literals(["modbus-tcp", "bacnet-ip", "simulator"]),
   status: Schema.Literals(["starting", "ok", "failing"]),
+  /** How often the gateway reads it, from the config. */
+  pollIntervalMs: Schema.Number,
   /** Why the device is failing (the health topic's reason). */
   reason: Schema.optionalKey(Schema.String),
   lastSuccess: Schema.optionalKey(Schema.Number),
@@ -94,8 +96,13 @@ export const GatewayStatus = Schema.Struct({
   since: Schema.Number,
   now: Schema.Number,
   broker: Schema.Struct({ url: Schema.String, connected: Schema.Boolean }),
-  /** Absent without a `buffer` in the config. */
-  buffer: Schema.optionalKey(Schema.Struct({ path: Schema.String, rows: Schema.Number })),
+  /**
+   * Absent without a `buffer` in the config. `rows` wait for the broker, out of `maxRows`; `dropped` counts the
+   * messages the buffer gave up on since the gateway started (overflow past `maxRows`, refused, unreadable, ...).
+   */
+  buffer: Schema.optionalKey(
+    Schema.Struct({ path: Schema.String, rows: Schema.Number, maxRows: Schema.Number, dropped: Schema.Number })
+  ),
   /** Absent until the host monitor's first sample. */
   host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),
@@ -112,8 +119,62 @@ export const Messages = Schema.Struct({
 })
 export type Messages = typeof Messages.Type
 
+/** One bucket of a point's history: what its reads in `[t, t + stepMs)` were. Booleans count as 0 and 1. */
+export const HistoryBucket = Schema.Struct({
+  t: Schema.Number,
+  min: Schema.Number,
+  max: Schema.Number,
+  avg: Schema.Number,
+  count: Schema.Number
+})
+export type HistoryBucket = typeof HistoryBucket.Type
+
+/**
+ * A point's history between `from` and `to` (Unix ms), in buckets of `stepMs`, oldest first; buckets without a
+ * read are left out. `resolution` says where it came from: every read (the last day) or per-minute rollups.
+ */
+export const HistorySeries = Schema.Struct({
+  device: Schema.String,
+  point: Schema.String,
+  from: Schema.Number,
+  to: Schema.Number,
+  stepMs: Schema.Number,
+  resolution: Schema.Literals(["read", "minute"]),
+  buckets: Schema.Array(HistoryBucket)
+})
+export type HistorySeries = typeof HistorySeries.Type
+
+/** The gateway keeps no history: none configured, or its file could not be opened. */
+export class HistoryUnavailable extends Schema.TaggedError<HistoryUnavailable>()(
+  "HistoryUnavailable",
+  { message: Schema.String },
+  { httpApiStatus: 404 }
+) {}
+
+/** Asked for a device or point the config does not have, or a range that ends before it starts. */
+export class HistoryQueryInvalid extends Schema.TaggedError<HistoryQueryInvalid>()(
+  "HistoryQueryInvalid",
+  { message: Schema.String },
+  { httpApiStatus: 400 }
+) {}
+
 export class StatusGroup extends HttpApiGroup.make("status")
   .add(HttpApiEndpoint.get("status", "/api/status", { success: GatewayStatus }))
-  .add(HttpApiEndpoint.get("messages", "/api/messages", { success: Messages })) {}
+  .add(HttpApiEndpoint.get("messages", "/api/messages", { success: Messages }))
+  .add(
+    HttpApiEndpoint.get("history", "/api/history", {
+      query: {
+        device: Schema.String,
+        point: Schema.String,
+        /** Unix ms; the last hour unless given. */
+        from: Schema.optional(Schema.FiniteFromString),
+        to: Schema.optional(Schema.FiniteFromString),
+        /** About how many buckets to return (default 300, at most 2,000). */
+        buckets: Schema.optional(Schema.FiniteFromString)
+      },
+      success: HistorySeries,
+      error: [HistoryUnavailable, HistoryQueryInvalid]
+    })
+  ) {}
 
 export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup) {}

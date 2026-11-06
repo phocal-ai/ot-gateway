@@ -15,10 +15,11 @@
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
-import { Cause, Effect, Result } from "effect"
+import { Cause, Effect, Logger, Result } from "effect"
 import { CliError } from "effect/cli"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { runCli } from "./Cli.ts"
+import { loadEnvFile } from "./EnvFile.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 
 // A broker or device named by host name may have several addresses (localhost: 127.0.0.1 and ::1). Node tries
@@ -42,10 +43,15 @@ const reportFailure = <E extends { readonly message: string }>(cause: Cause.Caus
   return Effect.logError(error.success.message)
 }
 
+// Before anything reads process.env: the broker password and OTEL_* variables of the folder's ot-gateway.env.
+loadEnvFile()
+
 const program = runCli(process.argv.slice(2))
 
 program.pipe(
   Effect.tapCause(reportFailure),
+  // Logs, the final failure among them, go to stderr: stdout is for results, so `check --json | jq` gets JSON only.
+  Effect.provideService(Logger.LogToStderr, true),
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain({ teardown: gatewayTeardown, disableErrorReporting: true })
 )

@@ -1,6 +1,7 @@
 /**
- * The polling pipeline for one device:
- * read → scale → deadband → publish, repeated on the device's schedule.
+ * The polling pipeline for one device: read → scale → publish, repeated on the device's schedule. How a value
+ * goes out is the point's publish mode (`Publish.ts`): on every read, the latest once per interval, a window's
+ * aggregate, or on change. Windows close on clock-aligned timers, one per distinct interval.
  */
 import { Clock, Duration, Effect, Metric, Option, Random, Result, Schedule, Semaphore, Stream } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
@@ -9,6 +10,20 @@ import { applyScaling, exceedsDeadband } from "./Normalize.ts"
 import type { AnyPoint, Slug } from "./Point.ts"
 import { defaultCycleTimeoutMs } from "./Config.ts"
 import { type DriverError, PipelineTimeout, type PublishError } from "./Errors.ts"
+import type { HistorySink } from "./History.ts"
+import { monotonicMillis } from "./Monotonic.ts"
+import {
+  addReading,
+  closeWindow,
+  everyRead,
+  interruptWindow,
+  openWindow,
+  type Publish,
+  publishOf,
+  type Window,
+  windowEnd,
+  windowIntervalMs
+} from "./Publish.ts"
 import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
@@ -40,20 +55,25 @@ export interface DeviceContext {
    * abandoned as hung (default `defaultCycleTimeoutMs(pollIntervalMs)`).
    */
   readonly cycleTimeoutMs?: number
+  /** How the device's points go out unless a point says otherwise (default: every read). */
+  readonly publish?: Publish
+  /** Where every read is kept on the device, if anywhere. */
+  readonly history?: HistorySink
 }
 
-/** Payload published for every value change. */
+/** Payload of a value: on a read, on a change, or the latest once per interval. */
 export interface ValueMessage {
   readonly value: PointValue
   readonly unit?: string
   readonly ts: number
 }
 
-const metaPayload = (point: AnyPoint): string =>
+const metaPayload = (point: AnyPoint, publish: Publish): string =>
   JSON.stringify({
     name: point.name,
     unit: point.unit,
     writable: point.writable,
+    publish,
     semantics: point.semantics
   })
 
@@ -98,14 +118,23 @@ const countCycle = (outcome: "ok" | "read_failed" | "publish_failed" | "timed_ou
  * the metrics in `Telemetry.ts` with a `device` attribute. Only
  * `traceSampleRatio` of the cycles are exported as traces.
  *
- * Values the driver pushes (`driver.changes`) go through the same scaling,
- * deadband and publishing, one at a time with the cycle's own values, so the
- * last published value per point stays consistent. They are not traced.
+ * Values the driver pushes (`driver.changes`) go through the same scaling and
+ * publish mode, one at a time with the cycle's own values and the window
+ * timers, so each point's state stays consistent. They are not traced.
  */
 export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, driver: Driver) {
   const publisher = yield* Publisher
   const points = new Map(driver.points.map((p) => [p.id, p] as const))
+  const policies = new Map(driver.points.map((p) => [p.id, publishOf(ctx.publish, p)] as const))
+  const policyOf = (pointId: string) => policies.get(pointId) ?? everyRead
+  /** Change mode: the last value sent, and when (monotonic), for the deadband and `maxSilenceMs`. */
   const last = new Map<string, PointValue>()
+  const lastSentAt = new Map<string, number>()
+  /** Sample mode with an interval: the latest value per point, and which points read one since the last send. */
+  const latest = new Map<string, ValueMessage>()
+  const fresh = new Set<string>()
+  /** Aggregate mode: each point's open window. */
+  const windows = new Map<string, Window>()
   const topicFor = (point: Slug) => ({
     site: ctx.site,
     building: ctx.building,
@@ -189,7 +218,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   const publishMeta = Effect.forEach(
     [...unpublishedMeta],
     (point) =>
-      publishPoint(metaTopic(topicFor(point.id)), metaPayload(point), { retain: true }).pipe(
+      publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id)), { retain: true }).pipe(
         Effect.catchTag("PublishError", skipRefused),
         Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
       ),
@@ -239,22 +268,85 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     if (nonFinitePoints.delete(point.id)) {
       yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
     }
-    if (!exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, point.deadband)) {
-      return yield* Metric.update(valuesSuppressed, 1)
-    }
+    ctx.history?.record(driver.deviceId, point.id, value, reading.timestamp)
     const message: ValueMessage = {
       value,
       ts: reading.timestamp,
       ...(point.unit === undefined ? {} : { unit: point.unit })
     }
-    const sent = yield* publishPoint(pointTopic(topicFor(point.id)), JSON.stringify(message)).pipe(
+    const policy = policyOf(point.id)
+    switch (policy.mode) {
+      case "sample": {
+        if (policy.intervalMs === undefined) {
+          yield* send(point.id, message)
+          return
+        }
+        latest.set(point.id, message)
+        fresh.add(point.id)
+        return
+      }
+      case "aggregate": {
+        const atMono = yield* monotonicMillis
+        windows.set(point.id, addReading(windows.get(point.id) ?? openWindow(atMono), value, atMono, reading.timestamp))
+        return
+      }
+      case "change": {
+        const atMono = yield* monotonicMillis
+        const sentAt = lastSentAt.get(point.id)
+        const quietTooLong =
+          policy.maxSilenceMs !== undefined && sentAt !== undefined && atMono - sentAt >= policy.maxSilenceMs
+        if (!quietTooLong && !exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, policy.deadband)) {
+          return yield* Metric.update(valuesSuppressed, 1)
+        }
+        // Only remember the value once it is out, so a failed publish is retried with the next read.
+        if (!(yield* send(point.id, message))) return
+        last.set(point.id, value)
+        lastSentAt.set(point.id, atMono)
+        return
+      }
+    }
+  })
+
+  /** Publishes one point's message; false when the broker refused it (counted and logged once per topic). */
+  const send = Effect.fnUntraced(function* (pointId: string, message: object) {
+    const sent = yield* publishPoint(pointTopic(topicFor(pointId)), JSON.stringify(message)).pipe(
       Effect.as(true),
       Effect.catchTag("PublishError", (error) => Effect.as(skipRefused(error), false))
     )
-    if (!sent) return
-    // Only remember the value once it is out, so a failed publish is retried next cycle.
-    last.set(point.id, value)
-    yield* Metric.update(valuesPublished, 1)
+    if (sent) yield* Metric.update(valuesPublished, 1)
+    return sent
+  })
+
+  /**
+   * Closes the windows of one interval at `endMs`: the latest value of each sample point that read one since the
+   * last send, and the aggregate of each aggregate point. A window with no read in it is sent only while the
+   * device is fine: then its value held unchanged (a quiet change-of-value point); otherwise nothing is known.
+   */
+  const closeWindows = Effect.fnUntraced(function* (intervalMs: number, endMs: number) {
+    const atMono = yield* monotonicMillis
+    for (const point of driver.points) {
+      const policy = policyOf(point.id)
+      if (windowIntervalMs(policy) !== intervalMs) continue
+      if (policy.mode === "sample") {
+        const message = latest.get(point.id)
+        if (message === undefined || !fresh.delete(point.id)) continue
+        yield* send(point.id, message)
+        continue
+      }
+      const window = windows.get(point.id)
+      if (window === undefined) continue
+      const closed = closeWindow(window, atMono, endMs, intervalMs, point.unit)
+      windows.set(point.id, closed.next)
+      if (closed.message === undefined || (closed.message.count === 0 && deviceProblem !== undefined)) continue
+      yield* send(point.id, closed.message)
+    }
+  })
+
+  /** A device that stops answering ends what its last values said: an outage is not averaged as if they held. */
+  const interruptWindows = Effect.gen(function* () {
+    if (windows.size === 0) return
+    const atMono = yield* monotonicMillis
+    for (const [pointId, window] of windows) windows.set(pointId, interruptWindow(window, atMono))
   })
   // Polled and pushed values for the same point must not interleave around `last`.
   const handling = yield* Semaphore.make(1)
@@ -302,6 +394,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       DriverError: (error) =>
         Effect.all([
           Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, error.reason)),
+          handling.withPermit(interruptWindows),
           deviceFailed(error.reason, "device read failed", { reason: error.reason, error: error.message }),
           Effect.annotateCurrentSpan({ "ot_gateway.outcome": "read_failed", "ot_gateway.reason": error.reason }),
           Metric.update(Metric.withAttributes(readFailures, { reason: error.reason }), 1),
@@ -317,6 +410,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       PipelineTimeout: (error) =>
         Effect.all([
           Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, "cycle-timeout")),
+          handling.withPermit(interruptWindows),
           deviceFailed("cycle-timeout", "polling cycle hung, abandoned it", {
             timeoutMs: error.timeoutMs,
             error: error.message
@@ -378,7 +472,32 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
           )
         )
 
-  return yield* Effect.all([polling, pushed], { concurrency: 2, discard: true }).pipe(
+  /**
+   * One timer per distinct publish interval, waking at each clock-aligned boundary. The boundary is computed again
+   * from the wall clock after every wait, so a clock that NTP steps re-aligns at the next window instead of
+   * drifting; the wait itself is a monotonic sleep. Window labels only move forward: a timer that wakes early, or a
+   * clock stepped back, extends the open window rather than closing one with the same label twice.
+   */
+  const intervals = [...new Set([...policies.values()].flatMap((policy) => windowIntervalMs(policy) ?? []))]
+  const windowTimer = (intervalMs: number) => {
+    let closedUpTo = 0
+    return Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis
+      const endMs = windowEnd(Math.max(now, closedUpTo), intervalMs)
+      closedUpTo = endMs
+      yield* Effect.sleep(endMs - now)
+      yield* handling.withPermit(closeWindows(intervalMs, endMs)).pipe(
+        deadline("publish-window"),
+        Effect.catchTags({
+          PublishError: (error) => pushLost("publishing a window failed", { topic: error.topic, error: error.message }),
+          PipelineTimeout: (error) => pushLost("closing a window hung, skipped it", { error: error.message })
+        })
+      )
+    }).pipe(Effect.forever)
+  }
+  const timers = Effect.forEach(intervals, windowTimer, { concurrency: "unbounded", discard: true })
+
+  return yield* Effect.all([polling, pushed, timers], { concurrency: 3, discard: true }).pipe(
     Effect.annotateLogs({ device: driver.deviceId }),
     withMetricAttributes({ device: driver.deviceId })
   )

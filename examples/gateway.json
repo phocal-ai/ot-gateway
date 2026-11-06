@@ -9,6 +9,9 @@
   "buffer": {
     "path": "./ot-gateway-buffer.sqlite"
   },
+  "history": {
+    "path": "./ot-gateway-history.sqlite"
+  },
   "status": {},
   "devices": [
     {
