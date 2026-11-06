@@ -72,18 +72,20 @@ You know which values you want, from which devices, and how often. `ot-gateway i
 
 The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere):
 
-| Command                              | What it does                                                                                                                                                                 |
-| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ot-gateway demo`                    | the demo above                                                                                                                                                               |
-| `ot-gateway init [folder]`           | ask for the site, broker and devices (or take them as flags with `--yes`), and write `ot-gateway.json`, `compose.yaml` and `ot-gateway.env` in the folder (`.` for this one) |
-| `ot-gateway run [config]`            | run the gateway with that config                                                                                                                                             |
-| `ot-gateway check [config]`          | validate a config without connecting to anything, listing every mistake with its path (`--json` for agents)                                                                  |
-| `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config, or write it as a points list with `--points-list` (below)                                                             |
-| `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points))                                                              |
-| `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one                                                    |
-| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker                                                                                            |
-| `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                        |
-| `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                                                           |
+| Command                              | What it does                                                                                                                                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ot-gateway demo`                    | the demo above                                                                                                                                                                                            |
+| `ot-gateway init [folder]`           | ask for the site, broker and devices (or take them as flags with `--yes`), and write `ot-gateway.json`, `compose.yaml` and `ot-gateway.env` in the folder (`.` for this one); `--dry-run` only shows them |
+| `ot-gateway run [config]`            | run the gateway with that config                                                                                                                                                                          |
+| `ot-gateway check [config]`          | validate a config without connecting to anything, listing every mistake with its path (`--json` for agents)                                                                                               |
+| `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config, or write it as a points list with `--points-list` (below)                                                                                          |
+| `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)); `--dry-run` only checks it                                                               |
+| `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one                                                                                 |
+| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker                                                                                                                         |
+| `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                                                     |
+| `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                                                                                        |
+
+For scripts and AI agents: nothing asks without a terminal, and `--json` on `init`, `check`, `discover`, `import`, `points schema` and `status` prints the result as JSON on stdout, a failure too (`{"ok": false, "error": …}`, exit code 1); logs go to stderr. A mistyped command gets the one you probably meant.
 
 ### Working on the gateway
 
@@ -109,6 +111,12 @@ https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup
 step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot
 find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my
 devices reach the broker.
+```
+
+To have your agent reach for the CLI on its own, add one line to its instructions (`AGENTS.md`, `CLAUDE.md`):
+
+```text
+For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start with `npx ot-gateway --help`.
 ```
 
 To draft BACnet points yourself, `discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:

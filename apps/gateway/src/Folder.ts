@@ -29,8 +29,15 @@ export interface FolderFiles {
 export const envFileText = (passwordEnv: string) =>
   `# The MQTT broker password. Docker Compose and ot-gateway read this file; keep it out of git.\n${passwordEnv}=\n`
 
-/** Writes compose.yaml and, for a broker login, ot-gateway.env next to the config at `configPath`. */
-export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (configPath: string, config: GatewayConfig) {
+/**
+ * Writes compose.yaml and, for a broker login, ot-gateway.env next to the config at `configPath`. A dry run
+ * writes nothing and says what it would write.
+ */
+export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
+  configPath: string,
+  config: GatewayConfig,
+  options: { readonly dryRun?: boolean } = {}
+) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
   const folder = path.dirname(configPath)
@@ -39,7 +46,7 @@ export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (configP
 
   const create = Effect.fnUntraced(function* (file: string, text: string, mode: number) {
     if (yield* fs.exists(file)) return kept.push(file)
-    yield* fs.writeFileString(file, text, { flag: "wx", mode })
+    if (options.dryRun !== true) yield* fs.writeFileString(file, text, { flag: "wx", mode })
     return written.push(file)
   })
 

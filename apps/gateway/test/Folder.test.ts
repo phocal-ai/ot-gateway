@@ -28,6 +28,16 @@ describe("writeFolderFiles", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("names the files on a dry run and writes none", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const folder = yield* fs.makeTempDirectoryScoped()
+      const files = yield* writeFolderFiles(join(folder, "ot-gateway.json"), yield* config(withLogin), { dryRun: true })
+      expect(files.written).toEqual([join(folder, "compose.yaml"), join(folder, "ot-gateway.env")])
+      expect(yield* fs.readDirectory(folder)).toEqual([])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.effect("keeps files that are there and writes no env file without a broker login", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
