@@ -14,13 +14,22 @@ One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much 
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 
-With Node.js on the machine, `npx ot-gateway init .` in that folder (or `npx ot-gateway init ~/ot-gateway`, which makes the folder too) asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. Fill in the password, then go on with the check below. Without Node, fetch `compose.yaml` yourself:
+`ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login and the telemetry variables commented out. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
+
+```bash
+alias ot-gateway='docker run --rm -it --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:v0.8.0'
+ot-gateway init .
+```
+
+`--network host` lets `discover`, `watch` and `status` reach the building network and the gateway's status page, and `--user` makes the files it writes yours. Add the line to `~/.bashrc` to keep it. In a script or for an AI agent, which have no terminal, leave out the `t` of `-it`, and give `watch` a `--seconds`: stopping the `docker` command does not stop the container.
+
+Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.0/packaging/compose.yaml
 ```
 
-Copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
+and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
 
 ```bash
 docker compose run --rm gateway --check /etc/ot-gateway/gateway.json

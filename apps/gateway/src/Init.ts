@@ -352,8 +352,17 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
   const folderPath = dirname(path)
   const name = basename(path)
   const argument = name === folderConfigName ? "" : ` ${name}`
+  // Without devices there is nothing to start yet: the points list comes first.
+  const devices: ReadonlyArray<readonly [string, string]> =
+    config.devices.length > 0
+      ? []
+      : [
+          ["ot-gateway points template > points.csv", "start a points list (or discover --points-list for BACnet)"],
+          [`ot-gateway import points.csv${argument}`, "add its devices to the config"]
+        ]
   const commands: ReadonlyArray<readonly [string, string]> = [
     ...(folderPath === "." ? [] : ([[`cd ${folderPath}`, "the gateway's folder"]] as const)),
+    ...devices,
     ...(compose
       ? ([
           ["docker compose up -d", "start it in Docker, restarted after a crash or a reboot"],
@@ -369,7 +378,6 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
     ...folder.kept.map((file) => `kept ${file} as it is`),
     ...(folder.noCompose === undefined ? [] : [`no compose.yaml: ${folder.noCompose}`]),
     ...password,
-    ...(config.devices.length === 0 ? ["  add your devices under devices (docs/configuration.md)"] : []),
     "next:",
     ...commands.map(([command, what]) => `  ${command.padEnd(width)}${what}`)
   ].join("\n")

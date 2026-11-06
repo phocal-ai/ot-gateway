@@ -420,15 +420,26 @@ const watchCommand = Command.make(
     topic: Flag.String("topic").pipe(
       Flag.withDescription("A topic filter instead of site/building/# (# for everything on the broker)"),
       Flag.optional
+    ),
+    seconds: Flag.Int("seconds").pipe(
+      Flag.withDescription("Stop after this many seconds instead of at Ctrl-C, for scripts and agents"),
+      Flag.filter(
+        (seconds) => seconds >= 1,
+        (seconds) => `--seconds takes 1 or more, not ${seconds}`
+      ),
+      Flag.optional
     )
   },
-  ({ config, topic }) =>
-    Effect.flatMap(loadConfig(config), (decoded) => watch(decoded, { topic: Option.getOrUndefined(topic) }))
+  ({ config, topic, seconds }) =>
+    Effect.flatMap(loadConfig(config), (decoded) =>
+      watch(decoded, { topic: Option.getOrUndefined(topic), seconds: Option.getOrUndefined(seconds) })
+    )
 ).pipe(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
   Command.withExamples([
     { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
-    { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" }
+    { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" },
+    { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" }
   ])
 )
 
