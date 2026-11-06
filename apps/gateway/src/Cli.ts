@@ -52,6 +52,35 @@ export const describeConfig = (config: GatewayConfig) => {
   ].join("\n")
 }
 
+/** What `check --json` prints for a valid config: the same as `describeConfig`, for scripts and agents. */
+export const configSummary = (config: GatewayConfig) => {
+  const passwordWarning = mqttPasswordWarning(config.mqtt)
+  return {
+    ok: true as const,
+    site: config.site,
+    building: config.building,
+    gateway: config.id,
+    broker: config.mqtt.url,
+    buffer: config.buffer?.path ?? null,
+    warnings: [
+      ...(passwordWarning === undefined ? [] : [passwordWarning]),
+      ...(config.buffer === undefined ? ["no buffer: values read while the broker is down are lost"] : [])
+    ],
+    devices: config.devices.map((device) => ({
+      id: device.id,
+      protocol: device.protocol,
+      points: device.points.length,
+      writable: device.points.filter((point) => point.writable).length,
+      pollIntervalMs: device.pollIntervalMs
+    }))
+  }
+}
+
+const jsonFlag = Flag.Boolean("json").pipe(
+  Flag.withDescription("Print the result as JSON, for scripts and agents"),
+  Flag.withDefault(false)
+)
+
 /** The gateway for `config`, with host monitoring and telemetry, until it is stopped. */
 const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfig) {
   const version = yield* readVersion
@@ -72,8 +101,16 @@ const run = Command.make("run", { config: configPath }, ({ config }) =>
   Command.withExamples([{ command: "ot-gateway run /etc/ot-gateway/gateway.json", description: "Run a config" }])
 )
 
-const check = Command.make("check", { config: configPath }, ({ config }) =>
-  Effect.flatMap(loadConfig(config), (decoded) => Console.log(describeConfig(decoded)))
+const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+  json
+    ? loadConfig(config).pipe(
+        // An invalid config is JSON on stdout too, and still exits 1.
+        Effect.tapError((error) =>
+          Console.log(JSON.stringify({ ok: false, path: config, error: error.message }, null, 2))
+        ),
+        Effect.flatMap((decoded) => Console.log(JSON.stringify(configSummary(decoded), null, 2)))
+      )
+    : Effect.flatMap(loadConfig(config), (decoded) => Console.log(describeConfig(decoded)))
 ).pipe(Command.withDescription("Validate a config without connecting to anything; lists every mistake with its path"))
 
 const discoverCommand = Command.make(
@@ -129,17 +166,49 @@ const demo = Command.make(
   ])
 )
 
-const init = Command.make("init", { config: configPath }, ({ config }) =>
-  Effect.gen(function* () {
-    const written = yield* runInit(config)
-    if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
-    const folder = yield* writeFolderFiles(config, written)
-    yield* Console.log(describeConfig(written))
-    yield* Console.log(nextSteps(config, written, { ...folder, written: [config, ...folder.written] }))
-  }).pipe(Effect.catchTag("QuitError", () => Console.error("init cancelled, nothing written")))
+const optionalFlag = (name: string, description: string) =>
+  Flag.String(name).pipe(Flag.withDescription(description), Flag.optional, Flag.map(Option.getOrUndefined))
+
+const init = Command.make(
+  "init",
+  {
+    config: configPath,
+    site: optionalFlag("site", "The site, the first topic segment (a slug: vienna-hq)"),
+    building: optionalFlag("building", "The building, the second topic segment"),
+    broker: optionalFlag("broker", "The MQTT broker URL, mqtts:// for TLS"),
+    username: optionalFlag("username", "The broker username"),
+    passwordEnv: optionalFlag("password-env", "The env variable for the broker password (default MQTT_PASSWORD)"),
+    devices: Flag.Literals("devices", ["simulated", "discover", "none"]).pipe(
+      Flag.withDescription("Where the devices come from: a simulated one, BACnet discovery, or none yet"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    points: optionalFlag("points", "A points list (CSV) to take the devices from"),
+    broadcast: optionalFlag("broadcast", "The broadcast address for BACnet discovery, when there are several networks"),
+    yes: Flag.Boolean("yes").pipe(
+      Flag.withAlias("y"),
+      Flag.withDescription("Ask nothing: the defaults for whatever no flag gives"),
+      Flag.withDefault(false)
+    ),
+    force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false))
+  },
+  ({ config, ...flags }) =>
+    Effect.gen(function* () {
+      const written = yield* runInit(config, flags)
+      if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
+      const folder = yield* writeFolderFiles(config, written)
+      yield* Console.log(describeConfig(written))
+      yield* Console.log(nextSteps(config, written, { ...folder, written: [config, ...folder.written] }))
+    }).pipe(Effect.catchTag("QuitError", () => Console.error("init cancelled, nothing written")))
 ).pipe(
   Command.withDescription("Answer a few questions (site, broker, devices) and get a config that check accepts"),
-  Command.withExamples([{ command: "ot-gateway init", description: "Write ot-gateway.json in this directory" }])
+  Command.withExamples([
+    { command: "ot-gateway init", description: "Write ot-gateway.json in this directory" },
+    {
+      command: "ot-gateway init --yes --site vienna-hq --broker mqtts://broker.example:8883 --points points.csv",
+      description: "The same without questions, for scripts and agents"
+    }
+  ])
 )
 
 const importCommand = Command.make(
@@ -172,15 +241,8 @@ const importCommand = Command.make(
   ])
 )
 
-const schemaCommand = Command.make(
-  "schema",
-  {
-    json: Flag.Boolean("json").pipe(
-      Flag.withDescription("Print it as JSON, for scripts and agents"),
-      Flag.withDefault(false)
-    )
-  },
-  ({ json }) => Console.log(json ? JSON.stringify(pointsListSchema(), null, 2) : describePointsListSchema())
+const schemaCommand = Command.make("schema", { json: jsonFlag }, ({ json }) =>
+  Console.log(json ? JSON.stringify(pointsListSchema(), null, 2) : describePointsListSchema())
 ).pipe(Command.withDescription("The points list's columns, rules and allowed values"))
 
 const templateCommand = Command.make("template", {}, () =>
@@ -220,9 +282,10 @@ const status = Command.make(
     url: Flag.String("url").pipe(
       Flag.withDescription("Where the gateway's status page is"),
       Flag.withDefault("http://127.0.0.1:8080")
-    )
+    ),
+    json: jsonFlag
   },
-  ({ url }) => statusReport(url)
+  ({ url, json }) => statusReport(url, { json })
 ).pipe(Command.withDescription("The running gateway's status: its broker, buffer and one line per device"))
 
 export const cli = Command.make("ot-gateway").pipe(
