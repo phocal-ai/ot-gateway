@@ -191,11 +191,14 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
     seen.add(keyOf(message))
     const index = acceptedOrder.get(message.topic)?.get(message.payload)
     if (index === undefined) continue
-    if (index < (lastIndex.get(message.topic) ?? -1)) {
+    const highest = lastIndex.get(message.topic) ?? -1
+    // The drainer pipelines up to IN_FLIGHT rows; one the broker refused for now is resent after the
+    // ones already on their way, so it may arrive up to IN_FLIGHT - 1 places late (BufferedPublisher.ts).
+    if (highest - index > IN_FLIGHT - 1) {
       outOfOrder++
-      firstOutOfOrder ||= `${keyOf(message)} at ${message.at} (faults then: ${activeAt(run, message.at)})`
+      firstOutOfOrder ||= `${keyOf(message)} at ${message.at}, ${highest - index} places late (faults then: ${activeAt(run, message.at)})`
     }
-    lastIndex.set(message.topic, index)
+    lastIndex.set(message.topic, Math.max(highest, index))
   }
   if (outOfOrder > 0) violations.push(`${outOfOrder} value(s) arrived before older ones, first: ${firstOutOfOrder}`)
 
