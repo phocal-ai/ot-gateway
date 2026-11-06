@@ -66,6 +66,18 @@ The `Soak` workflow simulates every night and runs the 30-minute soak and an arm
 
 The extended preset is for the hardware: SD card, CPU, thermal throttling, NTP steps. `SOAK_STRICT_HOST=1` also fails on an event-loop stall or a power or thermal condition (under-voltage only on Raspberry Pi kernel 6.12 and later, see docs/operations.md, "The machine"). Twelve hours is half a day of SD-card writes, NTP corrections and COV renewals at their real rate, five broker outages, and a sample every ten minutes for the growth checks. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) has the procedure and the pass criteria. A release that changes none of those paths, such as config validation, docs or CI, needs only the quick preset.
 
+## Device profiles
+
+A profile in [`profiles/`](profiles) describes one Modbus device model's registers, so points lists can name the model instead of copying its register map (docs/first-building.md, "Meters with a profile"). An assistant can draft one from a register map; `ot-gateway profiles schema --json` gives the format and `profiles/eastron-sdm630.json` is a complete example. A pull request that adds or changes one:
+
+1. **Names its source.** `source` gives the register map's title, revision and, where public, its URL. A profile from memory or from another project's code alone is not accepted; another project can serve as a cross-check, named in `notes`.
+2. **Checks every register against that source.** The reviewer does the same, point by point: address (0-based: 30001 is input register 0), table, type, word order, scale and unit. The tests check the shape, unique names and overlapping registers, not the numbers.
+3. **Says whether it was read from a device.** `verified: true` only when someone read the values from a real device and they made sense; the pull request says which device and firmware. Profiles from the register map alone are welcome with `verified: false`, and `profiles list` says so.
+4. **Starts small.** The values people use (energy, power, voltages, currents, temperatures, states), not all of a 300-register map; more can follow.
+5. **Writes nothing.** A profile has no `writable`; writes stay a decision in the config.
+
+The file name is the profile's `id`, `vendor-model` as a slug. A correction to a verified profile needs the same evidence as a new one.
+
 ## Reporting device quirks
 
 Real devices deviate from specs. If you hit one, open an issue with the device make and model, the firmware version, and a packet capture if you can. Those reports are gold.

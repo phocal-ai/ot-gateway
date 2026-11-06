@@ -6,9 +6,30 @@
 import { type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Schema } from "effect"
 import { loadConfig } from "./LoadConfig.ts"
-import { devicesFromPointsList, parseDelimited, type PointsListDevice, PointsListError } from "./PointsList.ts"
+import {
+  devicesFromPointsList,
+  parseDelimited,
+  type PointsListDevice,
+  PointsListError,
+  profileNames
+} from "./PointsList.ts"
 import { unknownColumns } from "./PointsSchema.ts"
 import { describeTranslation, edeToPointsList, isEde } from "./Ede.ts"
+import { resolveProfile } from "./Profile.ts"
+import { dirname } from "node:path"
+
+/** The devices of the points list at `path`, with the profiles it names (Profile.ts) loaded. */
+export const devicesFromFile = Effect.fn("devicesFromFile")(function* (
+  path: string,
+  existing: ReadonlyArray<string> = []
+) {
+  const text = yield* readPointsList(path)
+  const names = profileNames(text)
+  const profiles = yield* Effect.forEach(names, (name) =>
+    Effect.map(resolveProfile(name, { relativeTo: dirname(path) }), (profile) => [name, profile] as const)
+  )
+  return yield* devicesFromPointsList(text, existing, new Map(profiles))
+})
 
 /** The config file as it is, every key kept, to add devices to. */
 const ConfigObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
@@ -67,7 +88,7 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
   const fs = yield* FileSystem.FileSystem
   const checkOnly = options.dryRun && !(yield* fs.exists(configPath))
   const existing = checkOnly ? [] : (yield* loadConfig(configPath)).devices.map((device) => device.id)
-  const added = yield* devicesFromPointsList(yield* readPointsList(listPath), existing)
+  const added = yield* devicesFromFile(listPath, existing)
   const raw = checkOnly
     ? checkOnlyConfig
     : yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(configPath))

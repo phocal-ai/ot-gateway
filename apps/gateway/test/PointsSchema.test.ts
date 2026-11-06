@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url"
 import { exampleConfigPath } from "../src/Demo.ts"
 import { importPointsList } from "../src/Import.ts"
 import { columnAliases, devicesFromPointsList, parseDelimited } from "../src/PointsList.ts"
+import { resolveProfile } from "../src/Profile.ts"
 import {
   describePointsListSchema,
   pointsListColumns,
@@ -48,10 +49,14 @@ describe("the points list schema", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const example = yield* fs.readFileString(examplePoints)
-      for (const list of [pointsListTemplate(), example]) {
+      const profiles = new Map([["eastron-sdm630", yield* resolveProfile("eastron-sdm630", { relativeTo: "." })]])
+      for (const [list, protocols] of [
+        [pointsListTemplate(), ["modbus-tcp", "modbus-tcp", "bacnet-ip"]],
+        [example, ["modbus-tcp", "bacnet-ip"]]
+      ] as const) {
         expect(unknownColumns(parseDelimited(list)[0] ?? [])).toEqual([])
-        const devices = yield* devicesFromPointsList(list)
-        expect(devices.map((device) => device.protocol)).toEqual(["modbus-tcp", "bacnet-ip"])
+        const devices = yield* devicesFromPointsList(list, [], profiles)
+        expect(devices.map((device) => device.protocol)).toEqual(protocols)
       }
     }).pipe(Effect.provide(NodeServices.layer))
   )
@@ -66,7 +71,7 @@ describe("import --dry-run without a config", () => {
       const template = `${directory}/points.csv`
       yield* fs.writeFileString(template, pointsListTemplate())
       const result = yield* importPointsList(template, absent, { dryRun: true })
-      expect(result.added).toHaveLength(2)
+      expect(result.added).toHaveLength(3)
       expect(yield* fs.exists(absent)).toBe(false)
 
       const bad = `${directory}/bad.csv`

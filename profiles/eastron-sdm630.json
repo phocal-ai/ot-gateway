@@ -1,0 +1,146 @@
+{
+  "format": "ot-gateway device profile",
+  "version": 1,
+  "id": "eastron-sdm630",
+  "vendor": "Eastron",
+  "model": "SDM630-Modbus V2",
+  "protocol": "modbus-tcp",
+  "source": {
+    "document": "Eastron SDM630Modbus Smart Meter Modbus Protocol Implementation",
+    "revision": "V1.8",
+    "url": "https://www.eastroneurope.com/images/uploads/products/protocol/SDM630_MODBUS_Protocol.pdf"
+  },
+  "verified": false,
+  "notes": "An RS485 (Modbus RTU) meter: reach it through a Modbus TCP gateway and give that gateway's host and the meter's unit_id (1 unless set otherwise). Every value is a float32 in input registers, most significant register first; a meter set to reversed register order needs byte_order CDAB on its row. Registers cross-checked against the open-source mbmd project (meters/rs485/sdm.go).",
+  "points": [
+    {
+      "name": "L1 voltage",
+      "register": 0,
+      "table": "input",
+      "type": "float32",
+      "unit": "V",
+      "description": "Phase 1 line to neutral volts (30001)"
+    },
+    {
+      "name": "L2 voltage",
+      "register": 2,
+      "table": "input",
+      "type": "float32",
+      "unit": "V",
+      "description": "Phase 2 line to neutral volts (30003)"
+    },
+    {
+      "name": "L3 voltage",
+      "register": 4,
+      "table": "input",
+      "type": "float32",
+      "unit": "V",
+      "description": "Phase 3 line to neutral volts (30005)"
+    },
+    {
+      "name": "L1 current",
+      "register": 6,
+      "table": "input",
+      "type": "float32",
+      "unit": "A"
+    },
+    {
+      "name": "L2 current",
+      "register": 8,
+      "table": "input",
+      "type": "float32",
+      "unit": "A"
+    },
+    {
+      "name": "L3 current",
+      "register": 10,
+      "table": "input",
+      "type": "float32",
+      "unit": "A"
+    },
+    {
+      "name": "L1 active power",
+      "register": 12,
+      "table": "input",
+      "type": "float32",
+      "unit": "W"
+    },
+    {
+      "name": "L2 active power",
+      "register": 14,
+      "table": "input",
+      "type": "float32",
+      "unit": "W"
+    },
+    {
+      "name": "L3 active power",
+      "register": 16,
+      "table": "input",
+      "type": "float32",
+      "unit": "W"
+    },
+    {
+      "name": "Total active power",
+      "register": 52,
+      "table": "input",
+      "type": "float32",
+      "unit": "W",
+      "description": "Total system power (30053)"
+    },
+    {
+      "name": "Total apparent power",
+      "register": 56,
+      "table": "input",
+      "type": "float32",
+      "unit": "VA",
+      "description": "Total system volt amps (30057)"
+    },
+    {
+      "name": "Total reactive power",
+      "register": 60,
+      "table": "input",
+      "type": "float32",
+      "unit": "var",
+      "description": "Total system VAr (30061)"
+    },
+    {
+      "name": "Total power factor",
+      "register": 62,
+      "table": "input",
+      "type": "float32",
+      "description": "Total system power factor (30063)"
+    },
+    {
+      "name": "Frequency",
+      "register": 70,
+      "table": "input",
+      "type": "float32",
+      "unit": "Hz",
+      "description": "Frequency of supply voltages (30071)"
+    },
+    {
+      "name": "Total import energy",
+      "register": 72,
+      "table": "input",
+      "type": "float32",
+      "unit": "kWh",
+      "description": "Total Import kWh (30073)"
+    },
+    {
+      "name": "Total export energy",
+      "register": 74,
+      "table": "input",
+      "type": "float32",
+      "unit": "kWh",
+      "description": "Total Export kWh (30075)"
+    },
+    {
+      "name": "Total energy",
+      "register": 342,
+      "table": "input",
+      "type": "float32",
+      "unit": "kWh",
+      "description": "Total kWh, import plus export (30343)"
+    }
+  ]
+}

@@ -10,7 +10,8 @@
         "../../examples/gateway.json",
         "../../examples/points.csv",
         "../../packaging/compose.yaml",
-        "../../examples/building.ede.csv"
+        "../../examples/building.ede.csv",
+        "../../profiles/**"
       ]
     }
   }

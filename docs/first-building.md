@@ -59,6 +59,16 @@ pnpm ot-gateway import points.csv              # adds the devices to ot-gateway.
 
 Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input needs no `type`), `deadband`, `offset`, and `publish` (`sample`, `aggregate` or `change`) with `publish_s` (send the latest value, or an aggregate, every so many seconds: `900` for 15 minutes). BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has a meter and an air handler. `ot-gateway points schema` prints every column with its allowed values (`--json` for scripts and agents); `import` names the columns it does not know and ignores them.
 
+### Meters with a profile
+
+For a device model in the [profile library](../profiles), one row is enough: name the profile, and `*` takes all its points (or put one point's name in `point`, one row each):
+
+| device    | point | interval_s | host         | unit_id | profile        |
+| --------- | ----- | ---------- | ------------ | ------- | -------------- |
+| Sub meter | \*    | 15         | 192.168.1.60 | 2       | eastron-sdm630 |
+
+The row gives what differs per device (host, unit id, interval, what to send) and the profile gives the registers, types and units; a `byte_order`, `scale` or `unit` on the row still wins. `ot-gateway profiles list` shows the library and `ot-gateway profiles show eastron-sdm630` one profile's points. For a model that is not there, a profile can live next to the list as a draft (`profile: ./my-meter.json`, the format from `ot-gateway profiles schema`), and a reviewed one can go into the library (CONTRIBUTING.md, "Device profiles").
+
 Or add each device by hand under `devices` in `ot-gateway.json`:
 
 ```json

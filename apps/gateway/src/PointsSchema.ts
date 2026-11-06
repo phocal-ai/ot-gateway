@@ -74,10 +74,17 @@ export const pointsListColumns: ReadonlyArray<PointsListColumn> = [
   { name: "port", scope: "modbus-tcp", required: false, default: 502, description: "The TCP port" },
   { name: "unit_id", scope: "modbus-tcp", required: false, default: 1, description: "The Modbus unit (slave) id" },
   {
+    name: "profile",
+    scope: "modbus-tcp",
+    required: false,
+    description:
+      "A device profile (ot-gateway profiles list) or a .json draft next to the list: the row takes register, table, type, byte_order, scale and unit from it, and point names one of its points or * for all"
+  },
+  {
     name: "register",
     scope: "modbus-tcp",
     required: true,
-    description: "The 0-based address: a data sheet's 40101 is usually holding register 100"
+    description: "The 0-based address: a data sheet's 40101 is usually holding register 100 (not with a profile)"
   },
   {
     name: "table",
@@ -129,6 +136,7 @@ export const pointsListRules: ReadonlyArray<string> = [
   "Column names in any order and case; spaces and - count as _; unknown columns are named and ignored",
   "A row with host is Modbus TCP, a row with device_instance is BACnet/IP; one list can hold both",
   "A decimal comma is read as a point",
+  "A row with a profile takes its registers from the profile; its other columns (unit, scale, byte_order, publish) still win",
   "A BACnet EDE file (the semicolon CSV engineering tools export) is read as a list too; points from-ede shows it as one",
   "Nothing is made writable: writes are set in the config, on purpose"
 ]
@@ -207,6 +215,14 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
     type: "uint32",
     byte_order: "CDAB",
     scale: "0.1"
+  },
+  {
+    device: "Sub meter",
+    point: "*",
+    interval_s: "15",
+    host: "192.168.1.60",
+    unit_id: "2",
+    profile: "eastron-sdm630"
   },
   {
     device: "AHU 2",

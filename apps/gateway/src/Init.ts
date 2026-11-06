@@ -15,8 +15,8 @@ import { networkInterfaces, type NetworkInterfaceInfo } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { discoverDrafts, type draftDevices } from "./Discover.ts"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
-import { readPointsList } from "./Import.ts"
-import { devicesFromPointsList, type PointsListDevice } from "./PointsList.ts"
+import { devicesFromFile } from "./Import.ts"
+import type { PointsListDevice } from "./PointsList.ts"
 
 /** A simulated device with two points, to see values flow before any real device is connected. */
 export const simulatedDevice = {
@@ -245,11 +245,11 @@ const devicesFromList: Effect.Effect<
   Prompt.Environment
 > = Effect.gen(function* () {
   const path = yield* Prompt.String({ message: "Points list (CSV, see docs/first-building.md)", default: "points.csv" })
-  return yield* readPointsList(path).pipe(
-    Effect.flatMap((text) => devicesFromPointsList(text)),
+  return yield* devicesFromFile(path).pipe(
     Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
     Effect.catchTags({
       PointsListError: (error) => retry(error.message),
+      ProfileError: (error) => retry(error.message),
       PlatformError: (error) => retry(error.message)
     })
   )
@@ -257,8 +257,7 @@ const devicesFromList: Effect.Effect<
 
 /** The devices of the points list a flag named: a mistake ends init, there being nobody to ask again. */
 const devicesFromFlag = (path: string) =>
-  readPointsList(path).pipe(
-    Effect.flatMap((text) => devicesFromPointsList(text)),
+  devicesFromFile(path).pipe(
     Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
     Effect.mapError((error) => new InitError({ message: `--points ${path}: ${error.message}` }))
   )

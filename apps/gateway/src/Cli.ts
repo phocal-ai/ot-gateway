@@ -29,6 +29,13 @@ import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
 import { ConfigFileError, loadConfig } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
+import {
+  describeProfile,
+  describeProfileFormat,
+  libraryProfiles,
+  profileJsonSchema,
+  resolveProfile
+} from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
 import { readVersion } from "./Version.ts"
 
@@ -349,6 +356,58 @@ const fromEdeCommand = Command.make(
   ])
 )
 
+const profilesList = Command.make("list", { json: jsonFlag }, ({ json }) =>
+  Effect.gen(function* () {
+    const profiles = yield* libraryProfiles()
+    if (json) {
+      return yield* printJson(
+        profiles.map(({ id, vendor, model, verified, points }) => ({
+          id,
+          vendor,
+          model,
+          verified,
+          points: points.length
+        }))
+      )
+    }
+    const width = Math.max(...profiles.map((profile) => profile.id.length)) + 2
+    yield* Console.log(
+      profiles
+        .map(
+          (profile) =>
+            `${profile.id.padEnd(width)}${profile.vendor} ${profile.model}, ${profile.points.length} points${profile.verified ? "" : ", from its register map (not yet checked on a device)"}`
+        )
+        .join("\n")
+    )
+  }).pipe(jsonFailure(json))
+).pipe(Command.withDescription("The device profiles a points list can name in its profile column"))
+
+const profilesShow = Command.make(
+  "show",
+  {
+    profile: Argument.String("profile").pipe(Argument.withDescription("A profile id, or a path ending in .json")),
+    json: jsonFlag
+  },
+  ({ profile, json }) =>
+    Effect.gen(function* () {
+      const found = yield* resolveProfile(profile, { relativeTo: process.cwd() })
+      if (json) return yield* printJson(found)
+      yield* Console.log(describeProfile(found))
+    }).pipe(jsonFailure(json))
+).pipe(
+  Command.withDescription("One profile's points: names, registers, types and units"),
+  Command.withExamples([{ command: "ot-gateway profiles show eastron-sdm630", description: "The SDM630's points" }])
+)
+
+const profilesSchema = Command.make("schema", { json: jsonFlag }, ({ json }) =>
+  Console.log(json ? JSON.stringify(profileJsonSchema(), null, 2) : describeProfileFormat())
+).pipe(Command.withDescription("The profile format, to write one from a register map"))
+
+const profiles = Command.make("profiles").pipe(
+  Command.withDescription("Device profiles: a Modbus model's registers, named once and reused by points lists"),
+  Command.withSubcommands([profilesList, profilesShow, profilesSchema])
+)
+
 const points = Command.make("points").pipe(
   Command.withDescription("The points list, the CSV that import and init read: its schema and a template"),
   Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
@@ -391,6 +450,7 @@ export const rootDescription = [
   "",
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
   "    points schema --json             the points list's columns: translate any list or EDE file into it",
+  "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
   "    check --json                     every mistake in a config, with its path",
@@ -399,10 +459,32 @@ export const rootDescription = [
 
 export const cli = Command.make("ot-gateway").pipe(
   Command.withDescription(rootDescription),
-  Command.withSubcommands([demo, init, run, check, discoverCommand, importCommand, points, watchCommand, status])
+  Command.withSubcommands([
+    demo,
+    init,
+    run,
+    check,
+    discoverCommand,
+    importCommand,
+    points,
+    profiles,
+    watchCommand,
+    status
+  ])
 )
 
-const subcommands = new Set(["demo", "init", "run", "check", "discover", "import", "points", "watch", "status"])
+const subcommands = new Set([
+  "demo",
+  "init",
+  "run",
+  "check",
+  "discover",
+  "import",
+  "points",
+  "profiles",
+  "watch",
+  "status"
+])
 
 /**
  * The arguments for `cli`, with the forms from before the subcommands translated: no arguments or a config path
