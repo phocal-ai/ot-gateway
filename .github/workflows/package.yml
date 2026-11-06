@@ -74,7 +74,8 @@ jobs:
         run: |
           set -euo pipefail
           work=$(mktemp -d)
-          npm install --prefix "$work" --no-audit --no-fund dist/ot-gateway-*.tgz
+          # An absolute path: npm reads a bare dist/x.tgz as a GitHub repository.
+          npm install --prefix "$work" --no-audit --no-fund "$PWD"/dist/ot-gateway-*.tgz
           bin="$work/node_modules/.bin/ot-gateway"
           "$bin" --version
           "$bin" check examples/gateway.json
@@ -128,4 +129,4 @@ jobs:
           set -euo pipefail
           dist_tag=latest
           if [[ "$TAG" == *-* ]]; then dist_tag=next; fi
-          npm publish dist/ot-gateway-*.tgz --access public --tag "$dist_tag"
+          npm publish ./dist/ot-gateway-*.tgz --access public --tag "$dist_tag"
