@@ -11,6 +11,8 @@
  */
 import { Effect, Schema } from "effect"
 import { slugify } from "./Discover.ts"
+import type { Profile, ProfilePoint } from "./Profile.ts"
+import { closestMatch } from "./Suggest.ts"
 
 export class PointsListError extends Schema.TaggedError<PointsListError>()("PointsListError", {
   message: Schema.String
@@ -87,7 +89,11 @@ const units: Record<string, string> = {
   ppm: "unit:PPM",
   lx: "unit:LUX",
   lux: "unit:LUX",
-  rpm: "unit:REV-PER-MIN"
+  rpm: "unit:REV-PER-MIN",
+  va: "unit:V-A",
+  kva: "unit:KiloV-A",
+  var: "unit:V-A_Reactive",
+  kvar: "unit:KiloV-A_Reactive"
 }
 
 /** A unit as the config writes it: a QUDT name for the common spellings, otherwise as given. */
@@ -240,6 +246,70 @@ const deviceNumber = Effect.fnUntraced(function* (name: string, rows: ReadonlyAr
   return yield* numberIn({ line, get: (wanted) => (wanted === column ? text : undefined) }, column)
 })
 
+/** A profile point's value for a points list column. */
+const profileValue = (point: ProfilePoint, column: string): string | undefined => {
+  switch (column) {
+    case "register":
+      return String(point.register)
+    case "table":
+      return point.table
+    case "type":
+      return point.type
+    case "byte_order":
+      return point.byteOrder
+    case "scale":
+      return point.scale === undefined ? undefined : String(point.scale)
+    case "offset":
+      return point.offset === undefined ? undefined : String(point.offset)
+    case "unit":
+      return point.unit
+    default:
+      return undefined
+  }
+}
+
+/**
+ * A row as the rows it stands for: itself, or with a profile the profile's points it picks (`*` for all), each
+ * taking the row's columns first (host, interval, publish, a byte order the meter was set to) and the profile's
+ * registers for the rest.
+ */
+const expandProfile = Effect.fnUntraced(function* (row: Row, profiles: ReadonlyMap<string, Profile>) {
+  const name = row.get("profile")
+  if (name === undefined) return [row]
+  const profile = profiles.get(name)
+  if (profile === undefined) return yield* fail(`line ${row.line}: profile "${name}" was not loaded`)
+  if (row.get("device_instance") !== undefined) {
+    return yield* fail(`line ${row.line}: profiles describe Modbus devices; this row has a device_instance`)
+  }
+  for (const column of ["register", "table", "type"]) {
+    if (row.get(column) !== undefined) {
+      return yield* fail(`line ${row.line}: the row takes ${column} from profile ${profile.id}; leave ${column} empty`)
+    }
+  }
+  const wanted = row.get("point") ?? "*"
+  const ids = profile.points.map((point) => slugify(point.name))
+  const picked =
+    wanted === "*" ? profile.points : profile.points.filter((point) => slugify(point.name) === slugify(wanted))
+  if (picked.length === 0) {
+    const meant = closestMatch(slugify(wanted), ids)
+    return yield* fail(
+      `line ${row.line}: profile ${profile.id} has no point "${wanted}"${meant === undefined ? "" : `; did you mean ${meant}?`} (* takes all: ${ids.join(", ")})`
+    )
+  }
+  return picked.map((point): Row => ({
+    line: row.line,
+    get: (column) => (column === "point" ? point.name : (row.get(column) ?? profileValue(point, column)))
+  }))
+})
+
+/** The profiles a points list names, as written, for the caller to load before devicesFromPointsList. */
+export const profileNames = (text: string): ReadonlyArray<string> => {
+  const [header, ...records] = parseDelimited(text)
+  const column = (header ?? []).map(columnName).indexOf("profile")
+  if (column === -1) return []
+  return [...new Set(records.flatMap((fields) => fields[column]?.trim() || []))]
+}
+
 interface NamedPoint {
   readonly row: Row
   readonly pointId: string
@@ -310,7 +380,8 @@ export type PointsListDevice = Effect.Success<ReturnType<typeof toDevice>>
  */
 export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function* (
   text: string,
-  existing: ReadonlyArray<string> = []
+  existing: ReadonlyArray<string> = [],
+  profiles: ReadonlyMap<string, Profile> = new Map()
 ) {
   const [header, ...records] = parseDelimited(text)
   if (header === undefined) return yield* fail("the points list is empty")
@@ -331,7 +402,7 @@ export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function
   for (const row of rows) {
     const device = row.get("device")
     if (device === undefined) return yield* fail(`line ${row.line}: no device`)
-    byDevice.set(device, [...(byDevice.get(device) ?? []), row])
+    byDevice.set(device, [...(byDevice.get(device) ?? []), ...(yield* expandProfile(row, profiles))])
   }
   const taken = new Set(existing)
   return yield* Effect.forEach(byDevice, ([name, deviceRows]) => toDevice(name, deviceRows, taken))

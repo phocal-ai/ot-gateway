@@ -73,13 +73,15 @@ Read `otg points schema --json` once. Then, by what the user has:
 - **BACnet devices on the network:** `otg discover --points-list points.csv`. Nothing else may hold UDP 47808 (stop the demo or another BACnet tool first). Show a short summary per device (name, instance, point count) and remove the rows the user doesn't need; past about 5 devices or 50 points, ask which to keep. If nothing answered: check the broadcast address; devices on another subnet need a BBMD (`bacnet.bbmdAddress` in the config); a firewall can drop UDP 47808.
 - **An EDE file:** it imports as it is. `otg points from-ede <file> > points.csv` gives a list to trim first; it says how many objects it skipped (schedules, trend logs).
 - **A points list in some other layout** (other column names, an Excel export, several sheets): translate it into `points.csv` with the schema's columns. Save Excel as CSV first; `.xlsx` is not read. Keep the user's device and point names.
-- **Modbus datasheets:** write `points.csv` yourself, one row per register. Start with the 10 to 20 registers that matter (energy, power, temperatures, states), not all 300, and say that more can be added later.
+- **A Modbus model in the profile library** (`otg profiles list --json`): one row per device with `profile` set and `point` `*` (or one row per point it needs), plus its `host` and `unit_id`. `otg profiles show <id>` lists its points.
+- **Modbus datasheets:** for a model the library lacks, write `points.csv` yourself, one row per register. Start with the 10 to 20 registers that matter (energy, power, temperatures, states), not all 300, and say that more can be added later.
   - `table`: `holding` for 4xxxx/FC03, `input` for 3xxxx/FC04, `coil` for 0xxxx/FC01, `discrete` for 1xxxx/FC02.
   - `register`: **0-based.** Datasheets often list 40001-style numbers or 1-based addresses, so 40001 is holding register 0. When the sheet is unclear, say which you assumed; a wrong guess shows up in step 7.
   - `type`: `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`; a coil or discrete input needs none.
   - `byte_order` (default `ABCD`, high word first): `CDAB` when the sheet says low word first, "word swap" or "little-endian word order" (common on meters). When it doesn't say, leave the default and let step 7 show it.
   - `scale` for registers in tenths and so on; `unit` as the sheet writes it (`kW`, `kWh`, `°C`, `%`).
   - Several meters behind one Modbus gateway: one device each, with the gateway's `host` and each meter's own `unit_id`.
+  - Several devices of the same model: write a draft profile once (`otg profiles schema --json` gives the format), save it next to the list as `<vendor>-<model>.json`, and give each device's row `profile: ./<vendor>-<model>.json`. Mention that a reviewed profile can go into the library (CONTRIBUTING.md, "Device profiles").
 - **What to send** from question 4: `publish` per row (`aggregate` with `publish_s` 900 for 15 minutes, or `change`).
 
 Check the list until it is clean, then add it:

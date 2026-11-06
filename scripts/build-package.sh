@@ -11,8 +11,8 @@
 # TypeScript types under node_modules, so the sources cannot ship as they are).
 #
 # The package keeps the repository's layout (apps/gateway/src/main.mjs next to
-# apps/web/out, examples/gateway.json, packaging/compose.yaml and VERSION), so the paths the gateway
-# computes from `import.meta.url` (Version.ts, Demo.ts, Status.ts, Folder.ts) find those
+# apps/web/out, examples/gateway.json, packaging/compose.yaml, profiles/ and VERSION), so the paths the gateway
+# computes from `import.meta.url` (Version.ts, Demo.ts, Status.ts, Folder.ts, Profile.ts) find those
 # files without a change.
 set -euo pipefail
 
@@ -27,7 +27,7 @@ version=${tag#v}
 }
 
 rm -rf "$out" "$repo"/dist/ot-gateway-*.tgz
-mkdir -p "$out/apps/gateway/src" "$out/apps/web" "$out/examples" "$out/packaging"
+mkdir -p "$out/apps/gateway/src" "$out/apps/web" "$out/examples" "$out/packaging" "$out/profiles"
 
 # The status page (a static export, cached by Turborepo) and the bundle. The target is the oldest Node the
 # package supports; main.ts's shebang (with --max-semi-space-size) stays at the top of the bundle.
@@ -40,6 +40,8 @@ cp -R "$repo/apps/web/out" "$out/apps/web/out"
 cp "$repo/examples/gateway.json" "$out/examples/"
 # What `init` writes next to ot-gateway.json (Folder.ts).
 cp "$repo/packaging/compose.yaml" "$out/packaging/"
+# The device profile library that points lists name (Profile.ts).
+cp "$repo"/profiles/*.json "$out/profiles/"
 # What --version, telemetry and the status page report: the tag, as the container image has it.
 echo "v$version" >"$out/VERSION"
 cp "$repo/LICENSE" "$out/"
@@ -57,7 +59,7 @@ cat >"$out/package.json" <<EOF
   "keywords": ["bacnet", "modbus", "mqtt", "building-automation", "gateway", "iot", "effect"],
   "type": "module",
   "bin": { "ot-gateway": "apps/gateway/src/main.mjs" },
-  "files": ["apps", "examples", "packaging", "VERSION"],
+  "files": ["apps", "examples", "packaging", "profiles", "VERSION"],
   "engines": { "node": ">=22.18" }
 }
 EOF
