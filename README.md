@@ -80,7 +80,7 @@ The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads 
 | `ot-gateway check [config]`          | validate a config without connecting to anything, listing every mistake with its path                                                |
 | `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config, or write it as a points list with `--points-list` (below)                     |
 | `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points))                      |
-| `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in                                                                |
+| `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one            |
 | `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker                                                    |
 | `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each                                                                      |
 | `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                   |

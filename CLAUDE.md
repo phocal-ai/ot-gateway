@@ -22,6 +22,7 @@ pnpm ot-gateway check ot-gateway.json      # validate a config without connectin
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json); points template prints a list to fill in
+pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
 pnpm ot-gateway status                     # the running gateway's devices, one line each
 pnpm --filter @ot-gateway/core test   # one package

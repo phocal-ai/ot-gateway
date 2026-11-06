@@ -9,7 +9,8 @@
         "../../VERSION",
         "../../examples/gateway.json",
         "../../examples/points.csv",
-        "../../packaging/compose.yaml"
+        "../../packaging/compose.yaml",
+        "../../examples/building.ede.csv"
       ]
     }
   }

@@ -38,6 +38,7 @@ import {
 import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Result } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
+import { toCsv } from "./Csv.ts"
 
 /** How long Who-Is answers are collected. */
 const LISTEN = "3 seconds"
@@ -274,12 +275,6 @@ export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">) 
 
 type Draft = ReturnType<typeof draftDevices>[number]
 
-/** A CSV field: quoted when it holds a separator, a quote or a line break (RFC 4180). */
-const csvField = (value: string | number) => {
-  const text = String(value)
-  return /[",;\t\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
-}
-
 /**
  * A device-supplied point name as the list's `point` column: as named when import makes the same id from it,
  * otherwise the id. Names that a spreadsheet would run as a formula (=, +, -, @) become the id too: anyone on
@@ -302,7 +297,7 @@ export const draftPointsList = (drafts: ReadonlyArray<Draft>) => {
       point.instance
     ])
   )
-  return `${[header, ...rows].map((fields) => fields.map(csvField).join(",")).join("\n")}\n`
+  return toCsv([header, ...rows])
 }
 
 /**

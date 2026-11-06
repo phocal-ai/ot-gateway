@@ -16,13 +16,18 @@ export class PointsListError extends Schema.TaggedError<PointsListError>()("Poin
   message: Schema.String
 }) {}
 
-/** Fields of a delimited text (RFC 4180: quotes, doubled quotes, line breaks inside quotes), empty lines dropped. */
-export const parseDelimited = (text: string): ReadonlyArray<ReadonlyArray<string>> => {
+/**
+ * Fields of a delimited text (RFC 4180: quotes, doubled quotes, line breaks inside quotes), empty lines dropped.
+ * The separator is the one the first line has most of, unless given.
+ */
+export const parseDelimited = (text: string, separator?: string): ReadonlyArray<ReadonlyArray<string>> => {
   const body = text.replace(/^﻿/, "")
   const firstLine = body.split(/\r?\n/, 1)[0] ?? ""
-  const delimiter = [";", "\t", ","].reduce((best, candidate) =>
-    firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
-  )
+  const delimiter =
+    separator ??
+    [";", "\t", ","].reduce((best, candidate) =>
+      firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
+    )
   const rows: Array<Array<string>> = []
   let row: Array<string> = []
   let field = ""
