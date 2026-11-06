@@ -103,12 +103,13 @@ any other list, PDF ── AI assistant ─────────────�
                                                                                     until valid)
 ```
 
-In one folder on the machine on the building network:
+On the machine on the building network:
 
 ```bash
-npx ot-gateway init          # questions or a points list, finds BACnet devices, checks everything
-docker compose up -d         # runs it, restarts it, keeps its logs
-npx ot-gateway status        # one line per device
+npx ot-gateway init vienna-hq   # a folder, as create-next-app makes one: questions or a points list, finds BACnet devices, checks everything
+cd vienna-hq
+docker compose up -d            # runs it, restarts it, keeps its logs
+npx ot-gateway status           # one line per device
 ```
 
 - **Two jobs, two familiar tools.** Setting up happens where the person and their AI assistant work, so the CLI ships on npm: `npx` is how people already run Vercel's or Cloudflare's CLIs, and every coding agent can run it. Running the gateway around the clock is Docker Compose's job: restarts, updates (`docker compose pull`) and logs, on a Pi as on an industrial PC. Neither needs a checkout, git or a build.

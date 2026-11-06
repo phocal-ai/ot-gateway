@@ -8,7 +8,17 @@ import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem } from "effect"
 import type { NetworkInterfaceInfo } from "node:os"
 import { configSummary } from "../src/Cli.ts"
-import { type InitFlags, initConfig, lanInterfaces, nextSteps, runInit, simulatedDevice } from "../src/Init.ts"
+import {
+  defaultFolder,
+  type InitFlags,
+  initConfig,
+  initTarget,
+  isInteractive,
+  lanInterfaces,
+  nextSteps,
+  runInit,
+  simulatedDevice
+} from "../src/Init.ts"
 import { pointsListTemplate } from "../src/PointsSchema.ts"
 
 const answers = { site: "vienna-hq", building: "main", brokerUrl: "mqtt://broker.lan:1883" }
@@ -163,4 +173,39 @@ describe("configSummary", () => {
       })
     })
   )
+})
+
+describe("initTarget", () => {
+  it.effect("takes a folder as create-next-app does, the default one with --yes, and a .json path as the config", () =>
+    Effect.gen(function* () {
+      expect(yield* initTarget("vienna-hq", false)).toBe("vienna-hq/ot-gateway.json")
+      expect(yield* initTarget(".", false)).toBe("ot-gateway.json")
+      expect(yield* initTarget(undefined, true)).toBe(`${defaultFolder}/ot-gateway.json`)
+      expect(yield* initTarget("site.json", false)).toBe("site.json")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("makes a missing folder, and the next steps start with cd and need no config argument", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = yield* initTarget(`${folder}/new/vienna-hq`, true)
+        const config = yield* runInit(path, { yes: true })
+        expect(yield* fs.exists(path)).toBe(true)
+        if (config === undefined) return expect.unreachable()
+        const steps = nextSteps(path, config, { written: [path, `${folder}/new/vienna-hq/compose.yaml`], kept: [] })
+        expect(steps).toContain(`cd ${folder}/new/vienna-hq`)
+        expect(steps).toMatch(/ot-gateway check {2,}validate/)
+      })
+    )
+  )
+})
+
+describe("isInteractive", () => {
+  it("asks only with a terminal and without --yes", () => {
+    expect(isInteractive(false, true)).toBe(true)
+    expect(isInteractive(true, true)).toBe(false)
+    expect(isInteractive(false, false)).toBe(false)
+    expect(isInteractive(false, undefined)).toBe(false)
+  })
 })
