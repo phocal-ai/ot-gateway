@@ -13,6 +13,7 @@ import { Console, Effect, FileSystem, Schema, type Terminal } from "effect"
 import { Prompt } from "effect/cli"
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os"
 import { discoverDrafts, type draftDevices } from "./Discover.ts"
+import type { FolderFiles } from "./Folder.ts"
 import { readPointsList } from "./Import.ts"
 import { devicesFromPointsList, type PointsListDevice } from "./PointsList.ts"
 
@@ -215,15 +216,33 @@ export const runInit = Effect.fn("runInit")(function* (path: string) {
 })
 
 /** What to do after `init`, for the config it wrote to `path`. */
-export const nextSteps = (path: string, config: GatewayConfig) => {
+export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFiles = { written: [], kept: [] }) => {
   const passwordEnv = config.mqtt.passwordEnv
+  const envFile = [...folder.written, ...folder.kept].find((file) => file.endsWith("ot-gateway.env"))
+  const compose =
+    folder.noCompose === undefined && [...folder.written, ...folder.kept].some((file) => file.endsWith("compose.yaml"))
+  const port = config.status?.port ?? 8080
+  const password =
+    passwordEnv === undefined
+      ? []
+      : envFile === undefined
+        ? [`  set ${passwordEnv} to the broker password before you start the gateway`]
+        : [`  put the broker password after ${passwordEnv}= in ${envFile}`]
+  const start = compose
+    ? [
+        "  docker compose up -d                 start it in Docker, restarted after a crash or a reboot",
+        `  ot-gateway status                    one line per device (status page on http://127.0.0.1:${port})`
+      ]
+    : [`  ot-gateway run ${path}      start the gateway (status page on http://127.0.0.1:${port})`]
   return [
-    `wrote ${path}`,
-    ...(passwordEnv === undefined ? [] : [`  set ${passwordEnv} to the broker password before you start the gateway`]),
+    ...folder.written.map((file) => `wrote ${file}`),
+    ...folder.kept.map((file) => `kept ${file} as it is`),
+    ...(folder.noCompose === undefined ? [] : [`no compose.yaml: ${folder.noCompose}`]),
+    ...password,
     ...(config.devices.length === 0 ? ["  add your devices under devices (docs/configuration.md)"] : []),
     "next:",
+    ...start,
     `  ot-gateway check ${path}    validate it again after an edit`,
-    `  ot-gateway run ${path}      start the gateway (status page on http://127.0.0.1:${config.status?.port ?? 8080})`,
     `  ot-gateway watch ${path}    see what arrives at ${config.mqtt.url}`
   ].join("\n")
 }

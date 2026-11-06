@@ -19,6 +19,7 @@ import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover } from "./Discover.ts"
 import { importPointsList } from "./Import.ts"
+import { writeFolderFiles } from "./Folder.ts"
 import { nextSteps, runInit } from "./Init.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -116,8 +117,9 @@ const init = Command.make("init", { config: configPath }, ({ config }) =>
   Effect.gen(function* () {
     const written = yield* runInit(config)
     if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
+    const folder = yield* writeFolderFiles(config, written)
     yield* Console.log(describeConfig(written))
-    yield* Console.log(nextSteps(config, written))
+    yield* Console.log(nextSteps(config, written, { ...folder, written: [config, ...folder.written] }))
   }).pipe(Effect.catchTag("QuitError", () => Console.error("init cancelled, nothing written")))
 ).pipe(
   Command.withDescription("Answer a few questions (site, broker, devices) and get a config that check accepts"),
