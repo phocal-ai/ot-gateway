@@ -362,6 +362,8 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
         ]
   const commands: ReadonlyArray<readonly [string, string]> = [
     ...(folderPath === "." ? [] : ([[`cd ${folderPath}`, "the gateway's folder"]] as const)),
+    // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
+    [`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`],
     ...devices,
     ...(compose
       ? ([

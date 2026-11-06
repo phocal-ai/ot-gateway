@@ -61,7 +61,13 @@ const firstDialOf = (client: { readonly firstDial: Effect.Effect<void, { readonl
       duration: DIAL_TIMEOUT,
       orElse: () => Effect.fail(new MqttConnectionError({ message: `no answer within ${DIAL_TIMEOUT}` }))
     }),
-    Effect.mapError((error) => new BrokerCommandError({ message: `could not connect to ${url}: ${error.message}` }))
+    Effect.mapError(
+      (error) =>
+        // The socket's message starts with "could not connect" itself: say it once, with the URL.
+        new BrokerCommandError({
+          message: `could not connect to ${url}: ${error.message.replace(/^could not connect(: )?/, "")}`
+        })
+    )
   )
 
 export interface BrokerReport extends ConnectionInfo {

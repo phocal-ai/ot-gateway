@@ -13,10 +13,10 @@ Everything goes through the `ot-gateway` command. Call it `otg` below:
 
 - in a checkout of the ot-gateway repository: `pnpm ot-gateway` (after `pnpm install`), from the repository root;
 - anywhere else with Node: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`);
-- with Docker and no Node (a Raspberry Pi, most edge boxes): the image, from that folder. No `-t`, since you have no terminal:
-  `docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:latest` (the latest release, as `npx` runs). Define it as a shell function in each command you run; aliases do not carry over between them.
+- with Docker and no Node (a Raspberry Pi, most edge boxes): `~/.local/bin/ot-gateway`, from that folder. It runs the CLI from the image at the gateway's version and leaves out `-t` when there is no terminal. Install it once, no sudo:
+  `mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway`. Use the full path: a command over SSH does not read the login profile that puts `~/.local/bin` on the PATH.
 
-The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema`, `broker`, `publish` and `status` to get the result as JSON on stdout, a failure as `{"ok": false, "error": …}` (exit code 1); logs go to stderr. `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running.
+The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema`, `profiles list|get`, `broker`, `publish` and `status` to get the result as JSON on stdout, and nothing else there: a failure is `{"ok": false, "error": …}` (exit code 1), a usage mistake (unknown command or flag) `{"ok": false, "code": "usage", "error": …, "hint": …}` (exit code 2); help and logs go to stderr. `watch --json` prints one JSON object per message (NDJSON). `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running.
 
 ## Ground rules
 
@@ -120,7 +120,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 
 ## 8. Run it for real
 
-- **Docker Compose** (the default where `docker compose version` worked): with a yes from the user, `docker compose up -d` in the folder. It pins a release tag, restarts the gateway after a crash and at boot, uses host networking for BACnet and caps Docker's logs; the outbox and the history live in the `ot-gateway_data` volume. Check it with `otg status` and `docker compose logs --tail 20`. Upgrades are `OT_GATEWAY_TAG=<tag> docker compose up -d`.
+- **Docker Compose** (the default where `docker compose version` worked): with a yes from the user, `docker compose up -d` in the folder. It pins a release tag, restarts the gateway after a crash and at boot, uses host networking for BACnet and caps Docker's logs; the outbox and the history live in the `ot-gateway_data` volume. Check it with `otg status` and `docker compose logs --tail 20`. Upgrades write the new tag into `compose.yaml`, then `docker compose up -d` (docs/operations.md, "Upgrade").
 - **No Docker** (systemd, from a checkout): with a yes, `sudo packaging/install.sh ot-gateway.json`, then `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env` and `sudo systemctl restart ot-gateway`. Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
 - **This machine, for now:** the one command to start it again is `otg run` in the folder.
 

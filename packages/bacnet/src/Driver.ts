@@ -35,7 +35,7 @@ import {
   pushedPoints
 } from "@ot-gateway/core"
 import type { BacnetPoint, Driver, Network, PointValue, Reading, WriteValue } from "@ot-gateway/core"
-import { Clock, Duration, Effect, Metric, Option, Queue, Result, Schedule, Schema, Stream } from "effect"
+import { Clock, Duration, Effect, Equal, Metric, Option, Queue, Result, Schedule, Schema, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { AbortReason, MAX_APDU_IP, RejectReason } from "./Apdu.ts"
 import {
@@ -314,10 +314,24 @@ const COV_CONCURRENCY = 4
 /** A round of subscribing stops after this many attempts in a row got no answer: the device is down or swamped. */
 const COV_SILENT_IN_A_ROW = 2 * COV_CONCURRENCY
 
-const sameAddress = (left: DeviceAddress, right: DeviceAddress) =>
-  NetAddress.formatInet(left.address) === NetAddress.formatInet(right.address) &&
-  left.network?.network === right.network?.network &&
-  (left.network?.address ?? []).join(".") === (right.network?.address ?? []).join(".")
+/**
+ * Runs for every notification, so it compares without formatting or allocating. `Equal.equals` would hash both
+ * sides first; the IP's own equality compares the numbers.
+ */
+const sameInet = (left: NetAddress.InetAddress, right: NetAddress.InetAddress) =>
+  left.port === right.port &&
+  (left._tag === "InetAddressV4"
+    ? right._tag === "InetAddressV4"
+    : right._tag === "InetAddressV6" && left.scopeId === right.scopeId) &&
+  left.address[Equal.symbol](right.address)
+
+const sameAddress = (left: DeviceAddress, right: DeviceAddress) => {
+  if (!sameInet(left.address, right.address)) return false
+  if (left.network?.network !== right.network?.network) return false
+  const leftHops = left.network?.address ?? []
+  const rightHops = right.network?.address ?? []
+  return leftHops.length === rightHops.length && leftHops.every((byte, index) => byte === rightHops[index])
+}
 
 const describeObject = (object: ObjectId) => `${nameOf(ObjectType, object.objectType)}:${object.instance}`
 

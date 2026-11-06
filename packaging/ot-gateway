@@ -1,0 +1,40 @@
+#!/bin/sh
+# The ot-gateway command on a machine with Docker and no Node.js (a Raspberry Pi): it runs the CLI from the
+# gateway's image, with the current folder mounted as the working directory. Install it once, no sudo:
+#
+#   mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
+#
+# The image tag follows the gateway: OT_GATEWAY_TAG when set, else the tag of the running `ot-gateway` container,
+# else the default in the compose.yaml of the current folder or of ~/ot-gateway (OT_GATEWAY_HOME), else the
+# release this file came with. So the command and the gateway are the same version, and upgrade together.
+#
+# A terminal gets -t (colors, prompts); a pipe or an agent does not, so `ot-gateway points template > points.csv`
+# writes plain lines. Files outside the current folder are not visible to the command.
+set -eu
+
+image=${OT_GATEWAY_IMAGE:-ghcr.io/phocal-ai/ot-gateway}
+# Moved by each release with the other pins (CONTRIBUTING.md, "Branches").
+release=v0.10.0
+
+tag_of() {
+  [ -f "$1" ] && sed -n 's/.*ot-gateway:\${OT_GATEWAY_TAG:-\([^}]*\)}.*/\1/p' "$1" | head -n 1
+}
+
+command -v docker >/dev/null 2>&1 || {
+  echo "ot-gateway: docker is needed (docs/raspberry-pi-install.md, step 5)" >&2
+  exit 127
+}
+
+tag=${OT_GATEWAY_TAG:-}
+if [ -z "$tag" ]; then
+  running=$(docker inspect --format '{{.Config.Image}}' ot-gateway 2>/dev/null) || running=
+  case $running in "$image":*) tag=${running##*:} ;; esac
+fi
+[ -n "$tag" ] || tag=$(tag_of ./compose.yaml) || true
+[ -n "$tag" ] || tag=$(tag_of "${OT_GATEWAY_HOME:-$HOME/ot-gateway}/compose.yaml") || true
+[ -n "$tag" ] || tag=$release
+
+if [ -t 0 ] && [ -t 1 ]; then
+  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$image:$tag" "$@"
+fi
+exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$image:$tag" "$@"
