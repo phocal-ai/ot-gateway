@@ -1,9 +1,16 @@
 "use client"
-/** A shell command with a button that copies it, and says so for two seconds. */
+/** A shell command (or, with `multiline`, a prompt) with a button that copies it, and says so for two seconds. */
 import { Check, Copy } from "lucide-react"
 import { useEffect, useState } from "react"
 
-export const CopyCommand = ({ command }: { readonly command: string }) => {
+export const CopyCommand = ({
+  command,
+  multiline = false
+}: {
+  readonly command: string
+  /** Wrap the text and leave out the shell prompt: for a prompt to paste into an AI assistant. */
+  readonly multiline?: boolean
+}) => {
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {
@@ -20,9 +27,13 @@ export const CopyCommand = ({ command }: { readonly command: string }) => {
   }
 
   return (
-    <div className="bg-fd-card flex min-w-0 items-center gap-2 rounded-md border py-1.5 pr-1.5 pl-3">
-      <code className="min-w-0 flex-1 overflow-x-auto font-mono text-xs whitespace-nowrap">
-        <span className="text-fd-muted-foreground select-none">$ </span>
+    <div
+      className={`bg-fd-card flex min-w-0 gap-2 rounded-md border py-1.5 pr-1.5 pl-3 ${multiline ? "items-start" : "items-center"}`}
+    >
+      <code
+        className={`min-w-0 flex-1 font-mono text-xs ${multiline ? "py-1 leading-relaxed whitespace-pre-wrap" : "overflow-x-auto whitespace-nowrap"}`}
+      >
+        {multiline ? null : <span className="text-fd-muted-foreground select-none">$ </span>}
         {command}
       </code>
       <button

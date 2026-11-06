@@ -22,6 +22,12 @@
   --viz-grid: #383835;
 }
 
+/* The home page's margin outside its frame: a quiet dot grid, as on Cloudflare's pages. */
+.home-dots {
+  background-image: radial-gradient(circle, var(--color-fd-border) 1px, transparent 1.5px);
+  background-size: 14px 14px;
+}
+
 /* A message travelling along a pipe of the flow diagram: across on wide screens, down on narrow ones. */
 @keyframes flow-across {
   from {
@@ -155,6 +161,11 @@
 .value-flash {
   animation: value-flash 1.2s ease-out 500ms both;
 }
+
+/* A value on the status page picture that just changed, as on the real page. */
+.value-tick {
+  animation: value-flash 1.2s ease-out both;
+}
 @media (prefers-reduced-motion: reduce) {
   .packet-right,
   .packet-left {
@@ -162,7 +173,8 @@
     opacity: 0;
   }
   .reveal,
-  .value-flash {
+  .value-flash,
+  .value-tick {
     animation: none;
   }
 }

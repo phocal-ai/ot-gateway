@@ -1,10 +1,9 @@
 /**
  * What the gateway does and how it is used: install it, describe the building in one config file, use the data.
  * Each step has a small picture of what you see at that point; the names and values
- * match the rest of the home page (vienna-hq, ahu-1, the 15-minute aggregate). SeeItWork is the section after it.
+ * match the rest of the home page (vienna-hq, ahu-1, the 15-minute aggregate).
  */
 import Link from "next/link"
-import { CopyCommand } from "./copy-command.tsx"
 import { InstallTabs } from "./install-tabs.tsx"
 import type * as React from "react"
 
@@ -49,8 +48,8 @@ const arrivals = [
   ["vienna-hq/main/ahu-1/supply-air-temp", '{"value":21.38,"min":20.9,"max":21.8,"avg":21.38,…}']
 ] as const
 
-/** The demo from the README's quick start: a simulated building, the gateway and a test broker. */
-const demoCommand = "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo"
+/** The demo from the README's quick start: a simulated building, the gateway and a test broker (hero and closing call). */
+export const demoCommand = "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo"
 
 const steps: ReadonlyArray<{
   readonly title: string
@@ -148,19 +147,6 @@ export const HowItWorks = () => (
         </Link>
         .
       </p>
-    </div>
-  </div>
-)
-
-/** Under the steps, as its own section: the demo, with nothing to install but Docker. */
-export const SeeItWork = () => (
-  <div className="viz">
-    <p className="text-fd-muted-foreground max-w-2xl">
-      One command runs a simulated building, the gateway and a test broker on your computer. No devices needed, and the
-      status page opens on localhost:8080.
-    </p>
-    <div className="mt-4">
-      <CopyCommand command={demoCommand} />
     </div>
   </div>
 )
