@@ -27,14 +27,12 @@ import {
 import { Publisher } from "./Publisher.ts"
 import {
   deviceLastSuccess,
+  makeValueCounters,
   pointReadFailures,
   pollCycles,
   pollDuration,
   publishFailures,
-  pushedReadings,
   readFailures,
-  valuesPublished,
-  valuesSuppressed,
   withMetricAttributes
 } from "./Telemetry.ts"
 import { metaTopic, pointTopic } from "./Topic.ts"
@@ -124,6 +122,8 @@ const countCycle = (outcome: "ok" | "read_failed" | "publish_failed" | "timed_ou
  */
 export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, driver: Driver) {
   const publisher = yield* Publisher
+  /** This device's own instances of the per-value counters (`makeValueCounters`). */
+  const counters = makeValueCounters()
   const points = new Map(driver.points.map((p) => [p.id, p] as const))
   const policies = new Map(driver.points.map((p) => [p.id, publishOf(ctx.publish, p)] as const))
   const policyOf = (pointId: string) => policies.get(pointId) ?? everyRead
@@ -296,7 +296,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         const quietTooLong =
           policy.maxSilenceMs !== undefined && sentAt !== undefined && atMono - sentAt >= policy.maxSilenceMs
         if (!quietTooLong && !exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, policy.deadband)) {
-          return yield* Metric.update(valuesSuppressed, 1)
+          return yield* Metric.update(counters.suppressed, 1)
         }
         // Only remember the value once it is out, so a failed publish is retried with the next read.
         if (!(yield* send(point.id, message))) return
@@ -313,7 +313,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       Effect.as(true),
       Effect.catchTag("PublishError", (error) => Effect.as(skipRefused(error), false))
     )
-    if (sent) yield* Metric.update(valuesPublished, 1)
+    if (sent) yield* Metric.update(counters.published, 1)
     return sent
   })
 
@@ -448,7 +448,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     driver.changes === undefined
       ? Effect.void
       : Stream.runForEach(driver.changes, (reading) =>
-          Metric.update(pushedReadings, 1).pipe(
+          Metric.update(counters.pushed, 1).pipe(
             // Under the deadline, so a hung publish cannot keep the permit from the polling cycle forever.
             Effect.andThen(handling.withPermit(handleReading(reading)).pipe(deadline("pushed-value"))),
             // The value is lost; the next change, renewal notification or poll brings the point's value again.

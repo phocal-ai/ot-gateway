@@ -318,6 +318,32 @@ describe("PUBLISH", () => {
     expect(decodePublish(split.flags, split.body)).toEqual(Result.succeed(publish))
   })
 
+  it("round-trips every property, across the lengths where the remaining length grows a byte (§1.5.5)", () => {
+    // 127/128 and 16,383/16,384 bytes of body are where the Variable Byte Integer goes from 1 to 2 and 2 to 3 bytes.
+    for (const payloadLength of [0, 100, 101, 102, 16_350, 16_360, 16_400, 70_000]) {
+      for (const version of [5, 4] as const) {
+        const publish = {
+          topic: "gebäude/wärme/°C",
+          payload: new Uint8Array(payloadLength).fill(0x61),
+          qos: 1,
+          retain: false,
+          packetId: 0xfffe,
+          ...(version === 5
+            ? { messageExpirySeconds: 3600, responseTopic: "réponse/1", correlationData: bytes(1, 2, 3) }
+            : {})
+        } as const
+        const split = bodyOf(encodePublish(publish, version), PacketType.PUBLISH)
+        expect(decodePublish(split.flags, split.body, version)).toEqual(Result.succeed(publish))
+      }
+    }
+  })
+
+  it("refuses a topic longer than 65,535 bytes", () => {
+    expect(() =>
+      encodePublish({ topic: "ä".repeat(40_000), payload: new Uint8Array(), qos: 0, retain: false })
+    ).toThrow(RangeError)
+  })
+
   it("rejects QoS 2", () => {
     const split = bodyOf(
       encodePublish({ topic: "t", payload: new Uint8Array(), qos: 1, retain: false, packetId: 1 }),

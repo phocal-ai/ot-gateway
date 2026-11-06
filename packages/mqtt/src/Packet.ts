@@ -17,6 +17,7 @@ import {
   decodeVariableByteInteger,
   encodeUtf8String,
   encodeVariableByteInteger,
+  MAX_VARIABLE_BYTE_INTEGER,
   MqttCodecError,
   PacketType
 } from "./Codec.ts"
@@ -585,25 +586,88 @@ export interface Publish {
  * expiry, response topic and correlation data are left out there.
  */
 export const encodePublish = (publish: Publish, version: ProtocolVersion = 5): Uint8Array => {
-  const body = new Writer().string(publish.topic)
-  if (publish.qos > 0) body.u16(publish.packetId ?? 0)
-  if (version === 4) {
-    body.bytes(publish.payload)
-    return packet(PacketType.PUBLISH, (publish.qos << 1) | (publish.retain ? 1 : 0), body.toBytes())
+  // The hot path of the gateway, one call per value: sizes first, then one buffer written in place.
+  const topic = utf8String(publish.topic)
+  const withProperties = version === 5
+  const responseTopic =
+    withProperties && publish.responseTopic !== undefined ? utf8String(publish.responseTopic) : undefined
+  const expiry = withProperties ? publish.messageExpirySeconds : undefined
+  const correlation = withProperties ? publish.correlationData : undefined
+  let propertiesLength = 0
+  if (withProperties) {
+    propertiesLength = 2
+    if (expiry !== undefined) propertiesLength += 5
+    if (responseTopic !== undefined) propertiesLength += 3 + responseTopic.length
+    if (correlation !== undefined) propertiesLength += 3 + correlation.length
   }
-  body
-    .bytes(
-      encodeProperties((w) => {
-        w.byte(Property.PayloadFormatIndicator).byte(1)
-        if (publish.messageExpirySeconds !== undefined) {
-          w.byte(Property.MessageExpiryInterval).u32(publish.messageExpirySeconds)
-        }
-        if (publish.responseTopic !== undefined) w.byte(Property.ResponseTopic).string(publish.responseTopic)
-        if (publish.correlationData !== undefined) w.byte(Property.CorrelationData).binary(publish.correlationData)
-      })
-    )
-    .bytes(publish.payload)
-  return packet(PacketType.PUBLISH, (publish.qos << 1) | (publish.retain ? 1 : 0), body.toBytes())
+  const bodyLength =
+    2 +
+    topic.length +
+    (publish.qos > 0 ? 2 : 0) +
+    (withProperties ? variableByteIntegerLength(propertiesLength) + propertiesLength : 0) +
+    publish.payload.length
+  const out = new Uint8Array(1 + variableByteIntegerLength(bodyLength) + bodyLength)
+  out[0] = (PacketType.PUBLISH << 4) | (publish.qos << 1) | (publish.retain ? 1 : 0)
+  let offset = writeVariableByteInteger(out, 1, bodyLength)
+  offset = writeU16(out, offset, topic.length)
+  out.set(topic, offset)
+  offset += topic.length
+  if (publish.qos > 0) offset = writeU16(out, offset, publish.packetId ?? 0)
+  if (withProperties) {
+    offset = writeVariableByteInteger(out, offset, propertiesLength)
+    out[offset++] = Property.PayloadFormatIndicator
+    out[offset++] = 1
+    if (expiry !== undefined) {
+      out[offset++] = Property.MessageExpiryInterval
+      new DataView(out.buffer).setUint32(offset, expiry >>> 0)
+      offset += 4
+    }
+    if (responseTopic !== undefined) {
+      out[offset++] = Property.ResponseTopic
+      offset = writeU16(out, offset, responseTopic.length)
+      out.set(responseTopic, offset)
+      offset += responseTopic.length
+    }
+    if (correlation !== undefined) {
+      out[offset++] = Property.CorrelationData
+      offset = writeU16(out, offset, correlation.length)
+      out.set(correlation, offset)
+      offset += correlation.length
+    }
+  }
+  out.set(publish.payload, offset)
+  return out
+}
+
+/** A string's UTF-8 bytes, at most 65,535 of them (§1.5.4). */
+const utf8String = (value: string): Uint8Array => {
+  const bytes = encoder.encode(value)
+  if (bytes.length > 0xffff) throw new RangeError("string too long")
+  return bytes
+}
+
+/** How many bytes `value` takes as a Variable Byte Integer (§1.5.5). */
+const variableByteIntegerLength = (value: number): number => {
+  if (value > MAX_VARIABLE_BYTE_INTEGER) throw new RangeError(`value out of range: ${value}`)
+  return value < 128 ? 1 : value < 16_384 ? 2 : value < 2_097_152 ? 3 : 4
+}
+
+/** Writes `value` as a Variable Byte Integer at `offset` (§1.5.5); returns the offset after it. */
+const writeVariableByteInteger = (out: Uint8Array, offset: number, value: number): number => {
+  let rest = value
+  do {
+    let byte = rest % 128
+    rest = Math.floor(rest / 128)
+    if (rest > 0) byte |= 0x80
+    out[offset++] = byte
+  } while (rest > 0)
+  return offset
+}
+
+const writeU16 = (out: Uint8Array, offset: number, value: number): number => {
+  out[offset] = (value >> 8) & 0xff
+  out[offset + 1] = value & 0xff
+  return offset + 2
 }
 
 /** Decode a PUBLISH body with its fixed-header flags (the broker, and a client receiving commands). */

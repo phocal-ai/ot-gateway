@@ -229,7 +229,8 @@ const countConnect = (outcome: "ok" | "failed" | "rejected") =>
 const topicProblem = (topic: string): string | undefined => {
   if (topic.length === 0) return "topic is empty"
   if (topic.includes("+") || topic.includes("#")) return "topic contains a wildcard"
-  if (encoder.encode(topic).length > 0xffff) return "topic is longer than 65,535 bytes"
+  // A UTF-16 code unit is at most 3 bytes of UTF-8: only a topic that long can be over, so most skip the encoding.
+  if (topic.length > 0xffff / 3 && encoder.encode(topic).length > 0xffff) return "topic is longer than 65,535 bytes"
   return undefined
 }
 
