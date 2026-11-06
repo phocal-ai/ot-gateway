@@ -17,7 +17,8 @@ pnpm typecheck
 pnpm test
 pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
 pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
-pnpm ot-gateway init                       # questions in, ot-gateway.json out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init                       # questions in, ot-gateway.json, compose.yaml and ot-gateway.env out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)

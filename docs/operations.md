@@ -54,7 +54,7 @@ npx ot-gateway init                     # a few questions → ot-gateway.json, c
 npx ot-gateway check ot-gateway.json
 ```
 
-The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
+The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked: `npx ot-gateway init --yes --site vienna-hq --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `check --json` and `status --json` print their results as JSON. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
 
 ### systemd, without Docker
 
