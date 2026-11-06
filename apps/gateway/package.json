@@ -26,5 +26,8 @@
     "@ot-gateway/mqtt": "workspace:*",
     "@ot-gateway/simulator": "workspace:*",
     "effect": "4.1.2"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }
