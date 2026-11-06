@@ -8,7 +8,10 @@
  * the caller decides what to
  * retry: the pipeline retries `$meta` on the next cycle, and `@ot-gateway/buffer`
  * stores values for later. QoS 1 publishes complete on
- * PUBACK. The session is clean (no session state survives a reconnect), so
+ * PUBACK. Publishes go on the wire in the order they were called, also when
+ * several wait for the connection at once (§4.6 keeps that order to the
+ * subscribers), so values buffered during an outage do not overtake each
+ * other when it ends. The session is clean (no session state survives a reconnect), so
  * nothing unacknowledged is resent behind the caller's back.
  *
  * Dead connections are noticed three ways: the broker stays silent past
@@ -214,6 +217,9 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   // Opens once the first dial has connected or failed.
   const firstDialDone = yield* Latch.make(false)
   let session: Session | undefined
+  // Wire order: each publish waits until the one called before it has written its packet or given up.
+  let lastTurn: Deferred.Deferred<void> = Deferred.makeUnsafe<void>()
+  Deferred.doneUnsafe(lastTurn, Effect.void)
 
   /** One connection, from dialing until it fails. Never succeeds. */
   /** `onConnected` returns how many dials failed before this one, for the log. */
@@ -544,16 +550,27 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       let sent = false
       let blameless = false
       let used: Session | undefined
+      const previousTurn = lastTurn
+      const turn = Deferred.makeUnsafe<void>()
+      lastTurn = turn
+      const passTurn = Effect.sync(() => Deferred.doneUnsafe(turn, Effect.void))
       return Effect.gen(function* () {
         const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
         const problem = topicProblem(topic)
         if (problem !== undefined) return yield* rejected(problem)
-        yield* (options.waitForConnection === false ? firstDialDone : connected).await.pipe(
-          Effect.timeoutOrElse({
-            duration: publishTimeout,
-            orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
-          })
-        )
+        const notConnected = () => new MqttConnectionError({ message: "not connected to the broker" })
+        const withinPublishTimeout = Effect.timeoutOrElse({
+          duration: publishTimeout,
+          orElse: () => Effect.fail(notConnected())
+        })
+        if (options.waitForConnection === false) {
+          // Told not to wait: once the first dial is over, no connection fails now instead of queueing behind others.
+          yield* firstDialDone.await.pipe(withinPublishTimeout)
+          if (session === undefined) return yield* notConnected()
+          yield* Deferred.await(previousTurn).pipe(withinPublishTimeout)
+        } else {
+          yield* Deferred.await(previousTurn).pipe(Effect.andThen(connected.await), withinPublishTimeout)
+        }
         const current = session
         if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
         used = current
@@ -572,7 +589,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           if (packet.length > current.maximumPacketSize) {
             return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
           }
-          return yield* current.write(packet)
+          return yield* current.write(packet).pipe(Effect.ensuring(passTurn))
         }
 
         // One deadline covers waiting for an inflight slot (Receive Maximum), sending and the PUBACK.
@@ -589,7 +606,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             const acked = yield* Deferred.make<number, MqttConnectionError>()
             current.inflight.set(packetId, acked)
             return yield* Effect.gen(function* () {
-              yield* current.write(packet)
+              yield* current.write(packet).pipe(Effect.ensuring(passTurn))
               sent = true
               return yield* Deferred.await(acked)
             }).pipe(Effect.ensuring(Effect.sync(() => current.inflight.delete(packetId))))
@@ -622,6 +639,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           return yield* new MqttPublishError({ topic, reason: "unavailable", message })
         }
       }).pipe(
+        Effect.ensuring(passTurn),
         Effect.catchTag("MqttConnectionError", (error) =>
           Effect.fail(
             new MqttPublishError({

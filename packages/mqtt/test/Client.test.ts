@@ -5,7 +5,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@ot-gateway/core"
-import { ConfigProvider, Context, Effect, Exit, Layer, Metric, Redacted, Scope } from "effect"
+import { ConfigProvider, Context, Effect, Exit, Fiber, Layer, Metric, Redacted, Scope } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { makeBrokerControl, makeMqttClient, MqttPublisher, parseBrokerUrl, Property, serveMqtt } from "../src/index.ts"
 import type { BrokerControl, MqttClient, MqttClientOptions } from "../src/index.ts"
@@ -193,6 +193,26 @@ describe("MQTT client over TCP", () => {
       expect(second.control.messages.map((m) => m.payload)).toEqual(["after"])
       expect(yield* connectCount("restart", "ok")).toBe(2)
     }).pipe(withMetricAttributes({ test: "restart" }))
+  )
+
+  it.live("sends publishes in the order they were called, also across a reconnect", () =>
+    Effect.gen(function* () {
+      const firstScope = yield* Scope.make()
+      const first = yield* startBroker().pipe(Scope.provide(firstScope))
+      const client = yield* clientOn(first.port, { publishTimeout: "3 seconds" })
+      yield* connectedClient(client)
+      yield* Scope.close(firstScope, Exit.void)
+      yield* eventually(Effect.map(client.isConnected, (connected) => !connected))
+
+      // Waits for the connection; the next one is called as soon as the client has one again.
+      const waiting = yield* Effect.forkChild(client.publish("t", "older"))
+      yield* Effect.yieldNow
+      const second = yield* startBroker(makeBrokerControl(), first.port)
+      while (!(yield* client.isConnected)) yield* Effect.yieldNow
+      yield* client.publish("t", "newer")
+      yield* Fiber.join(waiting)
+      expect(second.control.messages.map((message) => message.payload)).toEqual(["older", "newer"])
+    })
   )
 
   it.live(

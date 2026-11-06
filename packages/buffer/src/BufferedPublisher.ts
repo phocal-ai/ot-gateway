@@ -82,7 +82,7 @@ const drainConcurrency = 16
 const maxStrikes = 3
 
 /** After a failed insert, values skip the outbox this long, so a locked file does not slow every publish. */
-const storeBackoffMillis = 1_000
+export const storeBackoffMillis = 1_000
 
 type DropReason = Exclude<BufferDropReason, "overflow">
 type Operation = "insert" | "delete" | "read" | "open"
