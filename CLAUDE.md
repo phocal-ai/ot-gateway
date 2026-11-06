@@ -37,7 +37,7 @@ scripts/build-package.sh   # the ot-gateway npm package (the CLI bundled, with t
 
 Turborepo caches `typecheck` and `test` locally and in a remote cache on Vercel (team `wimluks-projects`; `pnpm exec turbo login` and `turbo link` once per machine, `TURBO_TOKEN` in CI). A cached task is replayed only when none of its declared inputs changed, so **a test that reads a file outside its package must list that file in the package's `turbo.json` inputs**, as `packages/core` does for `docs/configuration.md`. Otherwise a change to that file replays a stale pass. Before changing Turborepo config, read `AGENTS.md`: turbo keeps a block there that points at the docs bundled with the installed version.
 
-There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
+There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`. What ships is a bundle: the npm package and the container image's entrypoint run `apps/gateway/src/main.mjs`, built by `scripts/bundle.sh` (esbuild), because one file starts about three times faster on a Pi and a running gateway keeps a third less heap. Code that finds a file through `import.meta.url` must work from that bundle too (the image smoke test checks the profiles and the version).
 
 `tsc` is TypeScript 7 (the Go-native compiler), patched by `@effect/tsgo` on `pnpm install` (the root `prepare` script) so that `pnpm typecheck` also reports Effect language-service diagnostics. Their severities are set in `tsconfig.base.json`; the ones set to `error` fail the build. If typecheck stops reporting Effect diagnostics, run `pnpm exec effect-tsgo patch`.
 

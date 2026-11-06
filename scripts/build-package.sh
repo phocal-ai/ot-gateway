@@ -29,13 +29,9 @@ version=${tag#v}
 rm -rf "$out" "$repo"/dist/ot-gateway-*.tgz
 mkdir -p "$out/apps/gateway/src" "$out/apps/web" "$out/examples" "$out/packaging" "$out/profiles"
 
-# The status page (a static export, cached by Turborepo) and the bundle. The target is the oldest Node the
-# package supports; main.ts's shebang (with --max-semi-space-size) stays at the top of the bundle.
+# The status page (a static export, cached by Turborepo) and the bundle (scripts/bundle.sh, which the image runs too).
 pnpm -C "$repo" exec turbo run build --filter=@ot-gateway/web --output-logs=errors-only
-pnpm -C "$repo/apps/gateway" exec esbuild src/main.ts --bundle --platform=node --format=esm \
-  --target=node22.18 --log-level=warning --outfile="$out/apps/gateway/src/main.mjs" \
-  --banner:js="import { createRequire as __otGatewayRequire } from 'node:module'; const require = __otGatewayRequire(import.meta.url);"
-chmod 755 "$out/apps/gateway/src/main.mjs"
+"$repo/scripts/bundle.sh" "$out/apps/gateway/src/main.mjs"
 cp -R "$repo/apps/web/out" "$out/apps/web/out"
 cp "$repo/examples/gateway.json" "$out/examples/"
 # What `init` writes next to ot-gateway.json (Folder.ts).
