@@ -78,7 +78,7 @@ The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads 
 | `ot-gateway init [config]`           | ask for the site, broker and devices, and write a config (default `ot-gateway.json`), `compose.yaml` and `ot-gateway.env` next to it |
 | `ot-gateway run [config]`            | run the gateway with that config                                                                                                     |
 | `ot-gateway check [config]`          | validate a config without connecting to anything, listing every mistake with its path                                                |
-| `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config (below)                                                                        |
+| `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config, or write it as a points list with `--points-list` (below)                     |
 | `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points))                      |
 | `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in                                                                |
 | `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker                                                    |
@@ -114,6 +114,7 @@ To draft BACnet points yourself, `discover` finds the devices through the config
 
 ```bash
 pnpm ot-gateway discover path/to/gateway.json
+pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it
 ```
 
 Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.

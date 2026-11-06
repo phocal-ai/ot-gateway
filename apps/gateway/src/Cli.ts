@@ -17,7 +17,7 @@ import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, Option } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover } from "./Discover.ts"
+import { discover, discoverToPointsList } from "./Discover.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { nextSteps, runInit } from "./Init.ts"
@@ -76,12 +76,27 @@ const check = Command.make("check", { config: configPath }, ({ config }) =>
   Effect.flatMap(loadConfig(config), (decoded) => Console.log(describeConfig(decoded)))
 ).pipe(Command.withDescription("Validate a config without connecting to anything; lists every mistake with its path"))
 
-const discoverCommand = Command.make("discover", { config: configPath }, ({ config }) =>
-  Effect.flatMap(loadConfig(config), discover)
+const discoverCommand = Command.make(
+  "discover",
+  {
+    config: configPath,
+    pointsList: Flag.String("points-list").pipe(
+      Flag.withDescription("Write the devices found as a points list (CSV) to this file, to trim and import"),
+      Flag.optional
+    )
+  },
+  ({ config, pointsList }) =>
+    Effect.flatMap(loadConfig(config), (decoded) =>
+      Option.isSome(pointsList) ? discoverToPointsList(decoded, pointsList.value) : discover(decoded)
+    )
 ).pipe(
   Command.withDescription(
     "Find BACnet devices through the config's bacnet settings and print a draft of their devices entries, read-only"
-  )
+  ),
+  Command.withExamples([
+    { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
+    { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" }
+  ])
 )
 
 const demo = Command.make(
