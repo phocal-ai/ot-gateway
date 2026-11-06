@@ -4,9 +4,9 @@
  * prints one line per message: the time, `retained` for what the broker kept, the topic and the payload.
  */
 import type { GatewayConfig } from "@ot-gateway/core"
-import { type InboundMessage, makeMqttClient, parseBrokerUrl } from "@ot-gateway/mqtt"
-import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { Config, Console, Duration, Effect, Random } from "effect"
+import type { InboundMessage } from "@ot-gateway/mqtt"
+import { Console, Duration, Effect } from "effect"
+import { brokerClient } from "./Broker.ts"
 
 /** Payloads are cut here on the terminal; the status page and any MQTT client show them whole. */
 const MAX_PAYLOAD = 300
@@ -37,18 +37,8 @@ export interface WatchOptions {
  * container running: a watch that ends by itself needs no one to stop it.
  */
 export const watch = Effect.fn("watch")(function* (config: GatewayConfig, options: WatchOptions = {}) {
-  const address = yield* parseBrokerUrl(config.mqtt.url)
-  const password = config.mqtt.passwordEnv === undefined ? undefined : yield* Config.Redacted(config.mqtt.passwordEnv)
   const filter = options.topic ?? watchFilter(config)
-  const openTimeout = "10 seconds"
-  const socket = address.tls
-    ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
-    : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
-  const suffix = (yield* Random.nextIntBetween(0, 0xffffff)).toString(16).padStart(6, "0")
-  yield* makeMqttClient(socket, {
-    clientId: `ot-gateway-watch-${suffix}`,
-    ...(config.mqtt.username === undefined ? {} : { username: config.mqtt.username }),
-    ...(password === undefined ? {} : { password }),
+  yield* brokerClient(config.mqtt, "watch", {
     subscriptions: [{ filter, qos: 0, retainAsPublished: true }],
     onConnect: () =>
       Console.error(

@@ -8,6 +8,8 @@
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
  *   ot-gateway watch [config]       print what arrives at the config's broker
+ *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
+ *   ot-gateway publish <topic> [payload]  one message to the config's broker (empty and --retain clears)
  *   ot-gateway status [--url]       the running gateway's status, one line per device
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
@@ -25,6 +27,7 @@ import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
+import { checkBroker, formatBrokerReport, formatPublished, publishOnce } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
 import { ConfigFileError, loadConfig } from "./LoadConfig.ts"
@@ -456,6 +459,66 @@ const watchCommand = Command.make(
   ])
 )
 
+const brokerCommand = Command.make("broker", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+  loadConfig(config).pipe(
+    Effect.flatMap(checkBroker),
+    Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatBrokerReport(report)))),
+    jsonFailure(json, { path: config })
+  )
+).pipe(
+  Command.withDescription(
+    "Connect to the config's broker: the MQTT it speaks (5 or 3.1.1), what it allows, and a message there and back"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway broker", description: "Check the broker in ot-gateway.json" },
+    { command: "ot-gateway broker /etc/ot-gateway/gateway.json --json", description: "Another config, as JSON" }
+  ])
+)
+
+const publishCommand = Command.make(
+  "publish",
+  {
+    topic: Argument.String("topic").pipe(Argument.withDescription("The topic, without wildcards")),
+    payload: Argument.String("payload").pipe(
+      Argument.withDescription("The message; empty when left out"),
+      Argument.withDefault("")
+    ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription("Path of the gateway's JSON config"),
+      Flag.withDefault("ot-gateway.json")
+    ),
+    retain: Flag.Boolean("retain").pipe(
+      Flag.withDescription(
+        "Ask the broker to keep it for later subscribers; an empty retained message clears the topic"
+      ),
+      Flag.withDefault(false)
+    ),
+    qos: Flag.ChoiceWithValue("qos", [
+      ["0", 0],
+      ["1", 1]
+    ] as const).pipe(
+      Flag.withDescription("0 sends and forgets, 1 waits until the broker confirmed it"),
+      Flag.withDefault(1 as const)
+    ),
+    json: jsonFlag
+  },
+  ({ topic, payload, config, retain, qos, json }) =>
+    loadConfig(config).pipe(
+      Effect.flatMap((decoded) => publishOnce(decoded, topic, payload, { retain, qos })),
+      Effect.flatMap((result) => (json ? printJson(result) : Console.log(formatPublished(result)))),
+      jsonFailure(json, { topic })
+    )
+).pipe(
+  Command.withDescription("Send one message to the config's broker, as the gateway's user"),
+  Command.withExamples([
+    { command: "ot-gateway publish my-site/main/test hello", description: "A message, QoS 1" },
+    {
+      command: "ot-gateway publish 'my-site/main/old-device/temp/$meta' --retain",
+      description: "Clear a retained message the broker keeps for a device that is gone"
+    }
+  ])
+)
+
 const status = Command.make(
   "status",
   {
@@ -478,6 +541,7 @@ export const rootDescription = [
   "    import <list> --dry-run --json   check a points list, row by row",
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
   "    check --json                     every mistake in a config, with its path",
+  "    broker --json                    the broker: MQTT version, limits, a round trip",
   "    status --json                    the running gateway, device by device"
 ].join("\n")
 
@@ -493,6 +557,8 @@ export const cli = Command.make("ot-gateway").pipe(
     points,
     profiles,
     watchCommand,
+    brokerCommand,
+    publishCommand,
     status
   ])
 )
@@ -507,6 +573,8 @@ const subcommands = new Set([
   "points",
   "profiles",
   "watch",
+  "broker",
+  "publish",
   "status"
 ])
 

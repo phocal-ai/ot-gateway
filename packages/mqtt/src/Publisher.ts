@@ -171,6 +171,7 @@ export const MqttPublisher = (
       const client = yield* makeMqttClient(socket, {
         ...clientOptions,
         clientId: settings.clientId ?? `ot-gateway-${hostname()}`,
+        protocolVersion: settings.version,
         ...(settings.username === undefined ? {} : { username: settings.username }),
         ...(password === undefined ? {} : { password }),
         ...(health === undefined

@@ -72,7 +72,7 @@ const startBroker = (control: BrokerControl) =>
     yield* serveMqtt(server, control).pipe(Effect.forkScoped)
     const port = server.address._tag === "UnixPathAddress" ? 0 : server.address.port
     return MqttPublisher(
-      { url: `mqtt://127.0.0.1:${port}`, clientId: "chaos-buffer" },
+      { version: "auto", url: `mqtt://127.0.0.1:${port}`, clientId: "chaos-buffer" },
       {
         waitForConnection: false,
         publishTimeout: "300 millis",

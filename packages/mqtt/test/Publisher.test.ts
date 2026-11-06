@@ -29,8 +29,9 @@ const capturingWarnings = () => {
 }
 
 /** The password warnings from starting a publisher for `settings` with no broker there, through a minute of redials. */
-const passwordWarningsAtStartup = (settings: MqttSettings) =>
+const passwordWarningsAtStartup = (settingsWithoutVersion: Omit<MqttSettings, "version">) =>
   Effect.gen(function* () {
+    const settings: MqttSettings = { version: "auto", ...settingsWithoutVersion }
     const capture = capturingWarnings()
     const network = makeMemoryNetwork().host("10.0.0.1")
     yield* Effect.gen(function* () {
@@ -45,7 +46,13 @@ describe("MqttPublisher password warning", () => {
     Effect.gen(function* () {
       const capture = capturingWarnings()
       const memory = makeMemoryNetwork()
-      const settings = { url: "mqtt://10.0.0.2:1883", clientId: "gw", username: "gw", passwordEnv: "MQTT_PASSWORD" }
+      const settings = {
+        version: "auto" as const,
+        url: "mqtt://10.0.0.2:1883",
+        clientId: "gw",
+        username: "gw",
+        passwordEnv: "MQTT_PASSWORD"
+      }
       yield* Effect.gen(function* () {
         yield* Layer.build(MqttPublisher(settings, { network: memory.host("10.0.0.1") }))
         // Redials while nobody listens, then a connection, a broker crash and a reconnect.
