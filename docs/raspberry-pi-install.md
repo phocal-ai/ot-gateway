@@ -139,7 +139,7 @@ cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 Write the config as `ot-gateway.json`: with `/setup` and an AI assistant in a clone of this repository (README, "Set it up with AI"), or by hand from [configuration.md](configuration.md) and `examples/gateway.json`. Three things matter on a Pi:
 
 - `mqtt.url` and every device's address must be reachable from the Pi. `localhost` means the Pi itself, not your laptop.
-- `buffer.path` is `/var/lib/ot-gateway/buffer.sqlite`, so the outbox outlives the container.
+- `buffer.path` can stay as `ot-gateway init` writes it (`./ot-gateway-buffer.sqlite`): relative paths land in the container's data volume, so the outbox outlives the container.
 - `"status": {}` is there, or the status page in part 8 stays off.
 
 Copy it to the Pi:
@@ -148,31 +148,30 @@ Copy it to the Pi:
 scp ot-gateway.json ot-gateway:
 ```
 
-On the Pi, fetch the Compose file of the release you install, put the config in place, and check it with the gateway itself:
+On the Pi, make a folder for the gateway, fetch the Compose file of the release you install, move the config next to it, and check it with the gateway itself:
 
 ```bash
+mkdir -p ~/ot-gateway && cd ~/ot-gateway
 curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml
-sudo install -d -m 755 /etc/ot-gateway && sudo install -d -o 1000 -g 1000 /var/lib/ot-gateway
-sudo install -m 644 ~/ot-gateway.json /etc/ot-gateway/gateway.json
-[ -e /etc/ot-gateway/gateway.env ] || sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/ot-gateway/gateway.env
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.7.0 --check /etc/ot-gateway/gateway.json
+mv ~/ot-gateway.json .
+docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
 ```
 
-The check prints `config ok` and what it will poll; anything else names the field to fix. The fourth line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner), and leaves an existing one alone. If the config names a broker password or other secrets (`/setup` puts them in `ot-gateway.env`), add those lines:
+The check prints `config ok` and what it will poll; anything else names the field to fix. No `sudo` is needed: the outbox and the history go to a Docker volume. If the config names a broker password or other secrets (`/setup` puts them in `ot-gateway.env`), copy that file next to the config too, readable by you only:
 
 ```bash
-sudo nano /etc/ot-gateway/gateway.env
+chmod 600 ~/ot-gateway/ot-gateway.env
 ```
 
 ## 7. Start it
 
 ```bash
-docker compose -f compose.yaml up -d
+cd ~/ot-gateway && docker compose up -d
 ```
 
-This `compose.yaml` in your home folder is the one [operations.md](operations.md) calls `packaging/compose.yaml`: run its upgrade and log commands from your home folder, with `compose.yaml`.
+Run the upgrade and config commands of [operations.md](operations.md) from `~/ot-gateway`, where `compose.yaml` is.
 
-The first start downloads the image, about a minute on Wi-Fi. The Compose file pins the release, restarts the gateway after a crash and at boot, caps its memory at 768 MB and keeps Docker's logs from filling the SD card. If Compose says `Your kernel does not support memory limit capabilities`, the memory step in part 5 is missing: do it, then recreate the container with `docker compose -f compose.yaml up -d --force-recreate`.
+The first start downloads the image, about a minute on Wi-Fi. The Compose file pins the release, restarts the gateway after a crash and at boot, caps its memory at 768 MB and keeps Docker's logs from filling the SD card. If Compose says `Your kernel does not support memory limit capabilities`, the memory step in part 5 is missing: do it, then recreate the container with `docker compose up -d --force-recreate`.
 
 After half a minute, the log should say it connected to the broker and found the devices, without warnings:
 

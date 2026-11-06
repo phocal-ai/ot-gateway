@@ -8,33 +8,39 @@ The fastest way to a first config is `/setup` in Claude Code (README, "Set it up
 
 ### Docker Compose (recommended)
 
-One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much as an industrial PC: `ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for every release. On a Pi it needs the 64-bit Raspberry Pi OS; there is no 32-bit ARM image. It reads `/etc/ot-gateway/gateway.json` and runs as uid 1000. Set `buffer.path` to `/var/lib/ot-gateway/buffer.sqlite` and `history.path` to `/var/lib/ot-gateway/history.sqlite` so the outbox and the history outlive the container.
+One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much as an industrial PC: `ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for every release. On a Pi it needs the 64-bit Raspberry Pi OS; there is no 32-bit ARM image. It needs Docker Compose 2.24 or newer (`docker compose version`), and no `sudo` or folders made by hand: put [`compose.yaml`](../packaging/compose.yaml) in a folder of its own with `ot-gateway.json` next to it, and start it from there.
 
 ```bash
-sudo install -d -m 755 /etc/ot-gateway && sudo install -d -o 1000 -g 1000 /var/lib/ot-gateway
+mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 
 ```bash
-sudo install -m 644 ot-gateway.json /etc/ot-gateway/gateway.json
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml
+```
+
+Copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
+
+```bash
+docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
 ```
 
 ```bash
-sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env
+docker compose up -d
 ```
 
-```bash
-docker compose -f packaging/compose.yaml up -d
-```
+The outbox and the history live in the `ot-gateway_data` volume, which is also the gateway's working directory: a relative `buffer.path` such as `./ot-gateway-buffer.sqlite` (what `ot-gateway init` writes) lands in it, and so does an absolute one under `/var/lib/ot-gateway`. Either way they outlive the container.
 
-[`packaging/compose.yaml`](../packaging/compose.yaml) pins a release tag, uses host networking (BACnet discovery and change of value need the building network's broadcasts, and the status page listens on the host's loopback), restarts the gateway after a crash and at boot, gives it 30 seconds to stop cleanly, caps Docker's own log files (it keeps them forever on the SD card otherwise) and holds the container to 768 MB. Raspberry Pi OS boots with memory limits off, and Compose then warns `Your kernel does not support memory limit capabilities` and runs the gateway without one: add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt`, restart the Pi and recreate the container ([raspberry-pi-install.md](raspberry-pi-install.md), part 5). The systemd unit's 512 MB limit below needs the same.
+`compose.yaml` pins a release tag, uses host networking (BACnet discovery and change of value need the building network's broadcasts, and the status page listens on the host's loopback), restarts the gateway after a crash and at boot, gives it 30 seconds to stop cleanly, caps Docker's own log files (it keeps them forever on the SD card otherwise) and holds the container to 768 MB. It refuses to start without `ot-gateway.json` next to it rather than mount an empty folder in its place. Raspberry Pi OS boots with memory limits off, and Compose then warns `Your kernel does not support memory limit capabilities` and runs the gateway without one: add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt`, restart the Pi and recreate the container ([raspberry-pi-install.md](raspberry-pi-install.md), part 5). The systemd unit's 512 MB limit below needs the same.
 
-Without Compose, the same as one command:
+Without Compose, the same as one command, from the same folder:
 
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
-  -v /etc/ot-gateway:/etc/ot-gateway:ro -v /var/lib/ot-gateway:/var/lib/ot-gateway \
-  ghcr.io/phocal-ai/ot-gateway:v0.7.0
+  -v "$PWD/ot-gateway.json:/etc/ot-gateway/gateway.json:ro" -v ot-gateway_data:/var/lib/ot-gateway \
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.7.0
 ```
+
+Leave out `--env-file ot-gateway.env` when there is no such file.
 
 ### The CLI from npm
 
@@ -84,7 +90,7 @@ sudo systemctl restart ot-gateway
 
 ## Change the config
 
-Edit, check, restart. A config that fails the check leaves the running gateway alone.
+Edit, check, restart. A config that fails the check leaves the running gateway alone. Under systemd:
 
 ```bash
 sudoedit /etc/ot-gateway/gateway.json
@@ -98,7 +104,17 @@ cd /opt/ot-gateway && sudo -u ot-gateway node apps/gateway/src/main.ts --check /
 sudo systemctl restart ot-gateway
 ```
 
-Or run `install.sh` again with the new file: it checks it before replacing the old one. To find BACnet devices for the config, stop the gateway first (both need UDP 47808), then run `node apps/gateway/src/main.ts --discover /etc/ot-gateway/gateway.json`.
+With Docker Compose, edit `ot-gateway.json` next to `compose.yaml`, check it and recreate the container, from that folder:
+
+```bash
+docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
+```
+
+```bash
+docker compose up -d --force-recreate
+```
+
+Under systemd, you can also run `install.sh` again with the new file: it checks it before replacing the old one. To find BACnet devices for the config, stop the gateway first (both need UDP 47808), then run `node apps/gateway/src/main.ts --discover /etc/ot-gateway/gateway.json`.
 
 ## Upgrade
 
@@ -118,11 +134,43 @@ sudo packaging/install.sh
 
 Read the release notes for config changes first. If the new version refuses the config, the installer says so and changes nothing: the old version keeps running with its files and config. Fix the config and run it again.
 
-With Docker Compose, name the new tag; going back is the same with the old one. `/etc/ot-gateway` and the outbox stay, and the container stops cleanly first:
+With Docker Compose, name the new tag, from the folder with `compose.yaml`; going back is the same with the old one. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
-OT_GATEWAY_TAG=v0.7.0 docker compose -f packaging/compose.yaml up -d
+OT_GATEWAY_TAG=v0.7.0 docker compose up -d
 ```
+
+### From the `/etc/ot-gateway` layout (v0.7.0 and earlier)
+
+Until v0.7.0, `compose.yaml` read the config from `/etc/ot-gateway` and kept the outbox in `/var/lib/ot-gateway`, which had to be made with `sudo` first. Now both live with `compose.yaml`: the config next to it, the outbox and the history in the `ot-gateway_data` volume. To move an existing gateway without losing what is waiting in the outbox, make the folder and copy the config and the secrets into it:
+
+```bash
+mkdir -p ~/ot-gateway && cd ~/ot-gateway && cp /etc/ot-gateway/gateway.json ot-gateway.json
+```
+
+```bash
+[ -e /etc/ot-gateway/gateway.env ] && sudo install -m 600 -o "$USER" /etc/ot-gateway/gateway.env ot-gateway.env
+```
+
+Stop the old container cleanly, fetch the new `compose.yaml`, create the new container without starting it, and copy the outbox and the history into its volume:
+
+```bash
+docker stop -t 30 ot-gateway && docker rm ot-gateway
+```
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml && docker compose create
+```
+
+```bash
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.7.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+```
+
+```bash
+docker compose start
+```
+
+Paths in the config stay as they were: `/var/lib/ot-gateway/buffer.sqlite` is where the volume is mounted. Once the status page shows every device `ok`, `/etc/ot-gateway` and `/var/lib/ot-gateway` can go.
 
 ## Moving from Plenum
 
@@ -163,11 +211,7 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.7.0 --check /etc/ot-gateway/gateway.json
 ```
 
-```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml && docker compose -f compose.yaml up -d
-```
-
-Fetching `compose.yaml` replaces the one in the current directory: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
+Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
@@ -266,9 +310,17 @@ The gateway reads the firmware's flags every second, so a dip between two sample
 
 ## Telemetry
 
-With the standard OpenTelemetry variables in `/etc/ot-gateway/gateway.env`, the gateway sends traces, metrics and logs over OTLP; without them, nothing. See [observability/README.md](../observability/README.md) for the variables, the dashboard and the Grafana Cloud free-plan budget.
+With the standard OpenTelemetry variables in `ot-gateway.env` next to `compose.yaml` (or `/etc/ot-gateway/gateway.env` under systemd), the gateway sends traces, metrics and logs over OTLP; without them, nothing. See [observability/README.md](../observability/README.md) for the variables, the dashboard and the Grafana Cloud free-plan budget.
 
 ## Uninstall
+
+With Docker Compose, from the folder with `compose.yaml`; `-v` also deletes the volume with the outbox and the history:
+
+```bash
+docker compose down -v
+```
+
+Under systemd:
 
 ```bash
 sudo systemctl disable --now ot-gateway
