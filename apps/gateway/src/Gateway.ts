@@ -17,6 +17,7 @@ import {
   type GatewayConfig,
   type HealthRegistry,
   healthTopic,
+  type HistorySink,
   makeHealthRegistry,
   type Network,
   onlinePayload,
@@ -36,7 +37,7 @@ import { keepRunning } from "./KeepRunning.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { historyHandler, makeStatusState, serveStatus, type StatusState } from "./Status.ts"
-import { type History, openHistory } from "@ot-gateway/history"
+import { openHistory } from "@ot-gateway/history"
 import { traceSampleRatio } from "./Telemetry.ts"
 
 export interface GatewayOptions {
@@ -110,7 +111,7 @@ const runOne = (
   network: Network | undefined,
   drivers: DriverRegistry,
   modbusLinks: ReadonlyMap<string, ModbusLink>,
-  history: History | undefined
+  reads: HistorySink | undefined
 ) => {
   /** Poll the device, and take commands for it while doing so. */
   const run = (driver: Driver) => Effect.andThen(drivers.register(driver), runDevice(ctx, driver))
@@ -122,7 +123,7 @@ const runOne = (
     ...(device.publish === undefined ? {} : { publish: device.publish }),
     traceSampleRatio: sampleRatio,
     health,
-    ...(history === undefined ? {} : { history: history.sink })
+    ...(reads === undefined ? {} : { history: reads })
   }
   switch (device.protocol) {
     case "simulator":
@@ -171,6 +172,12 @@ const runDevices = Effect.fn("runGateway")(function* (
   const sampleRatio = yield* traceSampleRatio
   // Open before the devices start, so their first reads are kept; closed after they stop, writing what waits.
   const history = config.history === undefined ? undefined : yield* openHistory(config.history)
+  // Every read goes to the history and to the status page, whichever are on.
+  const sinks = [history?.sink, status?.reads].filter((sink) => sink !== undefined)
+  const reads: HistorySink | undefined =
+    sinks.length === 0
+      ? undefined
+      : { record: (device, point, value, ts) => sinks.forEach((sink) => sink.record(device, point, value, ts)) }
   yield* Effect.log(`OT Gateway starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
     Effect.annotateLogs({ traceSampleRatio: sampleRatio, health: health.topic })
   )
@@ -196,17 +203,7 @@ const runDevices = Effect.fn("runGateway")(function* (
       ...config.devices.map((device) =>
         superviseDevice(
           Effect.suspend(() =>
-            runOne(
-              config,
-              device,
-              sampleRatio,
-              health.registry,
-              bacnet,
-              network,
-              commands.drivers,
-              modbusLinks,
-              history
-            )
+            runOne(config, device, sampleRatio, health.registry, bacnet, network, commands.drivers, modbusLinks, reads)
           ),
           { deviceId: device.id, health: health.registry }
         )

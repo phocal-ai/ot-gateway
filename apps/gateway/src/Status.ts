@@ -23,6 +23,7 @@ import {
   type CommandOutcome,
   type GatewayConfig,
   type HealthRegistry,
+  type HistorySink,
   mqttConnected,
   type StatusSettings
 } from "@ot-gateway/core"
@@ -63,6 +64,11 @@ export interface StatusState {
     payload: string,
     message: { readonly retained: boolean; readonly at: number }
   ) => void
+  /**
+   * Every read, as the pipeline hands it to the history: the page shows a point's last read, which is never
+   * older than what was published and is there before the first message of an aggregate or a change.
+   */
+  readonly reads: HistorySink
   readonly recordCommand: (
     at: number,
     command: { readonly device: string; readonly point: string },
@@ -87,6 +93,8 @@ export const makeStatusState = (
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
   const payloads = new Map<string, string>()
+  // The last read per device/point: one entry per configured point, so bounded by the config.
+  const reads = new Map<string, { readonly value: number | boolean; readonly ts: number }>()
   const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number }>()
   const droppedTopics = new Set<string>()
   const commands: Array<CommandStatus> = []
@@ -107,6 +115,11 @@ export const makeStatusState = (
       const slash = rest.indexOf("/")
       if (slash <= 0 || rest.indexOf("/", slash + 1) !== -1) return
       payloads.set(rest, payload)
+    },
+    reads: {
+      record: (device, point, value, ts) => {
+        reads.set(`${device}/${point}`, { value, ts })
+      }
     },
     recordCommand: (at, command, outcome) => {
       commands.unshift({
@@ -136,9 +149,10 @@ export const makeStatusState = (
           ...(state.reason === undefined ? {} : { reason: state.reason }),
           ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
           points: device.points.map((point) => {
-            const payload = payloads.get(`${device.id}/${point.id}`)
-            const decoded = payload === undefined ? Option.none() : decodeValue(payload)
-            const last = Option.getOrUndefined(decoded)
+            const key = `${device.id}/${point.id}`
+            const payload = payloads.get(key)
+            const last =
+              reads.get(key) ?? Option.getOrUndefined(payload === undefined ? Option.none() : decodeValue(payload))
             return {
               id: point.id,
               name: point.name,
