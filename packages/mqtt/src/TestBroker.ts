@@ -1,8 +1,10 @@
 /**
- * A minimal MQTT 5 broker for tests and local development: it accepts
- * connections, acknowledges publishes and records them, and routes them to
- * subscribers (QoS 0 and 1, retained messages on subscribe, request/response
- * properties passed through). It exists so the client is tested over real
+ * A minimal MQTT 5 and 3.1.1 broker for tests and local development: it
+ * accepts connections, acknowledges publishes and records them, and routes
+ * them to subscribers (QoS 0 and 1, retained messages on subscribe,
+ * request/response properties passed through between MQTT 5 clients). Each
+ * client is answered in the version it connected with; `speaksMqtt5: false`
+ * makes it a 3.1.1-only broker, which refuses MQTT 5 as one would. It exists so the client is tested over real
  * TCP (CLAUDE.md rule 8) and `pnpm gateway` has somewhere to publish;
  * `publishToSubscribers` lets a test send a command.
  *
@@ -21,6 +23,7 @@ import {
   decodePublish,
   decodeSubscribe,
   encodeConnack,
+  encodeUnsupportedLevelConnack,
   encodeDisconnect,
   encodePingresp,
   encodePuback,
@@ -29,7 +32,7 @@ import {
   makeFrameReader,
   topicMatches
 } from "./Packet.ts"
-import type { Connect, Subscription, Will } from "./Packet.ts"
+import type { Connect, ProtocolVersion, Subscription, Will } from "./Packet.ts"
 
 export interface ReceivedMessage {
   readonly clientId: string
@@ -45,12 +48,16 @@ export interface ReceivedMessage {
 interface Subscriber {
   /** Set once CONNECT arrives; No Local compares it with a message's sender. */
   clientId: string | undefined
+  /** The MQTT it connected with; what it is sent is encoded in it. */
+  version: ProtocolVersion
   readonly subscriptions: Array<Subscription>
   readonly outgoing: Queue.Queue<Uint8Array>
   nextPacketId: number
 }
 
 export interface BrokerControl {
+  /** Accept MQTT 5 clients (default true). Without it a level-5 CONNECT gets the 3.1.1 refusal, return code 1. */
+  speaksMqtt5: boolean
   /** CONNACK reason code; 0x80 and above refuses the connection. */
   connackReason: number
   /** Numeric CONNACK properties, e.g. Receive Maximum or Server Keep Alive. */
@@ -86,6 +93,7 @@ export interface BrokerControl {
 }
 
 export const makeBrokerControl = (): BrokerControl => ({
+  speaksMqtt5: true,
   connackReason: 0,
   connackProperties: new Map(),
   ackPublishes: true,
@@ -123,15 +131,18 @@ const deliver = (subscriber: Subscriber, message: ReceivedMessage, onSubscribe: 
   if (packetId !== undefined) subscriber.nextPacketId = (packetId % 0xffff) + 1
   Queue.offerUnsafe(
     subscriber.outgoing,
-    encodePublish({
-      topic: message.topic,
-      payload: encoder.encode(message.payload),
-      qos,
-      retain,
-      ...(packetId === undefined ? {} : { packetId }),
-      ...(message.responseTopic === undefined ? {} : { responseTopic: message.responseTopic }),
-      ...(message.correlationData === undefined ? {} : { correlationData: message.correlationData })
-    })
+    encodePublish(
+      {
+        topic: message.topic,
+        payload: encoder.encode(message.payload),
+        qos,
+        retain,
+        ...(packetId === undefined ? {} : { packetId }),
+        ...(message.responseTopic === undefined ? {} : { responseTopic: message.responseTopic }),
+        ...(message.correlationData === undefined ? {} : { correlationData: message.correlationData })
+      },
+      subscriber.version
+    )
   )
 }
 
@@ -167,6 +178,7 @@ const serveConnection = (control: BrokerControl) =>
       let will: Will | undefined
       const subscriber: Subscriber = {
         clientId: undefined,
+        version: 5,
         subscriptions: [],
         outgoing: yield* Queue.unbounded<Uint8Array>(),
         nextPacketId: 1
@@ -194,10 +206,22 @@ const serveConnection = (control: BrokerControl) =>
           switch (split.type) {
             case PacketType.CONNECT: {
               const connect = decodeConnect(split.body)
+              // A protocol level it does not speak gets the CONNACK saying so, then the connection closes (§3.1.2.2).
+              const unsupported = Result.isFailure(connect)
+                ? connect.failure.message.startsWith("unsupported protocol")
+                : false
+              if (
+                unsupported ||
+                (Result.isSuccess(connect) && connect.success.protocolVersion === 5 && !control.speaksMqtt5)
+              ) {
+                yield* writer.write(encodeUnsupportedLevelConnack())
+                return
+              }
               if (Result.isFailure(connect)) return
               const { password, ...rest } = connect.success
               control.connects.push({ ...rest, hasPassword: password !== undefined })
-              yield* writer.write(encodeConnack(control.connackReason, control.connackProperties))
+              subscriber.version = connect.success.protocolVersion ?? 5
+              yield* writer.write(encodeConnack(control.connackReason, control.connackProperties, subscriber.version))
               // A refused client is disconnected right after its CONNACK (§3.2.2.2).
               if (control.connackReason >= 0x80) return
               clientId = connect.success.clientId
@@ -207,7 +231,7 @@ const serveConnection = (control: BrokerControl) =>
               break
             }
             case PacketType.PUBLISH: {
-              const publish = decodePublish(split.flags, split.body)
+              const publish = decodePublish(split.flags, split.body, subscriber.version)
               if (Result.isFailure(publish) || clientId === undefined) return
               const { topic, qos, retain, packetId, responseTopic, correlationData } = publish.success
               const payload = decoder.decode(publish.success.payload)
@@ -224,19 +248,23 @@ const serveConnection = (control: BrokerControl) =>
                 })
               }
               if (qos === 1 && packetId !== undefined && control.ackPublishes) {
-                yield* writer.write(encodePuback(packetId, reasonCode))
+                // 3.1.1 cannot refuse a message in its PUBACK (3.1.1 §3.4): it acknowledges it and drops it.
+                yield* writer.write(encodePuback(packetId, reasonCode, subscriber.version))
               }
               break
             }
             case PacketType.SUBSCRIBE: {
-              const subscribe = decodeSubscribe(split.body)
+              const subscribe = decodeSubscribe(split.body, subscriber.version)
               if (Result.isFailure(subscribe) || clientId === undefined) return
               subscriber.subscriptions.push(...subscribe.success.subscriptions)
               yield* writer.write(
-                encodeSuback({
-                  packetId: subscribe.success.packetId,
-                  reasonCodes: subscribe.success.subscriptions.map((subscription) => subscription.qos)
-                })
+                encodeSuback(
+                  {
+                    packetId: subscribe.success.packetId,
+                    reasonCodes: subscribe.success.subscriptions.map((subscription) => subscription.qos)
+                  },
+                  subscriber.version
+                )
               )
               // Retain Handling 0: the retained messages a new subscription matches, flagged as retained (§3.3.1.3).
               const fresh = { ...subscriber, subscriptions: [...subscribe.success.subscriptions] }
@@ -267,7 +295,8 @@ const serveConnection = (control: BrokerControl) =>
           split = frames.next()
         }
         if (split._tag === "TooLarge") {
-          yield* writer.write(encodeDisconnect(0x95))
+          // A 3.1.1 broker never sends DISCONNECT (3.1.1 §3.14): it only closes.
+          if (subscriber.version === 5) yield* writer.write(encodeDisconnect(0x95))
           return
         }
         if (split._tag === "Invalid") return

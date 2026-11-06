@@ -1,6 +1,6 @@
 # @ot-gateway/mqtt
 
-Effect-native MQTT 5 client, implemented in-house: publishing, and subscriptions for commands.
+Effect-native MQTT 5 client, implemented in-house: publishing, and subscriptions for commands. It speaks MQTT 3.1.1 too, for brokers that do not have 5: `protocolVersion: "auto"` (the default) connects with 5 and falls back to 3.1.1 for good when the broker refuses it (a 3.1.1 broker answers CONNACK return code 1, MQTT 3.1.1 §3.2.2.3), `"3.1.1"` starts there and `"5"` never falls back. Under 3.1.1 there are no properties: the broker announces no limits, and No Local, Retain As Published, expiry and correlation data do not exist. `connection` says what was agreed, `firstDial` why the first connect failed.
 
 - **Codecs** (`Codec.ts`, `Packet.ts`): pure encoding and decoding per OASIS MQTT 5.0 chapter 3.
   - CONNECT/CONNACK with properties, PUBLISH at QoS 0 and 1, PUBACK, PINGREQ/PINGRESP, DISCONNECT.

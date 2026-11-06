@@ -1,8 +1,13 @@
 /**
- * MQTT 5 control packets (OASIS MQTT Version 5.0, chapter 3), as pure
- * encode/decode functions. The client uses the CONNECT/PUBLISH/PINGREQ/
- * DISCONNECT encoders and the CONNACK/PUBACK/PINGRESP/DISCONNECT decoders; the
- * test broker uses the opposite directions.
+ * MQTT control packets as pure encode/decode functions, in MQTT 5 (OASIS MQTT
+ * Version 5.0, chapter 3) and MQTT 3.1.1 (OASIS MQTT Version 3.1.1, chapter
+ * 3). The client uses the CONNECT/PUBLISH/PINGREQ/DISCONNECT encoders and the
+ * CONNACK/PUBACK/PINGRESP/DISCONNECT decoders; the test broker uses the
+ * opposite directions. Section numbers are MQTT 5's unless they say 3.1.1.
+ *
+ * 3.1.1 has no properties, no reason codes on PUBACK and DISCONNECT, and only
+ * the QoS in a subscription's options. Its CONNACK return codes are mapped to
+ * the MQTT 5 reason codes that mean the same, so callers check one set.
  *
  * Publishing, and subscribing for commands (v0.4): no QoS 2, no AUTH
  * exchange, no shared subscriptions.
@@ -12,11 +17,15 @@ import {
   decodeVariableByteInteger,
   encodeUtf8String,
   encodeVariableByteInteger,
+  MAX_VARIABLE_BYTE_INTEGER,
   MqttCodecError,
   PacketType
 } from "./Codec.ts"
 
 const encoder = new TextEncoder()
+
+/** The protocol level in CONNECT: 4 is MQTT 3.1.1 (3.1.1 §3.1.2.2), 5 is MQTT 5 (§3.1.2.2). */
+export type ProtocolVersion = 4 | 5
 const decoder = new TextDecoder("utf-8", { fatal: true })
 
 /** Property identifiers used here (§2.2.2.2). */
@@ -369,6 +378,8 @@ export interface Will {
 }
 
 export interface Connect {
+  /** 5 when absent. */
+  readonly protocolVersion?: ProtocolVersion
   readonly clientId: string
   readonly keepAliveSeconds: number
   readonly cleanStart: boolean
@@ -389,44 +400,52 @@ export const encodeConnect = (connect: Connect): Uint8Array => {
     ((connect.will?.qos ?? 0) << 3) |
     (connect.will === undefined ? 0 : 0x04) |
     (connect.cleanStart ? 0x02 : 0)
+  const v5 = (connect.protocolVersion ?? 5) === 5
+  // In 3.1.1 bit 1 is Clean Session (3.1.1 §3.1.2.4), and there are no properties: the session ends with the
+  // connection when it is set, as a session expiry of 0 does in MQTT 5.
   const body = new Writer()
     .string("MQTT")
-    .byte(5)
+    .byte(v5 ? 5 : 4)
     .byte(flags)
     .u16(connect.keepAliveSeconds)
-    .bytes(
+  if (v5) {
+    body.bytes(
       encodeProperties((w) => {
         w.byte(Property.SessionExpiryInterval).u32(connect.sessionExpirySeconds)
         if (connect.maximumPacketSize !== undefined) w.byte(Property.MaximumPacketSize).u32(connect.maximumPacketSize)
       })
     )
-    .string(connect.clientId)
+  }
+  body.string(connect.clientId)
   if (connect.will !== undefined) {
-    body
-      .bytes(encodeProperties((w) => w.byte(Property.PayloadFormatIndicator).byte(1)))
-      .string(connect.will.topic)
-      .binary(encoder.encode(connect.will.payload))
+    if (v5) body.bytes(encodeProperties((w) => w.byte(Property.PayloadFormatIndicator).byte(1)))
+    body.string(connect.will.topic).binary(encoder.encode(connect.will.payload))
   }
   if (connect.username !== undefined) body.string(connect.username)
   if (connect.password !== undefined) body.binary(encoder.encode(connect.password))
   return packet(PacketType.CONNECT, 0, body.toBytes())
 }
 
-/** Decode a CONNECT body (broker side). */
+/**
+ * Decode a CONNECT body (broker side), MQTT 5 or 3.1.1. A protocol level it
+ * does not speak fails with a message starting "unsupported protocol", so the
+ * broker can answer with the CONNACK for it (§3.1.2.2) before closing.
+ */
 export const decodeConnect = (body: Uint8Array): Result.Result<Connect, MqttCodecError> =>
   decodeWith(body, (r) => {
     const protocol = r.string()
     const level = r.byte()
-    if (protocol !== "MQTT" || level !== 5) {
+    if (protocol !== "MQTT" || (level !== 5 && level !== 4)) {
       throw new MqttCodecError({ message: `unsupported protocol ${protocol} level ${level}` })
     }
+    const v5 = level === 5
     const flags = r.byte()
     const keepAliveSeconds = r.u16()
-    const properties = r.properties()
+    const properties: Properties = v5 ? r.properties() : new Map()
     const clientId = r.string()
     let will: Will | undefined
     if ((flags & 0x04) !== 0) {
-      r.properties()
+      if (v5) r.properties()
       const topic = r.string()
       const payload = decoder.decode(r.binary())
       will = { topic, payload, qos: (flags >> 3) & 0x01 ? 1 : 0, retain: (flags & 0x20) !== 0 }
@@ -436,6 +455,7 @@ export const decodeConnect = (body: Uint8Array): Result.Result<Connect, MqttCode
     const expiry = properties.get(Property.SessionExpiryInterval)
     const maximumPacketSize = properties.get(Property.MaximumPacketSize)
     return {
+      protocolVersion: v5 ? 5 : 4,
       clientId,
       keepAliveSeconds,
       cleanStart: (flags & 0x02) !== 0,
@@ -457,16 +477,49 @@ export interface Connack {
   readonly properties: Properties
 }
 
-export const decodeConnack = (body: Uint8Array): Result.Result<Connack, MqttCodecError> =>
-  decodeWith(body, (r) => ({
-    sessionPresent: (r.byte() & 0x01) !== 0,
-    reasonCode: r.byte(),
-    properties: r.remaining > 0 ? r.properties() : new Map()
-  }))
+/**
+ * The 3.1.1 CONNACK return codes (3.1.1 §3.2.2.3) as the MQTT 5 reason codes
+ * that mean the same: unacceptable protocol version, identifier rejected,
+ * server unavailable, bad user name or password, not authorized.
+ */
+const returnCodeReasons: Record<number, number> = { 1: 0x84, 2: 0x85, 3: 0x88, 4: 0x86, 5: 0x87 }
+const reasonReturnCodes: Record<number, number> = { 0x84: 1, 0x85: 2, 0x88: 3, 0x86: 4, 0x87: 5 }
 
-/** Encode a CONNACK (broker side). Numeric properties only, as the test broker needs. */
-export const encodeConnack = (reasonCode: number, properties: ReadonlyMap<number, number> = new Map()): Uint8Array =>
-  packet(
+/**
+ * Decode a CONNACK. In 3.1.1 the return code is mapped to its MQTT 5 reason
+ * code. Read as MQTT 5, a reason code of 0x01 is no MQTT 5 code at all: it is
+ * a 3.1.1 broker refusing the protocol level (3.1.1 §3.2.2.3), which
+ * `refusesProtocolLevel` recognizes.
+ */
+export const decodeConnack = (body: Uint8Array, version: ProtocolVersion = 5): Result.Result<Connack, MqttCodecError> =>
+  decodeWith(body, (r) => {
+    const sessionPresent = (r.byte() & 0x01) !== 0
+    const code = r.byte()
+    if (version === 4) {
+      return { sessionPresent, reasonCode: code === 0 ? 0 : (returnCodeReasons[code] ?? 0x80), properties: new Map() }
+    }
+    return { sessionPresent, reasonCode: code, properties: r.remaining > 0 ? r.properties() : new Map() }
+  })
+
+/** Whether a CONNACK read as MQTT 5 says the broker does not speak MQTT 5: 0x84 from MQTT 5, 0x01 from 3.1.1. */
+export const refusesProtocolLevel = (connack: Connack): boolean =>
+  connack.reasonCode === 0x84 || connack.reasonCode === 0x01
+
+/**
+ * Encode a CONNACK (broker side). Numeric properties only, as the test broker
+ * needs. In 3.1.1 the reason code becomes its return code (unspecified errors
+ * become 3, server unavailable), and there are no properties.
+ */
+export const encodeConnack = (
+  reasonCode: number,
+  properties: ReadonlyMap<number, number> = new Map(),
+  version: ProtocolVersion = 5
+): Uint8Array => {
+  if (version === 4) {
+    const returnCode = reasonCode === 0 ? 0 : (reasonReturnCodes[reasonCode] ?? 3)
+    return packet(PacketType.CONNACK, 0, Uint8Array.of(0, returnCode))
+  }
+  return packet(
     PacketType.CONNACK,
     0,
     new Writer()
@@ -485,6 +538,10 @@ export const encodeConnack = (reasonCode: number, properties: ReadonlyMap<number
       )
       .toBytes()
   )
+}
+
+/** The CONNACK a 3.1.1 broker sends for a protocol level it does not speak (3.1.1 §3.1.2.2): return code 1. */
+export const encodeUnsupportedLevelConnack = (): Uint8Array => packet(PacketType.CONNACK, 0, Uint8Array.of(0, 1))
 
 /** Names for the CONNACK reason codes a gateway is likely to meet (§3.2.2.2). */
 export const connackReasonName = (code: number): string =>
@@ -523,33 +580,108 @@ export interface Publish {
   readonly correlationData?: Uint8Array
 }
 
-/** Encode a PUBLISH. Payloads are marked UTF-8 (payload format indicator 1): OT Gateway publishes JSON. */
-export const encodePublish = (publish: Publish): Uint8Array => {
-  const body = new Writer().string(publish.topic)
-  if (publish.qos > 0) body.u16(publish.packetId ?? 0)
-  body
-    .bytes(
-      encodeProperties((w) => {
-        w.byte(Property.PayloadFormatIndicator).byte(1)
-        if (publish.messageExpirySeconds !== undefined) {
-          w.byte(Property.MessageExpiryInterval).u32(publish.messageExpirySeconds)
-        }
-        if (publish.responseTopic !== undefined) w.byte(Property.ResponseTopic).string(publish.responseTopic)
-        if (publish.correlationData !== undefined) w.byte(Property.CorrelationData).binary(publish.correlationData)
-      })
-    )
-    .bytes(publish.payload)
-  return packet(PacketType.PUBLISH, (publish.qos << 1) | (publish.retain ? 1 : 0), body.toBytes())
+/**
+ * Encode a PUBLISH. Payloads are marked UTF-8 (payload format indicator 1):
+ * OT Gateway publishes JSON. 3.1.1 has no properties (3.1.1 §3.3.2), so
+ * expiry, response topic and correlation data are left out there.
+ */
+export const encodePublish = (publish: Publish, version: ProtocolVersion = 5): Uint8Array => {
+  // The hot path of the gateway, one call per value: sizes first, then one buffer written in place.
+  const topic = utf8String(publish.topic)
+  const withProperties = version === 5
+  const responseTopic =
+    withProperties && publish.responseTopic !== undefined ? utf8String(publish.responseTopic) : undefined
+  const expiry = withProperties ? publish.messageExpirySeconds : undefined
+  const correlation = withProperties ? publish.correlationData : undefined
+  let propertiesLength = 0
+  if (withProperties) {
+    propertiesLength = 2
+    if (expiry !== undefined) propertiesLength += 5
+    if (responseTopic !== undefined) propertiesLength += 3 + responseTopic.length
+    if (correlation !== undefined) propertiesLength += 3 + correlation.length
+  }
+  const bodyLength =
+    2 +
+    topic.length +
+    (publish.qos > 0 ? 2 : 0) +
+    (withProperties ? variableByteIntegerLength(propertiesLength) + propertiesLength : 0) +
+    publish.payload.length
+  const out = new Uint8Array(1 + variableByteIntegerLength(bodyLength) + bodyLength)
+  out[0] = (PacketType.PUBLISH << 4) | (publish.qos << 1) | (publish.retain ? 1 : 0)
+  let offset = writeVariableByteInteger(out, 1, bodyLength)
+  offset = writeU16(out, offset, topic.length)
+  out.set(topic, offset)
+  offset += topic.length
+  if (publish.qos > 0) offset = writeU16(out, offset, publish.packetId ?? 0)
+  if (withProperties) {
+    offset = writeVariableByteInteger(out, offset, propertiesLength)
+    out[offset++] = Property.PayloadFormatIndicator
+    out[offset++] = 1
+    if (expiry !== undefined) {
+      out[offset++] = Property.MessageExpiryInterval
+      new DataView(out.buffer).setUint32(offset, expiry >>> 0)
+      offset += 4
+    }
+    if (responseTopic !== undefined) {
+      out[offset++] = Property.ResponseTopic
+      offset = writeU16(out, offset, responseTopic.length)
+      out.set(responseTopic, offset)
+      offset += responseTopic.length
+    }
+    if (correlation !== undefined) {
+      out[offset++] = Property.CorrelationData
+      offset = writeU16(out, offset, correlation.length)
+      out.set(correlation, offset)
+      offset += correlation.length
+    }
+  }
+  out.set(publish.payload, offset)
+  return out
+}
+
+/** A string's UTF-8 bytes, at most 65,535 of them (§1.5.4). */
+const utf8String = (value: string): Uint8Array => {
+  const bytes = encoder.encode(value)
+  if (bytes.length > 0xffff) throw new RangeError("string too long")
+  return bytes
+}
+
+/** How many bytes `value` takes as a Variable Byte Integer (§1.5.5). */
+const variableByteIntegerLength = (value: number): number => {
+  if (value > MAX_VARIABLE_BYTE_INTEGER) throw new RangeError(`value out of range: ${value}`)
+  return value < 128 ? 1 : value < 16_384 ? 2 : value < 2_097_152 ? 3 : 4
+}
+
+/** Writes `value` as a Variable Byte Integer at `offset` (§1.5.5); returns the offset after it. */
+const writeVariableByteInteger = (out: Uint8Array, offset: number, value: number): number => {
+  let rest = value
+  do {
+    let byte = rest % 128
+    rest = Math.floor(rest / 128)
+    if (rest > 0) byte |= 0x80
+    out[offset++] = byte
+  } while (rest > 0)
+  return offset
+}
+
+const writeU16 = (out: Uint8Array, offset: number, value: number): number => {
+  out[offset] = (value >> 8) & 0xff
+  out[offset + 1] = value & 0xff
+  return offset + 2
 }
 
 /** Decode a PUBLISH body with its fixed-header flags (the broker, and a client receiving commands). */
-export const decodePublish = (flags: number, body: Uint8Array): Result.Result<Publish, MqttCodecError> =>
+export const decodePublish = (
+  flags: number,
+  body: Uint8Array,
+  version: ProtocolVersion = 5
+): Result.Result<Publish, MqttCodecError> =>
   decodeWith(body, (r) => {
     const qos = (flags >> 1) & 0x03
     if (qos > 1) throw new MqttCodecError({ message: `QoS ${qos} is not supported` })
     const topic = r.string()
     const packetId = qos > 0 ? r.u16() : undefined
-    const properties = r.properties()
+    const properties: Properties = version === 5 ? r.properties() : new Map()
     const expiry = properties.get(Property.MessageExpiryInterval)
     const responseTopic = properties.get(Property.ResponseTopic)
     const correlationData = properties.get(Property.CorrelationData)
@@ -589,16 +721,19 @@ export const pubackRefusesMessage = (reasonCode: number): boolean =>
 export const decodePuback = (body: Uint8Array): Result.Result<Puback, MqttCodecError> =>
   decodeWith(body, (r) => ({ packetId: r.u16(), reasonCode: r.remaining > 0 ? r.byte() : 0 }))
 
-export const encodePuback = (packetId: number, reasonCode = 0): Uint8Array =>
-  packet(
-    PacketType.PUBACK,
-    0,
-    new Writer()
-      .u16(packetId)
-      .byte(reasonCode)
-      .bytes(encodeProperties(() => {}))
-      .toBytes()
-  )
+/** Encode a PUBACK. In 3.1.1 it is the packet identifier alone (3.1.1 §3.4.2), so a refusal cannot be said. */
+export const encodePuback = (packetId: number, reasonCode = 0, version: ProtocolVersion = 5): Uint8Array =>
+  version === 4
+    ? packet(PacketType.PUBACK, 0, new Writer().u16(packetId).toBytes())
+    : packet(
+        PacketType.PUBACK,
+        0,
+        new Writer()
+          .u16(packetId)
+          .byte(reasonCode)
+          .bytes(encodeProperties(() => {}))
+          .toBytes()
+      )
 
 // ---------------------------------------------------------------------------
 // SUBSCRIBE (§3.8) and SUBACK (§3.9)
@@ -630,27 +765,38 @@ export interface Subscribe {
  * Encode a SUBSCRIBE. Options per filter (§3.8.3.1): the maximum QoS, No
  * Local and Retain As Published as asked, and Retain Handling 0 (send
  * retained messages on subscribe), so a retained message on a filter is
- * seen, flagged as retained, and can be refused.
+ * seen, flagged as retained, and can be refused. In 3.1.1 the options are
+ * the QoS alone (3.1.1 §3.8.3.1): No Local and Retain As Published do not
+ * exist there, and the broker clears the retain flag of live messages.
  */
-export const encodeSubscribe = (subscribe: Subscribe): Uint8Array => {
-  const body = new Writer().u16(subscribe.packetId).bytes(encodeProperties(() => {}))
+export const encodeSubscribe = (subscribe: Subscribe, version: ProtocolVersion = 5): Uint8Array => {
+  const body = new Writer().u16(subscribe.packetId)
+  if (version === 5) body.bytes(encodeProperties(() => {}))
   for (const { filter, qos, retainAsPublished, noLocal } of subscribe.subscriptions) {
-    body.string(filter).byte(qos | (noLocal === true ? 0x04 : 0) | (retainAsPublished === true ? 0x08 : 0))
+    const options = version === 5 ? qos | (noLocal === true ? 0x04 : 0) | (retainAsPublished === true ? 0x08 : 0) : qos
+    body.string(filter).byte(options)
   }
   // The fixed header flags of SUBSCRIBE are reserved as 0b0010 (§3.8.1).
   return packet(PacketType.SUBSCRIBE, 0b0010, body.toBytes())
 }
 
-export const decodeSubscribe = (body: Uint8Array): Result.Result<Subscribe, MqttCodecError> =>
+export const decodeSubscribe = (
+  body: Uint8Array,
+  version: ProtocolVersion = 5
+): Result.Result<Subscribe, MqttCodecError> =>
   decodeWith(body, (r) => {
     const packetId = r.u16()
-    r.properties()
+    if (version === 5) r.properties()
     const subscriptions: Array<Subscription> = []
     while (r.remaining > 0) {
       const filter = r.string()
       const options = r.byte()
       const qos = options & 0x03
       if (qos > 1) throw new MqttCodecError({ message: `QoS ${qos} is not supported` })
+      // The upper six bits are reserved in 3.1.1 (3.1.1 §3.8.3.1).
+      if (version === 4 && (options & 0xfc) !== 0) {
+        throw new MqttCodecError({ message: "reserved bits set in a subscription's options" })
+      }
       subscriptions.push({
         filter,
         qos: qos === 1 ? 1 : 0,
@@ -669,21 +815,18 @@ export interface Suback {
   readonly reasonCodes: ReadonlyArray<number>
 }
 
-export const encodeSuback = (suback: Suback): Uint8Array =>
-  packet(
-    PacketType.SUBACK,
-    0,
-    new Writer()
-      .u16(suback.packetId)
-      .bytes(encodeProperties(() => {}))
-      .bytes(Uint8Array.from(suback.reasonCodes))
-      .toBytes()
-  )
+/** Encode a SUBACK. 3.1.1 has no properties, and refuses with 0x80 only (3.1.1 §3.9.3). */
+export const encodeSuback = (suback: Suback, version: ProtocolVersion = 5): Uint8Array => {
+  const body = new Writer().u16(suback.packetId)
+  if (version === 5) body.bytes(encodeProperties(() => {}))
+  const codes = version === 5 ? suback.reasonCodes : suback.reasonCodes.map((code) => (code >= 0x80 ? 0x80 : code))
+  return packet(PacketType.SUBACK, 0, body.bytes(Uint8Array.from(codes)).toBytes())
+}
 
-export const decodeSuback = (body: Uint8Array): Result.Result<Suback, MqttCodecError> =>
+export const decodeSuback = (body: Uint8Array, version: ProtocolVersion = 5): Result.Result<Suback, MqttCodecError> =>
   decodeWith(body, (r) => {
     const packetId = r.u16()
-    r.properties()
+    if (version === 5) r.properties()
     return { packetId, reasonCodes: [...r.rest()] }
   })
 
@@ -711,9 +854,13 @@ export const topicMatches = (filter: string, topic: string): boolean => {
 export const encodePingreq = (): Uint8Array => Uint8Array.of(PacketType.PINGREQ << 4, 0)
 export const encodePingresp = (): Uint8Array => Uint8Array.of(PacketType.PINGRESP << 4, 0)
 
-/** Normal disconnection: reason 0x00 and no properties, so remaining length 0 (§3.14.2.1). */
-export const encodeDisconnect = (reasonCode = 0): Uint8Array =>
-  reasonCode === 0
+/**
+ * Normal disconnection: reason 0x00 and no properties, so remaining length 0
+ * (§3.14.2.1). 3.1.1's DISCONNECT has no reason (3.1.1 §3.14), so there every
+ * disconnection looks normal.
+ */
+export const encodeDisconnect = (reasonCode = 0, version: ProtocolVersion = 5): Uint8Array =>
+  reasonCode === 0 || version === 4
     ? Uint8Array.of(PacketType.DISCONNECT << 4, 0)
     : packet(PacketType.DISCONNECT, 0, Uint8Array.of(reasonCode, 0))
 

@@ -13,7 +13,7 @@ import type { BacnetValue } from "./Encoding.ts"
 import { ObjectType, PropertyId } from "./Enums.ts"
 
 /** Object types a gateway polls; the rest (schedules, trend logs, files…) are not points. */
-const POINT_TYPES = [
+export const POINT_TYPES = [
   "analog-input",
   "analog-output",
   "analog-value",

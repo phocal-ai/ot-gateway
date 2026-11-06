@@ -66,9 +66,11 @@ export const decodeVariableByteInteger = (
   return new MqttCodecError({ message: "malformed variable byte integer" })
 }
 
+const utf8 = new TextEncoder()
+
 /** Encode a UTF-8 string with its 2-byte length prefix. */
 export const encodeUtf8String = (value: string): Uint8Array => {
-  const encoded = new TextEncoder().encode(value)
+  const encoded = utf8.encode(value)
   if (encoded.length > 0xffff) throw new RangeError("string too long")
   const out = new Uint8Array(2 + encoded.length)
   new DataView(out.buffer).setUint16(0, encoded.length)

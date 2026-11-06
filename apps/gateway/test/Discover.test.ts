@@ -9,6 +9,7 @@
  * for the same instance from different addresses, and devices already in
  * the config.
  */
+import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import {
   type DescribedDevice,
@@ -19,9 +20,18 @@ import {
   serveSimulatedDevice
 } from "@ot-gateway/bacnet"
 import { makeMemoryNetwork, parseConfig } from "@ot-gateway/core"
-import { Effect, Fiber, Result } from "effect"
+import { Effect, Fiber, FileSystem, Result } from "effect"
 import { TestClock, TestConsole } from "effect/testing"
-import { discover, draftDevices, printable, slugify } from "../src/Discover.ts"
+import {
+  discover,
+  type DiscoverOptions,
+  discoverToPointsList,
+  draftDevices,
+  draftPointsList,
+  printable,
+  slugify
+} from "../src/Discover.ts"
+import { devicesFromPointsList } from "../src/PointsList.ts"
 
 const addressOf = (text: string) => Result.getOrThrow(parseDeviceAddress(text))
 
@@ -177,19 +187,20 @@ const fan = { id: "fan", name: "Fan", objectType: "binary-output", instance: 2 }
  */
 const run = Effect.fnUntraced(
   function* (
-    hosts: ReadonlyArray<{ readonly ip: string; readonly instance: number }>,
-    devices: ReadonlyArray<unknown> = []
+    hosts: ReadonlyArray<{ readonly ip: string; readonly instance: number; readonly port?: number }>,
+    devices: ReadonlyArray<unknown> = [],
+    options: DiscoverOptions = {}
   ) {
     const network = makeMemoryNetwork()
-    yield* Effect.forEach(hosts, ({ ip, instance }) =>
-      Effect.flatMap(network.host(ip).udp({ address: ip, port: 47_808 }), (socket) =>
+    yield* Effect.forEach(hosts, ({ ip, instance, port }) =>
+      Effect.flatMap(network.host(ip).udp({ address: ip, port: port ?? 47_808 }), (socket) =>
         serveSimulatedDevice(socket, ahu(instance))
       )
     )
     const config = yield* parseConfig(
       JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices })
     )
-    const running = yield* discover(config, network.host("10.0.0.1")).pipe(Effect.forkChild)
+    const running = yield* discover(config, network.host("10.0.0.1"), options).pipe(Effect.forkChild)
     yield* TestClock.adjust("4 seconds")
     yield* Fiber.join(running)
     const [draft] = yield* TestConsole.logLines
@@ -295,5 +306,144 @@ describe("discover", () => {
       })
       expect(warnings).toEqual([])
     })
+  )
+})
+
+describe("discover --address", () => {
+  const twoPorts = [
+    { ip: "10.0.2.1", instance: 2001 },
+    { ip: "10.0.2.2", instance: 2002, port: 47_809 }
+  ]
+
+  it.effect("asks the one device at a known address, on a port a broadcast does not reach", () =>
+    Effect.gen(function* () {
+      const { draft, errors } = yield* run(twoPorts, [], { address: "10.0.2.2:47809" })
+      expect(draft).toMatchObject({ devices: [{ id: "ahu-2", deviceInstance: 2002, address: "10.0.2.2:47809" }] })
+      expect(errors[0]).toContain("Who-Is to 10.0.2.2:47809")
+    })
+  )
+
+  it.effect("names the address and what to check when that device does not answer", () =>
+    Effect.gen(function* () {
+      const { draft, errors } = yield* run(twoPorts, [], { address: "10.0.2.9" })
+      expect(draft).toEqual({ devices: [] })
+      expect(errors.some((line) => line.includes("No device answered at 10.0.2.9"))).toBe(true)
+    })
+  )
+
+  it.effect("points at --address when a broadcast finds nothing", () =>
+    Effect.gen(function* () {
+      const { errors } = yield* run([{ ip: "10.0.2.2", instance: 2002, port: 47_809 }])
+      expect(errors.some((line) => line.includes("discover --address ip[:port]"))).toBe(true)
+    })
+  )
+
+  it.effect("refuses an address that is not ip or ip:port", () =>
+    Effect.gen(function* () {
+      const config = yield* parseConfig(
+        JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const error = yield* discover(config, makeMemoryNetwork().host("10.0.0.1"), { address: "ahu.local" }).pipe(
+        Effect.flip
+      )
+      expect(error.message).toContain("--address takes ip or ip:port")
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+})
+
+describe("draftPointsList", () => {
+  it("writes one row per object that import turns back into the same devices and point ids", () =>
+    Effect.gen(function* () {
+      const drafts = draftDevices([
+        found(2001, "10.0.0.5", {
+          name: "AHU 2",
+          listed: 4,
+          objects: [
+            { objectType: "analog-input", instance: 1, name: "Supply Temp, °C", unit: "unit:DEG_C" },
+            { objectType: "analog-input", instance: 2, name: "Supply Temp, °C" },
+            { objectType: "binary-input", instance: 3, name: '=HYPERLINK("x")' },
+            { objectType: "binary-output", instance: 4, name: "Fan" }
+          ]
+        })
+      ])
+      const list = draftPointsList(drafts)
+      expect(list.split("\n")[0]).toBe("device,point,unit,device_instance,address,object_type,object_instance")
+      expect(list).toContain('ahu-2,"Supply Temp, °C",unit:DEG_C,2001,10.0.0.5,analog-input,1')
+      expect(list).not.toContain("=HYPERLINK")
+      const [device] = yield* devicesFromPointsList(list)
+      expect(device?.id).toBe("ahu-2")
+      expect(device?.points.map((point) => point.id)).toEqual(drafts[0]?.points.map((point) => point.id))
+    }).pipe(Effect.runSync))
+})
+
+describe("discover --points-list", () => {
+  it.effect("writes the devices not in the config yet, and leaves an existing file alone", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      const network = makeMemoryNetwork()
+      yield* Effect.forEach([2001, 2002], (instance, index) =>
+        Effect.flatMap(
+          network.host(`10.0.2.${index + 1}`).udp({ address: `10.0.2.${index + 1}`, port: 47_808 }),
+          (socket) => serveSimulatedDevice(socket, ahu(instance))
+        )
+      )
+      const config = yield* parseConfig(
+        JSON.stringify({
+          site: "s",
+          building: "b",
+          mqtt: { url: "mqtt://broker" },
+          devices: [
+            {
+              protocol: "bacnet-ip",
+              id: "ahu",
+              deviceInstance: 2002,
+              address: "10.0.2.2",
+              points: [{ ...fan, objectType: "binary-output" }]
+            }
+          ]
+        })
+      )
+      const running = yield* discoverToPointsList(config, path, network.host("10.0.0.1")).pipe(Effect.forkChild)
+      // The file check before discovery is real I/O, so virtual time moves in steps until the fiber listens.
+      for (let step = 0; step < 30; step++) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
+        yield* TestClock.adjust("200 millis")
+      }
+      yield* Fiber.join(running)
+      const list = yield* fs.readFileString(path)
+      const devices = yield* devicesFromPointsList(list, ["ahu"])
+      expect(devices.map((device) => device.id)).toEqual(["ahu-2"])
+      expect(devices[0]?.points.map((point) => point.id)).toEqual(["supply-temp", "fan"])
+      const errors = (yield* TestConsole.errorLines).map(String)
+      expect(errors.some((line) => line.includes("1 device(s) already in the config are left out"))).toBe(true)
+      expect(errors.some((line) => line.includes(`ot-gateway import ${path}`))).toBe(true)
+
+      yield* discoverToPointsList(config, path, network.host("10.0.0.1"))
+      expect(yield* fs.readFileString(path)).toBe(list)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("writes no file when nothing answered", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      const config = yield* parseConfig(
+        JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const running = yield* discoverToPointsList(config, path, makeMemoryNetwork().host("10.0.0.1")).pipe(
+        Effect.forkChild
+      )
+      for (let step = 0; step < 30; step++) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
+        yield* TestClock.adjust("200 millis")
+      }
+      yield* Fiber.join(running)
+      expect(yield* fs.exists(path)).toBe(false)
+      const errors = (yield* TestConsole.errorLines).map(String)
+      expect(errors.some((line) => line.includes("was not written"))).toBe(true)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })

@@ -68,6 +68,9 @@ const freePort = Effect.promise(
     })
 )
 
+const pointOf = (snapshot: { readonly devices: ReadonlyArray<{ readonly points: ReadonlyArray<unknown> }> }) =>
+  snapshot.devices[0]?.points[0]
+
 describe("status", () => {
   it.effect("says how full the buffer is and adds up what it dropped, whatever the reason", () =>
     Effect.gen(function* () {
@@ -181,6 +184,28 @@ describe("status", () => {
         ],
         droppedTopics: 0
       })
+    })
+  )
+
+  it.effect("shows a point's last read before anything is published, and prefers it to what was", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      // An aggregate's first message comes at the end of its window; the read is there now.
+      state.reads.record("meter", "power", 4.2, 20)
+      expect(pointOf(yield* state.snapshot)).toMatchObject({ value: 4.2, ts: 20 })
+      // A change or deadband point publishes less often than it is read.
+      state.recordPublish("s/b/meter/power", '{"value":4.2,"ts":20}', { retained: false, at: 20 })
+      state.reads.record("meter", "power", 4.25, 25)
+      expect(pointOf(yield* state.snapshot)).toMatchObject({ value: 4.25, ts: 25 })
+    })
+  )
+
+  it.effect("forgets a topic cleared with an empty retained message", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      state.recordPublish("s/b/meter/old/$meta", '{"name":"Old"}', { retained: true, at: 10 })
+      state.recordPublish("s/b/meter/old/$meta", "", { retained: true, at: 11 })
+      expect((yield* state.messages).messages).toEqual([])
     })
   )
 

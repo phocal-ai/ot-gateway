@@ -52,16 +52,15 @@ Stop at the first one that fails, fix it, and start that test again.
 
 ### 1. Smoke, 15 minutes
 
-Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`OT_GATEWAY_TAG`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
+Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (the tag in `compose.yaml`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.7.0      # or ot-gateway:test
-docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
-  | sed 's#./ot-gateway-buffer.sqlite#/var/lib/ot-gateway/buffer.sqlite#' | sudo tee /etc/ot-gateway/gateway.json >/dev/null
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.10.0      # or ot-gateway:test
 docker run -d --name ot-gateway-bench --network host --log-driver local --restart unless-stopped \
-  -v /etc/ot-gateway/gateway.json:/etc/ot-gateway/gateway.json:ro \
-  --entrypoint node $IMAGE apps/gateway/src/bench.ts /etc/ot-gateway/gateway.json
+  --entrypoint node $IMAGE apps/gateway/src/bench.ts examples/gateway.json
 ```
+
+It reads the example config inside the image, so there is nothing to copy and no `sudo`. The gateway takes the same config, from its folder (`~/ot-gateway`, with `compose.yaml`): `docker run --rm --entrypoint cat $IMAGE examples/gateway.json > ot-gateway.json`, then `docker compose up -d`.
 
 Like the gateway, it comes back after a reboot, so a Pi that restarts doesn't show its devices as failing. Remove it when the smoke test is done (`docker rm -f ot-gateway-bench`): the soak brings its own broker and devices, on the same ports.
 

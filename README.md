@@ -9,7 +9,7 @@ It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retri
 > OT is operational technology: the controllers, meters and field buses that run a building, as opposed to its IT. OT Gateway sits between the two, and it was called Plenum until v0.5.0 ([moving from Plenum](docs/operations.md#moving-from-plenum)).
 
 > [!NOTE]
-> OT Gateway is early. The core pipeline, config schema, Modbus TCP and BACnet/IP reads, MQTT 5 publishing, health topics and store-and-forward work; BACnet COV subscriptions are next. See the [roadmap](#roadmap).
+> OT Gateway is early. The core pipeline, config schema, Modbus TCP and BACnet/IP reads, MQTT 5 publishing (3.1.1 for older brokers), health topics and store-and-forward work; BACnet COV subscriptions are next. See the [roadmap](#roadmap).
 
 ## Why
 
@@ -72,17 +72,23 @@ You know which values you want, from which devices, and how often. `ot-gateway i
 
 The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads secrets from `ot-gateway.env`; `node apps/gateway/src/main.ts …` anywhere):
 
-| Command                            | What it does                                                                                                    |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `ot-gateway demo`                  | the demo above                                                                                                  |
-| `ot-gateway init [config]`         | ask for the site, broker and devices, and write a config; the default is `ot-gateway.json`                      |
-| `ot-gateway run [config]`          | run the gateway with that config                                                                                |
-| `ot-gateway check [config]`        | validate a config without connecting to anything, listing every mistake with its path                           |
-| `ot-gateway discover [config]`     | find BACnet devices and print a draft of their config (below)                                                   |
-| `ot-gateway import <csv> [config]` | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)) |
-| `ot-gateway watch [config]`        | print every message under the config's site and building as it reaches the broker                               |
-| `ot-gateway status [--url]`        | the running gateway's broker, buffer and devices, one line each                                                 |
-| `ot-gateway --help`                | every command and flag; `--log-level debug` works with all of them                                              |
+| Command                              | What it does                                                                                                                                                                                              |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ot-gateway demo`                    | the demo above                                                                                                                                                                                            |
+| `ot-gateway init [folder]`           | ask for the site, broker and devices (or take them as flags with `--yes`), and write `ot-gateway.json`, `compose.yaml` and `ot-gateway.env` in the folder (`.` for this one); `--dry-run` only shows them |
+| `ot-gateway run [config]`            | run the gateway with that config                                                                                                                                                                          |
+| `ot-gateway check [config]`          | validate a config without connecting to anything, listing every mistake with its path (`--json` for agents)                                                                                               |
+| `ot-gateway discover [config]`       | find BACnet devices and print a draft of their config, or write it as a points list with `--points-list` (below)                                                                                          |
+| `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)); `--dry-run` only checks it                                                               |
+| `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one                                                                                 |
+| `ot-gateway profiles list\|show`     | the device profiles a points list can name in its `profile` column, so one row takes a meter's registers (`--json` for agents)                                                                            |
+| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker, until Ctrl-C or for `--seconds N`                                                                                      |
+| `ot-gateway broker [config]`         | connect to the config's broker: the MQTT it speaks (5 or 3.1.1), what it allows, and a message there and back (`--json` for agents)                                                                       |
+| `ot-gateway publish <topic> [msg]`   | send one message as the gateway's user; `--retain` with no message clears what the broker keeps on a topic (`--qos 0\|1`, `--json`)                                                                       |
+| `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                                                     |
+| `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                                                                                        |
+
+For scripts and AI agents: nothing asks without a terminal, and `--json` on `init`, `check`, `discover`, `import`, `points schema`, `broker`, `publish` and `status` prints the result as JSON on stdout, a failure too (`{"ok": false, "error": …}`, exit code 1); logs go to stderr. A mistyped command gets the one you probably meant.
 
 ### Working on the gateway
 
@@ -98,21 +104,30 @@ The fastest way to your own building is to let a coding agent do it. In [Claude 
 /setup
 ```
 
-The skill checks Node and pnpm, shows the demo, then asks about your devices and broker in one round. It discovers BACnet devices on the network and drafts Modbus points from a register list or datasheet you give it. Then it writes `ot-gateway.json` and validates it, runs the gateway until values flow, and on request installs it as a service or container. It never makes a point writable unless you ask.
+The skill checks Node, shows the demo, then asks about your devices and broker in one round. It writes the gateway's folder with `ot-gateway init`, turns BACnet discovery, an EDE file, your points list or Modbus datasheets into the standard points list, and checks it with the CLI. Then it runs the gateway until values flow and, on request, starts it with Docker Compose. It never makes a point writable unless you ask.
 
 With any other agent that can run commands (Cursor, Codex, Gemini CLI, …), paste:
 
 ```text
-Set up an OT Gateway for my building. Clone https://github.com/phocal-ai/ot-gateway if this is not
-already a checkout of it, then read .claude/skills/setup/SKILL.md and follow it step by step: run the
-commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out
-of the JSON config. Stop when values from my devices reach the broker.
+Set up an OT Gateway for my building. Read
+https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it
+step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot
+find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my
+devices reach the broker.
+```
+
+To have your agent reach for the CLI on its own, add one line to its instructions (`AGENTS.md`, `CLAUDE.md`):
+
+```text
+For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start with `npx ot-gateway --help`.
 ```
 
 To draft BACnet points yourself, `discover` finds the devices through the config's `bacnet` settings. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
 
 ```bash
 pnpm ot-gateway discover path/to/gateway.json
+pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it
+pnpm ot-gateway discover --address 10.20.3.40:47809  # only the device at that address: another subnet without a BBMD, or another port
 ```
 
 Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.
@@ -124,10 +139,11 @@ Once values flow, the gateway belongs on a machine that stays on in the building
 The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for an industrial PC as much as for a Raspberry Pi on the 64-bit OS.
 
 ```bash
-docker compose -f packaging/compose.yaml up -d
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+docker compose up -d
 ```
 
-The image reads `/etc/ot-gateway/gateway.json`; point `buffer.path` under `/var/lib/ot-gateway` so the outbox outlives the container. Secrets go in `/etc/ot-gateway/gateway.env`, readable by the container's user (uid 1000) and nobody else: `sudo install -m 600 -o 1000 -g 1000 ot-gateway.env /etc/ot-gateway/gateway.env`. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose … up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page.
+Run both in a folder with your `ot-gateway.json` (and `ot-gateway.env` for secrets, if the config names any). No `sudo` and no folders to make: the outbox and the history go to a Docker volume, and relative paths in the config land in it. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (write another into it and `docker compose up -d` to upgrade or go back, [docs/operations.md](docs/operations.md#upgrade)), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page. An install from v0.7.0 or earlier, with the config in `/etc/ot-gateway`, moves over as [docs/operations.md](docs/operations.md#from-the-etcot-gateway-layout-v070-and-earlier) shows.
 
 On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout owned by you or root (the script refuses one that others can write to):
 
@@ -217,7 +233,7 @@ IDs must be lowercase slugs of at most 64 characters, so they are always valid M
 | `site/building/device/point/$set`        | never    | a command to the gateway: `{"value":21.5}` (see Commands)                                                                                                      |
 | `site/building/device/point/$set/result` | no       | the command's result, with the command's correlation data                                                                                                      |
 
-The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`: the driver's `timeout`, `connection`, `protocol`, …, `cycle-timeout` when a polling cycle hung past its deadline, or `crashed` when the device's pipeline hit a bug and is being restarted). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back.
+The health topic says `{"status":"online","since":…,"ts":…,"devices":{…}}` on every connect and every `healthIntervalMs` (default 60 s), with each device `starting`, `ok` or `failing` (plus `lastSuccess` and the failure `reason`: the driver's `timeout`, `connection`, `protocol`, …, `cycle-timeout` when a polling cycle hung past its deadline, or `crashed` when the device's pipeline hit a bug and is being restarted). The gateway registers `{"status":"offline","reason":"connection-lost"}` as its MQTT last will, so the broker announces a crash or a lost network on its own, and publishes `"reason":"shutdown"` itself when it stops cleanly. After a reconnect the gateway publishes its retained messages again, so a broker that restarted without persistence gets them back. A point renamed or removed from the config would leave its retained `$meta` behind, describing a point that no longer exists: on every connect the gateway reads the retained `$meta` of its own devices and clears those of points it no longer has. A device's topics belong to the gateway that has the device in its config, so other gateways' devices in the same building are never touched, and neither is the metadata of a device removed from the config: clear that with `mosquitto_pub -r -n -t 'site/building/device/point/$meta'`.
 
 ## Commands
 
@@ -239,18 +255,18 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 
 ## Packages
 
-| Package                                       | What it does                                                                                         | Status  |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------- |
-| [`@ot-gateway/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service     | Working |
-| [`@ot-gateway/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                         | Working |
-| [`@ot-gateway/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server, with writes                    | Working |
-| [`@ot-gateway/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order  | Working |
-| [`@ot-gateway/mqtt`](packages/mqtt)           | MQTT 5: codecs, client with reconnect, keep alive and subscriptions, `Publisher` layer, test broker  | Working |
-| [`@ot-gateway/bacnet`](packages/bacnet)       | BACnet/IP: codecs, Who-Is discovery, ReadProperty(Multiple), COV and WriteProperty, simulator server | Working |
-| [`@ot-gateway/api`](packages/api)             | The local HTTP API's contract (Effect `HttpApi`), shared by the gateway and the status page          | Working |
-| [`@ot-gateway/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                 | Working |
-| [`@ot-gateway/web`](apps/web)                 | The local status page: Next.js and shadcn/ui, a static export the gateway serves                     | Working |
-| [`@ot-gateway/site`](apps/site)               | The project and docs site: Fumadocs, a static export on Vercel, with the docs rendered from `docs/`  | Working |
+| Package                                       | What it does                                                                                                  | Status  |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------- |
+| [`@ot-gateway/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service              | Working |
+| [`@ot-gateway/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                                  | Working |
+| [`@ot-gateway/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server, with writes                             | Working |
+| [`@ot-gateway/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order           | Working |
+| [`@ot-gateway/mqtt`](packages/mqtt)           | MQTT 5 and 3.1.1: codecs, client with reconnect, keep alive and subscriptions, `Publisher` layer, test broker | Working |
+| [`@ot-gateway/bacnet`](packages/bacnet)       | BACnet/IP: codecs, Who-Is discovery, ReadProperty(Multiple), COV and WriteProperty, simulator server          | Working |
+| [`@ot-gateway/api`](packages/api)             | The local HTTP API's contract (Effect `HttpApi`), shared by the gateway and the status page                   | Working |
+| [`@ot-gateway/gateway`](apps/gateway)         | Ready-to-run gateway, plus a local bench (test broker, Modbus and BACnet simulators)                          | Working |
+| [`@ot-gateway/web`](apps/web)                 | The local status page: Next.js and shadcn/ui, a static export the gateway serves                              | Working |
+| [`@ot-gateway/site`](apps/site)               | The project and docs site: Fumadocs, a static export on Vercel, with the docs rendered from `docs/`           | Working |
 
 ## Architecture
 

@@ -6,7 +6,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig, publicTestBrokers } from "@ot-gateway/core"
 import { Effect } from "effect"
-import { describeConfig, toCliArgs } from "../src/Cli.ts"
+import { cliVersion, describeConfig, toCliArgs } from "../src/Cli.ts"
 import {
   demoBanner,
   demoConfig,
@@ -17,6 +17,18 @@ import {
   randomDemoSite
 } from "../src/Demo.ts"
 import { loadConfig } from "../src/LoadConfig.ts"
+
+describe("cliVersion", () => {
+  it("drops a release tag's v, which the CLI prints itself", () => {
+    expect(cliVersion("v0.7.0")).toBe("0.7.0")
+    expect(cliVersion("v0.8.0-rc.1")).toBe("0.8.0-rc.1")
+  })
+
+  it("leaves a dev build or a commit as it is", () => {
+    expect(cliVersion("dev")).toBe("dev")
+    expect(cliVersion("c78bb4e09-dirty")).toBe("c78bb4e09-dirty")
+  })
+})
 
 describe("toCliArgs", () => {
   it("passes subcommands and flags such as --help through", () => {
@@ -65,7 +77,11 @@ describe("demo", () => {
       const options = { listen: "127.0.0.1", public: { broker: { host: "broker.emqx.io", port: 1883 }, site } }
       const config = demoConfig(yield* loadConfig(exampleConfigPath), "/tmp/demo-y", options)
       expect(config.site).toBe(site)
-      expect(config.mqtt).toEqual({ url: "mqtt://broker.emqx.io:1883", clientId: `ot-gateway-${site}` })
+      expect(config.mqtt).toEqual({
+        version: "auto",
+        url: "mqtt://broker.emqx.io:1883",
+        clientId: `ot-gateway-${site}`
+      })
       // What the gateway runs is decoded again, as a config file would be: the public-broker guard lets it through.
       expect((yield* parseConfig(JSON.stringify(config))).site).toBe(site)
       const banner = demoBanner(config, options)

@@ -14,7 +14,13 @@ import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { makeRegisterBank, makeSimulatorControl, serveModbus, setPointValue } from "@ot-gateway/modbus"
-import { encodeConnect, type InboundMessage, makeMqttClient, parseBrokerUrl } from "@ot-gateway/mqtt"
+import {
+  encodeConnect,
+  type InboundMessage,
+  makeMqttClient,
+  type MqttVersionSetting,
+  parseBrokerUrl
+} from "@ot-gateway/mqtt"
 import { Effect, Fiber, Schema } from "effect"
 import { runGateway } from "../../src/Gateway.ts"
 
@@ -35,13 +41,15 @@ const waitFor = (what: string, condition: () => boolean, timeoutMs = 10_000) =>
 const appClient = Effect.fnUntraced(function* (
   url: string,
   clientId: string,
-  filters: ReadonlyArray<{ readonly filter: string; readonly retainAsPublished?: boolean }>
+  filters: ReadonlyArray<{ readonly filter: string; readonly retainAsPublished?: boolean }>,
+  protocolVersion: MqttVersionSetting = "5"
 ) {
   const address = yield* parseBrokerUrl(url)
   const socket = yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout: "3 seconds" })
   const received: Array<InboundMessage> = []
   const client = yield* makeMqttClient(socket, {
     clientId,
+    protocolVersion,
     keepAliveSeconds: 5,
     subscriptions: filters.map(({ filter, retainAsPublished }) => ({
       filter,
@@ -90,6 +98,32 @@ describe.runIf(enabled)("interop: MQTT brokers", () => {
             const late = yield* appClient(url, `${base.replaceAll("/", "-")}-late`, [{ filter: `${base}/kept` }])
             yield* waitFor("the retained message", () => late.received.length >= 1)
             expect(late.received[0]?.retain).toBe(true)
+            yield* sender.client.publish(`${base}/kept`, "", { retain: true })
+          }).pipe(Effect.scoped),
+        30_000
+      )
+
+      it.live(
+        "speaks MQTT 3.1.1: delivers QoS 1 and keeps retained messages, without MQTT 5's properties",
+        () =>
+          Effect.gen(function* () {
+            const base = unique("mqtt311")
+            const app = yield* appClient(url, `${base.replaceAll("/", "-")}-app`, [{ filter: `${base}/#` }], "3.1.1")
+            const sender = yield* appClient(url, `${base.replaceAll("/", "-")}-sender`, [], "3.1.1")
+            expect((yield* sender.client.connection)?.protocolVersion).toBe("3.1.1")
+            yield* sender.client.publish(`${base}/live`, "1")
+            yield* sender.client.publish(`${base}/kept`, "2", { retain: true })
+            yield* waitFor("two messages", () => app.received.length >= 2)
+            // 3.1.1 clears the retain flag on live delivery (MQTT 3.1.1 §3.3.1.3).
+            expect(app.received.map((message) => message.retain)).toEqual([false, false])
+            const late = yield* appClient(
+              url,
+              `${base.replaceAll("/", "-")}-late`,
+              [{ filter: `${base}/kept` }],
+              "3.1.1"
+            )
+            yield* waitFor("the retained message", () => late.received.length >= 1)
+            expect(late.received[0]).toMatchObject({ payload: "2", retain: true })
             yield* sender.client.publish(`${base}/kept`, "", { retain: true })
           }).pipe(Effect.scoped),
         30_000

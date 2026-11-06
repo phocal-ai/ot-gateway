@@ -49,6 +49,11 @@ jobs:
           work=$(mktemp -d)
           sed 's#"path": "./ot-gateway-buffer.sqlite"#"path": "/var/lib/ot-gateway/buffer.sqlite"#' examples/gateway.json > "$work/gateway.json"
           docker run --rm -v "$work/gateway.json:/etc/ot-gateway/gateway.json:ro" ot-gateway:smoke --check /etc/ot-gateway/gateway.json
+          # The files the CLI finds next to the bundle: the device profiles and the version.
+          docker run --rm ot-gateway:smoke profiles list --json | grep -q '"id": "eastron-sdm630"'
+          docker run --rm ot-gateway:smoke --version
+          # The installed command (packaging/ot-gateway): this image, the folder mounted, no terminal.
+          (cd "$work" && OT_GATEWAY_IMAGE=ot-gateway OT_GATEWAY_TAG=smoke "$GITHUB_WORKSPACE/packaging/ot-gateway" check gateway.json | grep -q "config ok")
           # The bench (broker and simulated devices) from the image, the gateway in a second container.
           # The file, not its mktemp directory (mode 0700, another user's): the image runs as `node`.
           docker run -d --name bench --network host --entrypoint node \
@@ -107,7 +112,7 @@ jobs:
             --entrypoint bash ot-gateway:arm64 -c '
               node apps/gateway/src/bench.ts /work/gateway.json >/tmp/bench.log 2>&1 &
               sleep 20
-              node apps/gateway/src/main.ts /work/gateway.json >/tmp/gateway.log 2>&1 &
+              node apps/gateway/src/main.mjs /work/gateway.json >/tmp/gateway.log 2>&1 &
               sleep infinity'
           for _ in $(seq 240); do
             if docker exec arm64 grep -q "demo-site/b1/main-meter/active-power" /tmp/bench.log 2>/dev/null; then break; fi

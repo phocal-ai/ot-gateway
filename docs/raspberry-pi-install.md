@@ -136,43 +136,44 @@ cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 
 ## 6. The config and secrets
 
-Write the config as `ot-gateway.json`: with `/setup` and an AI assistant in a clone of this repository (README, "Set it up with AI"), or by hand from [configuration.md](configuration.md) and `examples/gateway.json`. Three things matter on a Pi:
+The Pi has no Node.js, and needs none: the gateway's image is the `ot-gateway` command too. On the Pi, install the command (a short script in `~/.local/bin` that runs the image, no `sudo`) and make a folder for the gateway:
+
+```bash
+mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
+mkdir -p ~/ot-gateway && cd ~/ot-gateway
+```
+
+The command always runs the image version that the folder's `compose.yaml` pins, so it upgrades with the gateway ([operations.md](operations.md#docker-compose-recommended) has the details).
+
+Then let it ask for the site, the broker and the devices, and write the folder:
+
+```bash
+ot-gateway init .
+```
+
+It writes `ot-gateway.json`, `compose.yaml` and `ot-gateway.env`. Three things matter on a Pi:
 
 - `mqtt.url` and every device's address must be reachable from the Pi. `localhost` means the Pi itself, not your laptop.
-- `buffer.path` is `/var/lib/ot-gateway/buffer.sqlite`, so the outbox outlives the container.
-- `"status": {}` is there, or the status page in part 8 stays off.
+- Secrets go in `ot-gateway.env`, never in the config: the broker password after `MQTT_PASSWORD=` when the broker needs a login, and the telemetry variables, commented out until you fill them in. `nano ot-gateway.env` edits it; it stays readable by you only.
+- Devices come from a points list: `ot-gateway points template > points.csv` starts one, `ot-gateway discover --points-list points.csv` fills one in from the BACnet devices that answer, and `ot-gateway import points.csv` adds it to the config ([first-building.md](first-building.md) walks through it).
 
-Copy it to the Pi:
-
-```bash
-scp ot-gateway.json ot-gateway:
-```
-
-On the Pi, fetch the Compose file of the release you install, put the config in place, and check it with the gateway itself:
+Check it with the gateway itself:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml
-sudo install -d -m 755 /etc/ot-gateway && sudo install -d -o 1000 -g 1000 /var/lib/ot-gateway
-sudo install -m 644 ~/ot-gateway.json /etc/ot-gateway/gateway.json
-[ -e /etc/ot-gateway/gateway.env ] || sudo install -m 600 -o 1000 -g 1000 /dev/null /etc/ot-gateway/gateway.env
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.7.0 --check /etc/ot-gateway/gateway.json
+ot-gateway check
 ```
 
-The check prints `config ok` and what it will poll; anything else names the field to fix. The fourth line creates an empty file for secrets, readable only by the gateway (uid 1000 in the container, which is `pi` on the Pi, so `ls` shows `pi` as the owner), and leaves an existing one alone. If the config names a broker password or other secrets (`/setup` puts them in `ot-gateway.env`), add those lines:
-
-```bash
-sudo nano /etc/ot-gateway/gateway.env
-```
+It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI assistant (README, "Set it up with AI"), the assistant runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
 
 ## 7. Start it
 
 ```bash
-docker compose -f compose.yaml up -d
+cd ~/ot-gateway && docker compose up -d
 ```
 
-This `compose.yaml` in your home folder is the one [operations.md](operations.md) calls `packaging/compose.yaml`: run its upgrade and log commands from your home folder, with `compose.yaml`.
+Run the upgrade and config commands of [operations.md](operations.md) from `~/ot-gateway`, where `compose.yaml` is.
 
-The first start downloads the image, about a minute on Wi-Fi. The Compose file pins the release, restarts the gateway after a crash and at boot, caps its memory at 768 MB and keeps Docker's logs from filling the SD card. If Compose says `Your kernel does not support memory limit capabilities`, the memory step in part 5 is missing: do it, then recreate the container with `docker compose -f compose.yaml up -d --force-recreate`.
+The first start downloads the image, about a minute on Wi-Fi. The Compose file pins the release, restarts the gateway after a crash and at boot, caps its memory at 768 MB and keeps Docker's logs from filling the SD card. If Compose says `Your kernel does not support memory limit capabilities`, the memory step in part 5 is missing: do it, then recreate the container with `docker compose up -d --force-recreate`.
 
 After half a minute, the log should say it connected to the broker and found the devices, without warnings:
 

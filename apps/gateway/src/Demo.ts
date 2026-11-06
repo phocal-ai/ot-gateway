@@ -77,7 +77,8 @@ export const demoConfig = (example: GatewayConfig, directory: string, options: D
       : {
           mqtt: {
             url: `mqtt://${options.public.broker.host}:${options.public.broker.port}`,
-            clientId: `ot-gateway-${site}`
+            clientId: `ot-gateway-${site}`,
+            version: "auto"
           }
         }),
     ...(buffer === undefined ? {} : { buffer: { ...buffer, path: `${directory}/buffer.sqlite` } }),

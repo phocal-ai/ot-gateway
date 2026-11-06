@@ -8,11 +8,14 @@
 #
 # The config is /etc/ot-gateway/gateway.json; point `buffer.path` under
 # /var/lib/ot-gateway so the outbox survives the container. Host networking lets
-# BACnet discovery hear broadcast I-Ams. There is no build step: Node runs the
-# TypeScript sources directly, so the image keeps the workspace layout (Node
-# does not strip types under node_modules, and workspace packages are
-# symlinks out of it). The status page (apps/web) is a static export, built
-# once on the build host and copied in.
+# BACnet discovery hear broadcast I-Ams. The entrypoint is the bundle the npm
+# package ships too (scripts/bundle.sh): one file, so it starts about three times
+# faster than the sources on a Raspberry Pi and takes less memory. The image
+# keeps the TypeScript sources and the workspace layout as well, for the bench
+# and the soak, which Node runs directly (it does not strip types under
+# node_modules, and workspace packages are symlinks out of it). The bundle and
+# the status page (apps/web, a static export) are built once on the build host
+# and copied in.
 #
 # To see it work without a config, broker or devices:
 #
@@ -31,6 +34,27 @@ COPY tsconfig.base.json ./
 COPY packages/api packages/api
 COPY apps/web apps/web
 RUN pnpm --filter @ot-gateway/web build
+
+# The bundle is JavaScript, the same on every platform: build it once, natively, not under QEMU.
+FROM --platform=$BUILDPLATFORM node:${NODE_VERSION}-bookworm-slim AS bundle
+WORKDIR /opt/ot-gateway
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/gateway/package.json apps/gateway/
+COPY packages/api/package.json packages/api/
+COPY packages/core/package.json packages/core/
+COPY packages/simulator/package.json packages/simulator/
+COPY packages/modbus/package.json packages/modbus/
+COPY packages/mqtt/package.json packages/mqtt/
+COPY packages/bacnet/package.json packages/bacnet/
+COPY packages/buffer/package.json packages/buffer/
+COPY packages/history/package.json packages/history/
+# With dev dependencies, for esbuild; this stage is thrown away.
+RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@ot-gateway/gateway..."
+COPY packages packages
+COPY apps/gateway/src apps/gateway/src
+COPY scripts/bundle.sh scripts/bundle.sh
+RUN scripts/bundle.sh /opt/ot-gateway/main.mjs
 
 FROM node:${NODE_VERSION}-bookworm-slim AS install
 WORKDIR /opt/ot-gateway
@@ -55,8 +79,13 @@ COPY --from=install /opt/ot-gateway ./
 COPY packages packages
 COPY apps/gateway/src apps/gateway/src
 COPY apps/gateway/package.json apps/gateway/
+COPY --from=bundle /opt/ot-gateway/main.mjs apps/gateway/src/main.mjs
 COPY --from=web /opt/ot-gateway/apps/web/out apps/web/out
 COPY examples examples
+# The device profiles a points list names (`ot-gateway profiles list`).
+COPY profiles profiles
+# What `ot-gateway init` writes next to ot-gateway.json when it runs in the container.
+COPY packaging/compose.yaml packaging/compose.yaml
 COPY scripts/soak.sh scripts/soak.sh
 # The build, for telemetry and the status page: the release tag when the image is published.
 ARG OT_GATEWAY_VERSION=dev
@@ -64,11 +93,21 @@ LABEL org.opencontainers.image.title="OT Gateway" \
       org.opencontainers.image.source="https://github.com/phocal-ai/ot-gateway" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.version="$OT_GATEWAY_VERSION"
-RUN mkdir -p /etc/ot-gateway /var/lib/ot-gateway && chown node:node /var/lib/ot-gateway && echo "$OT_GATEWAY_VERSION" > VERSION
+RUN mkdir -p /etc/ot-gateway /var/lib/ot-gateway /opt/ot-gateway/compile-cache \
+  && chown node:node /var/lib/ot-gateway /opt/ot-gateway/compile-cache && echo "$OT_GATEWAY_VERSION" > VERSION
 USER node
+# V8's compiled code for the bundle, made here on the target platform by one config check: Node starts the CLI
+# in 0.65 s instead of 0.87 s on a Pi 4 (a command takes about 1.3 s with Docker's own). Node keys it by user id,
+# so it serves the image's user (1000), and the `ot-gateway` command run as the first user of a Pi (also 1000).
+ENV NODE_COMPILE_CACHE=/opt/ot-gateway/compile-cache
+RUN node --max-semi-space-size=4 /opt/ot-gateway/apps/gateway/src/main.mjs --check examples/gateway.json >/dev/null
 ENV NODE_ENV=production
 # `demo` serves its status page on every interface of the container, so `-p 127.0.0.1:8080:8080` reaches it.
 ENV OT_GATEWAY_DEMO_LISTEN=0.0.0.0
+# The env file of the layout before the folder, read by the CLI when it is there and passed over in silence when
+# not (Node's --env-file-if-exists said so on every command). Compose passes ot-gateway.env as env_file.
+ENV OT_GATEWAY_ENV_FILE=/etc/ot-gateway/gateway.env
 # A smaller young generation than V8's default: about 40 MB less resident, no measurable CPU cost.
-ENTRYPOINT ["node", "--max-semi-space-size=4", "--env-file-if-exists=/etc/ot-gateway/gateway.env", "apps/gateway/src/main.ts"]
+# An absolute path, so a container may run from another working directory (compose.yaml uses the data volume).
+ENTRYPOINT ["node", "--max-semi-space-size=4", "/opt/ot-gateway/apps/gateway/src/main.mjs"]
 CMD ["/etc/ot-gateway/gateway.json"]

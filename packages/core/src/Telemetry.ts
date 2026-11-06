@@ -11,6 +11,28 @@ import { Effect, Metric } from "effect"
 import { monotonicMillis } from "./Monotonic.ts"
 
 /**
+ * The counters `runDevice` updates for every value, as new instances of the same series. Effect caches a metric's
+ * series key per instance for the attributes it last saw, so one instance shared by every device recomputes the key
+ * (a `JSON.stringify`) on almost every update; each device takes its own instances instead.
+ */
+export function makeValueCounters() {
+  return {
+    published: Metric.counter("ot_gateway_values_published", {
+      description: "Point values published",
+      incremental: true
+    }),
+    suppressed: Metric.counter("ot_gateway_values_suppressed", {
+      description: "Point values held back in change mode",
+      incremental: true
+    }),
+    pushed: Metric.counter("ot_gateway_pushed_readings", {
+      description: "Values pushed by devices between polls",
+      incremental: true
+    })
+  }
+}
+
+/**
  * Effect exports a metric without a `unit` attribute as unit "1", which
  * Grafana turns into a `_ratio` name suffix on gauges. Set it explicitly on
  * every metric measured in seconds.
@@ -48,16 +70,10 @@ export const publishFailures = Metric.counter("ot_gateway_publish_failures", {
 })
 
 /** Point messages published: a read, the latest of an interval, a window's aggregate or a change. */
-export const valuesPublished = Metric.counter("ot_gateway_values_published", {
-  description: "Point values published",
-  incremental: true
-})
+export const valuesPublished = makeValueCounters().published
 
 /** Point values read but not published because, in change mode, they did not change past the deadband. */
-export const valuesSuppressed = Metric.counter("ot_gateway_values_suppressed", {
-  description: "Point values held back in change mode",
-  incremental: true
-})
+export const valuesSuppressed = makeValueCounters().suppressed
 
 /** Unix time of the last cycle that read the device successfully. */
 export const deviceLastSuccess = Metric.gauge("ot_gateway_device_last_success_timestamp_seconds", {
@@ -90,10 +106,7 @@ export const deviceRestarts = Metric.counter("ot_gateway_device_restarts", {
 })
 
 /** Values a device pushed between polls (BACnet change-of-value), before the deadband. */
-export const pushedReadings = Metric.counter("ot_gateway_pushed_readings", {
-  description: "Values pushed by devices between polls",
-  incremental: true
-})
+export const pushedReadings = makeValueCounters().pushed
 
 /**
  * Points a device currently pushes (a live change-of-value subscription), so

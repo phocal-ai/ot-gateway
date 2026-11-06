@@ -25,6 +25,7 @@ import {
   PacketType,
   Property,
   pubackRefusesMessage,
+  refusesProtocolLevel,
   takePacket,
   topicMatches
 } from "../src/index.ts"
@@ -145,7 +146,7 @@ describe("CONNECT", () => {
     } as const
     const { body } = bodyOf(encodeConnect(connect), PacketType.CONNECT)
     expect(body[7]).toBe(0x80 | 0x40 | 0x20 | 0x08 | 0x04 | 0x02)
-    expect(decodeConnect(body)).toEqual(Result.succeed(connect))
+    expect(decodeConnect(body)).toEqual(Result.succeed({ protocolVersion: 5, ...connect }))
   })
 
   it("announces a Maximum Packet Size (§3.1.2.11.4)", () => {
@@ -157,17 +158,122 @@ describe("CONNECT", () => {
       maximumPacketSize: 1024 * 1024
     }
     const { body } = bodyOf(encodeConnect(connect), PacketType.CONNECT)
-    expect(decodeConnect(body)).toEqual(Result.succeed(connect))
+    expect(decodeConnect(body)).toEqual(Result.succeed({ protocolVersion: 5, ...connect }))
   })
 
-  it("rejects MQTT 3.1.1", () => {
+  it("rejects a protocol level it does not speak (MQTT 3.1 is level 3)", () => {
     const { body } = bodyOf(
       encodeConnect({ clientId: "gw", keepAliveSeconds: 30, cleanStart: true, sessionExpirySeconds: 0 }),
       PacketType.CONNECT
     )
-    const v311 = Uint8Array.from(body)
-    v311[6] = 4
-    expect(Result.isFailure(decodeConnect(v311))).toBe(true)
+    const v31 = Uint8Array.from(body)
+    v31[6] = 3
+    const decoded = decodeConnect(v31)
+    expect(Result.isFailure(decoded) && decoded.failure.message.startsWith("unsupported protocol")).toBe(true)
+  })
+})
+
+describe("MQTT 3.1.1", () => {
+  it("CONNECT: level 4, Clean Session, and no properties (3.1.1 §3.1.2)", () => {
+    const connect = {
+      protocolVersion: 4,
+      clientId: "gw",
+      keepAliveSeconds: 30,
+      cleanStart: true,
+      sessionExpirySeconds: 0,
+      username: "u",
+      password: "p",
+      will: { topic: "w", payload: "off", qos: 1, retain: true }
+    } as const
+    const { body } = bodyOf(encodeConnect({ ...connect, maximumPacketSize: 1024 }), PacketType.CONNECT)
+    // Variable header (§3.1.2), then client id, will topic and payload, user name, password (§3.1.3).
+    const variableHeader = [
+      0x00,
+      0x04,
+      0x4d,
+      0x51,
+      0x54,
+      0x54,
+      0x04,
+      0x80 | 0x40 | 0x20 | 0x08 | 0x04 | 0x02,
+      0x00,
+      0x1e
+    ]
+    const clientId = [0x00, 0x02, 0x67, 0x77]
+    const will = [0x00, 0x01, 0x77, 0x00, 0x03, 0x6f, 0x66, 0x66]
+    const credentials = [0x00, 0x01, 0x75, 0x00, 0x01, 0x70]
+    expect(Array.from(body)).toEqual([...variableHeader, ...clientId, ...will, ...credentials])
+    // The packet size limit cannot be announced in 3.1.1, so it does not come back.
+    expect(decodeConnect(body)).toEqual(Result.succeed(connect))
+  })
+
+  it("CONNACK: return codes map to the MQTT 5 reason codes and back (3.1.1 §3.2.2.3)", () => {
+    expect(Array.from(encodeConnack(0, new Map([[Property.ReceiveMaximum, 5]]), 4))).toEqual([0x20, 0x02, 0x00, 0x00])
+    expect(Array.from(encodeConnack(0x86, new Map(), 4))).toEqual([0x20, 0x02, 0x00, 0x04])
+    // A reason 3.1.1 has no code for becomes server unavailable.
+    expect(Array.from(encodeConnack(0x97, new Map(), 4))).toEqual([0x20, 0x02, 0x00, 0x03])
+    expect(decodeConnack(bytes(0x00, 0x05), 4)).toEqual(
+      Result.succeed({ sessionPresent: false, reasonCode: 0x87, properties: new Map() })
+    )
+    expect(decodeConnack(bytes(0x01, 0x00), 4)).toEqual(
+      Result.succeed({ sessionPresent: true, reasonCode: 0, properties: new Map() })
+    )
+  })
+
+  it("CONNACK: a 3.1.1 broker's answer to MQTT 5 reads as a refused protocol level", () => {
+    const answer = decodeConnack(bytes(0x00, 0x01))
+    expect(Result.isSuccess(answer) && refusesProtocolLevel(answer.success)).toBe(true)
+    const v5 = decodeConnack(bodyOf(encodeConnack(0x84), PacketType.CONNACK).body)
+    expect(Result.isSuccess(v5) && refusesProtocolLevel(v5.success)).toBe(true)
+    const ok = decodeConnack(bodyOf(encodeConnack(0), PacketType.CONNACK).body)
+    expect(Result.isSuccess(ok) && refusesProtocolLevel(ok.success)).toBe(false)
+  })
+
+  it("PUBLISH: topic, packet identifier and payload, no properties (3.1.1 §3.3.2)", () => {
+    const packet = encodePublish(
+      { topic: "a/b", payload: text.encode("x"), qos: 1, retain: true, packetId: 10, messageExpirySeconds: 5 },
+      4
+    )
+    expect(Array.from(packet)).toEqual([0x33, 0x08, 0x00, 0x03, 0x61, 0x2f, 0x62, 0x00, 0x0a, 0x78])
+    const { flags, body } = bodyOf(packet, PacketType.PUBLISH)
+    expect(decodePublish(flags, body, 4)).toEqual(
+      Result.succeed({ topic: "a/b", payload: text.encode("x"), qos: 1, retain: true, packetId: 10 })
+    )
+  })
+
+  it("PUBACK: the packet identifier alone (3.1.1 §3.4.2)", () => {
+    const packet = encodePuback(10, 0x87, 4)
+    expect(Array.from(packet)).toEqual([0x40, 0x02, 0x00, 0x0a])
+    expect(decodePuback(bodyOf(packet, PacketType.PUBACK).body)).toEqual(
+      Result.succeed({ packetId: 10, reasonCode: 0 })
+    )
+  })
+
+  it("SUBSCRIBE: the options are the QoS alone (3.1.1 §3.8.3.1)", () => {
+    const packet = encodeSubscribe(
+      { packetId: 1, subscriptions: [{ filter: "a/#", qos: 1, noLocal: true, retainAsPublished: true }] },
+      4
+    )
+    expect(Array.from(packet)).toEqual([0x82, 0x08, 0x00, 0x01, 0x00, 0x03, 0x61, 0x2f, 0x23, 0x01])
+    const { body } = bodyOf(packet, PacketType.SUBSCRIBE)
+    expect(decodeSubscribe(body, 4)).toEqual(
+      Result.succeed({ packetId: 1, subscriptions: [{ filter: "a/#", qos: 1 }] })
+    )
+    const reserved = Uint8Array.from(body)
+    reserved[reserved.length - 1] = 0x05
+    expect(Result.isFailure(decodeSubscribe(reserved, 4))).toBe(true)
+  })
+
+  it("SUBACK: no properties, and 0x80 for every refusal (3.1.1 §3.9.3)", () => {
+    const packet = encodeSuback({ packetId: 1, reasonCodes: [1, 0x87] }, 4)
+    expect(Array.from(packet)).toEqual([0x90, 0x04, 0x00, 0x01, 0x01, 0x80])
+    expect(decodeSuback(bodyOf(packet, PacketType.SUBACK).body, 4)).toEqual(
+      Result.succeed({ packetId: 1, reasonCodes: [1, 0x80] })
+    )
+  })
+
+  it("DISCONNECT: no reason code (3.1.1 §3.14)", () => {
+    expect(Array.from(encodeDisconnect(0x95, 4))).toEqual([0xe0, 0x00])
   })
 })
 
@@ -210,6 +316,32 @@ describe("PUBLISH", () => {
     const split = bodyOf(encodePublish(publish), PacketType.PUBLISH)
     expect(split.flags).toBe(0x03)
     expect(decodePublish(split.flags, split.body)).toEqual(Result.succeed(publish))
+  })
+
+  it("round-trips every property, across the lengths where the remaining length grows a byte (§1.5.5)", () => {
+    // 127/128 and 16,383/16,384 bytes of body are where the Variable Byte Integer goes from 1 to 2 and 2 to 3 bytes.
+    for (const payloadLength of [0, 100, 101, 102, 16_350, 16_360, 16_400, 70_000]) {
+      for (const version of [5, 4] as const) {
+        const publish = {
+          topic: "gebäude/wärme/°C",
+          payload: new Uint8Array(payloadLength).fill(0x61),
+          qos: 1,
+          retain: false,
+          packetId: 0xfffe,
+          ...(version === 5
+            ? { messageExpirySeconds: 3600, responseTopic: "réponse/1", correlationData: bytes(1, 2, 3) }
+            : {})
+        } as const
+        const split = bodyOf(encodePublish(publish, version), PacketType.PUBLISH)
+        expect(decodePublish(split.flags, split.body, version)).toEqual(Result.succeed(publish))
+      }
+    }
+  })
+
+  it("refuses a topic longer than 65,535 bytes", () => {
+    expect(() =>
+      encodePublish({ topic: "ä".repeat(40_000), payload: new Uint8Array(), qos: 0, retain: false })
+    ).toThrow(RangeError)
   })
 
   it("rejects QoS 2", () => {

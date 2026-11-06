@@ -31,14 +31,17 @@ The top level of the document.
 
 ## mqtt
 
-| Key           | Type           | Default                 | Meaning                                                                                                                           |
-| ------------- | -------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `url`         | string         | required                | `mqtts://host:port` (TLS) or `mqtt://host:port`. No credentials in it: they would be printed and logged with it.                  |
-| `clientId`    | string, ≤ 1024 | `ot-gateway-<hostname>` | The MQTT client identifier. Two gateways with the same one keep disconnecting each other.                                         |
-| `username`    | string, ≤ 1024 | none                    | Broker username.                                                                                                                  |
-| `passwordEnv` | string         | none                    | Name of the environment variable holding the password (`/etc/ot-gateway/gateway.env` under systemd). Never put the password here. |
+| Key           | Type                       | Default                 | Meaning                                                                                                                           |
+| ------------- | -------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `url`         | string                     | required                | `mqtts://host:port` (TLS) or `mqtt://host:port`. No credentials in it: they would be printed and logged with it.                  |
+| `clientId`    | string, ≤ 1024             | `ot-gateway-<hostname>` | The MQTT client identifier. Two gateways with the same one keep disconnecting each other.                                         |
+| `username`    | string, ≤ 1024             | none                    | Broker username.                                                                                                                  |
+| `passwordEnv` | string                     | none                    | Name of the environment variable holding the password (`/etc/ot-gateway/gateway.env` under systemd). Never put the password here. |
+| `version`     | `"auto"`, `"5"`, `"3.1.1"` | `"auto"`                | The MQTT spoken. `auto` uses MQTT 5 and falls back to 3.1.1 when the broker refuses 5; see below for what 3.1.1 leaves out.       |
 
 A public test broker (`broker.hivemq.com`, `broker.emqx.io`, `test.mosquitto.org`, `mqtt.eclipseprojects.io`) lets anyone read and write every topic, so a config that names one may only have devices on this machine, which are simulated: a device in a building on one is refused, by `check` and at start-up. `ot-gateway demo --public` uses one this way.
+
+Under MQTT 3.1.1 everything works, with less help from the broker: it announces no limits (packet size, inflight messages), command results carry no correlation data, a command's message expiry is not known (its age is limited by `maxAge` alone), and a command published with the retain flag is recognized as retained only when the gateway reconnects. Prefer MQTT 5 where the broker has it; `ot-gateway broker` says which one was agreed.
 
 A password over `mqtt://` is sent in clear text, so unless the broker is on the same machine (`localhost`, `127.0.0.0/8`, `::1`) the gateway warns about it at start-up and in `--check`: use `mqtts://`.
 

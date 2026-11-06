@@ -17,21 +17,27 @@ pnpm typecheck
 pnpm test
 pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
 pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
-pnpm ot-gateway init                       # questions in, ot-gateway.json out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, compose.yaml and ot-gateway.env out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
-pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config
+pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
+pnpm ot-gateway points schema              # the points list's columns (--json); points template prints a list to fill in
+pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
+pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
+pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
 pnpm ot-gateway status                     # the running gateway's devices, one line each
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
 scripts/interop.sh [mqtt|bacnet|modbus]   # against Mosquitto, EMQX, the BACnet Stack server and pymodbus (Docker, Python)
+scripts/build-package.sh   # the ot-gateway npm package (the CLI bundled, with the status page) in dist/
 ```
 
 Turborepo caches `typecheck` and `test` locally and in a remote cache on Vercel (team `wimluks-projects`; `pnpm exec turbo login` and `turbo link` once per machine, `TURBO_TOKEN` in CI). A cached task is replayed only when none of its declared inputs changed, so **a test that reads a file outside its package must list that file in the package's `turbo.json` inputs**, as `packages/core` does for `docs/configuration.md`. Otherwise a change to that file replays a stale pass. Before changing Turborepo config, read `AGENTS.md`: turbo keeps a block there that points at the docs bundled with the installed version.
 
-There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`.
+There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`. What ships is a bundle: the npm package and the container image's entrypoint run `apps/gateway/src/main.mjs`, built by `scripts/bundle.sh` (esbuild), because one file starts about three times faster on a Pi and a running gateway keeps a third less heap. Code that finds a file through `import.meta.url` must work from that bundle too (the image smoke test checks the profiles and the version).
 
 `tsc` is TypeScript 7 (the Go-native compiler), patched by `@effect/tsgo` on `pnpm install` (the root `prepare` script) so that `pnpm typecheck` also reports Effect language-service diagnostics. Their severities are set in `tsconfig.base.json`; the ones set to `error` fail the build. If typecheck stops reporting Effect diagnostics, run `pnpm exec effect-tsgo patch`.
 
@@ -126,7 +132,7 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Quickstart
 
-`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from a fresh checkout to a running gateway: it writes `ot-gateway.json` (git-ignored, with secrets in `ot-gateway.env`). The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
+`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
 
 ## Health and budget
 

@@ -2,6 +2,7 @@
  * What must hold after a simulated run, whatever faults it went through. Each
  * check returns the violations it found, as sentences a failing test prints.
  */
+import { storeBackoffMillis } from "@ot-gateway/buffer"
 import { healthTopic } from "@ot-gateway/core"
 import { Schema } from "effect"
 import { type CommandKind, RESPONSES, type SimulationRun } from "./Simulation.ts"
@@ -167,12 +168,15 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
 
   // 2. Per topic, values first arrive in the order they were accepted (resends may repeat older ones later).
   // A value accepted while the disk was full skips the outbox by design (BufferedPublisher.ts: publishing it
-  // directly beats losing it), so it may overtake older rows; it carries its own `ts`.
+  // directly beats losing it), so it may overtake older rows; it carries its own `ts`. So does one accepted in
+  // the second after, before the outbox tries the disk again (`storeBackoffMillis`).
   const diskFull = run.faults.filter((fault) => fault.kind === "disk-full")
   const bypassed = new Set(
     run.accepted
       .filter((message) =>
-        diskFull.some((fault) => fault.at <= message.at && message.at <= fault.at + fault.durationMs)
+        diskFull.some(
+          (fault) => fault.at <= message.at && message.at <= fault.at + fault.durationMs + storeBackoffMillis
+        )
       )
       .map(keyOf)
   )

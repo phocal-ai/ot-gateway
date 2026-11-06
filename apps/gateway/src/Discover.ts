@@ -36,8 +36,10 @@ import {
   parseDeviceAddress
 } from "@ot-gateway/bacnet"
 import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
-import { Console, Effect, Result } from "effect"
+import { Console, Effect, FileSystem, Result, Schema } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
+import { toCsv } from "./Csv.ts"
+import { printJson } from "./Output.ts"
 
 /** How long Who-Is answers are collected. */
 const LISTEN = "3 seconds"
@@ -223,16 +225,37 @@ const describeConfigured = (client: BacnetClient, configured: BacnetDevice, addr
     return missing === 0 ? [] : [{ device, described, configured }]
   }).pipe(skipOnFailure(configured.deviceInstance))
 
-/** Discover, describe and print the draft; through `network` instead of Node's in a simulation. */
-/** The draft `devices` entries for the BACnet devices that answer, with progress and warnings on stderr. */
-export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "udp">) =>
+export class DiscoverError extends Schema.TaggedError<DiscoverError>()("DiscoverError", { message: Schema.String }) {}
+
+export interface DiscoverOptions {
+  /**
+   * Ask the device at this `ip` or `ip:port` only, with a Who-Is sent to it rather than broadcast: for a device
+   * on another subnet without a BBMD, or on a port other than 47808, whose address a device list gives.
+   */
+  readonly address?: string | undefined
+}
+
+/**
+ * The draft `devices` entries for the BACnet devices that answer, with progress and warnings on stderr; through
+ * `network` instead of Node's in a simulation.
+ */
+export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
   Effect.gen(function* () {
+    const target = options.address === undefined ? undefined : parseDeviceAddress(options.address)
+    if (target !== undefined && Result.isFailure(target)) {
+      return yield* new DiscoverError({ message: `--address takes ip or ip:port: ${target.failure}` })
+    }
     const client = yield* makeBacnetNetwork(config.bacnet, network)
-    yield* Console.error(`Who-Is to ${config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
-    const devices = yield* client.discover({ within: LISTEN })
+    yield* Console.error(`Who-Is to ${options.address ?? config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
+    const devices = yield* client.discover({
+      within: LISTEN,
+      ...(target === undefined ? {} : { target: { address: target.success } })
+    })
     if (devices.length === 0) {
       yield* Console.error(
-        "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD."
+        options.address === undefined
+          ? "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD. With a device's address from a device list: discover --address ip[:port]."
+          : `No device answered at ${options.address}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
       )
     }
     if (devices.length >= MAX_DEVICES) {
@@ -269,5 +292,62 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
   }).pipe(Effect.scoped)
 
 /** `ot-gateway discover`: the drafts as `{ "devices": [...] }` on stdout, ready to paste into the config. */
-export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">) =>
-  Effect.flatMap(discoverDrafts(config, network), (devices) => Console.log(JSON.stringify({ devices }, null, 2)))
+export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
+  Effect.flatMap(discoverDrafts(config, network, options), (devices) => printJson({ devices }))
+
+type Draft = ReturnType<typeof draftDevices>[number]
+
+/**
+ * A device-supplied point name as the list's `point` column: as named when import makes the same id from it,
+ * otherwise the id. Names that a spreadsheet would run as a formula (=, +, -, @) become the id too: anyone on
+ * the LAN can answer Who-Is with any name.
+ */
+const pointColumn = (point: Draft["points"][number]) =>
+  slugify(point.name) === point.id && !/^[=+\-@\t\r]/.test(point.name) ? point.name : point.id
+
+/** The drafts as a points list (PointsSchema.ts): one row per object, to trim and import. */
+export const draftPointsList = (drafts: ReadonlyArray<Draft>) => {
+  const header = ["device", "point", "unit", "device_instance", "address", "object_type", "object_instance"]
+  const rows = drafts.flatMap((draft) =>
+    draft.points.map((point) => [
+      draft.id,
+      pointColumn(point),
+      point.unit ?? "",
+      draft.deviceInstance,
+      draft.address ?? "",
+      point.objectType,
+      point.instance
+    ])
+  )
+  return toCsv([header, ...rows])
+}
+
+/**
+ * `ot-gateway discover --points-list <file>`: the drafts of devices not in the config yet, written as a points
+ * list to trim, check and import. An existing file is left alone, and none is written when there is nothing in it.
+ */
+export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* (
+  config: GatewayConfig,
+  path: string,
+  network?: Pick<Network, "udp">,
+  options: DiscoverOptions = {}
+) {
+  const fs = yield* FileSystem.FileSystem
+  if (yield* fs.exists(path)) {
+    return yield* Console.error(`${path} exists; give another file name, or move it away first. Nothing was written.`)
+  }
+  const configured = new Set(config.devices.map((device) => device.id))
+  const drafts = yield* discoverDrafts(config, network, options)
+  const fresh = drafts.filter((draft) => !configured.has(draft.id))
+  if (fresh.length < drafts.length) {
+    yield* Console.error(
+      `  ${drafts.length - fresh.length} device(s) already in the config are left out; discover without --points-list drafts their new objects`
+    )
+  }
+  const points = fresh.reduce((total, draft) => total + draft.points.length, 0)
+  if (points === 0) return yield* Console.error(`no points to list; ${path} was not written.`)
+  yield* fs.writeFileString(path, draftPointsList(fresh), { flag: "wx" })
+  yield* Console.error(
+    `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ot-gateway import ${path}`
+  )
+})

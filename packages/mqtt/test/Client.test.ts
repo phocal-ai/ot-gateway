@@ -5,7 +5,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@ot-gateway/core"
-import { ConfigProvider, Context, Effect, Exit, Layer, Metric, Redacted, Scope } from "effect"
+import { ConfigProvider, Context, Effect, Exit, Fiber, Layer, Metric, Redacted, Scope } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { makeBrokerControl, makeMqttClient, MqttPublisher, parseBrokerUrl, Property, serveMqtt } from "../src/index.ts"
 import type { BrokerControl, MqttClient, MqttClientOptions } from "../src/index.ts"
@@ -91,6 +91,67 @@ describe("MQTT client over TCP", () => {
       // QoS 0 completes once written, so wait for the broker to read it.
       yield* eventually(Effect.sync(() => control.messages.length === 1))
       expect(control.messages.map((m) => m.qos)).toEqual([0])
+    })
+  )
+
+  it.live("says which MQTT it speaks and what the broker allows", () =>
+    Effect.gen(function* () {
+      const control = makeBrokerControl()
+      control.connackProperties.set(Property.ReceiveMaximum, 20)
+      control.connackProperties.set(Property.MaximumPacketSize, 4096)
+      const { port } = yield* startBroker(control)
+      const client = yield* clientOn(port)
+      yield* connectedClient(client)
+      expect(yield* client.connection).toEqual({
+        protocolVersion: "5",
+        receiveMaximum: 20,
+        maximumQoS: 1,
+        retainAvailable: true,
+        maximumPacketSize: 4096,
+        keepAliveSeconds: 30
+      })
+    })
+  )
+
+  it.live("falls back to MQTT 3.1.1 when the broker refuses MQTT 5, and stays with it", () =>
+    Effect.gen(function* () {
+      const control = makeBrokerControl()
+      control.speaksMqtt5 = false
+      const { port } = yield* startBroker(control)
+      const client = yield* clientOn(port)
+      yield* client.publish("s/b/d/p", '{"value":1}')
+      yield* client.publish("s/b/d/p/$meta", '{"unit":"°C"}', { retain: true, qos: 0 })
+      yield* eventually(Effect.sync(() => control.messages.length === 2))
+      expect(control.connects.map((connect) => connect.protocolVersion)).toEqual([4])
+      expect(control.messages).toEqual([
+        { clientId: "test-gw", topic: "s/b/d/p", payload: '{"value":1}', qos: 1, retain: false },
+        { clientId: "test-gw", topic: "s/b/d/p/$meta", payload: '{"unit":"°C"}', qos: 0, retain: true }
+      ])
+      expect(yield* client.connection).toMatchObject({ protocolVersion: "3.1.1", receiveMaximum: 1_000 })
+      expect(yield* connectCount("fallback", "failed")).toBe(0)
+    }).pipe(withMetricAttributes({ test: "fallback" }))
+  )
+
+  it.live("refuses to fall back when told to speak MQTT 5 only", () =>
+    Effect.gen(function* () {
+      const control = makeBrokerControl()
+      control.speaksMqtt5 = false
+      const { port } = yield* startBroker(control)
+      const client = yield* clientOn(port, { protocolVersion: "5", publishTimeout: "300 millis" })
+      const failed = yield* Effect.flip(client.publish("t", "x"))
+      expect(failed.reason).toBe("unavailable")
+      yield* eventually(Effect.map(connectCount("only5", "rejected"), (count) => count >= 1))
+      expect(control.connects).toEqual([])
+    }).pipe(withMetricAttributes({ test: "only5" }))
+  )
+
+  it.live("speaks MQTT 3.1.1 from the start when told to", () =>
+    Effect.gen(function* () {
+      const { port, control } = yield* startBroker()
+      const client = yield* clientOn(port, { protocolVersion: "3.1.1" })
+      yield* client.publish("t", "x")
+      expect(control.connects.map((connect) => connect.protocolVersion)).toEqual([4])
+      expect(control.messages.map((message) => message.payload)).toEqual(["x"])
     })
   )
 
@@ -195,6 +256,26 @@ describe("MQTT client over TCP", () => {
     }).pipe(withMetricAttributes({ test: "restart" }))
   )
 
+  it.live("sends publishes in the order they were called, also across a reconnect", () =>
+    Effect.gen(function* () {
+      const firstScope = yield* Scope.make()
+      const first = yield* startBroker().pipe(Scope.provide(firstScope))
+      const client = yield* clientOn(first.port, { publishTimeout: "3 seconds" })
+      yield* connectedClient(client)
+      yield* Scope.close(firstScope, Exit.void)
+      yield* eventually(Effect.map(client.isConnected, (connected) => !connected))
+
+      // Waits for the connection; the next one is called as soon as the client has one again.
+      const waiting = yield* Effect.forkChild(client.publish("t", "older"))
+      yield* Effect.yieldNow
+      const second = yield* startBroker(makeBrokerControl(), first.port)
+      while (!(yield* client.isConnected)) yield* Effect.yieldNow
+      yield* client.publish("t", "newer")
+      yield* Fiber.join(waiting)
+      expect(second.control.messages.map((message) => message.payload)).toEqual(["older", "newer"])
+    })
+  )
+
   it.live(
     "drops a broker that stops answering pings (which publishes the will), then reconnects",
     () =>
@@ -233,7 +314,13 @@ describe("MqttPublisher", () => {
     Effect.gen(function* () {
       const { port, control } = yield* startBroker()
       const layer = MqttPublisher(
-        { url: `mqtt://127.0.0.1:${port}`, clientId: "layer-gw", username: "gw", passwordEnv: "TEST_MQTT_PASSWORD" },
+        {
+          version: "auto",
+          url: `mqtt://127.0.0.1:${port}`,
+          clientId: "layer-gw",
+          username: "gw",
+          passwordEnv: "TEST_MQTT_PASSWORD"
+        },
         { reconnectDelay: fastOptions.reconnectDelay }
       ).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ TEST_MQTT_PASSWORD: "pw" }))))
 
@@ -255,7 +342,7 @@ describe("MqttPublisher", () => {
       const firstScope = yield* Scope.make()
       const first = yield* startBroker().pipe(Scope.provide(firstScope))
       const layer = MqttPublisher(
-        { url: `mqtt://127.0.0.1:${first.port}`, clientId: "health-gw" },
+        { version: "auto", url: `mqtt://127.0.0.1:${first.port}`, clientId: "health-gw" },
         {
           reconnectDelay: fastOptions.reconnectDelay,
           publishTimeout: "3 seconds",
@@ -298,7 +385,7 @@ describe("MqttPublisher", () => {
       const firstScope = yield* Scope.make()
       const first = yield* startBroker().pipe(Scope.provide(firstScope))
       const layer = MqttPublisher(
-        { url: `mqtt://127.0.0.1:${first.port}`, clientId: "replay-gw" },
+        { version: "auto", url: `mqtt://127.0.0.1:${first.port}`, clientId: "replay-gw" },
         { reconnectDelay: fastOptions.reconnectDelay, publishTimeout: "3 seconds" }
       )
       const publisher = Context.get(yield* Layer.build(layer), Publisher)
@@ -316,9 +403,11 @@ describe("MqttPublisher", () => {
 
   it.effect("fails to build without the password variable", () =>
     Effect.gen(function* () {
-      const layer = MqttPublisher({ url: "mqtt://127.0.0.1", passwordEnv: "TEST_MISSING_PASSWORD" }).pipe(
-        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({})))
-      )
+      const layer = MqttPublisher({
+        version: "auto",
+        url: "mqtt://127.0.0.1",
+        passwordEnv: "TEST_MISSING_PASSWORD"
+      }).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))))
       const error = yield* Effect.flip(Layer.build(layer))
       expect(error._tag).toBe("ConfigError")
     })
