@@ -208,6 +208,9 @@ export const toCliArgs = (argv: ReadonlyArray<string>): ReadonlyArray<string> =>
 
 const legacyFlags = new Set(["--check", "--discover"])
 
+/** The version as `--version` gets it: the CLI prints `v` before it, and a release tag already starts with one. */
+export const cliVersion = (version: string) => version.replace(/^v(?=\d)/, "")
+
 /** Runs the command line for `argv` (without node and the script). */
 export const runCli = (argv: ReadonlyArray<string>) =>
-  Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version })(toCliArgs(argv)))
+  Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version: cliVersion(version) })(toCliArgs(argv)))
