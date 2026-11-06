@@ -158,20 +158,33 @@ const discoverCommand = Command.make(
       Flag.withDescription("Write the devices found as a points list (CSV) to this file, to trim and import"),
       Flag.optional
     ),
+    address: Flag.String("address").pipe(
+      Flag.withDescription(
+        "Ask only the device at this ip or ip:port, instead of a broadcast: one on another subnet or another port"
+      ),
+      Flag.optional
+    ),
     json: jsonFlag
   },
   // The draft is JSON already; --json makes a failure JSON too.
-  ({ config, pointsList, json }) =>
-    Effect.flatMap(loadConfig(config), (decoded) =>
-      Option.isSome(pointsList) ? discoverToPointsList(decoded, pointsList.value) : discover(decoded)
-    ).pipe(jsonFailure(json, { path: config }))
+  ({ config, pointsList, address, json }) =>
+    Effect.flatMap(loadConfig(config), (decoded) => {
+      const options = { address: Option.getOrUndefined(address) }
+      return Option.isSome(pointsList)
+        ? discoverToPointsList(decoded, pointsList.value, undefined, options)
+        : discover(decoded, undefined, options)
+    }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
     "Find BACnet devices through the config's bacnet settings and print a draft of their devices entries, read-only"
   ),
   Command.withExamples([
     { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
-    { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" }
+    { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
+    {
+      command: "ot-gateway discover --address 10.20.3.40:47809",
+      description: "Ask one device whose address a device list gives"
+    }
   ])
 )
 
