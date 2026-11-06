@@ -1,7 +1,8 @@
 /**
  * The folder a gateway runs from with Docker Compose: `ot-gateway.json`, `compose.yaml` (packaging/compose.yaml,
- * which mounts that config and reads `ot-gateway.env`) and, when the broker needs a login, `ot-gateway.env` with
- * the password variable left empty for the operator to fill in. `init` writes the last two next to the config.
+ * which mounts that config and reads `ot-gateway.env`) and `ot-gateway.env`, the one place for what does not belong
+ * in the config: the broker password (left empty for the operator, when the broker needs a login) and the
+ * telemetry variables (commented out). `init` writes the last two next to the config.
  *
  * Neither file is ever replaced: a compose.yaml may have been edited, and an env file holds a secret. The env
  * file is created readable by its owner only, and nothing here reads it back.
@@ -25,13 +26,31 @@ export interface FolderFiles {
   readonly noCompose?: string | undefined
 }
 
-/** The env file's text: the password variable, empty, with a line that says what goes there. */
-export const envFileText = (passwordEnv: string) =>
-  `# The MQTT broker password. Docker Compose and ot-gateway read this file; keep it out of git.\n${passwordEnv}=\n`
+/**
+ * The env file's text: the password variable, empty, when the broker needs a login, and the telemetry
+ * variables commented out, so the operator finds where both go without reading the docs first.
+ */
+export const envFileText = (passwordEnv: string | undefined) =>
+  [
+    "# Secrets and settings for this gateway, kept out of ot-gateway.json. Docker Compose and ot-gateway read",
+    "# this file; keep it yours alone (chmod 600) and out of git.",
+    ...(passwordEnv === undefined ? [] : ["", "# The MQTT broker password.", `${passwordEnv}=`]),
+    "",
+    "# Telemetry: uncomment and fill in to send traces, metrics and logs over OTLP (observability/README.md).",
+    "# OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com/otlp",
+    "# OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic%20<token>",
+    "# OTEL_TRACES_EXPORTER=otlp",
+    "# OTEL_METRICS_EXPORTER=otlp",
+    "# OTEL_LOGS_EXPORTER=otlp",
+    "# OTEL_RESOURCE_ATTRIBUTES=deployment.environment=production",
+    "# OTEL_TRACES_SAMPLER=traceidratio",
+    "# OTEL_TRACES_SAMPLER_ARG=0.1",
+    ""
+  ].join("\n")
 
 /**
- * Writes compose.yaml and, for a broker login, ot-gateway.env next to the config at `configPath`. A dry run
- * writes nothing and says what it would write.
+ * Writes compose.yaml and ot-gateway.env next to the config at `configPath`. A dry run writes nothing and says
+ * what it would write.
  */
 export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
   configPath: string,
@@ -57,7 +76,6 @@ export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
   if (noCompose === undefined) {
     yield* create(path.join(folder, "compose.yaml"), yield* fs.readFileString(composeTemplatePath), 0o644)
   }
-  const passwordEnv = config.mqtt.passwordEnv
-  if (passwordEnv !== undefined) yield* create(path.join(folder, "ot-gateway.env"), envFileText(passwordEnv), 0o600)
+  yield* create(path.join(folder, "ot-gateway.env"), envFileText(config.mqtt.passwordEnv), 0o600)
   return { written, kept, noCompose } satisfies FolderFiles
 })
