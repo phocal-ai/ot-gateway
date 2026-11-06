@@ -43,8 +43,12 @@ const reportFailure = <E extends { readonly message: string }>(cause: Cause.Caus
   return Effect.logError(error.success.message)
 }
 
-// Before anything reads process.env: the broker password and OTEL_* variables of the folder's ot-gateway.env.
+// Before anything reads process.env: the broker password and OTEL_* variables of the folder's ot-gateway.env,
+// then of the file OT_GATEWAY_ENV_FILE names (the image names /etc/ot-gateway/gateway.env, the layout before
+// the folder), each only when it is there.
 loadEnvFile()
+const extraEnvFile = process.env["OT_GATEWAY_ENV_FILE"]
+if (extraEnvFile !== undefined && extraEnvFile !== "") loadEnvFile(extraEnvFile)
 
 const program = runCli(process.argv.slice(2))
 

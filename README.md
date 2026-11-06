@@ -82,7 +82,7 @@ The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads 
 | `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)); `--dry-run` only checks it                                                               |
 | `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one                                                                                 |
 | `ot-gateway profiles list\|show`     | the device profiles a points list can name in its `profile` column, so one row takes a meter's registers (`--json` for agents)                                                                            |
-| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker                                                                                                                         |
+| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker, until Ctrl-C or for `--seconds N`                                                                                      |
 | `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                                                     |
 | `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                                                                                        |
 
@@ -125,6 +125,7 @@ To draft BACnet points yourself, `discover` finds the devices through the config
 ```bash
 pnpm ot-gateway discover path/to/gateway.json
 pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it
+pnpm ot-gateway discover --address 10.20.3.40:47809  # only the device at that address: another subnet without a BBMD, or another port
 ```
 
 Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.
