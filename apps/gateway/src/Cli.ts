@@ -21,7 +21,7 @@ import { discover, discoverToPointsList } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { initTarget, nextSteps, runInit } from "./Init.ts"
+import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -192,20 +192,32 @@ const init = Command.make(
     broadcast: optionalFlag("broadcast", "The broadcast address for BACnet discovery, when there are several networks"),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
-      Flag.withDescription("Ask nothing: the defaults for whatever no flag gives"),
+      Flag.withDescription("Ask nothing: the defaults for whatever no flag gives (the same without a terminal)"),
       Flag.withDefault(false)
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false))
   },
-  ({ directory, ...flags }) =>
+  ({ directory, ...given }) =>
     Effect.gen(function* () {
+      // Without a terminal (an AI agent, a script, CI) there is nobody to answer: ask nothing, as with --yes.
+      const interactive = isInteractive(given.yes, process.stdin.isTTY)
+      if (!given.yes && !interactive) {
+        yield* Console.error(
+          "no terminal, so init asks nothing: the flags answer and the defaults fill the rest (--help lists the flags)"
+        )
+      }
+      const flags = { ...given, yes: !interactive }
       const config = yield* initTarget(directory, flags.yes)
       const written = yield* runInit(config, flags)
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written)
       yield* Console.log(describeConfig(written))
       yield* Console.log(nextSteps(config, written, { ...folder, written: [config, ...folder.written] }))
-    }).pipe(Effect.catchTag("QuitError", () => Console.error("init cancelled, nothing written")))
+    }).pipe(
+      Effect.catchTag("QuitError", () =>
+        Console.error("init cancelled, nothing written").pipe(Effect.andThen(Effect.sync(() => (process.exitCode = 1))))
+      )
+    )
 ).pipe(
   Command.withDescription(
     "Answer a few questions (site, broker, devices) and get the gateway's folder: ot-gateway.json, compose.yaml, ot-gateway.env"

@@ -54,7 +54,7 @@ npx ot-gateway init my-building         # a few questions → my-building/: ot-g
 npx ot-gateway check ot-gateway.json
 ```
 
-The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked: `npx ot-gateway init vienna-hq --yes --site vienna-hq --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `check --json` and `status --json` print their results as JSON. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
+The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked. Without a terminal on stdin, `init` behaves as with `--yes` and says so on stderr, so it never waits for an answer; a cancelled `init` exits 1: `npx ot-gateway init vienna-hq --yes --site vienna-hq --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `check --json` and `status --json` print their results as JSON. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
 
 ### systemd, without Docker
 

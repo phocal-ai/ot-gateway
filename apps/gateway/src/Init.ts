@@ -320,6 +320,9 @@ export const defaultFolder = "ot-gateway"
  * missing; nothing, which asks for the folder (or takes `ot-gateway` with `--yes`); or, as before folders, a
  * path ending in `.json`, which is the config itself.
  */
+/** Whether init may ask: not with --yes, and not without a terminal on stdin (an AI agent, a script, CI). */
+export const isInteractive = (yes: boolean, stdinIsTTY: boolean | undefined) => !yes && stdinIsTTY === true
+
 export const initTarget = Effect.fn("initTarget")(function* (argument: string | undefined, yes: boolean) {
   if (argument?.endsWith(".json") === true) return argument
   const folder =

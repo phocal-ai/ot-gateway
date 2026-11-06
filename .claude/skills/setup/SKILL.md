@@ -51,7 +51,7 @@ Ask these together:
 
 ## 4. Write the folder
 
-Run `init` with flags so it asks nothing:
+Run `init` with flags so it asks nothing (without a terminal it never asks anyway, and takes the defaults for what no flag gives):
 
 ```bash
 otg init . --yes --site vienna-hq --building b1 --broker mqtts://broker.example:8883 --username gateway --devices none

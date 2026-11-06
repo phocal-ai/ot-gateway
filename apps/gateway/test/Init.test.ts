@@ -13,6 +13,7 @@ import {
   type InitFlags,
   initConfig,
   initTarget,
+  isInteractive,
   lanInterfaces,
   nextSteps,
   runInit,
@@ -198,4 +199,13 @@ describe("initTarget", () => {
       })
     )
   )
+})
+
+describe("isInteractive", () => {
+  it("asks only with a terminal and without --yes", () => {
+    expect(isInteractive(false, true)).toBe(true)
+    expect(isInteractive(true, true)).toBe(false)
+    expect(isInteractive(false, false)).toBe(false)
+    expect(isInteractive(false, undefined)).toBe(false)
+  })
 })
