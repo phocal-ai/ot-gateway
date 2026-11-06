@@ -130,7 +130,7 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Quickstart
 
-`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from a fresh checkout to a running gateway: it writes `ot-gateway.json` (git-ignored, with secrets in `ot-gateway.env`). The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
+`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
 
 ## Health and budget
 
