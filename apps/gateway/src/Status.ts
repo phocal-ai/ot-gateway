@@ -94,6 +94,11 @@ export const makeStatusState = (
   return {
     recordPublish: (topic, payload, message) => {
       if (!topic.startsWith(prefix)) return
+      // An empty retained message clears the topic at the broker (StaleMeta.ts): the page forgets it too.
+      if (message.retained && payload === "") {
+        latest.delete(topic)
+        return
+      }
       const previous = latest.get(topic)
       if (previous !== undefined || latest.size < MAX_TOPICS) {
         latest.set(topic, { payload, retained: message.retained, at: message.at, count: (previous?.count ?? 0) + 1 })
