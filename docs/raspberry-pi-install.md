@@ -136,13 +136,14 @@ cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 
 ## 6. The config and secrets
 
-The Pi has no Node.js, and needs none: the gateway's image is the `ot-gateway` command too. On the Pi, make a folder for the gateway and give the command a short name (the second line keeps it for the next login):
+The Pi has no Node.js, and needs none: the gateway's image is the `ot-gateway` command too. On the Pi, install the command (a short script in `~/.local/bin` that runs the image, no `sudo`) and make a folder for the gateway:
 
 ```bash
+mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
-alias ot-gateway='docker run --rm -it --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:v0.8.1'
-alias ot-gateway >> ~/.bashrc
 ```
+
+The command always runs the image version that the folder's `compose.yaml` pins, so it upgrades with the gateway ([operations.md](operations.md#docker-compose-recommended) has the details).
 
 Then let it ask for the site, the broker and the devices, and write the folder:
 

@@ -39,6 +39,7 @@ import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Result, Schema } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { toCsv } from "./Csv.ts"
+import { printJson } from "./Output.ts"
 
 /** How long Who-Is answers are collected. */
 const LISTEN = "3 seconds"
@@ -292,9 +293,7 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
 
 /** `ot-gateway discover`: the drafts as `{ "devices": [...] }` on stdout, ready to paste into the config. */
 export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
-  Effect.flatMap(discoverDrafts(config, network, options), (devices) =>
-    Console.log(JSON.stringify({ devices }, null, 2))
-  )
+  Effect.flatMap(discoverDrafts(config, network, options), (devices) => printJson({ devices }))
 
 type Draft = ReturnType<typeof draftDevices>[number]
 
