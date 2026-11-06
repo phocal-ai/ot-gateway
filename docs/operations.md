@@ -36,18 +36,17 @@ docker run -d --name ot-gateway --network host --restart unless-stopped --log-dr
   ghcr.io/phocal-ai/ot-gateway:v0.7.0
 ```
 
-### The binary, to try it
+### The CLI from npm
 
-One file with the gateway, its status page, its CLI and Node inside, for Linux on arm64 (a Raspberry Pi 4 or 5 with the 64-bit OS) or x64, and macOS on Apple silicon. It needs no Docker, Node or git; on Linux it needs glibc and `libatomic1`, which Raspberry Pi OS, Debian and Ubuntu installs have (if not: `sudo apt-get install libatomic1`).
+The `ot-gateway` command, with the whole gateway inside, needs only Node.js 22.18 or newer: no checkout, Docker or git. It is how to try the gateway, set up a config and check on a running one, from the machine on the building network or a laptop plugged in on site.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/get.sh | sh
-ot-gateway demo                       # the status page on http://127.0.0.1:8080
-ot-gateway check ot-gateway.json
-ot-gateway run ot-gateway.json
+npx ot-gateway demo                     # the status page on http://127.0.0.1:8080
+npx ot-gateway init                     # a few questions → ot-gateway.json
+npx ot-gateway check ot-gateway.json
 ```
 
-`get.sh` downloads the binary for this machine from the latest GitHub release, checks it against the release's `SHA256SUMS` and puts it in `~/.local/bin` (as root, `/usr/local/bin`). `OT_GATEWAY_VERSION=vX.Y.Z` picks a release and `OT_GATEWAY_INSTALL_DIR` the folder. The binary loads `ot-gateway.env` from the folder it runs in, if there is one. It runs in the foreground; to keep it running as a service, use Docker Compose or systemd.
+`npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
 
 ### systemd, without Docker
 

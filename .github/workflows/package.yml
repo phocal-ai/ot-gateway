@@ -1,0 +1,131 @@
+name: Package
+
+# The `ot-gateway` npm package (scripts/build-package.sh): the CLI and the
+# gateway bundled into one file, with the status page. Pull requests build it
+# and smoke-test the installed package on the oldest supported Node and the LTS
+# the project uses. A pushed release tag (v*) on main publishes it to npm with
+# trusted publishing (no token; npm checks this workflow's OIDC identity) and
+# provenance. A prerelease tag such as v0.8.0-rc.1 goes to the `next` dist-tag,
+# so `npx ot-gateway` keeps the last release.
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - "packages/**"
+      - "apps/gateway/**"
+      - "apps/web/**"
+      - "examples/gateway.json"
+      - "pnpm-lock.yaml"
+      - "scripts/build-package.sh"
+      - "packaging/npm/**"
+      - ".github/workflows/package.yml"
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+# Read-only by default: only the publish job, which runs for release tags on main alone, gets an OIDC token.
+permissions:
+  contents: read
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+  TURBO_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the package
+        env:
+          OT_GATEWAY_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: scripts/build-package.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: package
+          path: dist/ot-gateway-*.tgz
+          retention-days: 7
+
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        # The oldest Node the package supports (its engines), and the LTS the project uses.
+        node: ["22.18", "24"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v7
+        with:
+          name: package
+          path: dist
+      - name: Install it as a user would, and run it
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          npm install --prefix "$work" --no-audit --no-fund dist/ot-gateway-*.tgz
+          bin="$work/node_modules/.bin/ot-gateway"
+          "$bin" --version
+          "$bin" check examples/gateway.json
+          # The demo from the package: example config, simulated devices, broker and status page, all from inside it.
+          (cd "$work" && "$bin" demo >"$work/demo.log" 2>&1 &)
+          for _ in $(seq 30); do
+            if curl -sf http://127.0.0.1:8080/api/status >"$work/demo.json" && grep -q '"status":"ok"' "$work/demo.json"; then break; fi
+            sleep 1
+          done
+          grep -q '"status":"ok"' "$work/demo.json" || { tail -40 "$work/demo.log"; exit 1; }
+          curl -sf http://127.0.0.1:8080/ | grep -q "<html"
+
+  publish:
+    needs: smoke
+    # A pushed tag only: a manual run on a tag ref does not publish.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # Releases are tagged on main (CONTRIBUTING.md), so a tag anywhere else is not one.
+      - name: Check that the tag is on main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main; tag releases on main only."
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+      # Trusted publishing needs npm 11.5.1 or newer.
+      - run: npm install -g npm@11
+      - uses: actions/download-artifact@v7
+        with:
+          name: package
+          path: dist
+      - name: Publish to npm
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          dist_tag=latest
+          if [[ "$TAG" == *-* ]]; then dist_tag=next; fi
+          npm publish dist/ot-gateway-*.tgz --access public --tag "$dist_tag"
