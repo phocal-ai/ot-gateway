@@ -58,6 +58,29 @@ export interface InitAnswers {
   readonly broadcastAddress?: string | undefined
 }
 
+/**
+ * Answers given on the command line, for scripts and AI agents: each one skips its question, and with `yes` the
+ * questions left take their defaults, so init asks nothing at all.
+ */
+export interface InitFlags {
+  readonly site?: string | undefined
+  readonly building?: string | undefined
+  readonly broker?: string | undefined
+  readonly username?: string | undefined
+  readonly passwordEnv?: string | undefined
+  readonly devices?: DeviceSource | undefined
+  /** A points list; implies `devices: "list"`. */
+  readonly points?: string | undefined
+  readonly broadcast?: string | undefined
+  /** Take the defaults for every question not answered by a flag. */
+  readonly yes?: boolean | undefined
+  /** Replace an existing config without asking. */
+  readonly force?: boolean | undefined
+}
+
+/** A flag's value that its question would not accept, or a config in the way without `--force`. */
+export class InitError extends Schema.TaggedError<InitError>()("InitError", { message: Schema.String }) {}
+
 /** The config for the answers and devices, in the file's own shape. */
 export const initConfig = (answers: InitAnswers, devices: ReadonlyArray<InitDevice>) => ({
   site: answers.site,
@@ -99,32 +122,80 @@ export const lanInterfaces = (
 
 const slugMessage = "lowercase letters, digits, - and _, starting with a letter or digit (vienna-hq, not Vienna HQ)"
 
-const slug = (message: string, fallback: string) =>
-  Prompt.String({
-    message,
-    default: fallback,
-    validate: (value) => (Schema.is(Slug)(value) ? Effect.succeed(value) : Effect.fail(slugMessage))
-  })
+const validSlug = (value: string) => (Schema.is(Slug)(value) ? Effect.succeed(value) : Effect.fail(slugMessage))
 
-const brokerUrl = Prompt.String({
-  message: "MQTT broker URL (mqtts:// for TLS)",
-  default: "mqtt://localhost:1883",
-  validate: (value) =>
-    parseBrokerUrl(value).pipe(
-      Effect.as(value),
-      Effect.catchTag("MqttSettingsError", (error) => Effect.fail(error.message))
+const validBrokerUrl = (value: string) =>
+  parseBrokerUrl(value).pipe(
+    Effect.as(value),
+    Effect.catchTag("MqttSettingsError", (error) => Effect.fail(error.message))
+  )
+
+const validEnvName = (value: string) =>
+  /^[A-Z_][A-Z0-9_]*$/.test(value) ? Effect.succeed(value) : Effect.fail("upper case, digits and _")
+
+/**
+ * One answer: the flag's value when given (checked as the question would check it), the default with `--yes`,
+ * otherwise the question.
+ */
+const answer = <A extends string>(
+  flag: string,
+  given: A | undefined,
+  yes: boolean,
+  fallback: A,
+  ask: Effect.Effect<A, Terminal.QuitError, Prompt.Environment>,
+  validate: (value: string) => Effect.Effect<string, string> = Effect.succeed
+) => {
+  if (given !== undefined) {
+    return validate(given).pipe(
+      Effect.as(given),
+      Effect.mapError((issue) => new InitError({ message: `--${flag} ${given}: ${issue}` }))
     )
-})
+  }
+  return yes ? Effect.succeed(fallback) : ask
+}
 
-const login = Effect.gen(function* () {
-  const username = yield* Prompt.String({ message: "Broker username (empty for none)", default: "" })
-  if (username === "") return undefined
-  const passwordEnv = yield* Prompt.String({
-    message: "Env variable that will hold the password (it is never written to the config)",
-    default: "MQTT_PASSWORD",
-    validate: (value) =>
-      /^[A-Z_][A-Z0-9_]*$/.test(value) ? Effect.succeed(value) : Effect.fail("upper case, digits and _")
-  })
+const slug = (flag: string, given: string | undefined, yes: boolean, message: string, fallback: string) =>
+  answer(flag, given, yes, fallback, Prompt.String({ message, default: fallback, validate: validSlug }), validSlug)
+
+const brokerUrl = (flags: InitFlags) =>
+  answer(
+    "broker",
+    flags.broker,
+    flags.yes === true,
+    "mqtt://localhost:1883",
+    Prompt.String({
+      message: "MQTT broker URL (mqtts:// for TLS)",
+      default: "mqtt://localhost:1883",
+      validate: validBrokerUrl
+    }),
+    validBrokerUrl
+  )
+
+const login = Effect.fn("login")(function* (flags: InitFlags) {
+  const yes = flags.yes === true
+  const username = yield* answer(
+    "username",
+    flags.username,
+    yes || flags.passwordEnv !== undefined,
+    "",
+    Prompt.String({ message: "Broker username (empty for none)", default: "" })
+  )
+  if (username === "") {
+    if (flags.passwordEnv !== undefined) return yield* new InitError({ message: "--password-env needs --username" })
+    return undefined
+  }
+  const passwordEnv = yield* answer(
+    "password-env",
+    flags.passwordEnv,
+    yes || flags.username !== undefined,
+    "MQTT_PASSWORD",
+    Prompt.String({
+      message: "Env variable that will hold the password (it is never written to the config)",
+      default: "MQTT_PASSWORD",
+      validate: validEnvName
+    }),
+    validEnvName
+  )
   return { username, passwordEnv }
 })
 
@@ -142,10 +213,19 @@ const deviceSource = Prompt.Select<DeviceSource>({
   ]
 })
 
-/** Where Who-Is goes: the only LAN's broadcast address, or the one picked from several. */
-const broadcastAddress = (lans: ReadonlyArray<LanInterface>) => {
+/**
+ * Where Who-Is goes: the flag's address, the only LAN's broadcast address, or the one picked from several (the
+ * first with `--yes`, said on stderr).
+ */
+const broadcastAddress = (lans: ReadonlyArray<LanInterface>, flags: InitFlags) => {
   const [only] = lans
+  if (flags.broadcast !== undefined) return Effect.succeed(flags.broadcast)
   if (lans.length <= 1) return Effect.succeed(only?.broadcast ?? "255.255.255.255")
+  if (flags.yes === true && only !== undefined) {
+    return Console.error(`  Who-Is on ${only.name} (${only.broadcast}); --broadcast picks another network`).pipe(
+      Effect.as(only.broadcast)
+    )
+  }
   return Prompt.Select({
     message: "Which network are the BACnet devices on?",
     choices: lans.map((lan) => ({ title: `${lan.name} ${lan.address}`, value: lan.broadcast }))
@@ -172,11 +252,19 @@ const devicesFromList: Effect.Effect<
   )
 })
 
+/** The devices of the points list a flag named: a mistake ends init, there being nobody to ask again. */
+const devicesFromFlag = (path: string) =>
+  readPointsList(path).pipe(
+    Effect.flatMap((text) => devicesFromPointsList(text)),
+    Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
+    Effect.mapError((error) => new InitError({ message: `--points ${path}: ${error.message}` }))
+  )
+
 /** The devices for the chosen source; discovery runs with the answers so far. */
-const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, answers: InitAnswers) {
+const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, answers: InitAnswers, flags: InitFlags) {
   if (source === "none") return []
   if (source === "simulated") return [simulatedDevice]
-  if (source === "list") return yield* devicesFromList
+  if (source === "list") return yield* flags.points === undefined ? devicesFromList : devicesFromFlag(flags.points)
   const probe = yield* Schema.decodeUnknownEffect(GatewayConfig)(initConfig(answers, []))
   const drafts = yield* discoverDrafts(probe)
   // A device needs a point: one without (no readable objects, or more than one address answered) is left out.
@@ -195,21 +283,27 @@ const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, an
  * Asks the questions and writes the config to `path`. Returns the config written, or `undefined` when the
  * operator kept an existing file.
  */
-export const runInit = Effect.fn("runInit")(function* (path: string) {
+export const runInit = Effect.fn("runInit")(function* (path: string, flags: InitFlags = {}) {
   const fs = yield* FileSystem.FileSystem
-  if (yield* fs.exists(path)) {
+  const yes = flags.yes === true
+  if (flags.points !== undefined && flags.devices !== undefined && flags.devices !== "list") {
+    return yield* new InitError({ message: `--points reads devices from a list; leave out --devices ${flags.devices}` })
+  }
+  if ((yield* fs.exists(path)) && flags.force !== true) {
+    if (yes) return yield* new InitError({ message: `${path} exists; --force replaces it` })
     const replace = yield* Prompt.Confirm({ message: `${path} exists. Replace it?`, initial: false })
     if (!replace) return undefined
   }
-  const site = yield* slug("Site (the first topic segment)", "my-site")
-  const building = yield* slug("Building (the second)", "main")
-  const answers: InitAnswers = { site, building, brokerUrl: yield* brokerUrl, login: yield* login }
-  const source = yield* deviceSource
+  const site = yield* slug("site", flags.site, yes, "Site (the first topic segment)", "my-site")
+  const building = yield* slug("building", flags.building, yes, "Building (the second)", "main")
+  const answers: InitAnswers = { site, building, brokerUrl: yield* brokerUrl(flags), login: yield* login(flags) }
+  const source: DeviceSource =
+    flags.points === undefined ? (flags.devices ?? (yes ? "simulated" : yield* deviceSource)) : "list"
   const withNetwork =
     source === "discover"
-      ? { ...answers, broadcastAddress: yield* broadcastAddress(lanInterfaces(networkInterfaces())) }
+      ? { ...answers, broadcastAddress: yield* broadcastAddress(lanInterfaces(networkInterfaces()), flags) }
       : answers
-  const text = `${JSON.stringify(initConfig(withNetwork, yield* devicesFrom(source, withNetwork)), null, 2)}\n`
+  const text = `${JSON.stringify(initConfig(withNetwork, yield* devicesFrom(source, withNetwork, flags)), null, 2)}\n`
   const config = yield* parseConfig(text)
   yield* fs.writeFileString(path, text)
   return config
@@ -228,12 +322,17 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
       : envFile === undefined
         ? [`  set ${passwordEnv} to the broker password before you start the gateway`]
         : [`  put the broker password after ${passwordEnv}= in ${envFile}`]
-  const start = compose
-    ? [
-        "  docker compose up -d                 start it in Docker, restarted after a crash or a reboot",
-        `  ot-gateway status                    one line per device (status page on http://127.0.0.1:${port})`
-      ]
-    : [`  ot-gateway run ${path}      start the gateway (status page on http://127.0.0.1:${port})`]
+  const commands: ReadonlyArray<readonly [string, string]> = [
+    ...(compose
+      ? ([
+          ["docker compose up -d", "start it in Docker, restarted after a crash or a reboot"],
+          ["ot-gateway status", `one line per device (status page on http://127.0.0.1:${port})`]
+        ] as const)
+      : ([[`ot-gateway run ${path}`, `start the gateway (status page on http://127.0.0.1:${port})`]] as const)),
+    [`ot-gateway check ${path}`, "validate it again after an edit"],
+    [`ot-gateway watch ${path}`, `see what arrives at ${config.mqtt.url}`]
+  ]
+  const width = Math.max(...commands.map(([command]) => command.length)) + 2
   return [
     ...folder.written.map((file) => `wrote ${file}`),
     ...folder.kept.map((file) => `kept ${file} as it is`),
@@ -241,8 +340,6 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
     ...password,
     ...(config.devices.length === 0 ? ["  add your devices under devices (docs/configuration.md)"] : []),
     "next:",
-    ...start,
-    `  ot-gateway check ${path}    validate it again after an edit`,
-    `  ot-gateway watch ${path}    see what arrives at ${config.mqtt.url}`
+    ...commands.map(([command, what]) => `  ${command.padEnd(width)}${what}`)
   ].join("\n")
 }

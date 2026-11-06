@@ -21,7 +21,7 @@ describe("loadConfig", () => {
       const error = yield* Effect.flip(loadConfig("does-not-exist/ot-gateway.json"))
       expect(error._tag).toBe("ConfigFileError")
       expect(error.message).toContain("no config at does-not-exist/ot-gateway.json")
-      expect(error.message).toContain("examples/gateway.json")
+      expect(error.message).toContain("run ot-gateway init")
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
