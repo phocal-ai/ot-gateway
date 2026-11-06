@@ -38,17 +38,28 @@ describe("writeFolderFiles", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
-  it.effect("keeps files that are there and writes no env file without a broker login", () =>
+  it.effect("keeps files that are there, and without a broker login writes the env file for telemetry only", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const folder = yield* fs.makeTempDirectoryScoped()
       yield* fs.writeFileString(join(folder, "compose.yaml"), "# edited\n")
       const files = yield* writeFolderFiles(join(folder, "ot-gateway.json"), yield* config(answers))
-      expect(files).toEqual({ written: [], kept: [join(folder, "compose.yaml")], noCompose: undefined })
+      expect(files).toEqual({
+        written: [join(folder, "ot-gateway.env")],
+        kept: [join(folder, "compose.yaml")],
+        noCompose: undefined
+      })
       expect(yield* fs.readFileString(join(folder, "compose.yaml"))).toBe("# edited\n")
-      expect(yield* fs.exists(join(folder, "ot-gateway.env"))).toBe(false)
+      const env = yield* fs.readFileString(join(folder, "ot-gateway.env"))
+      expect(env).toContain("# OTEL_EXPORTER_OTLP_ENDPOINT=")
+      expect(env).not.toContain("PASSWORD")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+
+  it("sets no variable until a telemetry line is uncommented", () => {
+    expect(missingFromEnv(envFileText(undefined), {})).toEqual([])
+    expect(missingFromEnv(envFileText("MQTT_PASSWORD"), {})).toEqual([])
+  })
 
   it.effect("writes no compose.yaml for a config under another name, which compose.yaml would not mount", () =>
     Effect.gen(function* () {

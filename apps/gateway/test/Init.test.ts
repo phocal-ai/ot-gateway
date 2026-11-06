@@ -91,12 +91,13 @@ describe("lanInterfaces", () => {
 })
 
 describe("nextSteps", () => {
-  it.effect("names the password variable, the missing devices and the commands to run next", () =>
+  it.effect("names the password variable, then adding devices before the commands that run them", () =>
     Effect.gen(function* () {
       const config = yield* decode(initConfig({ ...answers, login: { username: "u", passwordEnv: "BROKER_PW" } }, []))
       const steps = nextSteps("site.json", config)
       expect(steps).toContain("set BROKER_PW")
-      expect(steps).toContain("add your devices")
+      expect(steps).toContain("ot-gateway points template > points.csv")
+      expect(steps.indexOf("ot-gateway import points.csv site.json")).toBeLessThan(steps.indexOf("ot-gateway run"))
       expect(steps).toContain("ot-gateway run site.json")
       expect(steps).toContain("ot-gateway watch site.json")
     })
