@@ -14,10 +14,11 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Effect, Option } from "effect"
+import { Config, Console, Effect, FileSystem, Option } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, discoverToPointsList } from "./Discover.ts"
+import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { initTarget, nextSteps, runInit } from "./Init.ts"
@@ -264,9 +265,26 @@ const templateCommand = Command.make("template", {}, () =>
   Command.withExamples([{ command: "ot-gateway points template > points.csv", description: "Start a list to fill in" }])
 )
 
+const fromEdeCommand = Command.make(
+  "from-ede",
+  { file: Argument.String("ede-file").pipe(Argument.withDescription("A BACnet EDE file (CSV, semicolons)")) },
+  ({ file }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const translation = yield* edeToPointsList(yield* fs.readFileString(file))
+      yield* Console.error(describeTranslation(file, translation))
+      yield* Effect.sync(() => process.stdout.write(translation.list))
+    })
+).pipe(
+  Command.withDescription("A BACnet EDE file as a points list on stdout, to trim before import (import reads EDE too)"),
+  Command.withExamples([
+    { command: "ot-gateway points from-ede building.csv > points.csv", description: "Translate it, then trim it" }
+  ])
+)
+
 const points = Command.make("points").pipe(
   Command.withDescription("The points list, the CSV that import and init read: its schema and a template"),
-  Command.withSubcommands([schemaCommand, templateCommand])
+  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
 )
 
 const watchCommand = Command.make(

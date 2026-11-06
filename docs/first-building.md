@@ -34,7 +34,7 @@ pnpm ot-gateway init .
 
 It asks for the site and building (the first two parts of every topic, such as `vienna-hq` and `main`), the broker, and where your devices come from:
 
-- **Find BACnet devices now:** the gateway asks the network who is there and drafts every device with its points, names and units. Nothing is written to a device, and no point is made writable. `ot-gateway discover --points-list points.csv` writes the same as a points list instead: delete the rows you don't need and import it, as in step 3.
+- **Find BACnet devices now:** the gateway asks the network who is there and drafts every device with its points, names and units. Nothing is written to a device, and no point is made writable. `ot-gateway discover --points-list points.csv` writes the same as a points list instead: delete the rows you don't need and import it, as in step 3. An EDE file from the BACnet engineering tool (the semicolon CSV most of them export) imports as it is, and `ot-gateway points from-ede building.csv > points.csv` turns it into a list to trim first; objects that are not points (schedules, trend logs) are left out. [`examples/building.ede.csv`](../examples/building.ede.csv) is one.
 - **A simulated device:** to see your broker receive values before any real device is connected.
 - **From a points list:** a CSV of your devices and points (step 3 shows the columns). Excel's "CSV" export works, with commas or semicolons.
 - **None yet:** to add devices in the next step.

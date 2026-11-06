@@ -8,11 +8,12 @@ import { Console, Effect, FileSystem, Schema } from "effect"
 import { loadConfig } from "./LoadConfig.ts"
 import { devicesFromPointsList, parseDelimited, type PointsListDevice, PointsListError } from "./PointsList.ts"
 import { unknownColumns } from "./PointsSchema.ts"
+import { describeTranslation, edeToPointsList, isEde } from "./Ede.ts"
 
 /** The config file as it is, every key kept, to add devices to. */
 const ConfigObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 
-/** The points list at `path`, as text. */
+/** The points list at `path`, as text; an EDE file comes back translated into one (Ede.ts). */
 export const readPointsList = Effect.fn("readPointsList")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem
   const text = yield* fs
@@ -22,6 +23,11 @@ export const readPointsList = Effect.fn("readPointsList")(function* (path: strin
         Effect.fail(new PointsListError({ message: `no points list at ${path}` }))
       )
     )
+  if (isEde(text)) {
+    const translation = yield* edeToPointsList(text)
+    yield* Console.error(describeTranslation(path, translation))
+    return translation.list
+  }
   // A misspelt column would otherwise vanish without a word; extra columns (a description, a comment) are normal.
   const ignored = unknownColumns(parseDelimited(text)[0] ?? [])
   if (ignored.length > 0) {

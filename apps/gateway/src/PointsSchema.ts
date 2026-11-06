@@ -7,6 +7,7 @@
  * column keeps it.
  */
 import { ByteOrder, DataType } from "@ot-gateway/core"
+import { toCsv } from "./Csv.ts"
 import { columnAliases, columnName } from "./PointsList.ts"
 
 export const pointsListVersion = 1
@@ -128,6 +129,7 @@ export const pointsListRules: ReadonlyArray<string> = [
   "Column names in any order and case; spaces and - count as _; unknown columns are named and ignored",
   "A row with host is Modbus TCP, a row with device_instance is BACnet/IP; one list can hold both",
   "A decimal comma is read as a point",
+  "A BACnet EDE file (the semicolon CSV engineering tools export) is read as a list too; points from-ede shows it as one",
   "Nothing is made writable: writes are set in the config, on purpose"
 ]
 
@@ -230,7 +232,7 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
 /** A points list with every column and a few example rows, to fill in. */
 export const pointsListTemplate = () => {
   const names = pointsListColumns.map((column) => column.name)
-  return `${[names, ...templateRows.map((row) => names.map((name) => row[name] ?? ""))].map((fields) => fields.join(",")).join("\n")}\n`
+  return toCsv([names, ...templateRows.map((row) => names.map((name) => row[name] ?? ""))])
 }
 
 /** The columns of a header the format does not know, as written. */
