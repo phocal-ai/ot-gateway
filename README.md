@@ -143,7 +143,7 @@ curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packagin
 docker compose up -d
 ```
 
-Run both in a folder with your `ot-gateway.json` (and `ot-gateway.env` for secrets, if the config names any). No `sudo` and no folders to make: the outbox and the history go to a Docker volume, and relative paths in the config land in it. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (`OT_GATEWAY_TAG=v… docker compose up -d` upgrades or goes back), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page. An install from v0.7.0 or earlier, with the config in `/etc/ot-gateway`, moves over as [docs/operations.md](docs/operations.md#from-the-etcot-gateway-layout-v070-and-earlier) shows.
+Run both in a folder with your `ot-gateway.json` (and `ot-gateway.env` for secrets, if the config names any). No `sudo` and no folders to make: the outbox and the history go to a Docker volume, and relative paths in the config land in it. [`packaging/compose.yaml`](packaging/compose.yaml) pins a release tag (write another into it and `docker compose up -d` to upgrade or go back, [docs/operations.md](docs/operations.md#upgrade)), uses host networking so BACnet discovery hears broadcast I-Ams, restarts on failure and caps Docker's log files. The image includes the status page. An install from v0.7.0 or earlier, with the config in `/etc/ot-gateway`, moves over as [docs/operations.md](docs/operations.md#from-the-etcot-gateway-layout-v070-and-earlier) shows.
 
 On a machine without Docker, with systemd and Node.js 22.18 or newer, from a checkout owned by you or root (the script refuses one that others can write to):
 

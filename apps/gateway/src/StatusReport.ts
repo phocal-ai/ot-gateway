@@ -6,6 +6,7 @@ import { type GatewayStatus, OtGatewayApi } from "@ot-gateway/api"
 import { Console, Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
+import { printJson } from "./Output.ts"
 
 export class GatewayUnreachable extends Schema.TaggedError<GatewayUnreachable>()("GatewayUnreachable", {
   url: Schema.String,
@@ -70,5 +71,5 @@ export const statusReport = Effect.fn("statusReport")(function* (
 ) {
   const status = yield* fetchGatewayStatus(url)
   // --json: the status page's own /api/status answer, as checked against its contract.
-  yield* Console.log(options.json === true ? JSON.stringify(status, null, 2) : formatStatus(status))
+  yield* options.json === true ? printJson(status) : Console.log(formatStatus(status))
 })

@@ -1,12 +1,14 @@
 /**
  * `ot-gateway watch`: what the gateway publishes, as it arrives at the broker in the config. It subscribes to
  * `site/building/#` (or a filter of its own) with a client id of its own, so it runs next to the gateway, and
- * prints one line per message: the time, `retained` for what the broker kept, the topic and the payload.
+ * prints one line per message: the time, `retained` for what the broker kept, the topic and the payload. With
+ * `--json` the line is a JSON object (NDJSON), for scripts and agents.
  */
 import type { GatewayConfig } from "@ot-gateway/core"
 import type { InboundMessage } from "@ot-gateway/mqtt"
 import { Console, Duration, Effect } from "effect"
 import { brokerClient } from "./Broker.ts"
+import { printResult } from "./Output.ts"
 
 /** Payloads are cut here on the terminal; the status page and any MQTT client show them whole. */
 const MAX_PAYLOAD = 300
@@ -24,11 +26,24 @@ export const formatMessage = (message: Pick<InboundMessage, "topic" | "payload" 
   return `${time} ${message.retain ? "retained " : ""}${message.topic} ${payload}`
 }
 
+/** One message as a JSON line: the payload parsed when it is JSON, as the gateway's own messages are, whole. */
+export const messageRecord = (message: Pick<InboundMessage, "topic" | "payload" | "retain">, at: Date) => {
+  let payload: unknown = message.payload
+  try {
+    payload = JSON.parse(message.payload)
+  } catch {
+    // Not JSON (a plain MQTT client's message): kept as the string it is.
+  }
+  return JSON.stringify({ at: at.toISOString(), topic: message.topic, retained: message.retain, payload })
+}
+
 export interface WatchOptions {
   /** A topic filter instead of the config's site and building (`#` for everything on the broker). */
   readonly topic?: string | undefined
   /** Stop after this many seconds instead of at Ctrl-C: for scripts and agents, which cannot press it. */
   readonly seconds?: number | undefined
+  /** One JSON object per line on stdout (`messageRecord`) instead of the terminal's lines. */
+  readonly json?: boolean | undefined
 }
 
 /**
@@ -44,7 +59,10 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
       Console.error(
         `watching ${filter} on ${config.mqtt.url} (${options.seconds === undefined ? "Ctrl-C to stop" : `for ${options.seconds} s`})`
       ),
-    onMessage: (message) => Console.log(formatMessage(message, new Date()))
+    onMessage: (message) =>
+      options.json === true
+        ? printResult(messageRecord(message, new Date()))
+        : Console.log(formatMessage(message, new Date()))
   })
   yield* Console.error(`connecting to ${config.mqtt.url}…`)
   if (options.seconds === undefined) return yield* Effect.never

@@ -52,6 +52,8 @@ jobs:
           # The files the CLI finds next to the bundle: the device profiles and the version.
           docker run --rm ot-gateway:smoke profiles list --json | grep -q '"id": "eastron-sdm630"'
           docker run --rm ot-gateway:smoke --version
+          # The installed command (packaging/ot-gateway): this image, the folder mounted, no terminal.
+          (cd "$work" && OT_GATEWAY_IMAGE=ot-gateway OT_GATEWAY_TAG=smoke "$GITHUB_WORKSPACE/packaging/ot-gateway" check gateway.json | grep -q "config ok")
           # The bench (broker and simulated devices) from the image, the gateway in a second container.
           # The file, not its mktemp directory (mode 0700, another user's): the image runs as `node`.
           docker run -d --name bench --network host --entrypoint node \

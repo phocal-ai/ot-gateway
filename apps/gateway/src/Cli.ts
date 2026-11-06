@@ -16,7 +16,7 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Effect, FileSystem, Option } from "effect"
+import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, discoverToPointsList } from "./Discover.ts"
@@ -40,6 +40,7 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
+import { printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
@@ -100,14 +101,8 @@ const jsonFailure =
   (json: boolean, fields: Readonly<Record<string, unknown>> = {}) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     json
-      ? effect.pipe(
-          Effect.tapError((error) =>
-            Console.log(JSON.stringify({ ok: false, ...fields, error: errorText(error) }, null, 2))
-          )
-        )
+      ? effect.pipe(Effect.tapError((error) => printJson({ ok: false, ...fields, error: errorText(error) })))
       : effect
-
-const printJson = (value: unknown) => Console.log(JSON.stringify(value, null, 2))
 
 const dryRunFlag = (description: string) =>
   Flag.Boolean("dry-run").pipe(Flag.withDescription(description), Flag.withDefault(false))
@@ -345,7 +340,7 @@ const importCommand = Command.make(
 )
 
 const schemaCommand = Command.make("schema", { json: jsonFlag }, ({ json }) =>
-  Console.log(json ? JSON.stringify(pointsListSchema(), null, 2) : describePointsListSchema())
+  json ? printJson(pointsListSchema()) : Console.log(describePointsListSchema())
 ).pipe(Command.withDescription("The points list's columns, rules and allowed values"))
 
 const templateCommand = Command.make("template", {}, () =>
@@ -412,11 +407,13 @@ const profilesShow = Command.make(
     }).pipe(jsonFailure(json))
 ).pipe(
   Command.withDescription("One profile's points: names, registers, types and units"),
+  // `get`, as other CLIs name reading one thing.
+  Command.withAlias("get"),
   Command.withExamples([{ command: "ot-gateway profiles show eastron-sdm630", description: "The SDM630's points" }])
 )
 
 const profilesSchema = Command.make("schema", { json: jsonFlag }, ({ json }) =>
-  Console.log(json ? JSON.stringify(profileJsonSchema(), null, 2) : describeProfileFormat())
+  json ? printJson(profileJsonSchema()) : Console.log(describeProfileFormat())
 ).pipe(Command.withDescription("The profile format, to write one from a register map"))
 
 const profiles = Command.make("profiles").pipe(
@@ -444,18 +441,23 @@ const watchCommand = Command.make(
         (seconds) => `--seconds takes 1 or more, not ${seconds}`
       ),
       Flag.optional
+    ),
+    json: Flag.Boolean("json").pipe(
+      Flag.withDescription("One JSON object per message and line (NDJSON): at, topic, retained, payload"),
+      Flag.withDefault(false)
     )
   },
-  ({ config, topic, seconds }) =>
+  ({ config, topic, seconds, json }) =>
     Effect.flatMap(loadConfig(config), (decoded) =>
-      watch(decoded, { topic: Option.getOrUndefined(topic), seconds: Option.getOrUndefined(seconds) })
-    )
+      watch(decoded, { topic: Option.getOrUndefined(topic), seconds: Option.getOrUndefined(seconds), json })
+    ).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
   Command.withExamples([
     { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
     { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" },
-    { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" }
+    { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" },
+    { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" }
   ])
 )
 
@@ -533,7 +535,7 @@ const status = Command.make(
 
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
-  "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back",
+  "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
   "    points schema --json             the points list's columns: translate any list or EDE file into it",
@@ -587,6 +589,15 @@ export const toCliArgs = (argv: ReadonlyArray<string>): ReadonlyArray<string> =>
   if (first !== undefined && (subcommands.has(first) || (first.startsWith("-") && !legacyFlags.has(first)))) {
     return argv
   }
+  // A word that is not a path (`ot-gateway stauts`) is a mistyped command, which the CLI reports, not a config.
+  if (
+    first !== undefined &&
+    !legacyFlags.has(first) &&
+    !looksLikePath(first) &&
+    !argv.some((arg) => legacyFlags.has(arg))
+  ) {
+    return argv
+  }
   for (const flag of legacyFlags) {
     if (argv.includes(flag)) return [flag.slice(2), ...argv.filter((arg) => arg !== flag)]
   }
@@ -595,9 +606,20 @@ export const toCliArgs = (argv: ReadonlyArray<string>): ReadonlyArray<string> =>
 
 const legacyFlags = new Set(["--check", "--discover"])
 
+/** A config path as the forms before the subcommands took it: a file name with an extension, or a directory. */
+const looksLikePath = (arg: string) => arg.includes("/") || arg.includes("\\") || arg.includes(".")
+
 /** The version as `--version` gets it: the CLI prints `v` before it, and a release tag already starts with one. */
 export const cliVersion = (version: string) => version.replace(/^v(?=\d)/, "")
 
 /** Runs the command line for `argv` (without node and the script). */
-export const runCli = (argv: ReadonlyArray<string>) =>
-  Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version: cliVersion(version) })(toCliArgs(argv)))
+export const runCli = (argv: ReadonlyArray<string>) => {
+  const args = toCliArgs(argv)
+  const program = Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version: cliVersion(version) })(args))
+  // A one-shot command prints its result; the client's info lines (connected, subscribed) would bury it.
+  // `--log-level info` brings them back, since the CLI's own setting is applied inside this one.
+  return longRunning.has(args[0] ?? "") ? program : Effect.provideService(program, References.MinimumLogLevel, "Warn")
+}
+
+/** The commands that run until stopped and log what they do, as the gateway does. */
+const longRunning = new Set(["run", "demo"])

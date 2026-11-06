@@ -9,7 +9,9 @@
 # also the gateway's working directory, so relative paths in the config (`./ot-gateway-buffer.sqlite`, as
 # `ot-gateway init` writes them) end up in it and outlive the container.
 #
-# Upgrade with OT_GATEWAY_TAG=<new tag> docker compose up -d, and go back the same way.
+# Upgrade by writing the new tag into the default below, then docker compose up -d; go back the same way:
+#   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-<new tag>/' compose.yaml && docker compose up -d
+# The file keeps the tag, so a later `docker compose up -d` (a config change) does not go back to the old one.
 # docs/operations.md has the rest: logs, backups and what to watch.
 name: ot-gateway
 services:
