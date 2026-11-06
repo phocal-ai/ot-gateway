@@ -42,6 +42,18 @@ docker run -d --name ot-gateway --network host --restart unless-stopped --log-dr
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
 
+### The CLI from npm
+
+The `ot-gateway` command, with the whole gateway inside, needs only Node.js 22.18 or newer: no checkout, Docker or git. It is how to try the gateway, set up a config and check on a running one, from the machine on the building network or a laptop plugged in on site.
+
+```bash
+npx ot-gateway demo                     # the status page on http://127.0.0.1:8080
+npx ot-gateway init                     # a few questions → ot-gateway.json
+npx ot-gateway check ot-gateway.json
+```
+
+`npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
+
 ### systemd, without Docker
 
 Needs Node.js 22.18 or later (24 LTS recommended) and systemd. From a checkout:
