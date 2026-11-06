@@ -152,7 +152,7 @@ On the Pi, make a folder for the gateway, fetch the Compose file of the release 
 
 ```bash
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.8.0/packaging/compose.yaml
 mv ~/ot-gateway.json .
 docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
 ```
