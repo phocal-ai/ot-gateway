@@ -7,14 +7,12 @@ name: Soak
 # When it runs (CONTRIBUTING.md, "Soak"):
 # - every night: the simulation only, with new seeds; it is cheap and finds the most
 # - Sundays: the simulation, the 30-minute soak and the arm64 soak
-# - a pull request into main (a release): the quick soak, `scripts/soak.sh quick`
-# - by hand: any of them, on the branch it was started on
+# - by hand: any of them, on the branch it was started on (the quick preset before a release that needs it)
+# Never on pull requests: CI stays fast, and these runs block nothing.
 on:
   schedule:
     - cron: "23 3 * * 1-6"
     - cron: "23 3 * * 0"
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       duration:
@@ -131,8 +129,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Soak
-        # A release pull request runs the quick preset; the other runs take their settings from below.
-        run: scripts/soak.sh "${{ github.event_name == 'pull_request' && 'quick' || '$DURATION' }}"
+        run: scripts/soak.sh "$DURATION"
         env:
           DURATION: ${{ inputs.duration || '30m' }}
           SOAK_SPEED: ${{ inputs.speed || '60' }}
