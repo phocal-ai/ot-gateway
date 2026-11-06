@@ -14,6 +14,8 @@ One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much 
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 
+With Node.js on the machine, `npx ot-gateway init` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. Fill in the password, then go on with the check below. Without Node, fetch `compose.yaml` yourself:
+
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.7.0/packaging/compose.yaml
 ```
@@ -48,11 +50,11 @@ The `ot-gateway` command, with the whole gateway inside, needs only Node.js 22.1
 
 ```bash
 npx ot-gateway demo                     # the status page on http://127.0.0.1:8080
-npx ot-gateway init                     # a few questions → ot-gateway.json
+npx ot-gateway init                     # a few questions → ot-gateway.json, compose.yaml, ot-gateway.env
 npx ot-gateway check ot-gateway.json
 ```
 
-`npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
+The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
 
 ### systemd, without Docker
 

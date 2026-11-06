@@ -57,6 +57,8 @@ COPY apps/gateway/src apps/gateway/src
 COPY apps/gateway/package.json apps/gateway/
 COPY --from=web /opt/ot-gateway/apps/web/out apps/web/out
 COPY examples examples
+# What `ot-gateway init` writes next to ot-gateway.json when it runs in the container.
+COPY packaging/compose.yaml packaging/compose.yaml
 COPY scripts/soak.sh scripts/soak.sh
 # The build, for telemetry and the status page: the release tag when the image is published.
 ARG OT_GATEWAY_VERSION=dev

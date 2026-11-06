@@ -19,6 +19,7 @@ import { Cause, Effect, Result } from "effect"
 import { CliError } from "effect/cli"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { runCli } from "./Cli.ts"
+import { loadEnvFile } from "./EnvFile.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 
 // A broker or device named by host name may have several addresses (localhost: 127.0.0.1 and ::1). Node tries
@@ -41,6 +42,9 @@ const reportFailure = <E extends { readonly message: string }>(cause: Cause.Caus
   if (CliError.isCliError(error.success)) return Effect.void
   return Effect.logError(error.success.message)
 }
+
+// Before anything reads process.env: the broker password and OTEL_* variables of the folder's ot-gateway.env.
+loadEnvFile()
 
 const program = runCli(process.argv.slice(2))
 
