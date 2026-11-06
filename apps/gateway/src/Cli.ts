@@ -21,6 +21,7 @@ import { discover } from "./Discover.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { nextSteps, runInit } from "./Init.ts"
+import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
 import { runGateway } from "./Gateway.ts"
@@ -156,6 +157,29 @@ const importCommand = Command.make(
   ])
 )
 
+const schemaCommand = Command.make(
+  "schema",
+  {
+    json: Flag.Boolean("json").pipe(
+      Flag.withDescription("Print it as JSON, for scripts and agents"),
+      Flag.withDefault(false)
+    )
+  },
+  ({ json }) => Console.log(json ? JSON.stringify(pointsListSchema(), null, 2) : describePointsListSchema())
+).pipe(Command.withDescription("The points list's columns, rules and allowed values"))
+
+const templateCommand = Command.make("template", {}, () =>
+  Effect.sync(() => process.stdout.write(pointsListTemplate()))
+).pipe(
+  Command.withDescription("A points list with every column and example rows, as CSV on stdout"),
+  Command.withExamples([{ command: "ot-gateway points template > points.csv", description: "Start a list to fill in" }])
+)
+
+const points = Command.make("points").pipe(
+  Command.withDescription("The points list, the CSV that import and init read: its schema and a template"),
+  Command.withSubcommands([schemaCommand, templateCommand])
+)
+
 const watchCommand = Command.make(
   "watch",
   {
@@ -188,10 +212,10 @@ const status = Command.make(
 
 export const cli = Command.make("ot-gateway").pipe(
   Command.withDescription("OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back"),
-  Command.withSubcommands([demo, init, run, check, discoverCommand, importCommand, watchCommand, status])
+  Command.withSubcommands([demo, init, run, check, discoverCommand, importCommand, points, watchCommand, status])
 )
 
-const subcommands = new Set(["demo", "init", "run", "check", "discover", "import", "watch", "status"])
+const subcommands = new Set(["demo", "init", "run", "check", "discover", "import", "points", "watch", "status"])
 
 /**
  * The arguments for `cli`, with the forms from before the subcommands translated: no arguments or a config path

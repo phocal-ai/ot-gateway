@@ -1,27 +1,8 @@
 /**
  * A points list, the spreadsheet most building projects start from, turned into the config's `devices`.
  *
- * One row per point, with a header row. The columns, in any order and case (spaces and `-` count as `_`):
- *
- *   device          the device's name; rows with the same name are one device          required
- *   point           the point's name                                                   required
- *   unit            kW, °C, %, … or a QUDT name such as unit:KiloW                     optional
- *   interval_s      seconds between reads, for the whole device                         optional (5)
- *   publish         sample (every read, the default), aggregate or change              optional
- *   publish_s       seconds per message: the latest value (sample) or a window (aggregate)  optional
- *   deadband        the smallest change worth sending, in the point's unit (change mode)    optional
- *   scale, offset   value = raw × scale + offset                                       optional
- *
- *   Modbus TCP (a row with `host`):
- *   host, port, unit_id                 where the device is (port 502, unit 1 unless given)
- *   register                            0-based address, as in the config
- *   table                               holding (default), input, coil or discrete
- *   type                                int16, uint16, int32, uint32, float32, …, bool (bool for coil and discrete)
- *   byte_order                          ABCD (default), CDAB, BADC or DCBA
- *
- *   BACnet/IP (a row with `device_instance`):
- *   device_instance, address            the device, and its fixed address if it has one
- *   object_type, object_instance        the object, e.g. analog-input 1
+ * One row per point, with a header row. The columns are described once, in PointsSchema.ts
+ * (`ot-gateway points schema` prints them).
  *
  * Commas, semicolons (what Excel writes where the decimal mark is a comma) or tabs separate the fields, the
  * first line decides which, and a decimal comma is read as a point. Nothing is made writable: a write is a
@@ -112,12 +93,11 @@ export const qudtUnit = (unit: string) => {
 }
 
 /** Header aliases, after lower-casing and turning spaces and `-` into `_`. */
-const aliases: Record<string, string> = {
+export const columnAliases: Readonly<Record<string, string>> = {
   device_name: "device",
   point_name: "point",
   name: "point",
   ip: "host",
-  unit_id: "unit_id",
   unitid: "unit_id",
   slave: "unit_id",
   slave_id: "unit_id",
@@ -134,12 +114,13 @@ const aliases: Record<string, string> = {
   publish_every_s: "publish_s"
 }
 
-const columnName = (header: string) => {
+/** A header as the column it names: lower case, `_` for spaces and `-`, aliases resolved. */
+export const columnName = (header: string) => {
   const normal = header
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, "_")
-  return aliases[normal] ?? normal
+  return columnAliases[normal] ?? normal
 }
 
 interface Row {
