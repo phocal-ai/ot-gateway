@@ -6,7 +6,7 @@
 import type { GatewayConfig } from "@ot-gateway/core"
 import { type InboundMessage, makeMqttClient, parseBrokerUrl } from "@ot-gateway/mqtt"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { Config, Console, Effect, Random } from "effect"
+import { Config, Console, Duration, Effect, Random } from "effect"
 
 /** Payloads are cut here on the terminal; the status page and any MQTT client show them whole. */
 const MAX_PAYLOAD = 300
@@ -27,9 +27,15 @@ export const formatMessage = (message: Pick<InboundMessage, "topic" | "payload" 
 export interface WatchOptions {
   /** A topic filter instead of the config's site and building (`#` for everything on the broker). */
   readonly topic?: string | undefined
+  /** Stop after this many seconds instead of at Ctrl-C: for scripts and agents, which cannot press it. */
+  readonly seconds?: number | undefined
 }
 
-/** Prints the broker's messages until interrupted (Ctrl-C), reconnecting as the gateway does. */
+/**
+ * Prints the broker's messages until interrupted (Ctrl-C) or for `seconds`, reconnecting as the gateway does.
+ * The CLI runs in a container without Node on the machine, where killing the docker client leaves the
+ * container running: a watch that ends by itself needs no one to stop it.
+ */
 export const watch = Effect.fn("watch")(function* (config: GatewayConfig, options: WatchOptions = {}) {
   const address = yield* parseBrokerUrl(config.mqtt.url)
   const password = config.mqtt.passwordEnv === undefined ? undefined : yield* Config.Redacted(config.mqtt.passwordEnv)
@@ -44,9 +50,13 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
     ...(config.mqtt.username === undefined ? {} : { username: config.mqtt.username }),
     ...(password === undefined ? {} : { password }),
     subscriptions: [{ filter, qos: 0, retainAsPublished: true }],
-    onConnect: () => Console.error(`watching ${filter} on ${config.mqtt.url} (Ctrl-C to stop)`),
+    onConnect: () =>
+      Console.error(
+        `watching ${filter} on ${config.mqtt.url} (${options.seconds === undefined ? "Ctrl-C to stop" : `for ${options.seconds} s`})`
+      ),
     onMessage: (message) => Console.log(formatMessage(message, new Date()))
   })
   yield* Console.error(`connecting to ${config.mqtt.url}…`)
-  return yield* Effect.never
+  if (options.seconds === undefined) return yield* Effect.never
+  yield* Effect.sleep(Duration.seconds(options.seconds))
 }, Effect.scoped)

@@ -158,20 +158,33 @@ const discoverCommand = Command.make(
       Flag.withDescription("Write the devices found as a points list (CSV) to this file, to trim and import"),
       Flag.optional
     ),
+    address: Flag.String("address").pipe(
+      Flag.withDescription(
+        "Ask only the device at this ip or ip:port, instead of a broadcast: one on another subnet or another port"
+      ),
+      Flag.optional
+    ),
     json: jsonFlag
   },
   // The draft is JSON already; --json makes a failure JSON too.
-  ({ config, pointsList, json }) =>
-    Effect.flatMap(loadConfig(config), (decoded) =>
-      Option.isSome(pointsList) ? discoverToPointsList(decoded, pointsList.value) : discover(decoded)
-    ).pipe(jsonFailure(json, { path: config }))
+  ({ config, pointsList, address, json }) =>
+    Effect.flatMap(loadConfig(config), (decoded) => {
+      const options = { address: Option.getOrUndefined(address) }
+      return Option.isSome(pointsList)
+        ? discoverToPointsList(decoded, pointsList.value, undefined, options)
+        : discover(decoded, undefined, options)
+    }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
     "Find BACnet devices through the config's bacnet settings and print a draft of their devices entries, read-only"
   ),
   Command.withExamples([
     { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
-    { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" }
+    { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
+    {
+      command: "ot-gateway discover --address 10.20.3.40:47809",
+      description: "Ask one device whose address a device list gives"
+    }
   ])
 )
 
@@ -420,15 +433,26 @@ const watchCommand = Command.make(
     topic: Flag.String("topic").pipe(
       Flag.withDescription("A topic filter instead of site/building/# (# for everything on the broker)"),
       Flag.optional
+    ),
+    seconds: Flag.Int("seconds").pipe(
+      Flag.withDescription("Stop after this many seconds instead of at Ctrl-C, for scripts and agents"),
+      Flag.filter(
+        (seconds) => seconds >= 1,
+        (seconds) => `--seconds takes 1 or more, not ${seconds}`
+      ),
+      Flag.optional
     )
   },
-  ({ config, topic }) =>
-    Effect.flatMap(loadConfig(config), (decoded) => watch(decoded, { topic: Option.getOrUndefined(topic) }))
+  ({ config, topic, seconds }) =>
+    Effect.flatMap(loadConfig(config), (decoded) =>
+      watch(decoded, { topic: Option.getOrUndefined(topic), seconds: Option.getOrUndefined(seconds) })
+    )
 ).pipe(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
   Command.withExamples([
     { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
-    { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" }
+    { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" },
+    { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" }
   ])
 )
 

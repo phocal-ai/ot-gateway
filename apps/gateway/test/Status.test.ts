@@ -200,6 +200,15 @@ describe("status", () => {
     })
   )
 
+  it.effect("forgets a topic cleared with an empty retained message", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      state.recordPublish("s/b/meter/old/$meta", '{"name":"Old"}', { retained: true, at: 10 })
+      state.recordPublish("s/b/meter/old/$meta", "", { retained: true, at: 11 })
+      expect((yield* state.messages).messages).toEqual([])
+    })
+  )
+
   it.effect("bounds what it keeps: 2,000 topics, and 2,000 characters of each payload", () =>
     Effect.gen(function* () {
       const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
