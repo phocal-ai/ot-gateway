@@ -218,7 +218,12 @@ export const MqttSettings = Schema.Struct({
   clientId: Schema.optionalKey(ConnectString),
   username: Schema.optionalKey(ConnectString),
   /** Name of the environment variable holding the password. Never inline secrets. */
-  passwordEnv: Schema.optionalKey(Schema.String)
+  passwordEnv: Schema.optionalKey(Schema.String),
+  /**
+   * The MQTT spoken: `auto` dials with MQTT 5 and falls back to 3.1.1 for a
+   * broker that refuses it; `5` or `3.1.1` speak only that.
+   */
+  version: Schema.Literals(["auto", "5", "3.1.1"]).pipe(Schema.withDecodingDefaultKey(Effect.succeed("auto" as const)))
 })
 export type MqttSettings = typeof MqttSettings.Type
 
@@ -240,7 +245,9 @@ const isLoopbackHost = (hostname: string): boolean => {
  * the password in the CONNECT packet, so only `mqtts://` keeps it encrypted
  * on the network. `undefined` when there is nothing to warn about.
  */
-export const mqttPasswordWarning = (settings: MqttSettings): string | undefined => {
+export const mqttPasswordWarning = (
+  settings: Pick<MqttSettings, "url" | "username" | "passwordEnv">
+): string | undefined => {
   if (settings.passwordEnv === undefined) return undefined
   const url = URL.parse(settings.url)
   if (url === null || url.protocol !== "mqtt:" || isLoopbackHost(url.hostname)) return undefined

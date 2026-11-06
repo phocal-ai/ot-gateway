@@ -16,7 +16,7 @@ Everything goes through the `ot-gateway` command. Call it `otg` below:
 - with Docker and no Node (a Raspberry Pi, most edge boxes): the image, from that folder. No `-t`, since you have no terminal:
   `docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:latest` (the latest release, as `npx` runs). Define it as a shell function in each command you run; aliases do not carry over between them.
 
-The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema` and `status` to get the result as JSON on stdout, a failure as `{"ok": false, "error": …}` (exit code 1); logs go to stderr. `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running.
+The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema`, `broker`, `publish` and `status` to get the result as JSON on stdout, a failure as `{"ok": false, "error": …}` (exit code 1); logs go to stderr. `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running.
 
 ## Ground rules
 

@@ -25,6 +25,8 @@ pnpm ot-gateway import points.csv          # add a points list's devices to ot-g
 pnpm ot-gateway points schema              # the points list's columns (--json); points template prints a list to fill in
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
+pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
+pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
 pnpm ot-gateway status                     # the running gateway's devices, one line each
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)

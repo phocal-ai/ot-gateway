@@ -13,7 +13,7 @@ import { makeBrokerControl, publishToSubscribers, serveMqtt } from "../src/TestB
 
 const commands = "s/b/+/+/$set"
 
-const setup = Effect.fnUntraced(function* (retainAsPublished = false) {
+const setup = Effect.fnUntraced(function* (retainAsPublished = false, protocolVersion: "5" | "3.1.1" = "5") {
   const network = makeMemoryNetwork()
   const control = makeBrokerControl()
   const startBroker = Effect.gen(function* () {
@@ -28,6 +28,7 @@ const setup = Effect.fnUntraced(function* (retainAsPublished = false) {
   const socket = yield* network.host("10.0.0.1").tcp({ host: "10.0.0.2", port: 1883, openTimeout: "5 seconds" })
   const client = yield* makeMqttClient(socket, {
     clientId: "gateway",
+    protocolVersion,
     subscriptions: [{ filter: commands, qos: 1, retainAsPublished }],
     onMessage: (message) => Effect.sync(() => received.push(message))
   })
@@ -107,5 +108,22 @@ describe("MQTT subscriptions", () => {
         expect(received.map((message) => message.retain)).toEqual([retainAsPublished])
       }
     }).pipe(Effect.scoped)
+  )
+
+  it.effect("receives in MQTT 3.1.1: retained only on subscribing, and without MQTT 5's properties", () =>
+    Effect.gen(function* () {
+      const { control, startBroker, received } = yield* setup(true, "3.1.1")
+      publishToSubscribers(control, command(1, { retain: true }))
+      yield* startBroker
+      yield* TestClock.adjust("2 seconds")
+      // Live, a retained publish arrives with the retain flag cleared (3.1.1 §3.3.1.3).
+      publishToSubscribers(control, command(2, { retain: true }))
+      yield* TestClock.adjust("1 second")
+      expect(received).toEqual([
+        { topic: "s/b/ahu-1/setpoint/$set", payload: '{"value":1}', retain: true },
+        { topic: "s/b/ahu-1/setpoint/$set", payload: '{"value":2}', retain: false }
+      ])
+      expect(control.connects.map((connect) => connect.protocolVersion)).toEqual([4])
+    })
   )
 })
