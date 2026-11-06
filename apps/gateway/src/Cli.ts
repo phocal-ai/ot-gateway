@@ -20,7 +20,7 @@ import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from ".
 import { discover, discoverToPointsList } from "./Discover.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { nextSteps, runInit } from "./Init.ts"
+import { initTarget, nextSteps, runInit } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -172,7 +172,11 @@ const optionalFlag = (name: string, description: string) =>
 const init = Command.make(
   "init",
   {
-    config: configPath,
+    directory: Argument.String("directory").pipe(
+      Argument.withDescription("The gateway's folder, created if missing (. for this one); asked for when left out"),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
     site: optionalFlag("site", "The site, the first topic segment (a slug: vienna-hq)"),
     building: optionalFlag("building", "The building, the second topic segment"),
     broker: optionalFlag("broker", "The MQTT broker URL, mqtts:// for TLS"),
@@ -192,8 +196,9 @@ const init = Command.make(
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false))
   },
-  ({ config, ...flags }) =>
+  ({ directory, ...flags }) =>
     Effect.gen(function* () {
+      const config = yield* initTarget(directory, flags.yes)
       const written = yield* runInit(config, flags)
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written)
@@ -201,11 +206,18 @@ const init = Command.make(
       yield* Console.log(nextSteps(config, written, { ...folder, written: [config, ...folder.written] }))
     }).pipe(Effect.catchTag("QuitError", () => Console.error("init cancelled, nothing written")))
 ).pipe(
-  Command.withDescription("Answer a few questions (site, broker, devices) and get a config that check accepts"),
+  Command.withDescription(
+    "Answer a few questions (site, broker, devices) and get the gateway's folder: ot-gateway.json, compose.yaml, ot-gateway.env"
+  ),
   Command.withExamples([
-    { command: "ot-gateway init", description: "Write ot-gateway.json in this directory" },
     {
-      command: "ot-gateway init --yes --site vienna-hq --broker mqtts://broker.example:8883 --points points.csv",
+      command: "ot-gateway init vienna-hq",
+      description: "Make the folder vienna-hq and write the gateway's files in it"
+    },
+    { command: "ot-gateway init .", description: "Write them in this folder" },
+    {
+      command:
+        "ot-gateway init vienna-hq --yes --site vienna-hq --broker mqtts://broker.example:8883 --points points.csv",
       description: "The same without questions, for scripts and agents"
     }
   ])

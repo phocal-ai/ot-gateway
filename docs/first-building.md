@@ -27,8 +27,10 @@ Also note the broker your values should go to: its URL (`mqtt://` or `mqtts://` 
 In a checkout (`pnpm ot-gateway …`) or anywhere the gateway is installed (`ot-gateway …`):
 
 ```bash
-pnpm ot-gateway init
+pnpm ot-gateway init .
 ```
+
+`.` writes into this folder; `init my-building` makes a folder for it, and `init` alone asks where.
 
 It asks for the site and building (the first two parts of every topic, such as `vienna-hq` and `main`), the broker, and where your devices come from:
 

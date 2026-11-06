@@ -12,8 +12,9 @@ import { parseBrokerUrl } from "@ot-gateway/mqtt"
 import { Console, Effect, FileSystem, Schema, type Terminal } from "effect"
 import { Prompt } from "effect/cli"
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os"
+import { basename, dirname, join } from "node:path"
 import { discoverDrafts, type draftDevices } from "./Discover.ts"
-import type { FolderFiles } from "./Folder.ts"
+import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { readPointsList } from "./Import.ts"
 import { devicesFromPointsList, type PointsListDevice } from "./PointsList.ts"
 
@@ -305,8 +306,28 @@ export const runInit = Effect.fn("runInit")(function* (path: string, flags: Init
       : answers
   const text = `${JSON.stringify(initConfig(withNetwork, yield* devicesFrom(source, withNetwork, flags)), null, 2)}\n`
   const config = yield* parseConfig(text)
+  // Made only now, so a cancelled init leaves no empty folder behind.
+  yield* fs.makeDirectory(dirname(path), { recursive: true })
   yield* fs.writeFileString(path, text)
   return config
+})
+
+/** The folder `init` creates when it is given none and asks nothing, as create-next-app's `my-app`. */
+export const defaultFolder = "ot-gateway"
+
+/**
+ * Where init writes, from its argument, as create-next-app takes one: a folder (`.` for this one), created when
+ * missing; nothing, which asks for the folder (or takes `ot-gateway` with `--yes`); or, as before folders, a
+ * path ending in `.json`, which is the config itself.
+ */
+export const initTarget = Effect.fn("initTarget")(function* (argument: string | undefined, yes: boolean) {
+  if (argument?.endsWith(".json") === true) return argument
+  const folder =
+    argument ??
+    (yes
+      ? defaultFolder
+      : yield* Prompt.String({ message: "Folder for this gateway (. for this one)", default: defaultFolder }))
+  return join(folder, folderConfigName)
 })
 
 /** What to do after `init`, for the config it wrote to `path`. */
@@ -322,15 +343,20 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
       : envFile === undefined
         ? [`  set ${passwordEnv} to the broker password before you start the gateway`]
         : [`  put the broker password after ${passwordEnv}= in ${envFile}`]
+  // Commands run from the gateway's folder, where the config's default name needs no argument.
+  const folderPath = dirname(path)
+  const name = basename(path)
+  const argument = name === folderConfigName ? "" : ` ${name}`
   const commands: ReadonlyArray<readonly [string, string]> = [
+    ...(folderPath === "." ? [] : ([[`cd ${folderPath}`, "the gateway's folder"]] as const)),
     ...(compose
       ? ([
           ["docker compose up -d", "start it in Docker, restarted after a crash or a reboot"],
           ["ot-gateway status", `one line per device (status page on http://127.0.0.1:${port})`]
         ] as const)
-      : ([[`ot-gateway run ${path}`, `start the gateway (status page on http://127.0.0.1:${port})`]] as const)),
-    [`ot-gateway check ${path}`, "validate it again after an edit"],
-    [`ot-gateway watch ${path}`, `see what arrives at ${config.mqtt.url}`]
+      : ([[`ot-gateway run${argument}`, `start the gateway (status page on http://127.0.0.1:${port})`]] as const)),
+    [`ot-gateway check${argument}`, "validate it again after an edit"],
+    [`ot-gateway watch${argument}`, `see what arrives at ${config.mqtt.url}`]
   ]
   const width = Math.max(...commands.map(([command]) => command.length)) + 2
   return [

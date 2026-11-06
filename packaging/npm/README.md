@@ -4,7 +4,7 @@ An open-source edge gateway for buildings: Modbus TCP and BACnet/IP in, MQTT 5 o
 
 ```bash
 npx ot-gateway demo                    # a simulated building, a test broker and the status page on http://127.0.0.1:8080
-npx ot-gateway init                    # a few questions → ot-gateway.json
+npx ot-gateway init my-building        # a few questions → my-building/ with ot-gateway.json, compose.yaml, ot-gateway.env
 npx ot-gateway import points.csv       # add the devices of a points list
 npx ot-gateway discover ot-gateway.json  # find BACnet devices on the network
 npx ot-gateway check ot-gateway.json   # validate a config without connecting
