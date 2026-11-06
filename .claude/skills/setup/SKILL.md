@@ -14,7 +14,7 @@ Everything goes through the `ot-gateway` command. Call it `otg` below:
 - in a checkout of the ot-gateway repository: `pnpm ot-gateway` (after `pnpm install`), from the repository root;
 - anywhere else: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`).
 
-The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Agents get JSON from `otg check --json`, `otg status --json`, `otg points schema --json` and `otg import <list> --dry-run`.
+The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema` and `status` to get the result as JSON on stdout, a failure as `{"ok": false, "error": …}` (exit code 1); logs go to stderr. `--dry-run` on `init` and `import` writes nothing.
 
 ## Ground rules
 
@@ -57,6 +57,8 @@ Run `init` with flags so it asks nothing (without a terminal it never asks anywa
 otg init . --yes --site vienna-hq --building b1 --broker mqtts://broker.example:8883 --username gateway --devices none
 ```
 
+Add `--dry-run --json` first to see the config and the files it would write without writing anything.
+
 - Leave out `--username` for a broker without a login.
 - For BACnet, add `--broadcast <address>` when the machine has more than one network: the broadcast address of the building network's interface (`ip -4 -o addr show scope global` gives `brd 192.168.1.255`; on macOS, `ifconfig | grep broadcast`). Ask if it's unclear which interface that is.
 - With a points list or EDE file already in hand, check it as in step 5 first, then use `--points <file>` instead of `--devices none`.
@@ -83,7 +85,7 @@ Read `otg points schema --json` once. Then, by what the user has:
 Check the list until it is clean, then add it:
 
 ```bash
-otg import points.csv --dry-run   # checks every row against the gateway's schema; names the line of a mistake
+otg import points.csv --dry-run --json   # checks every row against the gateway's schema; names the line of a mistake
 otg import points.csv             # adds the devices to ot-gateway.json
 ```
 

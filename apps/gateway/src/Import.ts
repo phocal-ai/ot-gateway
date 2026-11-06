@@ -84,10 +84,7 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
       )
     )
   )
-  if (options.dryRun) {
-    yield* Console.log(JSON.stringify({ devices: added }, null, 2))
-    return { added, config: undefined } satisfies ImportResult
-  }
+  if (options.dryRun) return { added, config: undefined } satisfies ImportResult
   yield* fs.writeFileString(configPath, text)
   return { added, config } satisfies ImportResult
 })

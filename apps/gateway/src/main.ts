@@ -15,7 +15,7 @@
  */
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
-import { Cause, Effect, Result } from "effect"
+import { Cause, Effect, Logger, Result } from "effect"
 import { CliError } from "effect/cli"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { runCli } from "./Cli.ts"
@@ -50,6 +50,8 @@ const program = runCli(process.argv.slice(2))
 
 program.pipe(
   Effect.tapCause(reportFailure),
+  // Logs, the final failure among them, go to stderr: stdout is for results, so `check --json | jq` gets JSON only.
+  Effect.provideService(Logger.LogToStderr, true),
   Effect.provide(NodeServices.layer),
   NodeRuntime.runMain({ teardown: gatewayTeardown, disableErrorReporting: true })
 )

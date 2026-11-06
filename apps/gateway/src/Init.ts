@@ -77,6 +77,8 @@ export interface InitFlags {
   readonly yes?: boolean | undefined
   /** Replace an existing config without asking. */
   readonly force?: boolean | undefined
+  /** Work out the config, but write nothing. */
+  readonly dryRun?: boolean | undefined
 }
 
 /** A flag's value that its question would not accept, or a config in the way without `--force`. */
@@ -281,8 +283,8 @@ const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, an
 })
 
 /**
- * Asks the questions and writes the config to `path`. Returns the config written, or `undefined` when the
- * operator kept an existing file.
+ * Asks the questions and writes the config to `path` (not on a dry run). Returns the config, or `undefined`
+ * when the operator kept an existing file.
  */
 export const runInit = Effect.fn("runInit")(function* (path: string, flags: InitFlags = {}) {
   const fs = yield* FileSystem.FileSystem
@@ -306,6 +308,7 @@ export const runInit = Effect.fn("runInit")(function* (path: string, flags: Init
       : answers
   const text = `${JSON.stringify(initConfig(withNetwork, yield* devicesFrom(source, withNetwork, flags)), null, 2)}\n`
   const config = yield* parseConfig(text)
+  if (flags.dryRun === true) return config
   // Made only now, so a cancelled init leaves no empty folder behind.
   yield* fs.makeDirectory(dirname(path), { recursive: true })
   yield* fs.writeFileString(path, text)

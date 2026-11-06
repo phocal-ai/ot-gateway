@@ -113,6 +113,19 @@ const inFolder = <A, E>(
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
 
 describe("runInit with flags", () => {
+  it.effect("works out the config on a dry run and writes nothing, not even the folder", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = `${folder}/vienna-hq/ot-gateway.json`
+        const config = yield* runInit(path, { yes: true, dryRun: true, site: "vienna-hq", username: "gateway" })
+        expect(config?.site).toBe("vienna-hq")
+        expect(config?.mqtt.passwordEnv).toBe("MQTT_PASSWORD")
+        expect(yield* fs.exists(`${folder}/vienna-hq`)).toBe(false)
+      })
+    )
+  )
+
   it.effect("asks nothing with --yes, takes the flags' answers and the defaults for the rest", () =>
     inFolder((folder) =>
       Effect.gen(function* () {
