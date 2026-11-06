@@ -38,7 +38,11 @@ describe("initConfig", () => {
   it.effect("makes a valid config with a simulated device, no device, or a login", () =>
     Effect.gen(function* () {
       const simulated = yield* decode(initConfig(answers, [simulatedDevice]))
-      expect(simulated.mqtt).toEqual({ url: "mqtt://broker.lan:1883", clientId: "ot-gateway-vienna-hq-main" })
+      expect(simulated.mqtt).toEqual({
+        url: "mqtt://broker.lan:1883",
+        clientId: "ot-gateway-vienna-hq-main",
+        version: "auto"
+      })
       expect(simulated.devices.map((device) => device.id)).toEqual(["sim-1"])
       expect(simulated.buffer?.path).toBe("./ot-gateway-buffer.sqlite")
 

@@ -77,7 +77,11 @@ describe("demo", () => {
       const options = { listen: "127.0.0.1", public: { broker: { host: "broker.emqx.io", port: 1883 }, site } }
       const config = demoConfig(yield* loadConfig(exampleConfigPath), "/tmp/demo-y", options)
       expect(config.site).toBe(site)
-      expect(config.mqtt).toEqual({ url: "mqtt://broker.emqx.io:1883", clientId: `ot-gateway-${site}` })
+      expect(config.mqtt).toEqual({
+        version: "auto",
+        url: "mqtt://broker.emqx.io:1883",
+        clientId: `ot-gateway-${site}`
+      })
       // What the gateway runs is decoded again, as a config file would be: the public-broker guard lets it through.
       expect((yield* parseConfig(JSON.stringify(config))).site).toBe(site)
       const banner = demoBanner(config, options)

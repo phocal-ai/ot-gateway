@@ -1,6 +1,9 @@
 /**
- * MQTT 5 publishing client: one broker connection, kept alive and re-opened
+ * MQTT publishing client: one broker connection, kept alive and re-opened
  * with jittered exponential backoff for as long as the client's scope lives.
+ * It speaks MQTT 5, and MQTT 3.1.1 to a broker that does not: with
+ * `protocolVersion: "auto"` (the default) it dials with 5 and, when the broker
+ * refuses that protocol level, dials again with 3.1.1 and stays with it.
  *
  * Publishing never queues across outages: while disconnected, a publish
  * waits up to `publishTimeout` for the connection and then fails (or, with
@@ -8,7 +11,10 @@
  * the caller decides what to
  * retry: the pipeline retries `$meta` on the next cycle, and `@ot-gateway/buffer`
  * stores values for later. QoS 1 publishes complete on
- * PUBACK. The session is clean (no session state survives a reconnect), so
+ * PUBACK. Publishes go on the wire in the order they were called, also when
+ * several wait for the connection at once (§4.6 keeps that order to the
+ * subscribers), so values buffered during an outage do not overtake each
+ * other when it ends. The session is clean (no session state survives a reconnect), so
  * nothing unacknowledged is resent behind the caller's back.
  *
  * Dead connections are noticed three ways: the broker stays silent past
@@ -35,9 +41,10 @@ import {
   encodeSubscribe,
   makeFrameReader,
   Property,
-  pubackRefusesMessage
+  pubackRefusesMessage,
+  refusesProtocolLevel
 } from "./Packet.ts"
-import type { Subscription, Will } from "./Packet.ts"
+import type { ProtocolVersion, Subscription, Will } from "./Packet.ts"
 
 /** The connection could not be opened, broke, or the broker stopped answering. */
 export class MqttConnectionError extends Schema.TaggedError<MqttConnectionError>()("MqttConnectionError", {
@@ -49,6 +56,12 @@ export class MqttRejected extends Schema.TaggedError<MqttRejected>()("MqttReject
   reasonCode: Schema.Int,
   message: Schema.String
 }) {}
+
+/** The broker refused MQTT 5 and `auto` is set: dial again, with 3.1.1. Never leaves the client. */
+class MqttDowngrade extends Schema.TaggedError<MqttDowngrade>()("MqttDowngrade", {}) {}
+
+/** Which MQTT the client speaks: 5, 3.1.1, or 5 with a fallback to 3.1.1 (`auto`). */
+export type MqttVersionSetting = "auto" | "5" | "3.1.1"
 
 /**
  * A message could not be published. `unavailable`: no connection, it broke
@@ -79,6 +92,12 @@ export interface MqttClientOptions {
   readonly clientId: string
   readonly username?: string
   readonly password?: Redacted.Redacted
+  /**
+   * `auto` (default): MQTT 5, or 3.1.1 once the broker refuses 5. 3.1.1 has
+   * no message expiry, correlation data, No Local or Retain As Published, and
+   * the broker announces no limits.
+   */
+  readonly protocolVersion?: MqttVersionSetting
   /** Keep alive in seconds (default 30). The broker may override it in CONNACK. */
   readonly keepAliveSeconds?: number
   /** Time allowed from dialing to CONNACK (default 10 s). */
@@ -149,14 +168,33 @@ export interface PublishOptions {
   readonly correlationData?: Uint8Array
 }
 
+/** The live connection: the MQTT spoken and what the broker allowed in CONNACK. */
+export interface ConnectionInfo {
+  readonly protocolVersion: "5" | "3.1.1"
+  /** Unacknowledged QoS 1 publishes the client allows itself (the broker's Receive Maximum, at most 1,000). */
+  readonly receiveMaximum: number
+  readonly maximumQoS: 0 | 1
+  readonly retainAvailable: boolean
+  /** Bytes; absent when the broker announced no limit (always in 3.1.1). */
+  readonly maximumPacketSize?: number
+  /** Seconds, the broker's Server Keep Alive if it sent one. */
+  readonly keepAliveSeconds: number
+}
+
 export interface MqttClient {
   /** Publish a UTF-8 payload (QoS 1 by default). */
   readonly publish: (topic: string, payload: string, options?: PublishOptions) => Effect.Effect<void, MqttPublishError>
   readonly isConnected: Effect.Effect<boolean>
+  /** The live connection, if there is one. */
+  readonly connection: Effect.Effect<ConnectionInfo | undefined>
+  /** Waits for the first dial: done once it connected, failed with why it did not (later dials go on retrying). */
+  readonly firstDial: Effect.Effect<void, MqttConnectionError | MqttRejected>
 }
 
 /** What the broker allowed in CONNACK, plus the live connection's writer. */
 interface Session {
+  readonly version: ProtocolVersion
+  readonly info: ConnectionInfo
   readonly write: (bytes: Uint8Array) => Effect.Effect<void, MqttConnectionError>
   readonly inflight: Map<number, Deferred.Deferred<number, MqttConnectionError>>
   readonly inflightLimit: Semaphore.Semaphore
@@ -213,7 +251,14 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
   const connected = yield* Latch.make(false)
   // Opens once the first dial has connected or failed.
   const firstDialDone = yield* Latch.make(false)
+  // The first dial's outcome, for a caller that wants to know why it failed (`ot-gateway broker`).
+  const firstDial = Deferred.makeUnsafe<void, MqttConnectionError | MqttRejected>()
   let session: Session | undefined
+  // Starts at 5 unless told otherwise; `auto` moves it to 4 for good when the broker refuses 5.
+  let version: ProtocolVersion = options.protocolVersion === "3.1.1" ? 4 : 5
+  // Wire order: each publish waits until the one called before it has written its packet or given up.
+  let lastTurn: Deferred.Deferred<void> = Deferred.makeUnsafe<void>()
+  Deferred.doneUnsafe(lastTurn, Effect.void)
 
   /** One connection, from dialing until it fails. Never succeeds. */
   /** `onConnected` returns how many dials failed before this one, for the log. */
@@ -245,7 +290,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
          * first, if it can still be sent (§4.13.1, §4.13.2).
          */
         const protocolError = (reasonCode: number, message: string) =>
-          write(encodeDisconnect(reasonCode)).pipe(
+          // 3.1.1 has no reason to send, and its DISCONNECT discards the will: there, only close (3.1.1 §4.8).
+          (version === 4 ? Effect.void : write(encodeDisconnect(reasonCode))).pipe(
             Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.void }),
             Effect.catchTag("MqttConnectionError", () => Effect.void),
             Effect.andThen(Effect.fail(new MqttConnectionError({ message })))
@@ -275,8 +321,10 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           )
         )
 
+        const dialedWith = version
         yield* write(
           encodeConnect({
+            protocolVersion: dialedWith,
             clientId: options.clientId,
             keepAliveSeconds,
             cleanStart: true,
@@ -292,7 +340,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           if (packet.type !== PacketType.CONNACK) {
             return yield* new MqttConnectionError({ message: `expected CONNACK, got packet type ${packet.type}` })
           }
-          const decoded = decodeConnack(packet.body)
+          const decoded = decodeConnack(packet.body, dialedWith)
           if (Result.isFailure(decoded)) {
             return yield* new MqttConnectionError({ message: `unreadable CONNACK: ${decoded.failure.message}` })
           }
@@ -303,6 +351,16 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             orElse: () => Effect.fail(new MqttConnectionError({ message: "no CONNACK in time" }))
           })
         )
+        if (dialedWith === 5 && refusesProtocolLevel(connack)) {
+          if (options.protocolVersion === "5") {
+            return yield* new MqttRejected({
+              reasonCode: 0x84,
+              message: "broker refused the connection: it does not speak MQTT 5 (set mqtt.version to 3.1.1 or auto)"
+            })
+          }
+          version = 4
+          return yield* new MqttDowngrade()
+        }
         if (connack.reasonCode >= 0x80) {
           return yield* new MqttRejected({
             reasonCode: connack.reasonCode,
@@ -319,11 +377,26 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         if (props.get(Property.MaximumPacketSize) === 0) {
           return yield* protocolError(0x82, "broker sent Maximum Packet Size 0 in CONNACK, a protocol error")
         }
+        const receiveMaximum = Math.min(numberProperty(props, Property.ReceiveMaximum, 65_535), 1_000)
+        const announcedPacketSize = props.get(Property.MaximumPacketSize)
+        // The broker's Server Keep Alive replaces ours (§3.2.2.3.14). At 0 the broker stops
+        // checking on us, but a client may ping whenever it likes (§3.1.2.10), and it still has
+        // to notice a dead broker: keep pinging at our own interval then.
+        const effectiveKeepAlive = numberProperty(props, Property.ServerKeepAlive, keepAliveSeconds)
         const current: Session = {
+          version: dialedWith,
+          info: {
+            protocolVersion: dialedWith === 5 ? "5" : "3.1.1",
+            receiveMaximum,
+            maximumQoS: numberProperty(props, Property.MaximumQoS, 2) === 0 ? 0 : 1,
+            retainAvailable: numberProperty(props, Property.RetainAvailable, 1) === 1,
+            ...(typeof announcedPacketSize === "number" ? { maximumPacketSize: announcedPacketSize } : {}),
+            keepAliveSeconds: effectiveKeepAlive
+          },
           write,
           inflight: new Map(),
           // Receive Maximum bounds unacknowledged QoS 1 publishes (§3.2.2.3.3).
-          inflightLimit: yield* Semaphore.make(Math.min(numberProperty(props, Property.ReceiveMaximum, 65_535), 1_000)),
+          inflightLimit: yield* Semaphore.make(receiveMaximum),
           maximumQoS: numberProperty(props, Property.MaximumQoS, 2) === 0 ? 0 : 1,
           retainAvailable: numberProperty(props, Property.RetainAvailable, 1) === 1,
           maximumPacketSize: numberProperty(props, Property.MaximumPacketSize, Number.POSITIVE_INFINITY),
@@ -332,10 +405,6 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           pubackTimeouts: 0,
           droppedForSilence: false
         }
-        // The broker's Server Keep Alive replaces ours (§3.2.2.3.14). At 0 the broker stops
-        // checking on us, but a client may ping whenever it likes (§3.1.2.10), and it still has
-        // to notice a dead broker: keep pinging at our own interval then.
-        const effectiveKeepAlive = numberProperty(props, Property.ServerKeepAlive, keepAliveSeconds)
         const pingSeconds = effectiveKeepAlive > 0 ? effectiveKeepAlive : keepAliveSeconds
 
         yield* Effect.addFinalizer((exit) =>
@@ -371,6 +440,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         yield* Effect.logInfo("connected to MQTT broker").pipe(
           Effect.annotateLogs({
             keepAlive: effectiveKeepAlive,
+            ...(dialedWith === 4 ? { mqtt: "3.1.1" } : {}),
             ...(failedBefore > 0 ? { failedDials: failedBefore } : {})
           })
         )
@@ -379,7 +449,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         if (subscriptions.length > 0) {
           const packetId = current.nextPacketId
           current.nextPacketId = (packetId % 0xffff) + 1
-          yield* write(encodeSubscribe({ packetId, subscriptions }))
+          yield* write(encodeSubscribe({ packetId, subscriptions }, dialedWith))
         }
 
         let lastReceived = yield* monotonicMillis
@@ -405,14 +475,14 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 return yield* new MqttConnectionError({ message: `broker disconnected: ${reason}` })
               }
               case PacketType.PUBLISH: {
-                const publish = decodePublish(packet.flags, packet.body)
+                const publish = decodePublish(packet.flags, packet.body, dialedWith)
                 if (Result.isFailure(publish)) {
                   return yield* protocolError(0x81, `unreadable PUBLISH: ${publish.failure.message}`)
                 }
                 const { topic, payload, retain, packetId, messageExpirySeconds, responseTopic, correlationData } =
                   publish.success
                 // Acknowledged on receipt: once the broker has the PUBACK it never sends this again.
-                if (packetId !== undefined) yield* write(encodePuback(packetId))
+                if (packetId !== undefined) yield* write(encodePuback(packetId, 0, dialedWith))
                 if (options.onMessage !== undefined) {
                   yield* options.onMessage({
                     topic,
@@ -426,7 +496,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 break
               }
               case PacketType.SUBACK: {
-                const suback = decodeSuback(packet.body)
+                const suback = decodeSuback(packet.body, dialedWith)
                 const refused = Result.isSuccess(suback)
                   ? subscriptions.filter((_, index) => (suback.success.reasonCodes[index] ?? 0x80) >= 0x80)
                   : subscriptions
@@ -490,16 +560,23 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       })
     while (true) {
       let connectedAt: number | undefined
-      yield* runSession((at) => {
+      const outcome = yield* runSession((at) => {
         connectedAt = at
+        Deferred.doneUnsafe(firstDial, Effect.void)
         unreachable = undefined
         const dials = failedDials
         failedDials = 0
         return dials
       }).pipe(
         Effect.catchTags({
+          MqttDowngrade: () =>
+            Effect.as(
+              Effect.logInfo("MQTT broker does not speak MQTT 5, connecting with MQTT 3.1.1"),
+              "redial" as const
+            ),
           MqttRejected: (error) =>
-            countConnect("rejected").pipe(
+            Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
+              Effect.andThen(countConnect("rejected")),
               Effect.andThen(
                 dialFailed(
                   `rejected ${error.reasonCode}`,
@@ -512,7 +589,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           MqttConnectionError: (error) =>
             connectedAt !== undefined
               ? Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: error.message }))
-              : countConnect("failed").pipe(
+              : Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
+                  Effect.andThen(countConnect("failed")),
                   Effect.andThen(
                     dialFailed(
                       "unreachable",
@@ -524,6 +602,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 )
         })
       )
+      // Straight back with 3.1.1: the broker answered, so this is no failed dial.
+      if (outcome === "redial") continue
       yield* Latch.open(firstDialDone)
       // Back off unless the connection held for a while: a broker that accepts and then
       // drops the client at once (a session taken over by a twin with the same client
@@ -544,16 +624,27 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       let sent = false
       let blameless = false
       let used: Session | undefined
+      const previousTurn = lastTurn
+      const turn = Deferred.makeUnsafe<void>()
+      lastTurn = turn
+      const passTurn = Effect.sync(() => Deferred.doneUnsafe(turn, Effect.void))
       return Effect.gen(function* () {
         const rejected = (message: string) => new MqttPublishError({ topic, reason: "rejected", message })
         const problem = topicProblem(topic)
         if (problem !== undefined) return yield* rejected(problem)
-        yield* (options.waitForConnection === false ? firstDialDone : connected).await.pipe(
-          Effect.timeoutOrElse({
-            duration: publishTimeout,
-            orElse: () => Effect.fail(new MqttConnectionError({ message: "not connected to the broker" }))
-          })
-        )
+        const notConnected = () => new MqttConnectionError({ message: "not connected to the broker" })
+        const withinPublishTimeout = Effect.timeoutOrElse({
+          duration: publishTimeout,
+          orElse: () => Effect.fail(notConnected())
+        })
+        if (options.waitForConnection === false) {
+          // Told not to wait: once the first dial is over, no connection fails now instead of queueing behind others.
+          yield* firstDialDone.await.pipe(withinPublishTimeout)
+          if (session === undefined) return yield* notConnected()
+          yield* Deferred.await(previousTurn).pipe(withinPublishTimeout)
+        } else {
+          yield* Deferred.await(previousTurn).pipe(Effect.andThen(connected.await), withinPublishTimeout)
+        }
         const current = session
         if (current === undefined) return yield* new MqttConnectionError({ message: "not connected to the broker" })
         used = current
@@ -568,11 +659,11 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           publishOptions.correlationData === undefined ? {} : { correlationData: publishOptions.correlationData }
 
         if (qos === 0) {
-          const packet = encodePublish({ topic, payload: bytes, qos: 0, retain, ...correlation })
+          const packet = encodePublish({ topic, payload: bytes, qos: 0, retain, ...correlation }, current.version)
           if (packet.length > current.maximumPacketSize) {
             return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
           }
-          return yield* current.write(packet)
+          return yield* current.write(packet).pipe(Effect.ensuring(passTurn))
         }
 
         // One deadline covers waiting for an inflight slot (Receive Maximum), sending and the PUBACK.
@@ -582,14 +673,17 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             let packetId = current.nextPacketId
             while (current.inflight.has(packetId)) packetId = (packetId % 0xffff) + 1
             current.nextPacketId = (packetId % 0xffff) + 1
-            const packet = encodePublish({ topic, payload: bytes, qos: 1, retain, packetId, ...correlation })
+            const packet = encodePublish(
+              { topic, payload: bytes, qos: 1, retain, packetId, ...correlation },
+              current.version
+            )
             if (packet.length > current.maximumPacketSize) {
               return yield* rejected(`message exceeds the broker's ${current.maximumPacketSize} byte limit`)
             }
             const acked = yield* Deferred.make<number, MqttConnectionError>()
             current.inflight.set(packetId, acked)
             return yield* Effect.gen(function* () {
-              yield* current.write(packet)
+              yield* current.write(packet).pipe(Effect.ensuring(passTurn))
               sent = true
               return yield* Deferred.await(acked)
             }).pipe(Effect.ensuring(Effect.sync(() => current.inflight.delete(packetId))))
@@ -622,6 +716,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           return yield* new MqttPublishError({ topic, reason: "unavailable", message })
         }
       }).pipe(
+        Effect.ensuring(passTurn),
         Effect.catchTag("MqttConnectionError", (error) =>
           Effect.fail(
             new MqttPublishError({
@@ -635,7 +730,12 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
       )
     })
 
-  const client: MqttClient = { publish, isConnected: Effect.sync(() => session !== undefined) }
+  const client: MqttClient = {
+    publish,
+    isConnected: Effect.sync(() => session !== undefined),
+    connection: Effect.sync(() => session?.info),
+    firstDial: Deferred.await(firstDial)
+  }
   // Started last, so `onConnect` always receives a finished client.
   yield* Effect.forkScoped(connectionLoop)
   return client

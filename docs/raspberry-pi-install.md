@@ -140,7 +140,7 @@ The Pi has no Node.js, and needs none: the gateway's image is the `ot-gateway` c
 
 ```bash
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
-alias ot-gateway='docker run --rm -it --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:v0.8.1'
+alias ot-gateway='docker run --rm -it --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/phocal-ai/ot-gateway:v0.9.0'
 alias ot-gateway >> ~/.bashrc
 ```
 

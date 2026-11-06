@@ -55,7 +55,7 @@ Stop at the first one that fails, fix it, and start that test again.
 Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (`OT_GATEWAY_TAG`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.8.1      # or ot-gateway:test
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.9.0      # or ot-gateway:test
 docker run --rm --entrypoint cat $IMAGE examples/gateway.json \
   | sed 's#./ot-gateway-buffer.sqlite#/var/lib/ot-gateway/buffer.sqlite#' | sudo tee /etc/ot-gateway/gateway.json >/dev/null
 docker run -d --name ot-gateway-bench --network host --log-driver local --restart unless-stopped \
