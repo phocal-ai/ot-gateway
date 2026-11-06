@@ -77,7 +77,7 @@ describe("openHistory", () => {
     Effect.gen(function* () {
       // A flush a minute, not every 5 s: three days of virtual time would otherwise run 50,000 flushes, which
       // takes longer than the test's timeout on a slow CI runner.
-      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2, flushEveryMs: 60_000 })
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2 }, { flushEveryMs: 60_000 })
       for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
       yield* TestClock.adjust("1 minute")
       yield* TestClock.adjust(DAY + 3_600_000)
