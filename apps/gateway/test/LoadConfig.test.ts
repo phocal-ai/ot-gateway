@@ -65,4 +65,13 @@ describe("loadConfig", () => {
       expect(config.site).toBe("demo-site")
     }).pipe(Effect.provide(NodeServices.layer))
   )
+
+  for (const file of ["gateway.json", "building.json", "industrial.json"]) {
+    it.effect(`loads the example ${file}`, () =>
+      Effect.gen(function* () {
+        const config = yield* loadConfig(`../../examples/${file}`)
+        expect(config.devices.length).toBeGreaterThan(0)
+      }).pipe(Effect.provide(NodeServices.layer))
+    )
+  }
 })

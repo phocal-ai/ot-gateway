@@ -188,7 +188,7 @@ export const describePointsListSchema = () => {
   ].join("\n")
 }
 
-/** A meter on Modbus TCP and an air handler on BACnet/IP: what `points template` fills in under the header. */
+/** Meters on Modbus TCP and a heat pump on BACnet/IP: what `points template` fills in under the header. */
 const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
   {
     device: "Energy meter",
@@ -225,8 +225,8 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
     profile: "eastron-sdm630"
   },
   {
-    device: "Ventilation 2",
-    point: "Supply air temperature",
+    device: "Heat pump",
+    point: "Flow temperature",
     unit: "°C",
     interval_s: "30",
     deadband: "0.2",
@@ -235,8 +235,8 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
     object_instance: "1"
   },
   {
-    device: "Ventilation 2",
-    point: "Fan running",
+    device: "Heat pump",
+    point: "Compressor running",
     interval_s: "30",
     publish: "change",
     device_instance: "2001",

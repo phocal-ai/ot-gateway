@@ -14,11 +14,11 @@ Most projects start with a points list: a spreadsheet of what to read, from whic
 
 And for each point:
 
-| You need       | Modbus example                  | BACnet example                |
-| -------------- | ------------------------------- | ----------------------------- |
-| A name         | Energy meter active power       | Ventilation 2 supply air temp |
-| Where it lives | holding register 100, `float32` | found by `discover`           |
-| Its unit       | kW                              | °C (usually found too)        |
+| You need       | Modbus example                  | BACnet example             |
+| -------------- | ------------------------------- | -------------------------- |
+| A name         | Energy meter active power       | Heat pump flow temperature |
+| Where it lives | holding register 100, `float32` | found by `discover`        |
+| Its unit       | kW                              | °C (usually found too)     |
 
 Also note the broker your values should go to: its URL (`mqtt://` or `mqtts://` with TLS), and a username and password if it needs one. No broker yet? Start with the simulated devices and `ot-gateway demo`, or run [Mosquitto](https://mosquitto.org) next to the gateway.
 
@@ -57,7 +57,7 @@ pnpm ot-gateway import points.csv --dry-run    # checks the list and prints its 
 pnpm ot-gateway import points.csv              # adds the devices to ot-gateway.json
 ```
 
-Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input needs no `type`), `deadband`, `offset`, and `publish` (`sample`, `aggregate` or `change`) with `publish_s` (send the latest value, or an aggregate, every so many seconds: `900` for 15 minutes). BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has a meter and an air handler. `ot-gateway points schema` prints every column with its allowed values (`--json` for scripts and agents); `import` names the columns it does not know and ignores them.
+Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input needs no `type`), `deadband`, `offset`, and `publish` (`sample`, `aggregate` or `change`) with `publish_s` (send the latest value, or an aggregate, every so many seconds: `900` for 15 minutes). BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has an energy meter, a PV inverter and a heat pump. `ot-gateway points schema` prints every column with its allowed values (`--json` for scripts and agents); `import` names the columns it does not know and ignores them.
 
 ### Meters with a profile
 

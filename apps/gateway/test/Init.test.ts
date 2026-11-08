@@ -146,7 +146,7 @@ describe("runInit with flags", () => {
         })
         expect(config?.building).toBe("main")
         expect(config?.mqtt.passwordEnv).toBe("MQTT_PASSWORD")
-        expect(config?.devices.map((device) => device.id)).toEqual(["energy-meter", "sub-meter", "ventilation-2"])
+        expect(config?.devices.map((device) => device.id)).toEqual(["energy-meter", "sub-meter", "heat-pump"])
         expect(yield* fs.exists(path)).toBe(true)
 
         const again = yield* runInit(path, { yes: true }).pipe(Effect.flip)

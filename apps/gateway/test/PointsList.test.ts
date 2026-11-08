@@ -60,7 +60,7 @@ describe("devicesFromPointsList", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const devices = yield* devicesFromPointsList(yield* fs.readFileString(examplePoints))
-      expect(devices.map((device) => device.id)).toEqual(["energy-meter", "ventilation-2"])
+      expect(devices.map((device) => device.id)).toEqual(["energy-meter", "pv-inverter", "heat-pump"])
       expect(devices[0]).toMatchObject({
         protocol: "modbus-tcp",
         host: "192.168.1.50",
@@ -90,7 +90,8 @@ describe("devicesFromPointsList", () => {
         },
         { id: "breaker-tripped", name: "Breaker tripped", table: "coil", address: 0, dataType: "bool" }
       ])
-      expect(devices[1]).toMatchObject({ protocol: "bacnet-ip", deviceInstance: 2001, pollIntervalMs: 30_000 })
+      expect(devices[1]).toMatchObject({ protocol: "modbus-tcp", host: "192.168.1.51" })
+      expect(devices[2]).toMatchObject({ protocol: "bacnet-ip", deviceInstance: 2001, pollIntervalMs: 30_000 })
       const config = yield* parseConfig(JSON.stringify(initConfig(answers, devices)))
       for (const device of config.devices) {
         for (const point of device.points) expect(point.writable).toBe(false)
@@ -187,14 +188,14 @@ describe("importPointsList", () => {
       yield* fs.writeFileString(configPath, JSON.stringify(original))
 
       const result = yield* importPointsList(examplePoints, configPath, { dryRun: false })
-      expect(result.config?.devices.map((device) => device.id)).toEqual(["energy-meter", "ventilation-2"])
+      expect(result.config?.devices.map((device) => device.id)).toEqual(["energy-meter", "pv-inverter", "heat-pump"])
       const written = yield* fs.readFileString(configPath)
       expect(written).toContain('"healthIntervalMs": 30000')
 
       const badList = `${directory}/bad.csv`
       yield* fs.writeFileString(badList, "device,point,host,register,type\nMeter 2,p,1.2.3.4,1,float99\n")
       const error = yield* importPointsList(badList, configPath, { dryRun: false }).pipe(Effect.flip)
-      expect(error.message).toContain("nothing was written. Its devices start at devices[2]")
+      expect(error.message).toContain("nothing was written. Its devices start at devices[3]")
       expect(yield* fs.readFileString(configPath)).toBe(written)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )

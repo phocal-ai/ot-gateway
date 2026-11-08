@@ -198,7 +198,7 @@ const HomePage = () => (
         <Flow />
       </section>
 
-      <Section lead="Three steps from the devices in your building to data on your broker." title="How it works">
+      <Section lead="Three steps from the devices on your site to data on your broker." title="How it works">
         <HowItWorks />
       </Section>
 
@@ -226,7 +226,7 @@ const HomePage = () => (
       </Section>
 
       <Section
-        lead="Click through one read of a supply air temperature, from the BACnet bytes on the wire to the message on your broker."
+        lead="Click through one read of a heat pump's flow temperature, from the BACnet bytes on the wire to the message on your broker."
         title="One poll, step by step"
       >
         <PollDemo />
@@ -241,7 +241,7 @@ const HomePage = () => (
           <div className="text-sm">
             <p className="text-fd-muted-foreground text-xs font-medium tracking-wide uppercase">You bring</p>
             <ul className="mt-2 list-disc space-y-1.5 pl-4">
-              <li>A machine on the building network</li>
+              <li>A machine on the site's network</li>
               <li>Your datapoint list, or the device datasheets</li>
               <li>What to read, how often, and where it goes</li>
             </ul>

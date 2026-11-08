@@ -1,8 +1,8 @@
 /**
- * The home page's picture of what the gateway does: devices in the building on the left, the gateway in the
+ * The home page's picture of what the gateway does: devices on the site on the left, the gateway in the
  * middle, the software that wants the data on the right, with messages moving along the pipes between them.
  */
-import { Bell, ChartLine, Fan, FileChartColumn, Gauge, Thermometer } from "lucide-react"
+import { Bell, ChartLine, FileChartColumn, Gauge, Heater, SunMedium } from "lucide-react"
 import type * as React from "react"
 
 interface Item {
@@ -13,14 +13,14 @@ interface Item {
 
 const devices: ReadonlyArray<Item> = [
   { icon: Gauge, title: "Energy meter", detail: "Modbus TCP" },
-  { icon: Fan, title: "Air handlers", detail: "BACnet/IP" },
-  { icon: Thermometer, title: "Room sensors", detail: "BACnet/IP" }
+  { icon: SunMedium, title: "PV inverter", detail: "Modbus TCP" },
+  { icon: Heater, title: "Heat pump", detail: "BACnet/IP" }
 ]
 
 const software: ReadonlyArray<Item> = [
   { icon: ChartLine, title: "Dashboards", detail: "live values" },
   { icon: FileChartColumn, title: "Energy reports", detail: "kWh a month" },
-  { icon: Bell, title: "Alerts", detail: "a fan stopped" }
+  { icon: Bell, title: "Alerts", detail: "a compressor stopped" }
 ]
 
 const Column = ({

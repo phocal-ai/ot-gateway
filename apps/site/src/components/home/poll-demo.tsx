@@ -4,7 +4,7 @@
  * present value, and the gateway publishes it on MQTT. The bytes are real BACnet/IP (BVLC, NPDU and APDU as in
  * packages/bacnet, ASHRAE 135 clause 15.5 and Annex J); the message is the sample-mode payload from the README.
  */
-import { ArrowRight, Fan, Play, RotateCcw } from "lucide-react"
+import { ArrowRight, Heater, Play, RotateCcw } from "lucide-react"
 import type * as React from "react"
 import { useState } from "react"
 
@@ -145,18 +145,18 @@ const steps = [
 
 const nextOf: Record<Stage, Stage> = { 0: 1, 1: 2, 2: 3, 3: 0 }
 
-const idleText = "Click through one poll of the supply air temperature, from the device to your broker."
+const idleText = "Click through one poll of the heat pump's flow temperature, from the device to your broker."
 
 export const PollDemo = () => {
   const [stage, setStage] = useState<Stage>(0)
   const [invokeId, setInvokeId] = useState(1)
-  const [value, setValue] = useState(21.4)
+  const [value, setValue] = useState(35.4)
   const [ts, setTs] = useState(1793873700000)
 
   const goTo = (next: Stage) => {
     if (next === 1 && stage !== 1) {
       setInvokeId((id) => (id % 255) + 1)
-      setValue(Math.round((21 + Math.random() * 0.8) * 10) / 10)
+      setValue(Math.round((35 + Math.random() * 0.8) * 10) / 10)
     }
     if (next === 3) setTs(Date.now())
     setStage(next)
@@ -223,8 +223,8 @@ export const PollDemo = () => {
       <div className="grid gap-2 md:grid-cols-[1fr_auto_1.3fr_auto_1.2fr] md:gap-3">
         <Panel active current={stage === 1} title="Device">
           <p className="mb-3 flex items-center gap-2 text-sm font-semibold">
-            <Fan aria-hidden="true" className="text-fd-muted-foreground size-4" /> ventilation-1
-            <span className="text-fd-muted-foreground font-normal">air handler</span>
+            <Heater aria-hidden="true" className="text-fd-muted-foreground size-4" /> heat-pump
+            <span className="text-fd-muted-foreground font-normal">heat pump</span>
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <Field label="address">10.0.4.21:47808</Field>
@@ -275,7 +275,7 @@ export const PollDemo = () => {
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <Field label="topic">
               <span>
-                {["site-1/", "building-a/", "ventilation-1/", "supply-air-temp"].map((segment) => (
+                {["site-1/", "building-a/", "heat-pump/", "flow-temp"].map((segment) => (
                   <span className="whitespace-nowrap" key={segment}>
                     {segment}
                     <wbr />

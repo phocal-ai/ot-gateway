@@ -19,12 +19,12 @@ type Device = {
 
 const devices: ReadonlyArray<Device> = [
   {
-    id: "ventilation-1",
-    protocol: "BACnet/IP",
-    line: "read every 30 s",
+    id: "pv-inverter",
+    protocol: "Modbus TCP",
+    line: "read every 5 s",
     points: [
-      { id: "supply-air-temp", value: 21.4, decimals: 1, unit: "°C" },
-      { id: "fan-speed", value: 72, decimals: 0, unit: "%" }
+      { id: "ac-power", value: 5.8, decimals: 1, unit: "kW" },
+      { id: "energy-today", value: 23.4, decimals: 1, unit: "kWh" }
     ]
   },
   {
@@ -37,21 +37,23 @@ const devices: ReadonlyArray<Device> = [
     ]
   },
   {
-    id: "ventilation-2",
+    id: "heat-pump",
     protocol: "BACnet/IP",
     line: "read every 30 s · no answer for 4 min",
     failing: "timeout",
     points: [
-      { id: "supply-air-temp", value: 19.8, decimals: 1, unit: "°C" },
-      { id: "fan-speed", value: 64, decimals: 0, unit: "%" }
+      { id: "flow-temp", value: 35.2, decimals: 1, unit: "°C" },
+      { id: "return-temp", value: 30.1, decimals: 1, unit: "°C" }
     ]
   }
 ]
 
 /** How far each live value may wander from its start, so the numbers stay believable. */
 const wander: Readonly<Record<string, number>> = {
-  "supply-air-temp": 0.4,
-  "fan-speed": 3,
+  "ac-power": 0.4,
+  "energy-today": 0,
+  "flow-temp": 0.4,
+  "return-temp": 0.3,
   "active-power": 2.5,
   energy: 0
 }

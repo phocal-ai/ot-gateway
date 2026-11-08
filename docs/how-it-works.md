@@ -1,51 +1,52 @@
 # How it works
 
-OT Gateway is a small program that runs on any always-on computer in a building: a mini PC, a NAS, a server, an industrial PC or a Raspberry Pi. It asks the building's devices for their values, and sends those values to wherever your software looks for them.
+OT Gateway is a small program that runs on any always-on computer on a site, in a building, a plant room or a hall: a mini PC, a NAS, a server, an industrial PC or a Raspberry Pi. It asks the site's devices for their values, and sends those values to wherever your software looks for them.
 
 ## The everyday problem
 
-Say you look after an office building. It has an energy meter in the main switchboard and two air handlers on the roof. You already know what you want:
+Say you look after an office building. It has an energy meter in the main switchboard, a PV inverter for the solar panels on the roof and a heat pump in the plant room. You already know what you want:
 
-| What you want                    | From             | How often       |
-| -------------------------------- | ---------------- | --------------- |
-| Active power of the energy meter | the energy meter | every 5 seconds |
-| Supply air temperature, per unit | each air handler | every 30 s      |
-| Whether each fan is running      | each air handler | every 30 s      |
+| What you want                     | From             | How often       |
+| --------------------------------- | ---------------- | --------------- |
+| Active power of the energy meter  | the energy meter | every 5 seconds |
+| AC power of the solar panels      | the PV inverter  | every 5 seconds |
+| Flow temperature                  | the heat pump    | every 30 s      |
+| Whether the compressor is running | the heat pump    | every 30 s      |
 
-And you know where it should go: a dashboard, an energy report, an analytics platform, a digital twin. Those tools speak MQTT, the common language of IoT platforms. The devices don't: the meter speaks **Modbus TCP** and the air handlers speak **BACnet/IP**, two protocols that are decades old, everywhere in buildings, and unknown to most software.
+And you know where it should go: a dashboard, an energy report, an analytics platform, a digital twin. Those tools speak MQTT, the common language of IoT platforms. The devices don't: the meter and the inverter speak **Modbus TCP** and the heat pump speaks **BACnet/IP**, two protocols that are decades old, everywhere in buildings and plants, and unknown to most software.
 
 OT Gateway is the translator in between.
 
 ```text
-  in the building              the gateway                   your software
+  on the site                  the gateway                   your software
  +-----------------+          +--------------------+         +-------------------+
  | energy meter    |  Modbus  | asks every 5 s,    |  MQTT   | dashboards        |
- | air handler 1   | -------> | cleans the value,  | ------> | energy reports    |
- | air handler 2   |  BACnet  | adds name and unit |         | analytics, alerts |
+ | PV inverter     | -------> | cleans the value,  | ------> | energy reports    |
+ | heat pump       |  BACnet  | adds name and unit |         | analytics, alerts |
  +-----------------+          +--------------------+         +-------------------+
 ```
 
 ## What happens to one value
 
-Follow the supply air temperature of air handler 1:
+Follow the heat pump's flow temperature:
 
-1. **Ask.** Every 30 seconds the gateway asks the air handler for object `analog-input 1`.
-2. **Clean.** The device answers `21.5`. The gateway applies the scaling you set, if any (a meter that reports tenths of a kW, say), and checks the value is a real number.
+1. **Ask.** Every 30 seconds the gateway asks the heat pump for object `analog-input 1`.
+2. **Clean.** The device answers `35.4`. The gateway applies the scaling you set, if any (a meter that reports tenths of a kW, say), and checks the value is a real number.
 3. **Decide what to send.** Reading and sending are set separately. By default each read goes out as it is. A point can also send its latest value once a minute, a summary of each 15 minutes (minimum, maximum and average, for energy reports), or only when it changes (for alarms, states and setpoints). Summaries line up with the clock: a 15-minute window closes at :00, :15, :30 and :45, like the meter's.
 4. **Send.** It publishes on a topic named after where the value comes from:
 
    ```text
-   site-1/building-a/ventilation-1/supply-air-temp   {"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}
+   site-1/building-a/heat-pump/flow-temp   {"value":35.4,"ts":1793631666939,"unit":"unit:DEG_C"}
    ```
 
 5. **Keep it if the line is down.** If the broker can't be reached, the value waits in a small database on the gateway and goes out, in order, once the connection is back.
 
-The topic always has the same four parts, `site/building/device/point`, so anyone reading the data can tell where it came from without a lookup table. Next to every point, the gateway also keeps a description (`.../supply-air-temp/$meta`: name, unit, and what kind of sensor it is), so a platform can label it without being told.
+The topic always has the same four parts, `site/building/device/point`, so anyone reading the data can tell where it came from without a lookup table. Next to every point, the gateway also keeps a description (`.../flow-temp/$meta`: name, unit, and what kind of sensor it is), so a platform can label it without being told.
 
 ## Four words
 
-- **Point:** one value you want, such as a temperature, a power reading or a fan status.
-- **Device:** the thing that holds points: a meter, a controller, an air handler. It has an address on the network.
+- **Point:** one value you want, such as a temperature, a power reading or a compressor status.
+- **Device:** the thing that holds points: a meter, an inverter, a heat pump, a controller. It has an address on the network.
 - **Broker:** the MQTT server your software connects to. The gateway sends there; it doesn't store or show data long-term itself.
 - **Topic:** the name a value is sent under. With OT Gateway it is always `site/building/device/point`.
 

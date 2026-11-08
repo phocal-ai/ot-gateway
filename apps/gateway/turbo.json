@@ -7,10 +7,8 @@
         "src/**",
         "test/**",
         "../../VERSION",
-        "../../examples/gateway.json",
-        "../../examples/points.csv",
+        "../../examples/**",
         "../../packaging/compose.yaml",
-        "../../examples/building.ede.csv",
         "../../profiles/**"
       ]
     }

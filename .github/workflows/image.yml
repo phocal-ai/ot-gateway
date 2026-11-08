@@ -68,9 +68,9 @@ jobs:
             sleep 1
           done
           docker logs bench > "$work/bench.log" 2>&1
-          grep -m 5 -E "demo-site/building-a/(energy-meter|ventilation-2)/" "$work/bench.log"
+          grep -m 5 -E "demo-site/building-a/(energy-meter|heat-pump)/" "$work/bench.log"
           grep -q "demo-site/building-a/energy-meter/active-power" "$work/bench.log"
-          grep -q "demo-site/building-a/ventilation-2/supply-air-temp" "$work/bench.log"
+          grep -q "demo-site/building-a/heat-pump/flow-temp" "$work/bench.log"
           # The status page and its API, from the image's built web app.
           curl -sf http://127.0.0.1:8080/ | grep -q "<html"
           curl -sf http://127.0.0.1:8080/api/status | grep -q '"id":"energy-meter"'
@@ -118,7 +118,7 @@ jobs:
             if docker exec arm64 grep -q "demo-site/building-a/energy-meter/active-power" /tmp/bench.log 2>/dev/null; then break; fi
             sleep 1
           done
-          docker exec arm64 grep -m 5 -E "demo-site/building-a/(energy-meter|ventilation-2)/" /tmp/bench.log
+          docker exec arm64 grep -m 5 -E "demo-site/building-a/(energy-meter|heat-pump)/" /tmp/bench.log
           docker exec arm64 grep -q "demo-site/building-a/energy-meter/active-power" /tmp/bench.log
 
       - name: arm64 container logs

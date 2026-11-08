@@ -2,5 +2,6 @@ device,point,unit,interval_s,deadband,host,unit_id,register,table,type,byte_orde
 Energy meter,Active power,kW,5,0.1,192.168.1.50,1,100,holding,float32,CDAB,,,,
 Energy meter,Energy,kWh,5,,192.168.1.50,1,102,holding,uint32,CDAB,0.1,,,
 Energy meter,Breaker tripped,,5,,192.168.1.50,1,0,coil,,,,,,
-Ventilation 2,Supply air temperature,°C,30,0.2,,,,,,,,2001,analog-input,1
-Ventilation 2,Fan running,,30,,,,,,,,,2001,binary-input,4
+PV inverter,AC power,kW,5,0.1,192.168.1.51,1,200,holding,float32,CDAB,,,,
+Heat pump,Flow temperature,°C,30,0.2,,,,,,,,2001,analog-input,1
+Heat pump,Compressor running,,30,,,,,,,,,2001,binary-input,1

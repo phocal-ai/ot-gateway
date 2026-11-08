@@ -1,7 +1,7 @@
 /**
- * What the gateway does and how it is used: install it, describe the building in one config file, use the data.
+ * What the gateway does and how it is used: install it, describe the site in one config file, use the data.
  * Each step has a small picture of what you see at that point; the names and values
- * match the rest of the home page (site-1, ventilation-1, the 15-minute aggregate).
+ * match the rest of the home page (site-1, heat-pump, the 15-minute aggregate).
  */
 import Link from "next/link"
 import { InstallTabs } from "./install-tabs.tsx"
@@ -17,25 +17,25 @@ const configLines: ReadonlyArray<readonly [string, React.ReactNode]> = [
   [
     "site",
     <>
-      <Name>site-1</Name> <span className="text-fd-muted-foreground">Site 1</span>
+      <Name>site-1</Name> <span className="text-fd-muted-foreground">a campus, a plant, a property</span>
     </>
   ],
   [
     "building",
     <>
-      <Name>building-a</Name> <span className="text-fd-muted-foreground">building A</span>
+      <Name>building-a</Name> <span className="text-fd-muted-foreground">a building or hall on it</span>
     </>
   ],
   [
     "device",
     <>
-      <Name>ventilation-1</Name> <span className="text-fd-muted-foreground">air handler at 10.0.4.21, BACnet/IP</span>
+      <Name>heat-pump</Name> <span className="text-fd-muted-foreground">heat pump at 10.0.4.21, BACnet/IP</span>
     </>
   ],
   [
     "datapoint",
     <>
-      <Name>supply-air-temp</Name> <span className="text-fd-muted-foreground">analog input 1, in °C</span>
+      <Name>flow-temp</Name> <span className="text-fd-muted-foreground">flow temperature, analog input 1, in °C</span>
     </>
   ],
   ["schedule", <span className="text-fd-muted-foreground">read every 30 s, send a 15-minute average</span>]
@@ -44,11 +44,11 @@ const configLines: ReadonlyArray<readonly [string, React.ReactNode]> = [
 /** Step 3: a subscription to the site, and what arrives for the datapoint of step 2 (payloads shortened). */
 const subscribeCommand = "mosquitto_sub -h broker.example.com -t 'site-1/#' -v"
 const arrivals = [
-  ["site-1/building-a/ventilation-1/supply-air-temp/$meta", '{"name":"Supply air temperature","unit":"unit:DEG_C",…}'],
-  ["site-1/building-a/ventilation-1/supply-air-temp", '{"value":21.38,"min":20.9,"max":21.8,"avg":21.38,…}']
+  ["site-1/building-a/heat-pump/flow-temp/$meta", '{"name":"Heat pump flow temperature","unit":"unit:DEG_C",…}'],
+  ["site-1/building-a/heat-pump/flow-temp", '{"value":35.38,"min":34.9,"max":35.8,"avg":35.38,…}']
 ] as const
 
-/** The demo from the README's quick start: a simulated building, the gateway and a test broker (hero and closing call). */
+/** The demo from the README's quick start: simulated devices, the gateway and a test broker (hero and closing call). */
 export const demoCommand = "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo"
 
 const steps: ReadonlyArray<{
@@ -60,14 +60,14 @@ const steps: ReadonlyArray<{
   {
     title: "Install it",
     text: [
-      "Install it on any Linux machine on the building network, from a server to a Raspberry Pi: as a container with Docker, or as a service without. It comes with a built-in web interface."
+      "Install it on any Linux machine on the site's network, from a server to a Raspberry Pi: as a container with Docker, or as a service without. It comes with a built-in web interface."
     ],
     picture: <InstallTabs />
   },
   {
-    title: "Describe your building",
+    title: "Describe your site",
     text: [
-      "One config file describes your building: the devices, the datapoints to read, how often, and where the data goes. Write it by hand, or let your AI assistant write it with you.",
+      "One config file describes your site: the devices, the datapoints to read, how often, and where the data goes. Write it by hand, or let your AI assistant write it with you.",
       "Every site, building, device and datapoint gets a short name. Together the names make the MQTT topic, so you always know where a value comes from."
     ],
     picture: (
@@ -84,7 +84,7 @@ const steps: ReadonlyArray<{
         <div className="mt-3 border-t pt-3">
           <p className="text-fd-muted-foreground mb-1">topic, built from the names</p>
           <p className="font-mono break-all">
-            <Name>site-1</Name>/<Name>building-a</Name>/<Name>ventilation-1</Name>/<Name>supply-air-temp</Name>
+            <Name>site-1</Name>/<Name>building-a</Name>/<Name>heat-pump</Name>/<Name>flow-temp</Name>
           </p>
         </div>
       </div>

@@ -16,34 +16,34 @@
   "devices": [
     {
       "protocol": "simulator",
-      "id": "ventilation-1",
+      "id": "pv-inverter",
       "pollIntervalMs": 2000,
       "points": [
         {
-          "id": "supply-air-temp",
-          "name": "Ventilation 1 supply air temperature",
-          "unit": "unit:DEG_C",
-          "deadband": 0.2,
+          "id": "ac-power",
+          "name": "PV inverter AC power",
+          "unit": "unit:KiloW",
+          "deadband": 0.1,
           "waveform": "sine",
-          "min": 16,
-          "max": 22,
+          "min": 0,
+          "max": 8,
           "periodSeconds": 60,
           "semantics": {
-            "brick": "Supply_Air_Temperature_Sensor",
-            "haystack": ["discharge", "air", "temp", "sensor"]
+            "brick": "Active_Power_Sensor",
+            "haystack": ["pv", "elec", "power", "active", "sensor"]
           }
         },
         {
-          "id": "fan-speed",
-          "name": "Ventilation 1 supply fan speed",
-          "unit": "unit:PERCENT",
+          "id": "energy-today",
+          "name": "PV inverter energy today",
+          "unit": "unit:KiloW-HR",
           "waveform": "ramp",
           "min": 0,
-          "max": 100,
-          "periodSeconds": 30,
+          "max": 40,
+          "periodSeconds": 120,
           "semantics": {
-            "brick": "Supply_Fan_Speed_Command",
-            "haystack": ["discharge", "fan", "speed", "cmd"]
+            "brick": "Energy_Sensor",
+            "haystack": ["pv", "elec", "energy", "sensor"]
           }
         }
       ]
@@ -94,43 +94,43 @@
     },
     {
       "protocol": "bacnet-ip",
-      "id": "ventilation-2",
+      "id": "heat-pump",
       "deviceInstance": 2001,
       "address": "127.0.0.1:47809",
       "pollIntervalMs": 5000,
       "points": [
         {
-          "id": "supply-air-temp",
-          "name": "Ventilation 2 supply air temperature",
+          "id": "flow-temp",
+          "name": "Heat pump flow temperature",
           "unit": "unit:DEG_C",
           "deadband": 0.2,
           "objectType": "analog-input",
           "instance": 1,
           "semantics": {
-            "brick": "Supply_Air_Temperature_Sensor",
-            "haystack": ["discharge", "air", "temp", "sensor"]
+            "brick": "Leaving_Hot_Water_Temperature_Sensor",
+            "haystack": ["leaving", "hot", "water", "temp", "sensor"]
           }
         },
         {
-          "id": "cooling-valve",
-          "name": "Ventilation 2 cooling valve position",
-          "unit": "unit:PERCENT",
-          "deadband": 1,
-          "objectType": "analog-output",
-          "instance": 1,
+          "id": "return-temp",
+          "name": "Heat pump return temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "objectType": "analog-input",
+          "instance": 2,
           "semantics": {
-            "brick": "Chilled_Water_Valve_Command",
-            "haystack": ["cool", "valve", "cmd"]
+            "brick": "Entering_Hot_Water_Temperature_Sensor",
+            "haystack": ["entering", "hot", "water", "temp", "sensor"]
           }
         },
         {
-          "id": "fan-running",
-          "name": "Ventilation 2 supply fan running",
+          "id": "compressor-running",
+          "name": "Heat pump compressor running",
           "objectType": "binary-input",
           "instance": 1,
           "semantics": {
-            "brick": "Fan_Status",
-            "haystack": ["discharge", "fan", "run", "sensor"]
+            "brick": "Run_Status",
+            "haystack": ["compressor", "run", "sensor"]
           }
         }
       ]

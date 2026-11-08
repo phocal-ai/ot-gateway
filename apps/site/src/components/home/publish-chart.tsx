@@ -9,8 +9,8 @@ import { aggregates, changes, DEADBAND, READ_EVERY_SECONDS, readings, WINDOW_MIN
 const width = 640
 const height = 220
 const margin = { top: 12, right: 24, bottom: 28, left: 44 }
-const yMin = 20
-const yMax = 22
+const yMin = 34
+const yMax = 36
 
 const data = readings()
 const minutes = data.at(-1)?.minute ?? 1
@@ -59,7 +59,7 @@ export const PublishChart = () => {
     <figure className="viz">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <figcaption>
-          <span className="font-medium">Supply air temperature, 20 minutes</span>
+          <span className="font-medium">Heat pump flow temperature, 20 minutes</span>
           <span className="text-fd-muted-foreground ml-2 text-sm">
             {data.length} reads, {modes[mode].messages} messages
           </span>
@@ -93,7 +93,7 @@ export const PublishChart = () => {
         role="img"
         viewBox={`0 0 ${width} ${height}`}
       >
-        {[20, 21, 22].map((tick) => (
+        {[34, 35, 36].map((tick) => (
           <g key={tick}>
             <line
               stroke="var(--viz-grid)"
