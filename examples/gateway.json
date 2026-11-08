@@ -16,12 +16,12 @@
   "devices": [
     {
       "protocol": "simulator",
-      "id": "ahu-1",
+      "id": "ventilation-1",
       "pollIntervalMs": 2000,
       "points": [
         {
           "id": "supply-air-temp",
-          "name": "AHU 1 supply air temperature",
+          "name": "Ventilation 1 supply air temperature",
           "unit": "unit:DEG_C",
           "deadband": 0.2,
           "waveform": "sine",
@@ -35,7 +35,7 @@
         },
         {
           "id": "fan-speed",
-          "name": "AHU 1 supply fan speed",
+          "name": "Ventilation 1 supply fan speed",
           "unit": "unit:PERCENT",
           "waveform": "ramp",
           "min": 0,
@@ -50,13 +50,13 @@
     },
     {
       "protocol": "modbus-tcp",
-      "id": "main-meter",
+      "id": "energy-meter",
       "host": "127.0.0.1",
       "unitId": 1,
       "points": [
         {
           "id": "active-power",
-          "name": "Main meter active power",
+          "name": "Energy meter active power",
           "unit": "unit:KiloW",
           "table": "holding",
           "address": 100,
@@ -68,7 +68,7 @@
         },
         {
           "id": "energy",
-          "name": "Main meter energy counter",
+          "name": "Energy meter energy counter",
           "unit": "unit:KiloW-HR",
           "table": "input",
           "address": 0,
@@ -94,14 +94,14 @@
     },
     {
       "protocol": "bacnet-ip",
-      "id": "ahu-2",
+      "id": "ventilation-2",
       "deviceInstance": 2001,
       "address": "127.0.0.1:47809",
       "pollIntervalMs": 5000,
       "points": [
         {
           "id": "supply-air-temp",
-          "name": "AHU 2 supply air temperature",
+          "name": "Ventilation 2 supply air temperature",
           "unit": "unit:DEG_C",
           "deadband": 0.2,
           "objectType": "analog-input",
@@ -113,7 +113,7 @@
         },
         {
           "id": "cooling-valve",
-          "name": "AHU 2 cooling valve position",
+          "name": "Ventilation 2 cooling valve position",
           "unit": "unit:PERCENT",
           "deadband": 1,
           "objectType": "analog-output",
@@ -125,7 +125,7 @@
         },
         {
           "id": "fan-running",
-          "name": "AHU 2 supply fan running",
+          "name": "Ventilation 2 supply fan running",
           "objectType": "binary-input",
           "instance": 1,
           "semantics": {

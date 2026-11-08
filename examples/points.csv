@@ -1,6 +1,6 @@
 device,point,unit,interval_s,deadband,host,unit_id,register,table,type,byte_order,scale,device_instance,object_type,object_instance
-Main meter,Active power,kW,5,0.1,192.168.1.50,1,100,holding,float32,CDAB,,,,
-Main meter,Energy,kWh,5,,192.168.1.50,1,102,holding,uint32,CDAB,0.1,,,
-Main meter,Breaker tripped,,5,,192.168.1.50,1,0,coil,,,,,,
-AHU 2,Supply air temperature,°C,30,0.2,,,,,,,,2001,analog-input,1
-AHU 2,Fan running,,30,,,,,,,,,2001,binary-input,4
+Energy meter,Active power,kW,5,0.1,192.168.1.50,1,100,holding,float32,CDAB,,,,
+Energy meter,Energy,kWh,5,,192.168.1.50,1,102,holding,uint32,CDAB,0.1,,,
+Energy meter,Breaker tripped,,5,,192.168.1.50,1,0,coil,,,,,,
+Ventilation 2,Supply air temperature,°C,30,0.2,,,,,,,,2001,analog-input,1
+Ventilation 2,Fan running,,30,,,,,,,,,2001,binary-input,4

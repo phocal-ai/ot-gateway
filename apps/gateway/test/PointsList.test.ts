@@ -60,7 +60,7 @@ describe("devicesFromPointsList", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const devices = yield* devicesFromPointsList(yield* fs.readFileString(examplePoints))
-      expect(devices.map((device) => device.id)).toEqual(["main-meter", "ahu-2"])
+      expect(devices.map((device) => device.id)).toEqual(["energy-meter", "ventilation-2"])
       expect(devices[0]).toMatchObject({
         protocol: "modbus-tcp",
         host: "192.168.1.50",
@@ -169,10 +169,10 @@ describe("devicesFromPointsList", () => {
 
   it.effect("refuses a device id that is already in the config", () =>
     Effect.gen(function* () {
-      const error = yield* devicesFromPointsList("device,point,host,register,type\nAHU 1,p,1.2.3.4,1,int16", [
-        "ahu-1"
+      const error = yield* devicesFromPointsList("device,point,host,register,type\nVentilation 1,p,1.2.3.4,1,int16", [
+        "ventilation-1"
       ]).pipe(Effect.flip)
-      expect(error.message).toBe('device id "ahu-1" is already in the config')
+      expect(error.message).toBe('device id "ventilation-1" is already in the config')
     })
   )
 })
@@ -187,7 +187,7 @@ describe("importPointsList", () => {
       yield* fs.writeFileString(configPath, JSON.stringify(original))
 
       const result = yield* importPointsList(examplePoints, configPath, { dryRun: false })
-      expect(result.config?.devices.map((device) => device.id)).toEqual(["main-meter", "ahu-2"])
+      expect(result.config?.devices.map((device) => device.id)).toEqual(["energy-meter", "ventilation-2"])
       const written = yield* fs.readFileString(configPath)
       expect(written).toContain('"healthIntervalMs": 30000')
 

@@ -372,7 +372,7 @@ describe("PUBACK", () => {
 describe("PUBLISH request/response properties (§3.3.2.3)", () => {
   it("round-trips message expiry, response topic and correlation data", () => {
     const encoded = encodePublish({
-      topic: "s/b/ahu-1/setpoint/$set",
+      topic: "s/b/ventilation-1/setpoint/$set",
       payload: new TextEncoder().encode('{"value":21.5}'),
       qos: 1,
       retain: false,
@@ -383,7 +383,7 @@ describe("PUBLISH request/response properties (§3.3.2.3)", () => {
     })
     const split = bodyOf(encoded, PacketType.PUBLISH)
     expect(Result.getOrThrow(decodePublish(split.flags, split.body))).toMatchObject({
-      topic: "s/b/ahu-1/setpoint/$set",
+      topic: "s/b/ventilation-1/setpoint/$set",
       packetId: 7,
       messageExpirySeconds: 30,
       responseTopic: "app/responses",
@@ -440,8 +440,8 @@ describe("topicMatches (§4.7)", () => {
     ["#", "$SYS/broker", false],
     ["+/monitor/Clients", "$SYS/monitor/Clients", false],
     ["$SYS/#", "$SYS/broker", true],
-    ["s/b/+/+/$set", "s/b/ahu-1/setpoint/$set", true],
-    ["s/b/+/+/$set", "s/b/ahu-1/setpoint/$meta", false]
+    ["s/b/+/+/$set", "s/b/ventilation-1/setpoint/$set", true],
+    ["s/b/+/+/$set", "s/b/ventilation-1/setpoint/$meta", false]
   ])("%s against %s is %s", (filter, topic, matches) => {
     expect(topicMatches(filter, topic)).toBe(matches)
   })

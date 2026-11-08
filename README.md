@@ -53,11 +53,11 @@ pnpm demo
 The demo is a tiny building on your computer: a simulated energy meter (Modbus), a simulated air handler (BACnet) and a built-in sensor, the gateway reading them, and a test MQTT broker receiving what it sends. Nothing leaves your machine. The terminal prints every message the broker receives:
 
 ```text
-[retained] demo-site/building-a/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
-demo-site/building-a/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
-demo-site/building-a/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
-demo-site/building-a/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
-demo-site/building-a/ahu-2/fan-running {"value":true,"ts":1793638119839}
+[retained] demo-site/building-a/ventilation-1/supply-air-temp/$meta {"name":"Ventilation 1 supply air temperature","unit":"unit:DEG_C",...}
+demo-site/building-a/ventilation-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
+demo-site/building-a/energy-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
+demo-site/building-a/energy-meter/breaker-tripped {"value":true,"ts":1793631666942}
+demo-site/building-a/ventilation-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
 ### 2. Look around
@@ -172,14 +172,14 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
   "devices": [
     {
       "protocol": "modbus-tcp",
-      "id": "main-meter",
+      "id": "energy-meter",
       "host": "192.168.1.50",
       "pollIntervalMs": 5000,
       "publish": { "mode": "aggregate", "intervalMs": 900000 },
       "points": [
         {
           "id": "active-power",
-          "name": "Main meter active power",
+          "name": "Energy meter active power",
           "unit": "unit:KiloW",
           "table": "holding",
           "address": 100,
@@ -190,12 +190,12 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
     },
     {
       "protocol": "bacnet-ip",
-      "id": "ahu-2",
+      "id": "ventilation-2",
       "deviceInstance": 2001,
       "points": [
         {
           "id": "supply-air-temp",
-          "name": "AHU 2 supply air temperature",
+          "name": "Ventilation 2 supply air temperature",
           "objectType": "analog-input",
           "instance": 1,
           "deadband": 0.2

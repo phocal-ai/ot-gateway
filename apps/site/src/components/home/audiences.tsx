@@ -12,9 +12,9 @@ const DeviceList = () => (
   <ul className="bg-fd-card w-full max-w-md divide-y rounded-lg border text-xs">
     {(
       [
-        ["main-meter", "Modbus TCP", undefined],
-        ["ahu-1", "BACnet/IP", undefined],
-        ["ahu-2", "BACnet/IP", "timeout"]
+        ["energy-meter", "Modbus TCP", undefined],
+        ["ventilation-1", "BACnet/IP", undefined],
+        ["ventilation-2", "BACnet/IP", "timeout"]
       ] as const
     ).map(([id, protocol, failing]) => (
       <li className="flex items-center gap-3 px-3 py-2" key={id}>
@@ -50,7 +50,7 @@ const EnergyBars = () => (
 /** One message as it reaches the broker (docs/how-it-works.md). */
 const Message = () => (
   <pre className="bg-fd-card w-full overflow-x-auto rounded-lg border p-3 text-[0.7rem] leading-relaxed">
-    <span className="text-fd-muted-foreground">site-1/building-a/ahu-1/supply-air-temp</span>
+    <span className="text-fd-muted-foreground">site-1/building-a/ventilation-1/supply-air-temp</span>
     {"\n"}
     {`{"value":21.5,"unit":"unit:DEG_C",`}
     {"\n"}

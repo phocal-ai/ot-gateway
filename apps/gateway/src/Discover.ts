@@ -58,7 +58,7 @@ export const slugify = (name: string) =>
     .slice(0, 64)
     .replace(/-+$/, "")
 
-/** Object names often repeat the device's ("AHU 2 supply temp" on "AHU 2"); the topic has it already. */
+/** Object names often repeat the device's ("Ventilation 2 supply temp" on "Ventilation 2"); the topic has it already. */
 const withoutPrefix = (slug: string, prefix: string) =>
   prefix !== "" && slug.startsWith(`${prefix}-`) ? slug.slice(prefix.length + 1) : slug
 

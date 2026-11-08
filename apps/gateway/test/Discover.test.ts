@@ -55,7 +55,7 @@ const found = (
 
 describe("slugify", () => {
   it("turns object names into config slugs", () => {
-    expect(slugify("AHU 2 Supply Air Temp")).toBe("ahu-2-supply-air-temp")
+    expect(slugify("Ventilation 2 Supply Air Temp")).toBe("ventilation-2-supply-air-temp")
     expect(slugify("Kühlventil Stellung (%)")).toBe("kuhlventil-stellung")
     expect(slugify("  --Zone_3.Temp--  ")).toBe("zone_3-temp")
     expect(slugify("°C")).toBe("c")
@@ -66,7 +66,7 @@ describe("slugify", () => {
 
 describe("printable", () => {
   it("keeps escape sequences a device put in its name off the terminal", () => {
-    expect(printable("AHU 2\u001b]0;pwned\u0007\u001b[2J")).toBe("AHU 2?]0;pwned??[2J")
+    expect(printable("Ventilation 2\u001b]0;pwned\u0007\u001b[2J")).toBe("Ventilation 2?]0;pwned??[2J")
     expect(printable("Kühler‎")).toBe("Kühler?")
     expect(printable("x".repeat(500))).toHaveLength(120)
   })
@@ -77,29 +77,29 @@ describe("draftDevices", () => {
     const draft = draftDevices(
       [
         found(2001, "10.0.0.5", {
-          name: "AHU 2",
+          name: "Ventilation 2",
           listed: 5,
           objects: [
             { objectType: "analog-input", instance: 1, name: "Supply Temp", unit: "unit:DEG_C" },
             { objectType: "analog-input", instance: 2, name: "Supply Temp" },
             { objectType: "binary-output", instance: 3, name: "" },
             // The device's name again in front: the topic already has it.
-            { objectType: "binary-input", instance: 4, name: "AHU 2 Fan Status" }
+            { objectType: "binary-input", instance: 4, name: "Ventilation 2 Fan Status" }
           ]
         }),
         found(2002, "10.0.0.6:47810", {
-          name: "AHU 2",
+          name: "Ventilation 2",
           listed: 1,
           objects: [{ objectType: "analog-value", instance: 9, name: "Setpoint" }]
         }),
         found(3001, "10.0.0.1", { name: "", listed: 1, objects: [] }, { routed: true })
       ],
-      ["main-meter"]
+      ["energy-meter"]
     )
     expect(draft).toEqual([
       {
         protocol: "bacnet-ip",
-        id: "ahu-2",
+        id: "ventilation-2",
         deviceInstance: 2001,
         address: "10.0.0.5",
         points: [
@@ -112,12 +112,12 @@ describe("draftDevices", () => {
           },
           { id: "supply-temp-2", name: "Supply Temp", objectType: "analog-input", instance: 2 },
           { id: "binary-output-3", name: "binary-output-3", objectType: "binary-output", instance: 3 },
-          { id: "fan-status", name: "AHU 2 Fan Status", objectType: "binary-input", instance: 4 }
+          { id: "fan-status", name: "Ventilation 2 Fan Status", objectType: "binary-input", instance: 4 }
         ]
       },
       {
         protocol: "bacnet-ip",
-        id: "ahu-2-2002",
+        id: "ventilation-2-2002",
         deviceInstance: 2002,
         address: "10.0.0.6:47810",
         points: [{ id: "setpoint", name: "Setpoint", objectType: "analog-value", instance: 9 }]
@@ -158,7 +158,7 @@ describe("draftDevices", () => {
 const ahu = (instance: number) =>
   makeSimulatedDevice({
     instance,
-    name: "AHU 2",
+    name: "Ventilation 2",
     objects: [
       {
         objectType: "analog-input",
@@ -297,7 +297,7 @@ describe("discover", () => {
         devices: [
           {
             protocol: "bacnet-ip",
-            id: "ahu-2",
+            id: "ventilation-2",
             deviceInstance: 2001,
             address: "10.0.2.1",
             points: [supplyTemp, fan]
@@ -318,7 +318,9 @@ describe("discover --address", () => {
   it.effect("asks the one device at a known address, on a port a broadcast does not reach", () =>
     Effect.gen(function* () {
       const { draft, errors } = yield* run(twoPorts, [], { address: "10.0.2.2:47809" })
-      expect(draft).toMatchObject({ devices: [{ id: "ahu-2", deviceInstance: 2002, address: "10.0.2.2:47809" }] })
+      expect(draft).toMatchObject({
+        devices: [{ id: "ventilation-2", deviceInstance: 2002, address: "10.0.2.2:47809" }]
+      })
       expect(errors[0]).toContain("Who-Is to 10.0.2.2:47809")
     })
   )
@@ -356,7 +358,7 @@ describe("draftPointsList", () => {
     Effect.gen(function* () {
       const drafts = draftDevices([
         found(2001, "10.0.0.5", {
-          name: "AHU 2",
+          name: "Ventilation 2",
           listed: 4,
           objects: [
             { objectType: "analog-input", instance: 1, name: "Supply Temp, °C", unit: "unit:DEG_C" },
@@ -368,10 +370,10 @@ describe("draftPointsList", () => {
       ])
       const list = draftPointsList(drafts)
       expect(list.split("\n")[0]).toBe("device,point,unit,device_instance,address,object_type,object_instance")
-      expect(list).toContain('ahu-2,"Supply Temp, °C",unit:DEG_C,2001,10.0.0.5,analog-input,1')
+      expect(list).toContain('ventilation-2,"Supply Temp, °C",unit:DEG_C,2001,10.0.0.5,analog-input,1')
       expect(list).not.toContain("=HYPERLINK")
       const [device] = yield* devicesFromPointsList(list)
-      expect(device?.id).toBe("ahu-2")
+      expect(device?.id).toBe("ventilation-2")
       expect(device?.points.map((point) => point.id)).toEqual(drafts[0]?.points.map((point) => point.id))
     }).pipe(Effect.runSync))
 })
@@ -414,7 +416,7 @@ describe("discover --points-list", () => {
       yield* Fiber.join(running)
       const list = yield* fs.readFileString(path)
       const devices = yield* devicesFromPointsList(list, ["ahu"])
-      expect(devices.map((device) => device.id)).toEqual(["ahu-2"])
+      expect(devices.map((device) => device.id)).toEqual(["ventilation-2"])
       expect(devices[0]?.points.map((point) => point.id)).toEqual(["supply-temp", "fan"])
       const errors = (yield* TestConsole.errorLines).map(String)
       expect(errors.some((line) => line.includes("1 device(s) already in the config are left out"))).toBe(true)

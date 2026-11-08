@@ -37,7 +37,7 @@ The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to ru
 Skip this if the user says they've seen it. Otherwise:
 
 1. Start `otg demo` in the background: the gateway with a local MQTT test broker and simulated Modbus and BACnet devices, in one process.
-2. Within a few seconds it prints messages like `demo-site/building-a/main-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
+2. Within a few seconds it prints messages like `demo-site/building-a/energy-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
 3. Mention the status page at http://localhost:8080.
 4. Stop it before going on. It holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway or test bench already running), skip the demo.
 

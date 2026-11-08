@@ -454,7 +454,7 @@ const watchCommand = Command.make(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
   Command.withExamples([
     { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
-    { command: "ot-gateway watch --topic 'my-site/main/ahu-1/#'", description: "Only one device" },
+    { command: "ot-gateway watch --topic 'my-site/main/ventilation-1/#'", description: "Only one device" },
     { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" },
     { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" }
   ])

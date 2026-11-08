@@ -14,11 +14,11 @@ Most projects start with a points list: a spreadsheet of what to read, from whic
 
 And for each point:
 
-| You need       | Modbus example                  | BACnet example         |
-| -------------- | ------------------------------- | ---------------------- |
-| A name         | Main meter active power         | AHU 2 supply air temp  |
-| Where it lives | holding register 100, `float32` | found by `discover`    |
-| Its unit       | kW                              | °C (usually found too) |
+| You need       | Modbus example                  | BACnet example                |
+| -------------- | ------------------------------- | ----------------------------- |
+| A name         | Energy meter active power       | Ventilation 2 supply air temp |
+| Where it lives | holding register 100, `float32` | found by `discover`           |
+| Its unit       | kW                              | °C (usually found too)        |
 
 Also note the broker your values should go to: its URL (`mqtt://` or `mqtts://` with TLS), and a username and password if it needs one. No broker yet? Start with the simulated devices and `ot-gateway demo`, or run [Mosquitto](https://mosquitto.org) next to the gateway.
 
@@ -45,11 +45,11 @@ It writes `ot-gateway.json` and checks it. The password is never in that file: p
 
 Modbus devices can't describe themselves, so their points come from your list. The quickest way is the list itself, saved as CSV with one row per point:
 
-| device     | point           | unit | interval_s | host         | register | table | type    | byte_order | scale |
-| ---------- | --------------- | ---- | ---------- | ------------ | -------- | ----- | ------- | ---------- | ----- |
-| Main meter | Active power    | kW   | 5          | 192.168.1.50 | 100      |       | float32 | CDAB       |       |
-| Main meter | Energy          | kWh  | 5          | 192.168.1.50 | 102      |       | uint32  | CDAB       | 0.1   |
-| Main meter | Breaker tripped |      | 5          | 192.168.1.50 | 0        | coil  |         |            |       |
+| device       | point           | unit | interval_s | host         | register | table | type    | byte_order | scale |
+| ------------ | --------------- | ---- | ---------- | ------------ | -------- | ----- | ------- | ---------- | ----- |
+| Energy meter | Active power    | kW   | 5          | 192.168.1.50 | 100      |       | float32 | CDAB       |       |
+| Energy meter | Energy          | kWh  | 5          | 192.168.1.50 | 102      |       | uint32  | CDAB       | 0.1   |
+| Energy meter | Breaker tripped |      | 5          | 192.168.1.50 | 0        | coil  |         |            |       |
 
 ```bash
 pnpm ot-gateway points template > points.csv  # every column and example rows, to fill in
@@ -74,13 +74,13 @@ Or add each device by hand under `devices` in `ot-gateway.json`:
 ```json
 {
   "protocol": "modbus-tcp",
-  "id": "main-meter",
+  "id": "energy-meter",
   "host": "192.168.1.50",
   "pollIntervalMs": 5000,
   "points": [
     {
       "id": "active-power",
-      "name": "Main meter active power",
+      "name": "Energy meter active power",
       "unit": "unit:KiloW",
       "table": "holding",
       "address": 100,
@@ -90,7 +90,7 @@ Or add each device by hand under `devices` in `ot-gateway.json`:
 }
 ```
 
-`id`s become topic segments, so they are lowercase with `-` (`main-meter`, `active-power`). Units are [QUDT](https://qudt.org) names such as `unit:KiloW`, `unit:DEG_C` or `unit:PERCENT`. [Configuration](configuration.md) has every option: scaling, byte order for meters that swap words, and what to send: every read (the default), the latest per interval, 15-minute aggregates or only real changes.
+`id`s become topic segments, so they are lowercase with `-` (`energy-meter`, `active-power`). Units are [QUDT](https://qudt.org) names such as `unit:KiloW`, `unit:DEG_C` or `unit:PERCENT`. [Configuration](configuration.md) has every option: scaling, byte order for meters that swap words, and what to send: every read (the default), the latest per interval, 15-minute aggregates or only real changes.
 
 With a coding agent, `/setup` in Claude Code (or the prompt in [Set it up with AI](../README.md#set-it-up-with-ai)) reads a register list or data sheet and drafts these entries for you.
 

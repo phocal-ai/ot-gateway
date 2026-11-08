@@ -223,7 +223,7 @@ export const PollDemo = () => {
       <div className="grid gap-2 md:grid-cols-[1fr_auto_1.3fr_auto_1.2fr] md:gap-3">
         <Panel active current={stage === 1} title="Device">
           <p className="mb-3 flex items-center gap-2 text-sm font-semibold">
-            <Fan aria-hidden="true" className="text-fd-muted-foreground size-4" /> ahu-1
+            <Fan aria-hidden="true" className="text-fd-muted-foreground size-4" /> ventilation-1
             <span className="text-fd-muted-foreground font-normal">air handler</span>
           </p>
           <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
@@ -275,7 +275,7 @@ export const PollDemo = () => {
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <Field label="topic">
               <span>
-                {["site-1/", "building-a/", "ahu-1/", "supply-air-temp"].map((segment) => (
+                {["site-1/", "building-a/", "ventilation-1/", "supply-air-temp"].map((segment) => (
                   <span className="whitespace-nowrap" key={segment}>
                     {segment}
                     <wbr />

@@ -8,7 +8,7 @@ Say you look after an office building. It has an energy meter in the main switch
 
 | What you want                    | From             | How often       |
 | -------------------------------- | ---------------- | --------------- |
-| Active power of the main meter   | the energy meter | every 5 seconds |
+| Active power of the energy meter | the energy meter | every 5 seconds |
 | Supply air temperature, per unit | each air handler | every 30 s      |
 | Whether each fan is running      | each air handler | every 30 s      |
 
@@ -35,7 +35,7 @@ Follow the supply air temperature of air handler 1:
 4. **Send.** It publishes on a topic named after where the value comes from:
 
    ```text
-   site-1/building-a/ahu-1/supply-air-temp   {"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}
+   site-1/building-a/ventilation-1/supply-air-temp   {"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}
    ```
 
 5. **Keep it if the line is down.** If the broker can't be reached, the value waits in a small database on the gateway and goes out, in order, once the connection is back.

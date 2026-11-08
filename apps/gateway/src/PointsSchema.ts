@@ -191,7 +191,7 @@ export const describePointsListSchema = () => {
 /** A meter on Modbus TCP and an air handler on BACnet/IP: what `points template` fills in under the header. */
 const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
   {
-    device: "Main meter",
+    device: "Energy meter",
     point: "Active power",
     unit: "kW",
     interval_s: "5",
@@ -203,7 +203,7 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
     byte_order: "CDAB"
   },
   {
-    device: "Main meter",
+    device: "Energy meter",
     point: "Energy",
     unit: "kWh",
     interval_s: "5",
@@ -225,7 +225,7 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
     profile: "eastron-sdm630"
   },
   {
-    device: "AHU 2",
+    device: "Ventilation 2",
     point: "Supply air temperature",
     unit: "°C",
     interval_s: "30",
@@ -235,7 +235,7 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
     object_instance: "1"
   },
   {
-    device: "AHU 2",
+    device: "Ventilation 2",
     point: "Fan running",
     interval_s: "30",
     publish: "change",

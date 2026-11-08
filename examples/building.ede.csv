@@ -1,11 +1,11 @@
-PROJECT_NAME;Example building, AHU and heating
+PROJECT_NAME;Example building, ventilation and heating
 VERSION_OF_REFERENCEFILE;1
 TIMESTAMP_OF_LAST_CHANGE;2026-11-06
 AUTHOR_OF_LAST_CHANGE;ot-gateway examples
 VERSION_OF_LAYOUT;2.2
 #mandatory;mandatory;mandatory;mandatory;mandatory;optional;optional;optional;optional;optional;optional;optional;optional;optional;optional;optional
 # keyname;device obj.-instance;object-name;object-type;object-instance;description;present-value-default;min-present-value;max-present-value;settable;supports COV;hi-limit;low-limit;state-text-reference;unit-code;vendor-specific-address
-AHU2;2001;AHU 2;8;2001;Air handling unit 2;;;;;;;;;;
+AHU2;2001;Ventilation 2;8;2001;Air handling unit 2;;;;;;;;;;
 AHU2_SAT;2001;Supply air temperature;0;1;;;;;N;Y;;;;62;
 AHU2_RAT;2001;Return air temperature;0;2;;;;;N;Y;;;;62;
 AHU2_FAN;2001;Fan running;3;4;;;;;N;Y;;;;;

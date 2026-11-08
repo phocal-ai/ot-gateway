@@ -19,7 +19,7 @@ type Device = {
 
 const devices: ReadonlyArray<Device> = [
   {
-    id: "ahu-1",
+    id: "ventilation-1",
     protocol: "BACnet/IP",
     line: "read every 30 s",
     points: [
@@ -28,7 +28,7 @@ const devices: ReadonlyArray<Device> = [
     ]
   },
   {
-    id: "main-meter",
+    id: "energy-meter",
     protocol: "Modbus TCP",
     line: "read every 5 s",
     points: [
@@ -37,7 +37,7 @@ const devices: ReadonlyArray<Device> = [
     ]
   },
   {
-    id: "ahu-2",
+    id: "ventilation-2",
     protocol: "BACnet/IP",
     line: "read every 30 s · no answer for 4 min",
     failing: "timeout",

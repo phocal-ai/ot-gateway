@@ -26,9 +26,9 @@ describe("exceedsDeadband", () => {
 })
 
 describe("topics", () => {
-  const parts = { site: "site-1", building: "building-a", device: "ahu-1", point: "sat" }
+  const parts = { site: "site-1", building: "building-a", device: "ventilation-1", point: "supply-air-temp" }
   it("follows site/building/device/point", () => {
-    expect(pointTopic(parts)).toBe("site-1/building-a/ahu-1/sat")
-    expect(metaTopic(parts)).toBe("site-1/building-a/ahu-1/sat/$meta")
+    expect(pointTopic(parts)).toBe("site-1/building-a/ventilation-1/supply-air-temp")
+    expect(metaTopic(parts)).toBe("site-1/building-a/ventilation-1/supply-air-temp/$meta")
   })
 })

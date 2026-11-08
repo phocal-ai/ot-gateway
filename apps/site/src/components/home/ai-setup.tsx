@@ -8,10 +8,10 @@ import { Check, Paperclip } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 const request =
-  "Read the air handlers every 30 s and the main meter every 5 s, and send 15-minute averages to broker.example.com."
+  "Read the air handlers every 30 s and the energy meter every 5 s, and send 15-minute averages to broker.example.com."
 
 const steps = [
-  ["Found 2 BACnet devices on the network", "ahu-1 at 10.0.4.21, ahu-2 at 10.0.4.22"],
+  ["Found 2 BACnet devices on the network", "ventilation-1 at 10.0.4.21, ventilation-2 at 10.0.4.22"],
   [
     "Read the meter's registers from the datasheet",
     "active power, energy, voltage and current, with scaling and units"

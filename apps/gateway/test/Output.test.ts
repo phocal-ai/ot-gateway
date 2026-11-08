@@ -92,10 +92,10 @@ describe("watch --json", () => {
   it("prints one JSON object per message, the payload parsed when it is JSON", () => {
     const at = new Date("2026-11-06T10:00:00.000Z")
     expect(
-      JSON.parse(messageRecord({ topic: "s/b/ahu-1/temp", payload: '{"value":21.5}', retain: false }, at))
+      JSON.parse(messageRecord({ topic: "s/b/ventilation-1/temp", payload: '{"value":21.5}', retain: false }, at))
     ).toEqual({
       at: "2026-11-06T10:00:00.000Z",
-      topic: "s/b/ahu-1/temp",
+      topic: "s/b/ventilation-1/temp",
       retained: false,
       payload: { value: 21.5 }
     })

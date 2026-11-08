@@ -64,7 +64,7 @@ describe("demo", () => {
       expect(config.devices).toEqual(example.devices)
       const banner = demoBanner(config, { listen: "0.0.0.0" })
       expect(banner).toContain("http://localhost:8080")
-      expect(banner).toContain("main-meter (Modbus TCP)")
+      expect(banner).toContain("energy-meter (Modbus TCP)")
       expect(banner).toContain("init to describe your own building")
       expect(describeConfig(config)).toContain("config ok: demo-site/building-a")
     }).pipe(Effect.provide(NodeServices.layer))

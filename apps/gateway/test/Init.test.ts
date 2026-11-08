@@ -62,7 +62,7 @@ describe("initConfig", () => {
       const drafts = [
         {
           protocol: "bacnet-ip" as const,
-          id: "ahu-2",
+          id: "ventilation-2",
           deviceInstance: 2001,
           address: "192.168.1.40",
           points: [{ id: "supply-temp", name: "Supply Temp", objectType: "analog-input" as const, instance: 1 }]
@@ -70,7 +70,7 @@ describe("initConfig", () => {
       ]
       const config = yield* decode(initConfig({ ...answers, broadcastAddress: "192.168.1.255" }, drafts))
       expect(config.bacnet.broadcastAddress).toBe("192.168.1.255")
-      expect(config.devices).toMatchObject([{ protocol: "bacnet-ip", id: "ahu-2", deviceInstance: 2001 }])
+      expect(config.devices).toMatchObject([{ protocol: "bacnet-ip", id: "ventilation-2", deviceInstance: 2001 }])
     })
   )
 })
@@ -146,7 +146,7 @@ describe("runInit with flags", () => {
         })
         expect(config?.building).toBe("main")
         expect(config?.mqtt.passwordEnv).toBe("MQTT_PASSWORD")
-        expect(config?.devices.map((device) => device.id)).toEqual(["main-meter", "sub-meter", "ahu-2"])
+        expect(config?.devices.map((device) => device.id)).toEqual(["energy-meter", "sub-meter", "ventilation-2"])
         expect(yield* fs.exists(path)).toBe(true)
 
         const again = yield* runInit(path, { yes: true }).pipe(Effect.flip)
