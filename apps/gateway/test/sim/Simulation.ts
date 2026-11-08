@@ -163,7 +163,7 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
   parseConfig(
     JSON.stringify({
       site: "sim",
-      building: "b1",
+      building: "building-a",
       mqtt: { url: `mqtt://${BROKER}:1883`, clientId: "ot-gateway-sim" },
       buffer: { path: bufferPath },
       devices: [
@@ -189,7 +189,7 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
         })),
         ...Array.from({ length: devices }, (_, index) => ({
           protocol: "bacnet-ip",
-          id: `ahu-${index + 1}`,
+          id: `ventilation-${index + 1}`,
           deviceInstance: 2001 + index,
           address: bacnetHost(index),
           pollIntervalMs: 10_000,

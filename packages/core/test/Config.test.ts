@@ -3,8 +3,8 @@ import { Effect, Exit } from "effect"
 import { cycleTimeoutMs, mqttPasswordWarning, parseConfig } from "../src/index.ts"
 
 const minimal = {
-  site: "vienna-hq",
-  building: "b1",
+  site: "site-1",
+  building: "building-a",
   mqtt: { url: "mqtt://localhost:1883" },
   devices: [
     {
@@ -19,7 +19,7 @@ const minimal = {
 /** A BACnet device as written in a config file, at `address` if given. */
 const bacnetDevice = (address?: string) => ({
   protocol: "bacnet-ip",
-  id: "ahu-2",
+  id: "ventilation-2",
   deviceInstance: 1001,
   ...(address === undefined ? {} : { address }),
   points: [{ id: "supply-temp", name: "Supply temperature", objectType: "analog-input", instance: 1 }]
@@ -52,14 +52,14 @@ describe("parseConfig", () => {
 
   it.effect("rejects ids that are not valid topic segments", () =>
     Effect.gen(function* () {
-      const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, site: "Vienna/HQ" })))
+      const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, site: "Site/1" })))
       expect(Exit.isFailure(exit)).toBe(true)
     })
   )
 
   it.effect("says what a slug is when an id is not one", () =>
     Effect.gen(function* () {
-      const error = yield* Effect.flip(parseConfig(JSON.stringify({ ...minimal, site: "Vienna HQ" })))
+      const error = yield* Effect.flip(parseConfig(JSON.stringify({ ...minimal, site: "Site 1" })))
       expect(error.message).toContain("Expected a slug: lowercase letters, digits, - and _")
       expect(error.message).toContain(`at ["site"]`)
     })
@@ -86,7 +86,7 @@ describe("parseConfig", () => {
       const bacnetOnNetwork = yield* Effect.flip(
         parseConfig(JSON.stringify({ ...minimal, mqtt, devices: [bacnetDevice("192.168.1.20")] }))
       )
-      expect(bacnetOnNetwork.message).toContain(`Use your own broker for "ahu-2"`)
+      expect(bacnetOnNetwork.message).toContain(`Use your own broker for "ventilation-2"`)
       const local = yield* parseConfig(
         JSON.stringify({
           ...minimal,
@@ -205,7 +205,14 @@ describe("parseConfig", () => {
       })
       const device = config.devices[0]
       expect(device?.protocol === "bacnet-ip" && device.points[0]?.property).toBe("present-value")
-      for (const address of ["ahu-2.local", "192.168.1.256", "10.0.0.1:", "::1", "10.0.0.1:0", "10.0.0.1:65536"]) {
+      for (const address of [
+        "ventilation-2.local",
+        "192.168.1.256",
+        "10.0.0.1:",
+        "::1",
+        "10.0.0.1:0",
+        "10.0.0.1:65536"
+      ]) {
         const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, devices: [bacnetDevice(address)] })))
         expect(Exit.isFailure(exit)).toBe(true)
       }

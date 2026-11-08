@@ -1,0 +1,136 @@
+{
+  "site": "plant-1",
+  "building": "hall-a",
+  "id": "main",
+  "mqtt": {
+    "url": "mqtts://broker.example.com:8883",
+    "clientId": "ot-gateway-plant-1-hall-a"
+  },
+  "buffer": {
+    "path": "/var/lib/ot-gateway/buffer.sqlite"
+  },
+  "status": {},
+  "devices": [
+    {
+      "protocol": "modbus-tcp",
+      "id": "air-compressor",
+      "host": "10.0.8.10",
+      "unitId": 1,
+      "pollIntervalMs": 5000,
+      "points": [
+        {
+          "id": "pressure",
+          "name": "Compressed air pressure",
+          "unit": "unit:BAR",
+          "deadband": 0.05,
+          "table": "input",
+          "address": 0,
+          "dataType": "float32",
+          "semantics": {
+            "brick": "Pressure_Sensor",
+            "haystack": ["air", "pressure", "sensor"]
+          }
+        },
+        {
+          "id": "power",
+          "name": "Compressor power",
+          "unit": "unit:KiloW",
+          "deadband": 0.1,
+          "table": "input",
+          "address": 2,
+          "dataType": "float32",
+          "semantics": {
+            "brick": "Active_Power_Sensor",
+            "haystack": ["elec", "power", "active", "sensor"]
+          }
+        },
+        {
+          "id": "running",
+          "name": "Compressor running",
+          "table": "discrete",
+          "address": 0,
+          "dataType": "bool",
+          "semantics": {
+            "brick": "Run_Status",
+            "haystack": ["compressor", "run", "sensor"]
+          }
+        }
+      ]
+    },
+    {
+      "protocol": "modbus-tcp",
+      "id": "water-tank",
+      "host": "10.0.8.11",
+      "unitId": 1,
+      "pollIntervalMs": 10000,
+      "points": [
+        {
+          "id": "level",
+          "name": "Tank level",
+          "unit": "unit:PERCENT",
+          "deadband": 1,
+          "table": "input",
+          "address": 0,
+          "dataType": "uint16",
+          "scaling": {
+            "factor": 0.1
+          },
+          "semantics": {
+            "brick": "Level_Sensor",
+            "haystack": ["water", "tank", "level", "sensor"]
+          }
+        },
+        {
+          "id": "temperature",
+          "name": "Tank water temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "table": "input",
+          "address": 1,
+          "dataType": "int16",
+          "scaling": {
+            "factor": 0.1
+          },
+          "semantics": {
+            "brick": "Water_Temperature_Sensor",
+            "haystack": ["water", "temp", "sensor"]
+          }
+        }
+      ]
+    },
+    {
+      "protocol": "modbus-tcp",
+      "id": "machine-meter",
+      "host": "10.0.8.12",
+      "unitId": 1,
+      "pollIntervalMs": 5000,
+      "points": [
+        {
+          "id": "active-power",
+          "name": "Machine active power",
+          "unit": "unit:KiloW",
+          "deadband": 0.1,
+          "table": "holding",
+          "address": 100,
+          "dataType": "float32",
+          "semantics": {
+            "brick": "Active_Power_Sensor",
+            "haystack": ["elec", "power", "active", "sensor"]
+          }
+        },
+        {
+          "id": "energy",
+          "name": "Machine energy counter",
+          "unit": "unit:KiloW-HR",
+          "table": "holding",
+          "address": 102,
+          "dataType": "uint32",
+          "semantics": {
+            "brick": "Energy_Sensor",
+            "haystack": ["elec", "energy", "sensor"]
+          }
+        }
+      ]
+    }
+  ]
+}

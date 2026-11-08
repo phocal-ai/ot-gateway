@@ -1,7 +1,7 @@
 {
   "name": "ot-gateway",
   "private": true,
-  "description": "Effect-native edge gateway for buildings: Modbus TCP and BACnet/IP to MQTT.",
+  "description": "Open-source OT gateway for buildings and industrial sites: Modbus TCP and BACnet/IP to MQTT, AI-native.",
   "license": "MIT",
   "type": "module",
   "scripts": {

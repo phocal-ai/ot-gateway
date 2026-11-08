@@ -7,16 +7,16 @@ import { clockTime, every, fillPercent, freshness, since, topicKind } from "../s
 
 describe("topicKind", () => {
   it("tells values, metadata, health and command results apart", () => {
-    expect(topicKind("demo-site/b1/main-meter/active-power")).toBe("value")
-    expect(topicKind("demo-site/b1/main-meter/active-power/$meta")).toBe("metadata")
-    expect(topicKind("demo-site/b1/$gateway/main/health")).toBe("health")
-    expect(topicKind("demo-site/b1/ahu-1/setpoint/$set/result")).toBe("command result")
-    expect(topicKind("demo-site/b1/something")).toBe("other")
+    expect(topicKind("demo-site/building-a/energy-meter/active-power")).toBe("value")
+    expect(topicKind("demo-site/building-a/energy-meter/active-power/$meta")).toBe("metadata")
+    expect(topicKind("demo-site/building-a/$gateway/main/health")).toBe("health")
+    expect(topicKind("demo-site/building-a/ventilation-1/setpoint/$set/result")).toBe("command result")
+    expect(topicKind("demo-site/building-a/something")).toBe("other")
   })
 })
 
 const device = (fields: Partial<DeviceStatus>): DeviceStatus => ({
-  id: "main-meter",
+  id: "energy-meter",
   protocol: "modbus-tcp",
   status: "ok",
   pollIntervalMs: 5000,

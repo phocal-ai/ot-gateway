@@ -64,9 +64,9 @@ describe("demo", () => {
       expect(config.devices).toEqual(example.devices)
       const banner = demoBanner(config, { listen: "0.0.0.0" })
       expect(banner).toContain("http://localhost:8080")
-      expect(banner).toContain("main-meter (Modbus TCP)")
+      expect(banner).toContain("energy-meter (Modbus TCP)")
       expect(banner).toContain("init to describe your own building")
-      expect(describeConfig(config)).toContain("config ok: demo-site/b1")
+      expect(describeConfig(config)).toContain("config ok: demo-site/building-a")
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
@@ -85,7 +85,7 @@ describe("demo", () => {
       // What the gateway runs is decoded again, as a config file would be: the public-broker guard lets it through.
       expect((yield* parseConfig(JSON.stringify(config))).site).toBe(site)
       const banner = demoBanner(config, options)
-      expect(banner).toContain(`mosquitto_sub -h broker.emqx.io -p 1883 -t '${site}/b1/#' -v`)
+      expect(banner).toContain(`mosquitto_sub -h broker.emqx.io -p 1883 -t '${site}/building-a/#' -v`)
       expect(banner).toContain("never point a real device at it")
     }).pipe(Effect.provide(NodeServices.layer))
   )

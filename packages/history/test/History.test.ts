@@ -45,20 +45,22 @@ describe("openHistory", () => {
   it.effect("writes reads in batches and returns them in buckets", () =>
     Effect.gen(function* () {
       const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 })
-      for (let second = 0; second < 10; second++) history.sink.record("ahu-1", "temp", second, second * 1000)
+      for (let second = 0; second < 10; second++) history.sink.record("ventilation-1", "temp", second, second * 1000)
       // Nothing is written before the first flush.
       expect(
-        (yield* history.series({ device: "ahu-1", point: "temp", from: 0, to: 10_000, buckets: 2 })).buckets
+        (yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })).buckets
       ).toEqual([])
       yield* TestClock.adjust("5 seconds")
-      const series = yield* history.series({ device: "ahu-1", point: "temp", from: 0, to: 10_000, buckets: 2 })
+      const series = yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })
       expect(series).toMatchObject({ stepMs: 5_000, resolution: "read" })
       expect(series.buckets).toEqual([
         { t: 0, min: 0, max: 4, avg: 2, count: 5 },
         { t: 5_000, min: 5, max: 9, avg: 7, count: 5 }
       ])
       // Another point, or another device, is another series.
-      expect((yield* history.series({ device: "ahu-1", point: "other", from: 0, to: 10_000 })).buckets).toEqual([])
+      expect((yield* history.series({ device: "ventilation-1", point: "other", from: 0, to: 10_000 })).buckets).toEqual(
+        []
+      )
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 

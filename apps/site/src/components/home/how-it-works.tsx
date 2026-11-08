@@ -1,10 +1,10 @@
 /**
- * What the gateway does and how it is used: install it, describe the building in one config file, use the data.
+ * What the gateway does and how it is used: create its folder, describe the site in one config file, start it and
+ * use the data.
  * Each step has a small picture of what you see at that point; the names and values
- * match the rest of the home page (vienna-hq, ahu-1, the 15-minute aggregate).
+ * match the rest of the home page (site-1, heat-pump, the 15-minute aggregate).
  */
 import Link from "next/link"
-import { InstallTabs } from "./install-tabs.tsx"
 import type * as React from "react"
 
 /** A name in the config that becomes a segment of the topic; highlighted the same way in both places. */
@@ -17,38 +17,55 @@ const configLines: ReadonlyArray<readonly [string, React.ReactNode]> = [
   [
     "site",
     <>
-      <Name>vienna-hq</Name> <span className="text-fd-muted-foreground">Vienna headquarters</span>
+      <Name>site-1</Name> <span className="text-fd-muted-foreground">a campus, a plant, a property</span>
     </>
   ],
   [
     "building",
     <>
-      <Name>main</Name> <span className="text-fd-muted-foreground">main building</span>
+      <Name>building-a</Name> <span className="text-fd-muted-foreground">a building or hall on it</span>
     </>
   ],
   [
     "device",
     <>
-      <Name>ahu-1</Name> <span className="text-fd-muted-foreground">air handler at 10.0.4.21, BACnet/IP</span>
+      <Name>heat-pump</Name> <span className="text-fd-muted-foreground">heat pump at 10.0.4.21, BACnet/IP</span>
     </>
   ],
   [
     "datapoint",
     <>
-      <Name>supply-air-temp</Name> <span className="text-fd-muted-foreground">analog input 1, in °C</span>
+      <Name>flow-temp</Name> <span className="text-fd-muted-foreground">flow temperature, analog input 1, in °C</span>
     </>
   ],
   ["schedule", <span className="text-fd-muted-foreground">read every 30 s, send a 15-minute average</span>]
 ]
 
 /** Step 3: a subscription to the site, and what arrives for the datapoint of step 2 (payloads shortened). */
-const subscribeCommand = "mosquitto_sub -h broker.example.com -t 'vienna-hq/#' -v"
+const subscribeCommand = "mosquitto_sub -h broker.example.com -t 'site-1/#' -v"
 const arrivals = [
-  ["vienna-hq/main/ahu-1/supply-air-temp/$meta", '{"name":"Supply air temperature","unit":"unit:DEG_C",…}'],
-  ["vienna-hq/main/ahu-1/supply-air-temp", '{"value":21.38,"min":20.9,"max":21.8,"avg":21.38,…}']
+  ["site-1/building-a/heat-pump/flow-temp/$meta", '{"name":"Heat pump flow temperature","unit":"unit:DEG_C",…}'],
+  ["site-1/building-a/heat-pump/flow-temp", '{"value":35.38,"min":34.9,"max":35.8,"avg":35.38,…}']
 ] as const
 
-/** The demo from the README's quick start: a simulated building, the gateway and a test broker (hero and closing call). */
+/** `init` makes the folder; the files are what it writes (apps/gateway/src/Init.ts). */
+const initCommand = "npx ot-gateway init site-1"
+
+/** Commands (with their `$ ` prompt) and what they print, muted. */
+const Terminal = ({ lines }: { readonly lines: ReadonlyArray<readonly [string, string]> }) => (
+  <pre className="w-full font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+    <code>
+      {lines.map(([prompt, text]) => (
+        <span className={`block ${prompt === "" ? "text-fd-muted-foreground" : ""}`} key={text}>
+          {prompt === "" ? null : <span className="text-fd-muted-foreground select-none">{prompt}</span>}
+          {text}
+        </span>
+      ))}
+    </code>
+  </pre>
+)
+
+/** The demo from the README's quick start: simulated devices, the gateway and a test broker (hero and closing call). */
 export const demoCommand = "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo"
 
 const steps: ReadonlyArray<{
@@ -58,16 +75,25 @@ const steps: ReadonlyArray<{
   readonly picture: React.ReactNode
 }> = [
   {
-    title: "Install it",
+    title: "Create it",
     text: [
-      "Install it on any Linux machine on the building network, from a server to a Raspberry Pi: as a container with Docker, or as a service without. It comes with a built-in web interface."
+      "On any Linux machine on the site's network, from a server to a Raspberry Pi, init asks a few questions and writes the gateway's folder: the config and a Docker Compose file."
     ],
-    picture: <InstallTabs />
+    picture: (
+      <Terminal
+        lines={[
+          ["$ ", initCommand],
+          ["", "wrote site-1/ot-gateway.json"],
+          ["", "wrote site-1/compose.yaml"],
+          ["", "wrote site-1/ot-gateway.env"]
+        ]}
+      />
+    )
   },
   {
-    title: "Describe your building",
+    title: "Describe your site",
     text: [
-      "One config file describes your building: the devices, the datapoints to read, how often, and where the data goes. Write it by hand, or let your AI assistant write it with you.",
+      "One config file describes your site: the devices, the datapoints to read, how often, and where the data goes. Write it by hand, or let an AI agent write it from your points list or datasheets.",
       "Every site, building, device and datapoint gets a short name. Together the names make the MQTT topic, so you always know where a value comes from."
     ],
     picture: (
@@ -84,21 +110,26 @@ const steps: ReadonlyArray<{
         <div className="mt-3 border-t pt-3">
           <p className="text-fd-muted-foreground mb-1">topic, built from the names</p>
           <p className="font-mono break-all">
-            <Name>vienna-hq</Name>/<Name>main</Name>/<Name>ahu-1</Name>/<Name>supply-air-temp</Name>
+            <Name>site-1</Name>/<Name>building-a</Name>/<Name>heat-pump</Name>/<Name>flow-temp</Name>
           </p>
         </div>
       </div>
     )
   },
   {
-    title: "Subscribe to your data",
+    title: "Start it and subscribe",
     text: [
-      "Start it, and the values arrive on your broker under the topics from step 2. Subscribe from any MQTT client, or connect your dashboards, energy reports and alerts."
+      "Start it, and the values arrive on your broker under the topics from step 2. Subscribe from any MQTT client, or connect your dashboards, energy reports and alerts.",
+      "The status page on port 8080 shows every device and its latest values, and why one is failing."
     ],
     picture: (
       <pre className="w-full font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
         <code>
           <span className="block">
+            <span className="text-fd-muted-foreground select-none">$ </span>
+            docker compose up -d
+          </span>
+          <span className="mt-1.5 block">
             <span className="text-fd-muted-foreground select-none">$ </span>
             {subscribeCommand}
           </span>

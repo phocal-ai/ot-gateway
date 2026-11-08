@@ -1,0 +1,122 @@
+{
+  "site": "site-1",
+  "building": "building-a",
+  "id": "main",
+  "mqtt": {
+    "url": "mqtts://broker.example.com:8883",
+    "clientId": "ot-gateway-site-1-building-a"
+  },
+  "buffer": {
+    "path": "/var/lib/ot-gateway/buffer.sqlite"
+  },
+  "status": {},
+  "devices": [
+    {
+      "protocol": "bacnet-ip",
+      "id": "heating-plant",
+      "deviceInstance": 1001,
+      "address": "10.0.4.20",
+      "pollIntervalMs": 30000,
+      "points": [
+        {
+          "id": "flow-temp",
+          "name": "Heating flow temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "objectType": "analog-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Leaving_Hot_Water_Temperature_Sensor",
+            "haystack": ["leaving", "hot", "water", "temp", "sensor"]
+          }
+        },
+        {
+          "id": "return-temp",
+          "name": "Heating return temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "objectType": "analog-input",
+          "instance": 2,
+          "semantics": {
+            "brick": "Entering_Hot_Water_Temperature_Sensor",
+            "haystack": ["entering", "hot", "water", "temp", "sensor"]
+          }
+        },
+        {
+          "id": "pump-running",
+          "name": "Heating pump running",
+          "objectType": "binary-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Pump_Status",
+            "haystack": ["hot", "water", "pump", "run", "sensor"]
+          }
+        }
+      ]
+    },
+    {
+      "protocol": "bacnet-ip",
+      "id": "ventilation",
+      "deviceInstance": 2001,
+      "address": "10.0.4.21",
+      "pollIntervalMs": 30000,
+      "points": [
+        {
+          "id": "supply-air-temp",
+          "name": "Ventilation supply air temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "objectType": "analog-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Supply_Air_Temperature_Sensor",
+            "haystack": ["discharge", "air", "temp", "sensor"]
+          }
+        },
+        {
+          "id": "fan-running",
+          "name": "Ventilation supply fan running",
+          "objectType": "binary-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Fan_Status",
+            "haystack": ["discharge", "fan", "run", "sensor"]
+          }
+        }
+      ]
+    },
+    {
+      "protocol": "bacnet-ip",
+      "id": "meeting-room",
+      "deviceInstance": 3001,
+      "address": "10.0.4.30",
+      "pollIntervalMs": 60000,
+      "points": [
+        {
+          "id": "room-temp",
+          "name": "Meeting room temperature",
+          "unit": "unit:DEG_C",
+          "deadband": 0.2,
+          "objectType": "analog-input",
+          "instance": 1,
+          "semantics": {
+            "brick": "Zone_Air_Temperature_Sensor",
+            "haystack": ["zone", "air", "temp", "sensor"]
+          }
+        },
+        {
+          "id": "co2",
+          "name": "Meeting room CO2",
+          "unit": "unit:PPM",
+          "deadband": 25,
+          "objectType": "analog-input",
+          "instance": 2,
+          "semantics": {
+            "brick": "CO2_Sensor",
+            "haystack": ["zone", "air", "co2", "sensor"]
+          }
+        }
+      ]
+    }
+  ]
+}

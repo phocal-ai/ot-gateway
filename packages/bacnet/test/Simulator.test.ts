@@ -31,7 +31,7 @@ import {
 const makeDevice = (maxApdu?: number) =>
   makeSimulatedDevice({
     instance: 1001,
-    name: "ahu-1",
+    name: "ventilation-1",
     vendorId: 260,
     ...(maxApdu === undefined ? {} : { maxApdu }),
     objects: [

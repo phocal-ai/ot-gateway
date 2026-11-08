@@ -52,7 +52,7 @@ describe("the points list schema", () => {
       const profiles = new Map([["eastron-sdm630", yield* resolveProfile("eastron-sdm630", { relativeTo: "." })]])
       for (const [list, protocols] of [
         [pointsListTemplate(), ["modbus-tcp", "modbus-tcp", "bacnet-ip"]],
-        [example, ["modbus-tcp", "bacnet-ip"]]
+        [example, ["modbus-tcp", "modbus-tcp", "bacnet-ip"]]
       ] as const) {
         expect(unknownColumns(parseDelimited(list)[0] ?? [])).toEqual([])
         const devices = yield* devicesFromPointsList(list, [], profiles)

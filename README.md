@@ -1,19 +1,19 @@
 # OT Gateway
 
-**An Effect-native edge gateway for buildings.**
+**An open-source OT gateway for buildings and industrial sites, set up and debugged with your AI assistant.**
 
-OT Gateway gets the values you care about out of a building's meters and controllers and into your software. It runs on any always-on computer in the building (a mini PC, a server, a NAS, a Raspberry Pi), reads building protocols such as Modbus TCP and BACnet/IP, publishes clean, named values with units to MQTT, and carries commands back safely. [How it works](docs/how-it-works.md) explains it with one example building.
+OT Gateway gets the values you care about out of a site's meters and controllers and into your software. It runs as one container wherever Docker runs (a mini PC, an industrial PC, a server, a Raspberry Pi), reads protocols such as Modbus TCP and BACnet/IP, and forwards clean, named values with units as standard MQTT, without losing values when the connection drops. Debugging and telemetry are built in: a local status page, a health message and OpenTelemetry. [How it works](docs/how-it-works.md) explains it with one example building.
 
 It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable, not hidden in callbacks or flow graphs. OT Gateway is both a library you compose in code and a ready-to-run gateway you configure with one JSON file.
 
-> OT is operational technology: the controllers, meters and field buses that run a building, as opposed to its IT. OT Gateway sits between the two, and it was called Plenum until v0.5.0 ([moving from Plenum](docs/operations.md#moving-from-plenum)).
+> OT is operational technology: the controllers, meters and field buses that run a building or a plant, as opposed to its IT. OT Gateway sits between the two, and it was called Plenum until v0.5.0 ([moving from Plenum](docs/operations.md#moving-from-plenum)).
 
 > [!NOTE]
 > OT Gateway is early. The core pipeline, config schema, Modbus TCP and BACnet/IP reads, MQTT 5 publishing (3.1.1 for older brokers), health topics and store-and-forward work; BACnet COV subscriptions are next. See the [roadmap](#roadmap).
 
 ## Why
 
-Getting data out of a building is harder than it should be. Field devices speak Modbus and BACnet; modern platforms expect MQTT and structured data. The glue in between is usually a flow editor that hides failures, a closed vendor box, or a script nobody wants to touch after the first network drop.
+Getting data out of a building or a plant is harder than it should be. Field devices speak Modbus and BACnet; modern platforms expect MQTT and structured data. The glue in between is usually a flow editor that hides failures, a closed vendor box, an industrial controller that costs thousands per site and a specialist per change, or a script nobody wants to touch after the first network drop.
 
 OT Gateway treats field reality as normal: devices time out, brokers go offline, register maps are inconsistent. Each of those is a typed error the gateway handles on purpose, so it can run unattended for months and tell you exactly what went wrong when something does.
 
@@ -50,14 +50,15 @@ pnpm install
 pnpm demo
 ```
 
-The demo is a tiny building on your computer: a simulated energy meter (Modbus), a simulated air handler (BACnet) and a built-in sensor, the gateway reading them, and a test MQTT broker receiving what it sends. Nothing leaves your machine. The terminal prints every message the broker receives:
+The demo is a small site on your computer: a simulated energy meter (Modbus), a heat pump (BACnet) and a PV inverter, the gateway reading them, and a test MQTT broker receiving what it sends. Nothing leaves your machine. The terminal prints every message the broker receives:
 
 ```text
-[retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
-demo-site/b1/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
-demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
-demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
-demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
+[retained] demo-site/building-a/heat-pump/flow-temp/$meta {"name":"Heat pump flow temperature","unit":"unit:DEG_C",...}
+demo-site/building-a/heat-pump/flow-temp {"value":35.44,"ts":1793631666939,"unit":"unit:DEG_C"}
+demo-site/building-a/pv-inverter/ac-power {"value":6.02,"ts":1793631666940,"unit":"unit:KiloW"}
+demo-site/building-a/energy-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
+demo-site/building-a/energy-meter/breaker-tripped {"value":true,"ts":1793631666942}
+demo-site/building-a/heat-pump/compressor-running {"value":true,"ts":1793638119839}
 ```
 
 ### 2. Look around
@@ -109,7 +110,7 @@ The skill checks Node, shows the demo, then asks about your devices and broker i
 With any other agent that can run commands (Cursor, Codex, Gemini CLI, …), paste:
 
 ```text
-Set up an OT Gateway for my building. Read
+Set up an OT Gateway for my site. Read
 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it
 step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot
 find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my
@@ -163,8 +164,8 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
 
 ```json
 {
-  "site": "vienna-hq",
-  "building": "b1",
+  "site": "site-1",
+  "building": "building-a",
   "id": "main",
   "mqtt": { "url": "mqtts://broker.local:8883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/ot-gateway/buffer.sqlite" },
@@ -172,14 +173,14 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
   "devices": [
     {
       "protocol": "modbus-tcp",
-      "id": "main-meter",
+      "id": "energy-meter",
       "host": "192.168.1.50",
       "pollIntervalMs": 5000,
       "publish": { "mode": "aggregate", "intervalMs": 900000 },
       "points": [
         {
           "id": "active-power",
-          "name": "Main meter active power",
+          "name": "Energy meter active power",
           "unit": "unit:KiloW",
           "table": "holding",
           "address": 100,
@@ -190,12 +191,12 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
     },
     {
       "protocol": "bacnet-ip",
-      "id": "ahu-2",
+      "id": "heat-pump",
       "deviceInstance": 2001,
       "points": [
         {
-          "id": "supply-air-temp",
-          "name": "AHU 2 supply air temperature",
+          "id": "flow-temp",
+          "name": "Heat pump flow temperature",
           "objectType": "analog-input",
           "instance": 1,
           "deadband": 0.2
@@ -207,7 +208,7 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
 }
 ```
 
-`publish` decides what goes out, apart from how often the device is read. Without it, every read is sent. `{ "mode": "sample", "intervalMs": 60000 }` sends the latest value once a minute; `{ "mode": "aggregate", "intervalMs": 900000 }` sends minimum, maximum, time-weighted average, last value and count for each 15 minutes, in windows aligned to the clock; `{ "mode": "change", "deadband": 0.2, "maxSilenceMs": 3600000 }` sends when the value moves at least 0.2 and at least hourly. A point's own `publish` or `deadband` (short for change mode) overrides its device's. Above, the meter sends 15-minute aggregates and the air handler's temperature its changes. See [publish](docs/configuration.md#publish), with what each mode costs in traffic and buffer.
+`publish` decides what goes out, apart from how often the device is read. Without it, every read is sent. `{ "mode": "sample", "intervalMs": 60000 }` sends the latest value once a minute; `{ "mode": "aggregate", "intervalMs": 900000 }` sends minimum, maximum, time-weighted average, last value and count for each 15 minutes, in windows aligned to the clock; `{ "mode": "change", "deadband": 0.2, "maxSilenceMs": 3600000 }` sends when the value moves at least 0.2 and at least hourly. A point's own `publish` or `deadband` (short for change mode) overrides its device's. Above, the meter sends 15-minute aggregates and the heat pump's flow temperature its changes. See [publish](docs/configuration.md#publish), with what each mode costs in traffic and buffer.
 
 With `history`, every read is kept on the gateway, each one for a day and per minute for `retentionDays` (7), for the status page's charts and `GET /api/history`. See [history](docs/configuration.md#history).
 
@@ -222,6 +223,13 @@ With `status`, the gateway serves its local status page and `GET /api/status` on
 Every device has an optional `cycleTimeoutMs`: how long one polling cycle (the read with its retries, and publishing the values) may take before it is abandoned as hung, counted as `timed_out` and reported as `cycle-timeout` in the health topic. It defaults to twice `pollIntervalMs` and at least `pollIntervalMs` plus 30 seconds; raise it for a slow device with many points.
 
 IDs must be lowercase slugs of at most 64 characters, so they are always valid MQTT topic segments. Device ids are unique within the gateway and point ids within their device, since each names a topic. The config is checked strictly: a key the schema does not know (a typo such as `intervall`) fails the start with its path instead of being ignored, every device needs at least one point, `host` and the broker `url` must not be empty, a `deadband` cannot be negative, a publish interval must divide a day and be no shorter than the device's poll interval, and a scaling `factor` cannot be 0. A JSON syntax error reports its position. Defaults such as gateway ID `main`, port 502, unit ID 1 and a 5-second poll interval are applied when the config is decoded. See [`examples/gateway.json`](examples/gateway.json) and [`packages/core/src/Config.ts`](packages/core/src/Config.ts) for the full schema.
+
+More examples in [`examples/`](examples/):
+
+- [`gateway.json`](examples/gateway.json): the demo, an energy meter, a PV inverter and a heat pump.
+- [`building.json`](examples/building.json): a building on BACnet/IP, with a heating plant, ventilation and a meeting room.
+- [`industrial.json`](examples/industrial.json): a hall on Modbus TCP, with an air compressor, a water tank and a machine's meter.
+- [`points.csv`](examples/points.csv) and [`building.ede.csv`](examples/building.ede.csv): a points list and a BACnet EDE file to import.
 
 ## Topics
 

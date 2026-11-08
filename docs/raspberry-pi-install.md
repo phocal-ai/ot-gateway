@@ -37,7 +37,7 @@ Install [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (version 2.
 2. **Operating system:** Raspberry Pi OS (other) → **Raspberry Pi OS Lite (64-bit)**. It has to be 64-bit: the gateway image is arm64 only and does not start on the 32-bit OS. Lite has no desktop, which a gateway does not need.
 3. **Storage:** the SD card. Check the size, so you do not erase another disk.
 4. **Customisation:**
-   - **Hostname:** `ot-gateway` (or one name per gateway, such as `ot-gateway-b1`).
+   - **Hostname:** `ot-gateway` (or one name per gateway, such as `ot-gateway-site-1`).
    - **Localisation:** your time zone. The keyboard layout does not matter.
    - **User:** `pi`, with a password of your own. You need the password only for `sudo` on the Pi, never to log in.
    - **Wi-Fi:** in a building, leave it empty and use Ethernet: a gateway there should not depend on Wi-Fi. For a Pi on your desk, Wi-Fi is fine; its address may change, and a dropped connection looks like a network fault in the tests.

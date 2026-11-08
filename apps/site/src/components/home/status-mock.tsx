@@ -19,16 +19,16 @@ type Device = {
 
 const devices: ReadonlyArray<Device> = [
   {
-    id: "ahu-1",
-    protocol: "BACnet/IP",
-    line: "read every 30 s",
+    id: "pv-inverter",
+    protocol: "Modbus TCP",
+    line: "read every 5 s",
     points: [
-      { id: "supply-air-temp", value: 21.4, decimals: 1, unit: "°C" },
-      { id: "fan-speed", value: 72, decimals: 0, unit: "%" }
+      { id: "ac-power", value: 5.8, decimals: 1, unit: "kW" },
+      { id: "energy-today", value: 23.4, decimals: 1, unit: "kWh" }
     ]
   },
   {
-    id: "main-meter",
+    id: "energy-meter",
     protocol: "Modbus TCP",
     line: "read every 5 s",
     points: [
@@ -37,21 +37,23 @@ const devices: ReadonlyArray<Device> = [
     ]
   },
   {
-    id: "ahu-2",
+    id: "heat-pump",
     protocol: "BACnet/IP",
     line: "read every 30 s · no answer for 4 min",
     failing: "timeout",
     points: [
-      { id: "supply-air-temp", value: 19.8, decimals: 1, unit: "°C" },
-      { id: "fan-speed", value: 64, decimals: 0, unit: "%" }
+      { id: "flow-temp", value: 35.2, decimals: 1, unit: "°C" },
+      { id: "return-temp", value: 30.1, decimals: 1, unit: "°C" }
     ]
   }
 ]
 
 /** How far each live value may wander from its start, so the numbers stay believable. */
 const wander: Readonly<Record<string, number>> = {
-  "supply-air-temp": 0.4,
-  "fan-speed": 3,
+  "ac-power": 0.4,
+  "energy-today": 0,
+  "flow-temp": 0.4,
+  "return-temp": 0.3,
   "active-power": 2.5,
   energy: 0
 }
@@ -149,7 +151,7 @@ export const StatusMock = () => {
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">OT Gateway</p>
-            <p className="text-fd-muted-foreground text-[0.7rem]">vienna-hq / main · gateway main · up 12 days</p>
+            <p className="text-fd-muted-foreground text-[0.7rem]">site-1 / building-a · gateway main · up 12 days</p>
           </div>
           <span className="flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[0.7rem] font-medium">
             <span className="size-1.5 animate-pulse rounded-full bg-[var(--status-good)]" /> Live
@@ -159,7 +161,7 @@ export const StatusMock = () => {
         <div className="grid grid-cols-3 gap-2 md:gap-3">
           <Overview label="Broker" note="to mqtt://broker.example.com" value="connected" />
           <Overview bad label="Devices" note="answering, 1 failing" value="2/3" />
-          <Overview label="Buffer" note="waiting for the broker" value="0/1,000,000" />
+          <Overview label="Buffer" note="holds up to 1,000,000 offline" value="0 waiting" />
         </div>
 
         <div className="mt-2 grid gap-2 sm:grid-cols-3 md:mt-3 md:gap-3">
@@ -178,7 +180,11 @@ export const StatusMock = () => {
                   const value = values[key] ?? point.value
                   return (
                     <div className="flex items-center justify-between gap-2 border-b py-1.5 last:border-b-0" key={key}>
-                      <dt className="truncate text-[0.7rem]">{point.id}</dt>
+                      <dt
+                        className={`truncate text-[0.7rem] ${device.failing === undefined ? "" : "text-fd-muted-foreground"}`}
+                      >
+                        {point.id}
+                      </dt>
                       <dd
                         className={`-mr-1 rounded px-1 font-mono text-[0.7rem] whitespace-nowrap tabular-nums ${
                           device.failing === undefined ? "" : "text-fd-muted-foreground"
@@ -195,6 +201,9 @@ export const StatusMock = () => {
                   )
                 })}
               </dl>
+              {device.failing === undefined ? null : (
+                <p className="text-fd-muted-foreground mt-1.5 text-[0.65rem]">last read 4 min ago</p>
+              )}
             </Card>
           ))}
         </div>

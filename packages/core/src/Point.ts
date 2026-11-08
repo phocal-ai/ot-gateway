@@ -19,7 +19,7 @@ export const Slug = Schema.String.pipe(
   Schema.check(
     Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/, {
       message:
-        "Expected a slug: lowercase letters, digits, - and _, starting with a letter or digit (vienna-hq, not Vienna HQ)"
+        "Expected a slug: lowercase letters, digits, - and _, starting with a letter or digit (site-1, not Site 1)"
     }),
     Schema.isMaxLength(64)
   )

@@ -8,16 +8,16 @@ import { Check, Paperclip } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
 
 const request =
-  "Read the air handlers every 30 s and the main meter every 5 s, and send 15-minute averages to broker.example.com."
+  "Read the heat pump every 30 s, the PV inverter and the energy meter every 5 s, and send 15-minute averages to broker.example.com."
 
 const steps = [
-  ["Found 2 BACnet devices on the network", "ahu-1 at 10.0.4.21, ahu-2 at 10.0.4.22"],
+  ["Found the heat pump on the network", "heat-pump at 10.0.4.21, BACnet/IP"],
   [
-    "Read the meter's registers from the datasheet",
-    "active power, energy, voltage and current, with scaling and units"
+    "Read the meter's and the inverter's registers from their datasheets",
+    "power, energy and status, with scaling and units"
   ],
   ["Wrote ot-gateway.json and checked it", "valid, every datapoint read-only"],
-  ["Started the gateway", "3/3 devices answering, values arriving on vienna-hq/main/#"]
+  ["Started the gateway", "3/3 devices answering, values arriving on site-1/building-a/#"]
 ] as const
 
 /** Delay before each line, so the session plays out instead of appearing at once. */
