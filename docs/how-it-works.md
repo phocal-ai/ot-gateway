@@ -35,7 +35,7 @@ Follow the supply air temperature of air handler 1:
 4. **Send.** It publishes on a topic named after where the value comes from:
 
    ```text
-   vienna-hq/main/ahu-1/supply-air-temp   {"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}
+   site-1/building-a/ahu-1/supply-air-temp   {"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}
    ```
 
 5. **Keep it if the line is down.** If the broker can't be reached, the value waits in a small database on the gateway and goes out, in order, once the connection is back.

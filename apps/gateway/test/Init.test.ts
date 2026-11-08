@@ -21,7 +21,7 @@ import {
 } from "../src/Init.ts"
 import { pointsListTemplate } from "../src/PointsSchema.ts"
 
-const answers = { site: "vienna-hq", building: "main", brokerUrl: "mqtt://broker.lan:1883" }
+const answers = { site: "site-1", building: "building-a", brokerUrl: "mqtt://broker.lan:1883" }
 
 const decode = (config: ReturnType<typeof initConfig>) => parseConfig(JSON.stringify(config))
 
@@ -40,7 +40,7 @@ describe("initConfig", () => {
       const simulated = yield* decode(initConfig(answers, [simulatedDevice]))
       expect(simulated.mqtt).toEqual({
         url: "mqtt://broker.lan:1883",
-        clientId: "ot-gateway-vienna-hq-main",
+        clientId: "ot-gateway-site-1-building-a",
         version: "auto"
       })
       expect(simulated.devices.map((device) => device.id)).toEqual(["sim-1"])
@@ -122,11 +122,11 @@ describe("runInit with flags", () => {
     inFolder((folder) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
-        const path = `${folder}/vienna-hq/ot-gateway.json`
-        const config = yield* runInit(path, { yes: true, dryRun: true, site: "vienna-hq", username: "gateway" })
-        expect(config?.site).toBe("vienna-hq")
+        const path = `${folder}/site-1/ot-gateway.json`
+        const config = yield* runInit(path, { yes: true, dryRun: true, site: "site-1", username: "gateway" })
+        expect(config?.site).toBe("site-1")
         expect(config?.mqtt.passwordEnv).toBe("MQTT_PASSWORD")
-        expect(yield* fs.exists(`${folder}/vienna-hq`)).toBe(false)
+        expect(yield* fs.exists(`${folder}/site-1`)).toBe(false)
       })
     )
   )
@@ -139,7 +139,7 @@ describe("runInit with flags", () => {
         const path = `${folder}/ot-gateway.json`
         const config = yield* runInit(path, {
           yes: true,
-          site: "vienna-hq",
+          site: "site-1",
           broker: "mqtts://broker.example:8883",
           username: "gateway",
           points: `${folder}/points.csv`
@@ -162,7 +162,7 @@ describe("runInit with flags", () => {
       Effect.gen(function* () {
         const path = `${folder}/ot-gateway.json`
         const failure = (flags: InitFlags) => runInit(path, { yes: true, ...flags }).pipe(Effect.flip)
-        expect((yield* failure({ site: "Vienna HQ" })).message).toContain("--site Vienna HQ: lowercase letters")
+        expect((yield* failure({ site: "Site 1" })).message).toContain("--site Site 1: lowercase letters")
         expect((yield* failure({ broker: "http://broker" })).message).toContain("--broker http://broker:")
         expect((yield* failure({ passwordEnv: "PW" })).message).toBe("--password-env needs --username")
         expect((yield* failure({ username: "u", passwordEnv: "pw" })).message).toContain(
@@ -181,8 +181,8 @@ describe("configSummary", () => {
       const config = yield* decode(initConfig(answers, [simulatedDevice]))
       expect(configSummary(config)).toEqual({
         ok: true,
-        site: "vienna-hq",
-        building: "main",
+        site: "site-1",
+        building: "building-a",
         gateway: "main",
         broker: "mqtt://broker.lan:1883",
         buffer: "./ot-gateway-buffer.sqlite",
@@ -196,7 +196,7 @@ describe("configSummary", () => {
 describe("initTarget", () => {
   it.effect("takes a folder as create-next-app does, the default one with --yes, and a .json path as the config", () =>
     Effect.gen(function* () {
-      expect(yield* initTarget("vienna-hq", false)).toBe("vienna-hq/ot-gateway.json")
+      expect(yield* initTarget("site-1", false)).toBe("site-1/ot-gateway.json")
       expect(yield* initTarget(".", false)).toBe("ot-gateway.json")
       expect(yield* initTarget(undefined, true)).toBe(`${defaultFolder}/ot-gateway.json`)
       expect(yield* initTarget("site.json", false)).toBe("site.json")
@@ -207,12 +207,12 @@ describe("initTarget", () => {
     inFolder((folder) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem
-        const path = yield* initTarget(`${folder}/new/vienna-hq`, true)
+        const path = yield* initTarget(`${folder}/new/site-1`, true)
         const config = yield* runInit(path, { yes: true })
         expect(yield* fs.exists(path)).toBe(true)
         if (config === undefined) return expect.unreachable()
-        const steps = nextSteps(path, config, { written: [path, `${folder}/new/vienna-hq/compose.yaml`], kept: [] })
-        expect(steps).toContain(`cd ${folder}/new/vienna-hq`)
+        const steps = nextSteps(path, config, { written: [path, `${folder}/new/site-1/compose.yaml`], kept: [] })
+        expect(steps).toContain(`cd ${folder}/new/site-1`)
         expect(steps).toMatch(/ot-gateway check {2,}validate/)
       })
     )

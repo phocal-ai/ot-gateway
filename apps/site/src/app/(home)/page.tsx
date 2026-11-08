@@ -4,8 +4,6 @@
  */
 import {
   Activity,
-  Building2,
-  Code,
   DatabaseBackup,
   FlaskConical,
   LifeBuoy,
@@ -13,14 +11,14 @@ import {
   RadioTower,
   ShieldCheck,
   Sparkles,
-  SquareTerminal,
-  Wrench
+  SquareTerminal
 } from "lucide-react"
 import Link from "next/link"
 import type * as React from "react"
 import { PublishChart } from "@/components/home/publish-chart.tsx"
 import { Flow } from "@/components/home/flow.tsx"
 import { AiSetup } from "@/components/home/ai-setup.tsx"
+import { Audiences } from "@/components/home/audiences.tsx"
 import { CopyCommand } from "@/components/home/copy-command.tsx"
 import { demoCommand, HowItWorks } from "@/components/home/how-it-works.tsx"
 import { PollDemo } from "@/components/home/poll-demo.tsx"
@@ -28,24 +26,6 @@ import { StatusMock } from "@/components/home/status-mock.tsx"
 import { site } from "@/lib/site.ts"
 
 type Icon = React.ComponentType<{ readonly className?: string; readonly "aria-hidden"?: "true" }>
-
-const audiences: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
-  [
-    Building2,
-    "Facility and energy managers",
-    "Meter readings and plant data in the dashboard or energy report you already use, without a vendor project."
-  ],
-  [
-    Wrench,
-    "System integrators",
-    "One small, scripted install per building: the same config format, status page and health message every time."
-  ],
-  [
-    Code,
-    "Platform and software teams",
-    "Clean MQTT with names, units and semantics on every point, so building data looks like any other data."
-  ]
-]
 
 /** What an AI assistant gets to work with; each item exists in the repo (README "Set it up with AI", Cli.ts, docs). */
 const aiNative: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
@@ -125,6 +105,11 @@ const positioning = [
   ["EMQX Neuron", "Many industrial protocols", "Open, small, library-first; focused on building automation"],
   ["ThingsBoard IoT Gateway", "Broad connector set", "Not tied to one platform; generic MQTT output"],
   ["Telegraf", "Excellent metrics collection", "Two-way, with safe command write-back and point semantics"],
+  [
+    "Industrial controllers (PLCs)",
+    "Proven hardware, programmed per site",
+    "A fraction of the cost; set up from a file, with your AI assistant"
+  ],
   ["Vendor gateways", "Supported, certified", "Open source, extensible, no lock-in"]
 ] as const
 
@@ -282,8 +267,8 @@ const HomePage = () => (
         <Cells items={aiNative} />
       </Section>
 
-      <Section flush title="Who it is for">
-        <Cells items={audiences} />
+      <Section flush lead="From the field bus to the dashboard." title="Who it is for">
+        <Audiences />
       </Section>
 
       <Section

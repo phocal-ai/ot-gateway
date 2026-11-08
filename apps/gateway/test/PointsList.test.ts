@@ -14,7 +14,7 @@ import { devicesFromPointsList, parseDelimited, qudtUnit } from "../src/PointsLi
 const minimalConfig = { site: "s", building: "b", mqtt: { url: "mqtt://localhost:1883" } }
 
 const examplePoints = exampleConfigPath.replace(/gateway\.json$/, "points.csv")
-const answers = { site: "vienna-hq", building: "main", brokerUrl: "mqtt://broker.lan:1883" }
+const answers = { site: "site-1", building: "building-a", brokerUrl: "mqtt://broker.lan:1883" }
 
 const mistake = (text: string) =>
   devicesFromPointsList(text).pipe(

@@ -6,7 +6,7 @@ import { formatMessage, watchFilter } from "../src/Watch.ts"
 
 describe("watch", () => {
   it("subscribes to everything under the site and building", () => {
-    expect(watchFilter({ site: "vienna-hq", building: "main" })).toBe("vienna-hq/main/#")
+    expect(watchFilter({ site: "site-1", building: "building-a" })).toBe("site-1/building-a/#")
   })
 
   it("prints one line per message, marks retained ones and cuts long payloads", () => {

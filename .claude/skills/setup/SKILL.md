@@ -37,7 +37,7 @@ The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to ru
 Skip this if the user says they've seen it. Otherwise:
 
 1. Start `otg demo` in the background: the gateway with a local MQTT test broker and simulated Modbus and BACnet devices, in one process.
-2. Within a few seconds it prints messages like `demo-site/b1/main-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
+2. Within a few seconds it prints messages like `demo-site/building-a/main-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
 3. Mention the status page at http://localhost:8080.
 4. Stop it before going on. It holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway or test bench already running), skip the demo.
 
@@ -49,14 +49,14 @@ Ask these together:
 2. **What they have:** a points list (CSV or Excel), an EDE file from the BACnet engineering tool, device datasheets (PDF), or nothing yet.
 3. **Broker:** the URL (`mqtts://host:port`, or `mqtt://` without TLS; never with credentials in it) and the username if it needs one. The demo's broker is not for production: without a broker of their own, say so and pause here until they have one.
 4. **What to send:** "Every read (Recommended)", "15-minute aggregates" (energy reports), or "Only changes" (states, setpoints).
-5. **Site and building names**, e.g. "Vienna HQ, Building 1". You make the slugs: `vienna-hq`, `b1`.
+5. **Site and building names**, e.g. "Site 1, Building A". You make the slugs: `site-1`, `building-a`.
 
 ## 4. Write the folder
 
 Run `init` with flags so it asks nothing (without a terminal it never asks anyway, and takes the defaults for what no flag gives):
 
 ```bash
-otg init . --yes --site vienna-hq --building b1 --broker mqtts://broker.example:8883 --username gateway --devices none
+otg init . --yes --site site-1 --building building-a --broker mqtts://broker.example:8883 --username gateway --devices none
 ```
 
 Add `--dry-run --json` first to see the config and the files it would write without writing anything.

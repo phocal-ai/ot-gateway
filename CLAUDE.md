@@ -4,7 +4,7 @@ Guidance for AI coding assistants (and humans) working in this repo. Read [docs/
 
 ## What OT Gateway is
 
-An Effect-native edge gateway for buildings: Modbus TCP and BACnet/IP in, MQTT 5 out, safe commands back. It runs unattended on a Raspberry Pi, so reliability beats features.
+An Effect-native OT gateway for buildings and industrial sites: Modbus TCP and BACnet/IP in, standard MQTT out, safe commands back. It runs unattended in Docker on small hardware (a Raspberry Pi, an industrial PC), set up and debugged with an AI assistant, so reliability and a clear experience for people and agents beat features. Public copy names no controller or router brands and no customer.
 
 ## Commands
 

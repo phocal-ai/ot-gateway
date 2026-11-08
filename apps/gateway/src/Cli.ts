@@ -227,7 +227,7 @@ const init = Command.make(
       Argument.optional,
       Argument.map(Option.getOrUndefined)
     ),
-    site: optionalFlag("site", "The site, the first topic segment (a slug: vienna-hq)"),
+    site: optionalFlag("site", "The site, the first topic segment (a slug: site-1)"),
     building: optionalFlag("building", "The building, the second topic segment"),
     broker: optionalFlag("broker", "The MQTT broker URL, mqtts:// for TLS"),
     username: optionalFlag("username", "The broker username"),
@@ -297,16 +297,15 @@ const init = Command.make(
   ),
   Command.withExamples([
     {
-      command: "ot-gateway init vienna-hq",
-      description: "Make the folder vienna-hq and write the gateway's files in it"
+      command: "ot-gateway init site-1",
+      description: "Make the folder site-1 and write the gateway's files in it"
     },
     { command: "ot-gateway init .", description: "Write them in this folder" },
     {
-      command:
-        "ot-gateway init vienna-hq --yes --site vienna-hq --broker mqtts://broker.example:8883 --points points.csv",
+      command: "ot-gateway init site-1 --yes --site site-1 --broker mqtts://broker.example:8883 --points points.csv",
       description: "The same without questions, for scripts and agents"
     },
-    { command: "ot-gateway init vienna-hq --json --dry-run --site vienna-hq", description: "Only show it, as JSON" }
+    { command: "ot-gateway init site-1 --json --dry-run --site site-1", description: "Only show it, as JSON" }
   ])
 )
 

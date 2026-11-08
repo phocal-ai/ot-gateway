@@ -3,8 +3,8 @@ import { Effect, Exit } from "effect"
 import { cycleTimeoutMs, mqttPasswordWarning, parseConfig } from "../src/index.ts"
 
 const minimal = {
-  site: "vienna-hq",
-  building: "b1",
+  site: "site-1",
+  building: "building-a",
   mqtt: { url: "mqtt://localhost:1883" },
   devices: [
     {
@@ -52,14 +52,14 @@ describe("parseConfig", () => {
 
   it.effect("rejects ids that are not valid topic segments", () =>
     Effect.gen(function* () {
-      const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, site: "Vienna/HQ" })))
+      const exit = yield* Effect.exit(parseConfig(JSON.stringify({ ...minimal, site: "Site/1" })))
       expect(Exit.isFailure(exit)).toBe(true)
     })
   )
 
   it.effect("says what a slug is when an id is not one", () =>
     Effect.gen(function* () {
-      const error = yield* Effect.flip(parseConfig(JSON.stringify({ ...minimal, site: "Vienna HQ" })))
+      const error = yield* Effect.flip(parseConfig(JSON.stringify({ ...minimal, site: "Site 1" })))
       expect(error.message).toContain("Expected a slug: lowercase letters, digits, - and _")
       expect(error.message).toContain(`at ["site"]`)
     })

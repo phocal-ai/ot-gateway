@@ -1,7 +1,7 @@
 /**
  * What the gateway does and how it is used: install it, describe the building in one config file, use the data.
  * Each step has a small picture of what you see at that point; the names and values
- * match the rest of the home page (vienna-hq, ahu-1, the 15-minute aggregate).
+ * match the rest of the home page (site-1, ahu-1, the 15-minute aggregate).
  */
 import Link from "next/link"
 import { InstallTabs } from "./install-tabs.tsx"
@@ -17,13 +17,13 @@ const configLines: ReadonlyArray<readonly [string, React.ReactNode]> = [
   [
     "site",
     <>
-      <Name>vienna-hq</Name> <span className="text-fd-muted-foreground">Vienna headquarters</span>
+      <Name>site-1</Name> <span className="text-fd-muted-foreground">Site 1</span>
     </>
   ],
   [
     "building",
     <>
-      <Name>main</Name> <span className="text-fd-muted-foreground">main building</span>
+      <Name>building-a</Name> <span className="text-fd-muted-foreground">building A</span>
     </>
   ],
   [
@@ -42,10 +42,10 @@ const configLines: ReadonlyArray<readonly [string, React.ReactNode]> = [
 ]
 
 /** Step 3: a subscription to the site, and what arrives for the datapoint of step 2 (payloads shortened). */
-const subscribeCommand = "mosquitto_sub -h broker.example.com -t 'vienna-hq/#' -v"
+const subscribeCommand = "mosquitto_sub -h broker.example.com -t 'site-1/#' -v"
 const arrivals = [
-  ["vienna-hq/main/ahu-1/supply-air-temp/$meta", '{"name":"Supply air temperature","unit":"unit:DEG_C",…}'],
-  ["vienna-hq/main/ahu-1/supply-air-temp", '{"value":21.38,"min":20.9,"max":21.8,"avg":21.38,…}']
+  ["site-1/building-a/ahu-1/supply-air-temp/$meta", '{"name":"Supply air temperature","unit":"unit:DEG_C",…}'],
+  ["site-1/building-a/ahu-1/supply-air-temp", '{"value":21.38,"min":20.9,"max":21.8,"avg":21.38,…}']
 ] as const
 
 /** The demo from the README's quick start: a simulated building, the gateway and a test broker (hero and closing call). */
@@ -84,7 +84,7 @@ const steps: ReadonlyArray<{
         <div className="mt-3 border-t pt-3">
           <p className="text-fd-muted-foreground mb-1">topic, built from the names</p>
           <p className="font-mono break-all">
-            <Name>vienna-hq</Name>/<Name>main</Name>/<Name>ahu-1</Name>/<Name>supply-air-temp</Name>
+            <Name>site-1</Name>/<Name>building-a</Name>/<Name>ahu-1</Name>/<Name>supply-air-temp</Name>
           </p>
         </div>
       </div>

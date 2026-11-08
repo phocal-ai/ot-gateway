@@ -1,6 +1,6 @@
 {
   "site": "demo-site",
-  "building": "b1",
+  "building": "building-a",
   "id": "main",
   "mqtt": {
     "url": "mqtt://localhost:1883",

@@ -29,8 +29,8 @@ describe("loadConfig", () => {
     Effect.gen(function* () {
       const path = yield* configFile(
         JSON.stringify({
-          site: "Vienna HQ",
-          building: "b1",
+          site: "Site 1",
+          building: "building-a",
           mqtt: { url: "mqtt://localhost:1883" },
           devices: [
             {

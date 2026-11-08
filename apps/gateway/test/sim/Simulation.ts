@@ -163,7 +163,7 @@ export const simulationConfig = (devices: number, bufferPath: string) =>
   parseConfig(
     JSON.stringify({
       site: "sim",
-      building: "b1",
+      building: "building-a",
       mqtt: { url: `mqtt://${BROKER}:1883`, clientId: "ot-gateway-sim" },
       buffer: { path: bufferPath },
       devices: [

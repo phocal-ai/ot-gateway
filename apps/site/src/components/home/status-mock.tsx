@@ -149,7 +149,7 @@ export const StatusMock = () => {
         <div className="mb-4 flex items-start justify-between gap-3">
           <div>
             <p className="text-sm font-semibold">OT Gateway</p>
-            <p className="text-fd-muted-foreground text-[0.7rem]">vienna-hq / main · gateway main · up 12 days</p>
+            <p className="text-fd-muted-foreground text-[0.7rem]">site-1 / building-a · gateway main · up 12 days</p>
           </div>
           <span className="flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-[0.7rem] font-medium">
             <span className="size-1.5 animate-pulse rounded-full bg-[var(--status-good)]" /> Live

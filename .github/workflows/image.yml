@@ -64,13 +64,13 @@ jobs:
           # stops reading early makes `docker logs` die of SIGPIPE, and the step fail with 141.
           for _ in $(seq 30); do
             docker logs bench > "$work/bench.log" 2>&1
-            if grep -q "demo-site/b1/main-meter/active-power" "$work/bench.log"; then break; fi
+            if grep -q "demo-site/building-a/main-meter/active-power" "$work/bench.log"; then break; fi
             sleep 1
           done
           docker logs bench > "$work/bench.log" 2>&1
-          grep -m 5 -E "demo-site/b1/(main-meter|ahu-2)/" "$work/bench.log"
-          grep -q "demo-site/b1/main-meter/active-power" "$work/bench.log"
-          grep -q "demo-site/b1/ahu-2/supply-air-temp" "$work/bench.log"
+          grep -m 5 -E "demo-site/building-a/(main-meter|ahu-2)/" "$work/bench.log"
+          grep -q "demo-site/building-a/main-meter/active-power" "$work/bench.log"
+          grep -q "demo-site/building-a/ahu-2/supply-air-temp" "$work/bench.log"
           # The status page and its API, from the image's built web app.
           curl -sf http://127.0.0.1:8080/ | grep -q "<html"
           curl -sf http://127.0.0.1:8080/api/status | grep -q '"id":"main-meter"'
@@ -115,11 +115,11 @@ jobs:
               node apps/gateway/src/main.mjs /work/gateway.json >/tmp/gateway.log 2>&1 &
               sleep infinity'
           for _ in $(seq 240); do
-            if docker exec arm64 grep -q "demo-site/b1/main-meter/active-power" /tmp/bench.log 2>/dev/null; then break; fi
+            if docker exec arm64 grep -q "demo-site/building-a/main-meter/active-power" /tmp/bench.log 2>/dev/null; then break; fi
             sleep 1
           done
-          docker exec arm64 grep -m 5 -E "demo-site/b1/(main-meter|ahu-2)/" /tmp/bench.log
-          docker exec arm64 grep -q "demo-site/b1/main-meter/active-power" /tmp/bench.log
+          docker exec arm64 grep -m 5 -E "demo-site/building-a/(main-meter|ahu-2)/" /tmp/bench.log
+          docker exec arm64 grep -q "demo-site/building-a/main-meter/active-power" /tmp/bench.log
 
       - name: arm64 container logs
         if: failure()

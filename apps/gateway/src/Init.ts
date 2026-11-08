@@ -123,7 +123,7 @@ export const lanInterfaces = (
     })
   )
 
-const slugMessage = "lowercase letters, digits, - and _, starting with a letter or digit (vienna-hq, not Vienna HQ)"
+const slugMessage = "lowercase letters, digits, - and _, starting with a letter or digit (site-1, not Site 1)"
 
 const validSlug = (value: string) => (Schema.is(Slug)(value) ? Effect.succeed(value) : Effect.fail(slugMessage))
 

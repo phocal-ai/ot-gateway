@@ -275,7 +275,7 @@ export const PollDemo = () => {
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
             <Field label="topic">
               <span>
-                {["vienna-hq/", "main/", "ahu-1/", "supply-air-temp"].map((segment) => (
+                {["site-1/", "building-a/", "ahu-1/", "supply-air-temp"].map((segment) => (
                   <span className="whitespace-nowrap" key={segment}>
                     {segment}
                     <wbr />

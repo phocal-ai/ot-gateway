@@ -17,7 +17,7 @@ const steps = [
     "active power, energy, voltage and current, with scaling and units"
   ],
   ["Wrote ot-gateway.json and checked it", "valid, every datapoint read-only"],
-  ["Started the gateway", "3/3 devices answering, values arriving on vienna-hq/main/#"]
+  ["Started the gateway", "3/3 devices answering, values arriving on site-1/building-a/#"]
 ] as const
 
 /** Delay before each line, so the session plays out instead of appearing at once. */

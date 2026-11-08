@@ -1,19 +1,19 @@
 # OT Gateway
 
-**An Effect-native edge gateway for buildings.**
+**An open-source OT gateway for buildings and industrial sites, set up and debugged with your AI assistant.**
 
-OT Gateway gets the values you care about out of a building's meters and controllers and into your software. It runs on any always-on computer in the building (a mini PC, a server, a NAS, a Raspberry Pi), reads building protocols such as Modbus TCP and BACnet/IP, publishes clean, named values with units to MQTT, and carries commands back safely. [How it works](docs/how-it-works.md) explains it with one example building.
+OT Gateway gets the values you care about out of a site's meters and controllers and into your software. It runs as one container wherever Docker runs (a mini PC, an industrial PC, a server, a Raspberry Pi), reads protocols such as Modbus TCP and BACnet/IP, and forwards clean, named values with units as standard MQTT, without losing values when the connection drops. Debugging and telemetry are built in: a local status page, a health message and OpenTelemetry. [How it works](docs/how-it-works.md) explains it with one example building.
 
 It is built on [Effect](https://effect.website) 4 for TypeScript. Polling, retries, timeouts, resource cleanup and failures are explicit, typed and testable, not hidden in callbacks or flow graphs. OT Gateway is both a library you compose in code and a ready-to-run gateway you configure with one JSON file.
 
-> OT is operational technology: the controllers, meters and field buses that run a building, as opposed to its IT. OT Gateway sits between the two, and it was called Plenum until v0.5.0 ([moving from Plenum](docs/operations.md#moving-from-plenum)).
+> OT is operational technology: the controllers, meters and field buses that run a building or a plant, as opposed to its IT. OT Gateway sits between the two, and it was called Plenum until v0.5.0 ([moving from Plenum](docs/operations.md#moving-from-plenum)).
 
 > [!NOTE]
 > OT Gateway is early. The core pipeline, config schema, Modbus TCP and BACnet/IP reads, MQTT 5 publishing (3.1.1 for older brokers), health topics and store-and-forward work; BACnet COV subscriptions are next. See the [roadmap](#roadmap).
 
 ## Why
 
-Getting data out of a building is harder than it should be. Field devices speak Modbus and BACnet; modern platforms expect MQTT and structured data. The glue in between is usually a flow editor that hides failures, a closed vendor box, or a script nobody wants to touch after the first network drop.
+Getting data out of a building or a plant is harder than it should be. Field devices speak Modbus and BACnet; modern platforms expect MQTT and structured data. The glue in between is usually a flow editor that hides failures, a closed vendor box, an industrial controller that costs thousands per site and a specialist per change, or a script nobody wants to touch after the first network drop.
 
 OT Gateway treats field reality as normal: devices time out, brokers go offline, register maps are inconsistent. Each of those is a typed error the gateway handles on purpose, so it can run unattended for months and tell you exactly what went wrong when something does.
 
@@ -53,11 +53,11 @@ pnpm demo
 The demo is a tiny building on your computer: a simulated energy meter (Modbus), a simulated air handler (BACnet) and a built-in sensor, the gateway reading them, and a test MQTT broker receiving what it sends. Nothing leaves your machine. The terminal prints every message the broker receives:
 
 ```text
-[retained] demo-site/b1/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
-demo-site/b1/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
-demo-site/b1/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
-demo-site/b1/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
-demo-site/b1/ahu-2/fan-running {"value":true,"ts":1793638119839}
+[retained] demo-site/building-a/ahu-1/supply-air-temp/$meta {"name":"AHU 1 supply air temperature","unit":"unit:DEG_C",...}
+demo-site/building-a/ahu-1/supply-air-temp {"value":20.99,"ts":1793631666939,"unit":"unit:DEG_C"}
+demo-site/building-a/main-meter/active-power {"value":32.67,"ts":1793631666941,"unit":"unit:KiloW"}
+demo-site/building-a/main-meter/breaker-tripped {"value":true,"ts":1793631666942}
+demo-site/building-a/ahu-2/fan-running {"value":true,"ts":1793638119839}
 ```
 
 ### 2. Look around
@@ -163,8 +163,8 @@ A gateway is described by one JSON document; [docs/configuration.md](docs/config
 
 ```json
 {
-  "site": "vienna-hq",
-  "building": "b1",
+  "site": "site-1",
+  "building": "building-a",
   "id": "main",
   "mqtt": { "url": "mqtts://broker.local:8883", "passwordEnv": "OT_GATEWAY_MQTT_PASSWORD" },
   "buffer": { "path": "/var/lib/ot-gateway/buffer.sqlite" },
