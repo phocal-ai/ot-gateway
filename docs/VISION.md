@@ -14,7 +14,7 @@ It is built on Effect for TypeScript, and it is Effect-native throughout. Pollin
 
 Getting data out of a building or a plant is still harder than it should be. Field devices speak Modbus and BACnet, while modern platforms expect MQTT and structured data. The glue in between is usually fragile, expensive, or both.
 
-- **Flow tools hide failure.** Node-RED-style gateways are fast to start but hard to test, version and reason about. When a device goes quiet, it is often unclear why.
+- **Flow tools hide failure.** Visual flow tools are fast to start but hard to test, version and reason about. When a device goes quiet, it is often unclear why.
 - **Vendor gateways are closed.** They are expensive, hard to extend, and lock the point mapping inside a proprietary UI.
 - **Industrial controllers are the safe default, and an expensive one.** Collecting a site's data with a programmable controller costs thousands per site in hardware, licences and programming, and needs a specialist for every change. That does not scale to many sites with a few hundred points each.
 - **Lost data on bad links.** Sites hang off cellular routers and shared networks. A gateway that drops values while the uplink is down leaves holes in every report.
@@ -137,14 +137,14 @@ npx ot-gateway status           # one line per device
 
 OT Gateway aims at the gap between visual flow tools on one side and closed vendor gateways and industrial controllers on the other: code-first, typed and testable, yet usable from a config file, and set up and debugged with an AI assistant.
 
-| Tool                    | Strength                               | Where OT Gateway differs                                             |
-| ----------------------- | -------------------------------------- | -------------------------------------------------------------------- |
-| Node-RED                | Fast visual prototyping, big ecosystem | Typed, version-controlled config and code; testable without hardware |
-| EMQX Neuron             | Many industrial protocols              | Open, small, library-first; AI-assisted setup and debugging          |
-| ThingsBoard IoT Gateway | Broad connector set                    | Not tied to one platform; generic MQTT output                        |
-| Telegraf                | Excellent metrics collection           | Two-way, with safe command write-back and point semantics            |
-| Industrial controllers  | Proven hardware, programmed per site   | A fraction of the cost per site; set up from a file, with AI         |
-| Vendor gateways         | Supported, certified                   | Open source, extensible, no lock-in                                  |
+| Kind of tool            | Strength                             | Where OT Gateway differs                                     |
+| ----------------------- | ------------------------------------ | ------------------------------------------------------------ |
+| Visual flow tools       | Fast prototyping, big ecosystems     | A typed config in version control, testable without hardware |
+| Protocol gateways       | Many industrial protocols            | Open, small, with debugging and telemetry built in           |
+| IoT platform connectors | Tight fit with their platform        | Standard MQTT to any broker, tied to no platform             |
+| Metrics agents          | Excellent at collecting metrics      | Two-way, with guarded writes and point metadata              |
+| Industrial controllers  | Proven hardware, programmed per site | A fraction of the cost per site; set up from a file, with AI |
+| Vendor gateways         | Supported, certified                 | Open source, extensible, no lock-in                          |
 
 ## Roadmap
 

@@ -2,24 +2,14 @@
  * The landing page. Its claims come from docs/VISION.md and the README; keep
  * them in step with those rather than adding numbers the repo does not back.
  */
-import {
-  Activity,
-  DatabaseBackup,
-  FlaskConical,
-  LifeBuoy,
-  Network,
-  RadioTower,
-  ShieldCheck,
-  Sparkles,
-  SquareTerminal
-} from "lucide-react"
+import { Activity, MonitorCheck, RadioTower } from "lucide-react"
 import Link from "next/link"
 import type * as React from "react"
 import { PublishChart } from "@/components/home/publish-chart.tsx"
 import { Flow } from "@/components/home/flow.tsx"
 import { AiSetup } from "@/components/home/ai-setup.tsx"
 import { Audiences } from "@/components/home/audiences.tsx"
-import { CopyCommand } from "@/components/home/copy-command.tsx"
+import { CopyCommand, CopyPrompt } from "@/components/home/copy-command.tsx"
 import { demoCommand, HowItWorks } from "@/components/home/how-it-works.tsx"
 import { PollDemo } from "@/components/home/poll-demo.tsx"
 import { StatusMock } from "@/components/home/status-mock.tsx"
@@ -27,88 +17,46 @@ import { site } from "@/lib/site.ts"
 
 type Icon = React.ComponentType<{ readonly className?: string; readonly "aria-hidden"?: "true" }>
 
-/** What an AI assistant gets to work with; each item exists in the repo (README "Set it up with AI", Cli.ts, docs). */
-const aiNative: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
+/** Where to look when something is wrong (docs/operations.md, observability/README.md). */
+const debugging: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
   [
-    Sparkles,
-    "A setup skill",
+    MonitorCheck,
+    "Status page",
+    "On the gateway, port 8080: devices, values, messages and history, for whoever is on site."
+  ],
+  [
+    RadioTower,
+    "Health on MQTT",
     <>
-      <code>/setup</code> in Claude Code, or one prompt for Cursor, Codex or any agent that runs commands: from the
-      first question to values on your broker.
+      <code>…/$gateway/main/health</code>, retained: online or offline and which devices fail, for your alerts.
     </>
   ],
   [
-    SquareTerminal,
-    "A CLI it can drive",
-    <>
-      <code>discover</code>, <code>import</code>, <code>check</code>, <code>watch</code> and <code>status</code>, in
-      plain text. <code>check</code> lists every mistake with its path.
-    </>
-  ],
-  [
-    LifeBuoy,
-    "Help when something breaks",
-    "Each device says ok or failing with a reason, and the troubleshooting guide maps log messages to causes and fixes, so your assistant can find what went wrong."
+    Activity,
+    "OpenTelemetry",
+    "Metrics, logs and traces to Grafana or any OpenTelemetry backend, set with the standard OTEL_* variables."
   ]
 ]
 
 /** The prompt from the README's "Set it up with AI", for agents other than Claude Code; keep the two the same. */
-const setupPrompt = `Set up an OT Gateway for my building. Clone https://github.com/phocal-ai/ot-gateway if this is not already a checkout of it, then read .claude/skills/setup/SKILL.md and follow it step by step: run the commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my devices reach the broker.`
+const setupPrompt = `Set up an OT Gateway for my site. Read https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my devices reach the broker.`
 
 const setupSkill = `${site.repository}/blob/main/.claude/skills/setup/SKILL.md`
 
-const features: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
-  [
-    Network,
-    "Modbus TCP and BACnet/IP in",
-    <>
-      Polling, BACnet change-of-value, scaling and QUDT units per point. <code>ot-gateway discover</code> finds BACnet
-      devices and drafts their config.
-    </>
-  ],
-  [
-    RadioTower,
-    "MQTT 5 out",
-    <>
-      Values on <code>site/building/device/point</code>, metadata on the retained <code>$meta</code> topic, gateway
-      health on its own retained topic.
-    </>
-  ],
-  [
-    ShieldCheck,
-    "Safe writes",
-    "Writing is opt-in per point, range-checked and logged. A command is written once or not at all, never replayed from a buffer."
-  ],
-  [
-    DatabaseBackup,
-    "Store-and-forward",
-    "While the broker is unreachable, values go to a SQLite outbox on the gateway and are sent, in order, when it returns."
-  ],
-  [
-    Activity,
-    "Observable",
-    "Each device is ok, starting or failing with a reason, on the status page and in the health message. Metrics, logs and traces go out over OpenTelemetry."
-  ],
-  [
-    FlaskConical,
-    "Testable without hardware",
-    "Every driver has a simulator, and CI runs the gateway end to end against Mosquitto, EMQX, a BACnet server and pymodbus."
-  ]
-]
-
+/** Kinds of tool, not products: public copy names no brands (CLAUDE.md). */
 const positioning = [
   [
-    "Node-RED",
-    "Fast visual prototyping, big ecosystem",
-    "Typed, version-controlled config and code; testable without hardware"
+    "Visual flow tools",
+    "Fast prototyping, big ecosystems",
+    "A typed config in version control, testable without hardware"
   ],
-  ["EMQX Neuron", "Many industrial protocols", "Open, small, library-first; focused on building automation"],
-  ["ThingsBoard IoT Gateway", "Broad connector set", "Not tied to one platform; generic MQTT output"],
-  ["Telegraf", "Excellent metrics collection", "Two-way, with safe command write-back and point semantics"],
+  ["Protocol gateways", "Many industrial protocols", "Open, small, with debugging and telemetry built in"],
+  ["IoT platform connectors", "Tight fit with their platform", "Standard MQTT to any broker, tied to no platform"],
+  ["Metrics agents", "Excellent at collecting metrics", "Two-way, with guarded writes and point metadata"],
   [
     "Industrial controllers (PLCs)",
     "Proven hardware, programmed per site",
-    "A fraction of the cost; set up from a file, with your AI assistant"
+    "A fraction of the cost; set up from a file, with an AI agent"
   ],
   ["Vendor gateways", "Supported, certified", "Open source, extensible, no lock-in"]
 ] as const
@@ -123,18 +71,21 @@ const Rule = () => (
 
 /** A row of the page: a centered heading cell with its lead, a rule, then the content. */
 const Section = ({
+  id,
   title,
   lead,
   flush = false,
   children
 }: {
+  /** An anchor to link to the section. */
+  readonly id?: string
   readonly title: string
   readonly lead?: React.ReactNode
   /** Content that brings its own cells, edge to edge, instead of padding. */
   readonly flush?: boolean
   readonly children: React.ReactNode
 }) => (
-  <section>
+  <section className="scroll-mt-14" id={id}>
     <Rule />
     <header className="px-6 py-14 text-center md:px-12 md:py-20">
       <h2 className="mx-auto max-w-3xl text-3xl font-semibold tracking-tight md:text-4xl">{title}</h2>
@@ -145,19 +96,6 @@ const Section = ({
   </section>
 )
 
-/** Cells divided by hairlines, edge to edge with the frame, each with an icon, a title and a sentence. */
-const Cells = ({ items }: { readonly items: ReadonlyArray<readonly [Icon, string, React.ReactNode]> }) => (
-  <dl className="bg-fd-border grid gap-px md:grid-cols-3">
-    {items.map(([Icon, title, text]) => (
-      <div className="bg-fd-background p-6 md:p-8" key={title}>
-        <Icon aria-hidden="true" className="text-fd-muted-foreground mb-5 size-6" />
-        <dt className="font-medium">{title}</dt>
-        <dd className="text-fd-muted-foreground mt-1 text-sm">{text}</dd>
-      </div>
-    ))}
-  </dl>
-)
-
 const primaryButton = "bg-fd-primary text-fd-primary-foreground rounded-md px-4 py-2 text-sm font-medium"
 const secondaryButton = "hover:bg-fd-accent rounded-md border px-4 py-2 text-sm font-medium"
 
@@ -165,32 +103,26 @@ const HomePage = () => (
   <div className="home-dots">
     <main className="bg-fd-background mx-auto w-full max-w-6xl border-x border-dashed">
       <section className="px-6 py-16 md:px-12 md:py-24">
-        <p className="text-fd-muted-foreground mb-3 text-sm font-medium">Open source · MIT · early</p>
+        <p className="text-fd-muted-foreground mb-3 text-sm font-medium">Open source · MIT</p>
         <h1 className="mb-5 max-w-3xl tracking-tight">
           <span className="block text-4xl font-semibold md:text-5xl">OT Gateway</span>
           <span className="text-fd-muted-foreground mt-2 block text-2xl font-medium md:text-3xl">
-            Building protocols in. MQTT out.
+            OT data in. Standard MQTT out.
           </span>
         </h1>
         <p className="text-fd-muted-foreground mb-8 max-w-2xl text-lg">
-          It polls devices on a schedule and publishes their data to MQTT. Built AI-native: your AI assistant sets it up
-          with you, from finding the devices to the first values.
+          Reads building and industrial protocols and sends the data as standard MQTT. Nothing is lost when the
+          connection drops. Built for AI-native setup and debugging.
         </p>
-        <div className="flex flex-wrap gap-3">
-          <Link className={primaryButton} href="/docs">
+        <div className="flex flex-wrap items-start gap-3">
+          <Link className={`${primaryButton} shrink-0`} href="/docs">
             Get started
           </Link>
-          <Link className={secondaryButton} href="/docs/how-it-works">
-            How it works
-          </Link>
-          <a className={secondaryButton} href={site.repository}>
-            GitHub
-          </a>
+          <CopyPrompt prompt={setupPrompt} />
         </div>
-        <div className="mt-8 max-w-2xl">
-          <p className="text-fd-muted-foreground mb-2 text-sm">See it work in less than a minute, without devices:</p>
-          <CopyCommand command={demoCommand} />
-        </div>
+        <p className="text-fd-muted-foreground mt-8 text-sm">
+          Modbus TCP · BACnet/IP · MQTT 3.1.1 and 5 · runs in Docker, for example on a Raspberry Pi
+        </p>
       </section>
 
       <Rule />
@@ -203,38 +135,34 @@ const HomePage = () => (
       </Section>
 
       <Section
-        lead="Every gateway comes with a status page: each device green or red with the reason, and the values as they arrive."
-        title="Know when a device goes quiet"
+        lead="Every gateway has a status page, a health message on MQTT and OpenTelemetry: each device ok or failing with the reason, and the values as they arrive."
+        title="Debugging built in"
       >
         <StatusMock />
+        <dl className="mt-8 grid gap-6 text-sm md:grid-cols-3">
+          {debugging.map(([Icon, title, text]) => (
+            <div className="flex gap-3" key={title}>
+              <Icon aria-hidden="true" className="text-fd-muted-foreground mt-0.5 size-5 shrink-0" />
+              <div>
+                <dt className="font-medium">{title}</dt>
+                <dd className="text-fd-muted-foreground mt-1">{text}</dd>
+              </div>
+            </div>
+          ))}
+        </dl>
       </Section>
 
       <Section
-        lead="How often a device is read and what goes to the broker are set separately, per device or per point."
+        lead="Read a device every few seconds and send only what your software needs: every read, an average per window, or only the changes."
         title="Read often, send what you need"
       >
-        <div className="grid gap-8 md:grid-cols-[2fr_1fr] md:items-center">
-          <PublishChart />
-          <p className="text-fd-muted-foreground text-sm">
-            <span className="text-fd-foreground font-medium">Every read</span> for live dashboards.{" "}
-            <span className="text-fd-foreground font-medium">Aggregates</span> for energy reports and analytics:
-            minimum, maximum and time-weighted average per window, aligned to the clock like the meter&apos;s 15
-            minutes. <span className="text-fd-foreground font-medium">On change</span> for states, alarms and setpoints
-            that sit still for hours.
-          </p>
-        </div>
-      </Section>
-
-      <Section
-        lead="Click through one read of a heat pump's flow temperature, from the BACnet bytes on the wire to the message on your broker."
-        title="One poll, step by step"
-      >
-        <PollDemo />
+        <PublishChart />
       </Section>
 
       <Section
         flush
-        lead="Developed with AI from the start, it comes with what your AI assistant needs to set it up with you and to help when something breaks."
+        id="ai-native"
+        lead="Developed with AI from the start. It comes with what an AI agent needs to set it up and to help when something breaks."
         title="Built AI-native"
       >
         <div className="grid gap-10 px-6 py-10 md:grid-cols-[1fr_1.5fr] md:items-center md:px-12 md:py-14">
@@ -245,26 +173,25 @@ const HomePage = () => (
               <li>Your datapoint list, or the device datasheets</li>
               <li>What to read, how often, and where it goes</li>
             </ul>
-            <p className="text-fd-muted-foreground mt-6 mb-2 text-xs font-medium tracking-wide uppercase">
-              Paste this into your AI assistant
+            <p className="text-fd-muted-foreground mt-4">
+              The agent drives the CLI: <code>discover</code>, <code>import</code>, <code>check</code>,{" "}
+              <code>watch</code> and <code>status</code>, in plain text, and <code>check</code> names every mistake with
+              its path.
             </p>
-            <CopyCommand command={setupPrompt} multiline />
-            <p className="text-fd-muted-foreground mt-3">
-              It follows{" "}
+            <p className="text-fd-muted-foreground mt-4">
+              Copy the prompt from the top of the page, or type <code>/setup</code> in Claude Code. It follows{" "}
               <a className="text-fd-foreground font-medium underline" href={setupSkill}>
                 the setup skill
               </a>
-              . In Claude Code, just type <code>/setup</code>. Rather do it yourself?{" "}
+              . Rather do it yourself?{" "}
               <Link className="text-fd-foreground font-medium underline" href="/docs/first-building">
-                Your first building
+                Your first site
               </Link>{" "}
               walks you through it by hand.
             </p>
           </div>
           <AiSetup />
         </div>
-        <Rule />
-        <Cells items={aiNative} />
       </Section>
 
       <Section flush lead="From the field bus to the dashboard." title="Who it is for">
@@ -272,11 +199,20 @@ const HomePage = () => (
       </Section>
 
       <Section
-        flush
-        lead="Built on Effect for TypeScript, with its own Modbus, BACnet/IP and MQTT 5 stacks."
-        title="Under the hood"
+        lead="One read of the heat pump's flow temperature, from the BACnet bytes to the MQTT message."
+        title="From bytes to MQTT"
       >
-        <Cells items={features} />
+        <details className="group text-center">
+          <summary
+            className={`${secondaryButton} inline-flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden`}
+          >
+            <span className="group-open:hidden">Show the bytes</span>
+            <span className="hidden group-open:inline">Hide the bytes</span>
+          </summary>
+          <div className="mt-8 text-left">
+            <PollDemo />
+          </div>
+        </details>
       </Section>
 
       <Section
@@ -287,7 +223,7 @@ const HomePage = () => (
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b">
-                <th className="py-2 pr-4 font-medium">Tool</th>
+                <th className="py-2 pr-4 font-medium">Kind of tool</th>
                 <th className="py-2 pr-4 font-medium">Strength</th>
                 <th className="py-2 font-medium">Where OT Gateway differs</th>
               </tr>
@@ -307,20 +243,15 @@ const HomePage = () => (
 
       <Rule />
       <section className="px-6 py-20 text-center md:px-12 md:py-28">
-        <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">Connect your first building</h2>
-        <p className="text-fd-muted-foreground mx-auto mt-4 max-w-xl">
-          By hand or with your AI assistant. Or start with the simulated one.
-        </p>
-        <div className="mt-8 flex flex-wrap justify-center gap-3">
+        <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">Connect your first site</h2>
+        <p className="text-fd-muted-foreground mx-auto mt-4 max-w-xl">Try it in a minute, without devices:</p>
+        <div className="mx-auto mt-6 max-w-2xl text-left">
+          <CopyCommand command={demoCommand} />
+        </div>
+        <div className="mt-8 flex justify-center">
           <Link className={primaryButton} href="/docs">
             Get started
           </Link>
-          <Link className={secondaryButton} href="/docs#set-it-up-with-ai">
-            Set it up with AI
-          </Link>
-        </div>
-        <div className="mx-auto mt-6 max-w-2xl text-left">
-          <CopyCommand command={demoCommand} />
         </div>
       </section>
 
@@ -329,6 +260,8 @@ const HomePage = () => (
         <span>OT Gateway, MIT licensed</span>
         <Link href="/docs">Docs</Link>
         <Link href="/docs/how-it-works">How it works</Link>
+        <Link href="/docs/operations">Operations</Link>
+        <Link href="/docs/troubleshooting">Troubleshooting</Link>
         <Link href="/docs/vision">Vision</Link>
         <a href={site.repository}>GitHub</a>
       </footer>

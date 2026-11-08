@@ -161,7 +161,7 @@ export const StatusMock = () => {
         <div className="grid grid-cols-3 gap-2 md:gap-3">
           <Overview label="Broker" note="to mqtt://broker.example.com" value="connected" />
           <Overview bad label="Devices" note="answering, 1 failing" value="2/3" />
-          <Overview label="Buffer" note="waiting for the broker" value="0/1,000,000" />
+          <Overview label="Buffer" note="holds up to 1,000,000 offline" value="0 waiting" />
         </div>
 
         <div className="mt-2 grid gap-2 sm:grid-cols-3 md:mt-3 md:gap-3">
@@ -180,7 +180,11 @@ export const StatusMock = () => {
                   const value = values[key] ?? point.value
                   return (
                     <div className="flex items-center justify-between gap-2 border-b py-1.5 last:border-b-0" key={key}>
-                      <dt className="truncate text-[0.7rem]">{point.id}</dt>
+                      <dt
+                        className={`truncate text-[0.7rem] ${device.failing === undefined ? "" : "text-fd-muted-foreground"}`}
+                      >
+                        {point.id}
+                      </dt>
                       <dd
                         className={`-mr-1 rounded px-1 font-mono text-[0.7rem] whitespace-nowrap tabular-nums ${
                           device.failing === undefined ? "" : "text-fd-muted-foreground"
@@ -197,6 +201,9 @@ export const StatusMock = () => {
                   )
                 })}
               </dl>
+              {device.failing === undefined ? null : (
+                <p className="text-fd-muted-foreground mt-1.5 text-[0.65rem]">last read 4 min ago</p>
+              )}
             </Card>
           ))}
         </div>

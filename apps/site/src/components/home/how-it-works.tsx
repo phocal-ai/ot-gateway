@@ -1,10 +1,10 @@
 /**
- * What the gateway does and how it is used: install it, describe the site in one config file, use the data.
+ * What the gateway does and how it is used: create its folder, describe the site in one config file, start it and
+ * use the data.
  * Each step has a small picture of what you see at that point; the names and values
  * match the rest of the home page (site-1, heat-pump, the 15-minute aggregate).
  */
 import Link from "next/link"
-import { InstallTabs } from "./install-tabs.tsx"
 import type * as React from "react"
 
 /** A name in the config that becomes a segment of the topic; highlighted the same way in both places. */
@@ -48,6 +48,23 @@ const arrivals = [
   ["site-1/building-a/heat-pump/flow-temp", '{"value":35.38,"min":34.9,"max":35.8,"avg":35.38,…}']
 ] as const
 
+/** `init` makes the folder; the files are what it writes (apps/gateway/src/Init.ts). */
+const initCommand = "npx ot-gateway init site-1"
+
+/** Commands (with their `$ ` prompt) and what they print, muted. */
+const Terminal = ({ lines }: { readonly lines: ReadonlyArray<readonly [string, string]> }) => (
+  <pre className="w-full font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+    <code>
+      {lines.map(([prompt, text]) => (
+        <span className={`block ${prompt === "" ? "text-fd-muted-foreground" : ""}`} key={text}>
+          {prompt === "" ? null : <span className="text-fd-muted-foreground select-none">{prompt}</span>}
+          {text}
+        </span>
+      ))}
+    </code>
+  </pre>
+)
+
 /** The demo from the README's quick start: simulated devices, the gateway and a test broker (hero and closing call). */
 export const demoCommand = "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo"
 
@@ -58,16 +75,25 @@ const steps: ReadonlyArray<{
   readonly picture: React.ReactNode
 }> = [
   {
-    title: "Install it",
+    title: "Create it",
     text: [
-      "Install it on any Linux machine on the site's network, from a server to a Raspberry Pi: as a container with Docker, or as a service without. It comes with a built-in web interface."
+      "On any Linux machine on the site's network, from a server to a Raspberry Pi, init asks a few questions and writes the gateway's folder: the config and a Docker Compose file."
     ],
-    picture: <InstallTabs />
+    picture: (
+      <Terminal
+        lines={[
+          ["$ ", initCommand],
+          ["", "wrote site-1/ot-gateway.json"],
+          ["", "wrote site-1/compose.yaml"],
+          ["", "wrote site-1/ot-gateway.env"]
+        ]}
+      />
+    )
   },
   {
     title: "Describe your site",
     text: [
-      "One config file describes your site: the devices, the datapoints to read, how often, and where the data goes. Write it by hand, or let your AI assistant write it with you.",
+      "One config file describes your site: the devices, the datapoints to read, how often, and where the data goes. Write it by hand, or let an AI agent write it from your points list or datasheets.",
       "Every site, building, device and datapoint gets a short name. Together the names make the MQTT topic, so you always know where a value comes from."
     ],
     picture: (
@@ -91,14 +117,19 @@ const steps: ReadonlyArray<{
     )
   },
   {
-    title: "Subscribe to your data",
+    title: "Start it and subscribe",
     text: [
-      "Start it, and the values arrive on your broker under the topics from step 2. Subscribe from any MQTT client, or connect your dashboards, energy reports and alerts."
+      "Start it, and the values arrive on your broker under the topics from step 2. Subscribe from any MQTT client, or connect your dashboards, energy reports and alerts.",
+      "The status page on port 8080 shows every device and its latest values, and why one is failing."
     ],
     picture: (
       <pre className="w-full font-mono text-xs leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
         <code>
           <span className="block">
+            <span className="text-fd-muted-foreground select-none">$ </span>
+            docker compose up -d
+          </span>
+          <span className="mt-1.5 block">
             <span className="text-fd-muted-foreground select-none">$ </span>
             {subscribeCommand}
           </span>

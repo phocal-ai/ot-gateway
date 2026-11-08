@@ -110,7 +110,7 @@ The skill checks Node, shows the demo, then asks about your devices and broker i
 With any other agent that can run commands (Cursor, Codex, Gemini CLI, …), paste:
 
 ```text
-Set up an OT Gateway for my building. Read
+Set up an OT Gateway for my site. Read
 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it
 step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot
 find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my
