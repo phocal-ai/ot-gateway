@@ -21,7 +21,7 @@ const tempo: Datasource = { type: "tempo", uid: "grafanacloud-traces" }
 /** Series selector shared by every PromQL query. */
 const sel =
   'service_namespace="ot-gateway", deployment_environment=~"$environment", site=~"$site", building=~"$building", device=~"$device"'
-/** For the gateway's own series (process and host), which have no `device`. */
+/** For the gateway's own series (process, host, and the buffer's gauges), which have no `device`. */
 const hostSel =
   'service_namespace="ot-gateway", deployment_environment=~"$environment", site=~"$site", building=~"$building"'
 const logSel = '{service_name="ot-gateway", service_namespace="ot-gateway", deployment_environment=~"$environment"}'
@@ -440,7 +440,7 @@ timeseries(
   "Messages waiting in the buffer",
   [
     {
-      expr: `max by (service_instance_id) (ot_gateway_buffer_rows{${sel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_buffer_rows{${hostSel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],
@@ -502,7 +502,7 @@ timeseries(
   "Running without a buffer",
   [
     {
-      expr: `max by (service_instance_id) (ot_gateway_buffer_disabled{${sel}})`,
+      expr: `max by (service_instance_id) (ot_gateway_buffer_disabled{${hostSel}})`,
       legendFormat: "{{service_instance_id}}"
     }
   ],

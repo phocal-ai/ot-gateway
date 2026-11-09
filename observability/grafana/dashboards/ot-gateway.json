@@ -1318,7 +1318,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (ot_gateway_buffer_rows{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_buffer_rows{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
@@ -1501,7 +1501,7 @@
             "type": "prometheus",
             "uid": "grafanacloud-prom"
           },
-          "expr": "max by (service_instance_id) (ot_gateway_buffer_disabled{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\", device=~\"$device\"})",
+          "expr": "max by (service_instance_id) (ot_gateway_buffer_disabled{service_namespace=\"ot-gateway\", deployment_environment=~\"$environment\", site=~\"$site\", building=~\"$building\"})",
           "legendFormat": "{{service_instance_id}}"
         }
       ],
