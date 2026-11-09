@@ -102,35 +102,7 @@
   }
 }
 
-/* The poll demo: a packet crossing between two panels once per step, and content arriving as it is sent. */
-@keyframes packet-right {
-  0% {
-    left: 0;
-    opacity: 0;
-  }
-  15%,
-  85% {
-    opacity: 1;
-  }
-  100% {
-    left: 100%;
-    opacity: 0;
-  }
-}
-@keyframes packet-left {
-  0% {
-    left: 100%;
-    opacity: 0;
-  }
-  15%,
-  85% {
-    opacity: 1;
-  }
-  100% {
-    left: 0;
-    opacity: 0;
-  }
-}
+/* The AI setup transcript: each line arriving in turn. */
 @keyframes reveal {
   from {
     opacity: 0;
@@ -149,17 +121,8 @@
     background-color: transparent;
   }
 }
-.packet-right {
-  animation: packet-right 700ms ease-in-out both;
-}
-.packet-left {
-  animation: packet-left 700ms ease-in-out both;
-}
 .reveal {
   animation: reveal 450ms ease-out 450ms both;
-}
-.value-flash {
-  animation: value-flash 1.2s ease-out 500ms both;
 }
 
 /* A value on the status page picture that just changed, as on the real page. */
@@ -167,13 +130,7 @@
   animation: value-flash 1.2s ease-out both;
 }
 @media (prefers-reduced-motion: reduce) {
-  .packet-right,
-  .packet-left {
-    animation: none;
-    opacity: 0;
-  }
   .reveal,
-  .value-flash,
   .value-tick {
     animation: none;
   }

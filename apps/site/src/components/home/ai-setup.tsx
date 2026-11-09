@@ -1,6 +1,6 @@
 "use client"
 /**
- * Setting up with an AI assistant, as a short session: the request in plain words, then what `/setup`
+ * Setting up with an AI agent, as a short session: the request in plain words, then what `/setup`
  * (`.claude/skills/setup/SKILL.md`) does with it, one line per step. Every step is one the skill really takes;
  * the lines appear one after another once the window scrolls into view.
  */
@@ -59,7 +59,7 @@ export const AiSetup = () => {
           <span className="bg-fd-border size-2.5 rounded-full" />
           <span className="bg-fd-border size-2.5 rounded-full" />
         </span>
-        <span className="text-fd-muted-foreground">~/ot-gateway · your AI assistant</span>
+        <span className="text-fd-muted-foreground">~/ot-gateway · your AI agent</span>
       </div>
 
       <div className="space-y-4 p-4 leading-relaxed md:p-5">
