@@ -67,7 +67,7 @@ Like the gateway, it comes back after a reboot, so a Pi that restarts doesn't sh
 On the status page:
 
 - every device `ok`, values moving;
-- the **Host** card shows the version you installed, a temperature and no conditions;
+- the header shows the version you installed, and no notice about the machine sits above the cards (`/api/status` has the temperature and `throttled.now` is empty);
 - `docker logs ot-gateway` has no warnings.
 
 ### 2. Accelerated soak on the Pi, 1 hour
@@ -124,7 +124,7 @@ Pull the plug (or switch the smart plug) while the gateway is writing its outbox
 
 ### 7. Heat
 
-An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cpu 4` beside the gateway. This proves the warnings work: expect `host is hot` and a `soft_temperature_limit` or `throttled` condition on the status page, in the health message and on the dashboard. On Raspberry Pi OS 13 and other kernels from 6.12 on the gateway cannot see those two: expect `host is hot` and the temperature, and check `vcgencmd get_throttled` on the Pi while it is hot. The gateway itself should keep every device `ok`.
+An hour in a closed box or cabinet without the heatsink, or with `stress-ng --cpu 4` beside the gateway. This proves the warnings work: expect `host is hot` and a `soft_temperature_limit` or `throttled` condition in `/api/status`, the health message and on the dashboard, and a notice at the top of the status page that the Pi slows itself down. On Raspberry Pi OS 13 and other kernels from 6.12 on the gateway cannot see those two: expect `host is hot` and the temperature, and check `vcgencmd get_throttled` on the Pi while it is hot. The gateway itself should keep every device `ok`.
 
 ## Pass criteria
 

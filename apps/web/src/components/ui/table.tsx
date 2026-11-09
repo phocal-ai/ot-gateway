@@ -2,8 +2,16 @@ import type * as React from "react"
 import { cn } from "@/lib/utils"
 
 /** shadcn/ui Table (new-york). */
-export const Table = ({ className, ...props }: React.ComponentProps<"table">) => (
-  <div data-slot="table-container" className="relative w-full overflow-x-auto">
+/**
+ * `containerClassName` replaces the container's horizontal scrolling, for a table whose header sticks to the
+ * window: a scrolling container would hold it instead.
+ */
+export const Table = ({
+  className,
+  containerClassName = "overflow-x-auto",
+  ...props
+}: React.ComponentProps<"table"> & { readonly containerClassName?: string }) => (
+  <div data-slot="table-container" className={cn("relative w-full", containerClassName)}>
     <table data-slot="table" className={cn("w-full caption-bottom text-sm", className)} {...props} />
   </div>
 )

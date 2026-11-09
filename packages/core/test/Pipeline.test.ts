@@ -196,6 +196,45 @@ describe("runDevice", () => {
       expect(yield* countOf(pollCycles, { device: "acl", outcome: "ok" })).toBe(2)
     })
   )
+
+  it.effect("records every point's reading while the broker is down, and asks the broker once per cycle", () =>
+    Effect.gen(function* () {
+      const second: AnyPoint = { ...point, id: "zone-humidity", name: "Zone humidity" }
+      const driver: Driver = {
+        deviceId: "offline",
+        points: [point, second],
+        readAll: Effect.succeed<ReadonlyArray<Reading>>([
+          { pointId: point.id, value: 200, timestamp: 0 },
+          { pointId: second.id, value: 400, timestamp: 0 }
+        ]),
+        write: () => Effect.void
+      }
+      const recorded: Array<string> = []
+      const attempts: Array<string> = []
+      const publisher = Layer.succeed(Publisher, {
+        publish: (topic) =>
+          Effect.suspend(() => {
+            attempts.push(topic)
+            return Effect.fail(new PublishError({ topic, reason: "unavailable", message: "not connected" }))
+          })
+      })
+      const history = { record: (_device: string, pointId: string) => void recorded.push(pointId) }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, history }, driver).pipe(
+        Effect.provide(publisher),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 second")
+      yield* Fiber.interrupt(fiber)
+
+      expect(recorded).toEqual(["zone-temp", "zone-humidity", "zone-temp", "zone-humidity"])
+      // A broker that is down is asked once per cycle, not once per point, each waiting for the publish timeout.
+      expect(attempts.filter((topic) => !topic.endsWith("$meta"))).toEqual([
+        "s/b/offline/zone-temp",
+        "s/b/offline/zone-temp"
+      ])
+      expect(yield* countOf(pollCycles, { device: "offline", outcome: "publish_failed" })).toBe(2)
+    })
+  )
 })
 
 /** Read a counter's count for one combination of attributes. */

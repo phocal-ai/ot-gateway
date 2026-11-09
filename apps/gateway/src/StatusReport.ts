@@ -40,7 +40,7 @@ export const formatStatus = (status: GatewayStatus) => {
       const lastRead =
         device.lastSuccess === undefined ? "no read yet" : `read ${ago(status.now - device.lastSuccess)} ago`
       const reason = device.reason === undefined ? "" : ` (${device.reason})`
-      return `    ${device.id.padEnd(width)}  ${device.status.padEnd(8)} ${device.protocol}, ${device.points.length} point(s), ${lastRead}${reason}`
+      return `    ${device.id.padEnd(width)}  ${device.status.padEnd(8)} ${device.protocol}, ${device.pointCount} point(s), ${lastRead}${reason}`
     })
   ].join("\n")
 }
@@ -48,10 +48,10 @@ export const formatStatus = (status: GatewayStatus) => {
 const advice =
   "Is the gateway running (ot-gateway run, or ot-gateway demo)? If its status page is elsewhere, pass --url."
 
-/** The status from the gateway at `url`, within three seconds. */
-export const fetchGatewayStatus = (url: string) =>
+/** The status from the gateway at `url`, within three seconds; `"none"` without each point's value. */
+export const fetchGatewayStatus = (url: string, points: "all" | "none" = "all") =>
   HttpApiClient.make(OtGatewayApi, { baseUrl: url }).pipe(
-    Effect.flatMap((client) => client.status.status()),
+    Effect.flatMap((client) => client.status.status({ query: { points } })),
     Effect.provide(FetchHttpClient.layer),
     // Unreachable, a timeout or an answer that does not decode: the same advice for each.
     Effect.mapError(
@@ -69,7 +69,8 @@ export const statusReport = Effect.fn("statusReport")(function* (
   url: string,
   options: { readonly json?: boolean } = {}
 ) {
-  const status = yield* fetchGatewayStatus(url)
-  // --json: the status page's own /api/status answer, as checked against its contract.
+  // --json: the status page's own /api/status answer, as checked against its contract, values included. The lines
+  // need only the devices.
+  const status = yield* fetchGatewayStatus(url, options.json === true ? "all" : "none")
   yield* options.json === true ? printJson(status) : Console.log(formatStatus(status))
 })

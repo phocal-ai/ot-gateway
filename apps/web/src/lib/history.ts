@@ -1,5 +1,5 @@
 /**
- * A point's history for the device dialog: fetched from `/api/history`, and the pure parts of drawing it (ranges,
+ * A point's history for the point panel: fetched from `/api/history`, and the pure parts of drawing it (ranges,
  * ticks, gaps), kept here so they are tested without a browser.
  */
 import { type HistoryBucket, type HistorySeries, OtGatewayApi } from "@ot-gateway/api"
@@ -65,6 +65,9 @@ export const segments = (buckets: ReadonlyArray<HistoryBucket>, stepMs: number) 
 
 /** About `count` round values covering `[min, max]`: 1, 2 or 5 times a power of ten apart. */
 export const valueTicks = (min: number, max: number, count = 4): ReadonlyArray<number> => {
+  // No reads (the min and max of nothing are ±Infinity) or a value no axis can show: a plain 0 to 1, not a loop that
+  // never reaches `max`.
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min > max) return [0, 1]
   if (min === max) {
     const pad = Math.abs(min) * 0.05 || 1
     return valueTicks(min - pad, max + pad, count)
