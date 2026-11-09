@@ -87,12 +87,12 @@ const HomePage = () => (
         <h1 className="mb-5 max-w-3xl tracking-tight">
           <span className="block text-4xl font-semibold md:text-5xl">OT Gateway</span>
           <span className="text-fd-muted-foreground mt-2 block text-2xl font-medium md:text-3xl">
-            OT data in. Standard MQTT out.
+            Building and industrial data in. Standard MQTT out.
           </span>
         </h1>
         <p className="text-fd-muted-foreground mb-8 max-w-2xl text-lg">
-          Reads building and industrial protocols and sends the data as standard MQTT. Nothing is lost when the
-          connection drops. Built for AI-native setup and debugging.
+          Reads your meters and controllers and sends their values as standard MQTT. Nothing is lost when the connection
+          drops. Built for AI-native setup and debugging.
         </p>
         <div className="flex flex-wrap items-start gap-3">
           <Link className={`${primaryButton} shrink-0`} href="/docs">
