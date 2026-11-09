@@ -2,15 +2,39 @@
  * The gateway's status, through the typed client for `OtGatewayApi`: the same
  * schema the gateway encodes with decodes the answer here.
  */
-import { type DeviceStatus, type GatewayStatus, type Messages, OtGatewayApi } from "@ot-gateway/api"
+import {
+  type ConfigView,
+  type DeviceStatus,
+  type GatewayStatus,
+  type Messages,
+  OtGatewayApi,
+  type PointCatalog,
+  type PointReading
+} from "@ot-gateway/api"
 import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
+import { chunkKeys } from "./points"
 
 /** The gateway did not answer, not in time, or not with a status: for the page, all the same. */
 export class StatusUnavailable extends Schema.TaggedError<StatusUnavailable>()("StatusUnavailable", {
   message: Schema.String
 }) {}
+
+/**
+ * A request run to its result, as a promise that never rejects: a defect (a bug in the page, not the gateway) counts
+ * as no answer too, so a poll that schedules its next request after this one always goes on.
+ */
+export const settle = <A>(request: Effect.Effect<A, StatusUnavailable>) =>
+  Effect.runPromise(
+    Effect.result(
+      request.pipe(
+        Effect.catchDefect((defect) =>
+          Effect.fail(new StatusUnavailable({ message: defect instanceof Error ? defect.message : "unexpected error" }))
+        )
+      )
+    )
+  )
 
 /** The typed client for the gateway that served this page: the API is on the same origin. */
 const gateway = HttpApiClient.make(OtGatewayApi, {
@@ -30,12 +54,30 @@ const withinThreeSeconds = <A, E extends { readonly message: string }, R>(reques
     })
   )
 
-/** The status, for the whole page. */
+/**
+ * The status, for the whole page: health, broker, buffer, host and commands, without each point's value (that is
+ * a megabyte every poll at 10,000 points). The points page asks for the values of the rows it shows.
+ */
 export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = gateway.pipe(
-  Effect.flatMap((client) => client.status.status()),
+  Effect.flatMap((client) => client.status.status({ query: { points: "none" } })),
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )
+
+/** The last reads of these `device/point` keys, in as few requests as fit a URL each. */
+export const fetchValues = (
+  keys: ReadonlyArray<string>
+): Effect.Effect<ReadonlyArray<PointReading>, StatusUnavailable> =>
+  gateway.pipe(
+    Effect.flatMap((client) =>
+      Effect.forEach(chunkKeys(keys), (chunk) => client.status.values({ query: { points: chunk.join(",") } }), {
+        concurrency: 4
+      })
+    ),
+    Effect.map((answers) => answers.flatMap((answer) => answer.readings)),
+    Effect.provide(FetchHttpClient.layer),
+    withinThreeSeconds
+  )
 
 /** The latest message per topic, for the messages view; asked for only while it is open. */
 export const fetchMessages: Effect.Effect<Messages, StatusUnavailable> = gateway.pipe(
@@ -43,6 +85,27 @@ export const fetchMessages: Effect.Effect<Messages, StatusUnavailable> = gateway
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )
+
+/** Every configured point, for the points page; it changes only when the gateway restarts, so it is asked for once. */
+export const fetchPoints: Effect.Effect<PointCatalog, StatusUnavailable> = gateway.pipe(
+  Effect.flatMap((client) => client.status.points()),
+  Effect.provide(FetchHttpClient.layer),
+  withinThreeSeconds
+)
+
+/** The running config without its points, for the Settings tab; it changes only when the gateway restarts. */
+export const fetchConfig: Effect.Effect<ConfigView, StatusUnavailable> = gateway.pipe(
+  Effect.flatMap((client) => client.status.config()),
+  Effect.provide(FetchHttpClient.layer),
+  withinThreeSeconds
+)
+
+/** The protocols as people name them. */
+export const protocolName: Readonly<Record<string, string>> = {
+  "modbus-tcp": "Modbus TCP",
+  "bacnet-ip": "BACnet/IP",
+  simulator: "Simulated"
+}
 
 /** QUDT unit names (`unit:DEG_C`) as people write them. */
 const unitSymbols: Record<string, string> = {
@@ -97,6 +160,30 @@ export const freshness = (device: DeviceStatus, now: number): Freshness => {
     ? { _tag: "live" }
     : { _tag: "late", lastSuccess: device.lastSuccess }
 }
+
+/** The gateway's failure reasons (`DriverError`'s, and the pipeline's `cycle-timeout`) in words. */
+const failureWords: Readonly<Record<string, string>> = {
+  timeout: "no reply",
+  connection: "cannot connect",
+  protocol: "protocol error",
+  "invalid-response": "bad reply",
+  configuration: "config error",
+  "not-implemented": "not supported",
+  "cycle-timeout": "read hangs"
+}
+
+/** Why a device is failing, as someone on site would say it: "cannot connect", not "connection". */
+export const failureLabel = (reason: string) => failureWords[reason] ?? reason
+
+/** How much a device's state needs a look: failing first, then late, starting, and the ones that answer last. */
+const attention = { failing: 0, late: 1, starting: 2, live: 3 } as const
+
+/** The devices with problems first, each group in config order, so a site's failing meter is not row 87. */
+export const byAttention = (devices: ReadonlyArray<DeviceStatus>, now: number): ReadonlyArray<DeviceStatus> =>
+  devices
+    .map((device, index) => ({ device, index, rank: attention[freshness(device, now)._tag] }))
+    .toSorted((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ device }) => device)
 
 /** "every 5 s", "every 2 min": how often a device is read. */
 export const every = (intervalMs: number) => {

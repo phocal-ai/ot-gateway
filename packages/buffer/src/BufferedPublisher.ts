@@ -126,6 +126,12 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   options: BufferedPublisherOptions
 ) {
   const inner = yield* Publisher
+  // The gauges describe the whole buffer, so they keep the attributes it was built with (site, building), not the
+  // `device` of whichever device's fiber stores a value: otherwise each device would set its own series, none of
+  // them the buffer's.
+  const ownAttributes = yield* Metric.CurrentMetricAttributes
+  const setGauge = (gauge: typeof bufferRows, value: number) =>
+    Metric.update(gauge, value).pipe(Effect.provideService(Metric.CurrentMetricAttributes, ownAttributes))
   const batchSize = options.batchSize ?? 100
   const retryDelay = options.retryDelay ?? "5 seconds"
   const checkInterval = options.checkInterval ?? "30 seconds"
@@ -153,7 +159,7 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   const setPending = Effect.fnUntraced(function* (target: Store, rows: number) {
     target.pending = Math.max(0, rows)
     if (target !== current) return
-    yield* Metric.update(bufferRows, target.pending)
+    yield* setGauge(bufferRows, target.pending)
     if (target.pending > 0) yield* Latch.open(hasRows)
     else yield* Latch.close(hasRows)
   })
@@ -162,13 +168,13 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   const install = Effect.fnUntraced(function* (database: OutboxDatabase | undefined) {
     if (database === undefined) {
       current = undefined
-      yield* Metric.update(bufferDisabled, 1)
-      yield* Metric.update(bufferRows, 0)
+      yield* setGauge(bufferDisabled, 1)
+      yield* setGauge(bufferRows, 0)
       return yield* Latch.close(hasRows)
     }
     const target = makeStore(database, yield* database.outbox.count())
     current = target
-    yield* Metric.update(bufferDisabled, 0)
+    yield* setGauge(bufferDisabled, 0)
     yield* setPending(target, target.pending)
     if (target.pending > 0) {
       yield* Effect.logInfo("buffered messages waiting from a previous run").pipe(

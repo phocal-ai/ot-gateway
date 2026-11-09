@@ -26,7 +26,7 @@ The first line installs the command, without `sudo` ([`packaging/ot-gateway`](..
 Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.10.0/packaging/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.11.0/packaging/compose.yaml
 ```
 
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
@@ -48,7 +48,7 @@ Without Compose, the same as one command, from the same folder:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v "$PWD/ot-gateway.json:/etc/ot-gateway/gateway.json:ro" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.10.0
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.11.0
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -63,7 +63,7 @@ npx ot-gateway init my-building         # a few questions → my-building/: ot-g
 npx ot-gateway check ot-gateway.json
 ```
 
-The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked. Without a terminal on stdin, `init` behaves as with `--yes` and says so on stderr, so it never waits for an answer; a cancelled `init` exits 1: `npx ot-gateway init vienna-hq --yes --site vienna-hq --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `--json` on `init`, `check`, `discover`, `import`, `points schema` and `status` prints the result as JSON on stdout, and a failure as `{"ok": false, "error": …}` with exit code 1; logs go to stderr. `init --dry-run` and `import --dry-run` write nothing: they show the config and files, or the devices, that would be written. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
+The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked. Without a terminal on stdin, `init` behaves as with `--yes` and says so on stderr, so it never waits for an answer; a cancelled `init` exits 1: `npx ot-gateway init site-1 --yes --site site-1 --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `--json` on `init`, `check`, `discover`, `import`, `points schema` and `status` prints the result as JSON on stdout, and a failure as `{"ok": false, "error": …}` with exit code 1; logs go to stderr. `init --dry-run` and `import --dry-run` write nothing: they show the config and files, or the devices, that would be written. `npx` runs the latest release; `npm install -g ot-gateway` keeps it installed. To run a gateway unattended, use Docker Compose or systemd.
 
 ### systemd, without Docker
 
@@ -132,7 +132,7 @@ Under systemd, you can also run `install.sh` again with the new file: it checks 
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.10.0
+git fetch --tags && git checkout v0.11.0
 ```
 
 ```bash
@@ -148,7 +148,7 @@ Read the release notes for config changes first. If the new version refuses the 
 With Docker Compose, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
-sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.10.0/' compose.yaml && docker compose up -d
+sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.11.0/' compose.yaml && docker compose up -d
 ```
 
 ### From the `/etc/ot-gateway` layout (v0.7.0 and earlier)
@@ -170,11 +170,11 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.10.0/packaging/compose.yaml && docker compose create
+curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.11.0/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
-docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.10.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.11.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
 ```
 
 ```bash
@@ -219,14 +219,14 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.10.0 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.11.0 --check /etc/ot-gateway/gateway.json
 ```
 
 Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.10.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.11.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -241,7 +241,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.10.0
+git fetch --tags && git checkout v0.11.0
 ```
 
 ```bash
@@ -289,13 +289,13 @@ The first line names the build (`version` on the status page and in telemetry): 
 
 ## Status page
 
-With `status` in the config, `http://127.0.0.1:8080` on the gateway shows the broker, the outbox, the machine (below), every device with its health and latest values, and recent commands. It listens on loopback by default, so from a laptop:
+With `status` in the config, `http://127.0.0.1:8080` on the gateway shows the broker, the outbox, a notice when the machine (below) has a problem, and every device with its health; the Points tab has the latest values, and the Messages tab what the gateway publishes, command results among them. It listens on loopback by default, so from a laptop:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 pi@gateway
 ```
 
-and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The page's Messages section shows the latest message the gateway published on each topic (`GET /api/messages`, at most 2,000 topics and 2,000 characters of each payload); with more than 50 points it starts closed and is fetched only while open.
+and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The Buffer card says how many messages wait and, from the last minute of polls, when the buffer will be full while the broker is away or how long the backlog takes once it is back. The Status tab's Broker, Devices and Buffer cards open their details: when the broker connection came up and what the broker allowed (MQTT version, keep-alive, retained messages, largest message), reconnects, failed attempts, values published and publishes that failed; devices by state and protocol with the ones that need a look; and what the buffer stored, sent on and dropped, by reason. The Settings tab (`/settings`) shows the running config from `GET /api/config`: every block with its defaults filled in and each device without its points (no secrets: the broker password is only named by `passwordEnv`). The page cannot change it. The Messages tab (`/messages`) shows the latest message the gateway published on each topic (`GET /api/messages`, at most 2,000 topics and 2,000 characters of each payload), fetched only while the tab is open, with a search over topics and payloads and a filter by kind. The Points page (`/points`) lists every configured point from `GET /api/points` (topic, source, publish mode, scaling, limits, Brick and Haystack), fetched once. It draws only the rows on screen and polls only their values with `GET /api/values?points=device/point,...` (at most 500 per request), while the page's status poll uses `GET /api/status?points=none`: at 10,000 points, the full `/api/status` is about 1.3 MB, without points about 27 KB.
 
 ## Health on MQTT
 
@@ -305,7 +305,7 @@ The `online` message also carries `host`, the machine's last sample (below): `me
 
 ## The machine
 
-Every 15 seconds the gateway samples itself and the machine under it, natively and in a container alike (it reads `/proc/self`, `/sys` and Node, needs no privileges and runs no commands). The status page shows the sample; telemetry exports it (`ot_gateway_process_*`, `ot_gateway_event_loop_lag_seconds`, `ot_gateway_host_*`, `ot_gateway_clock_steps_total`, `ot_gateway_buffer_disk_free_bytes`, and per device `ot_gateway_driver_request_seconds_total`); the health message carries the essentials. Each problem is logged when it starts and when it ends:
+Every 15 seconds the gateway samples itself and the machine under it, natively and in a container alike (it reads `/proc/self`, `/sys` and Node, needs no privileges and runs no commands). The status page says nothing about the machine while it is fine; when the power supply is too weak, the Pi throttles, it runs at 80 °C or more, the disk has under 64 MB free or the gateway stalls or runs above 90 % CPU (after its first minute, which is busy with starting up), a notice at the top says so and what to do (the raw sample is in `/api/status`); telemetry exports it (`ot_gateway_process_*`, `ot_gateway_event_loop_lag_seconds`, `ot_gateway_host_*`, `ot_gateway_clock_steps_total`, `ot_gateway_buffer_disk_free_bytes`, and per device `ot_gateway_driver_request_seconds_total`); the health message carries the essentials. Each problem is logged when it starts and when it ends:
 
 | Log line                                    | What it means                                                                                                                                                                                                                                                                    |
 | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -315,7 +315,7 @@ Every 15 seconds the gateway samples itself and the machine under it, natively a
 | `the outbox's disk is nearly full`          | Less than 64 MiB free where the outbox lives. The gateway keeps publishing directly while the broker takes values, but cannot buffer an outage.                                                                                                                                  |
 | `wall clock stepped`                        | NTP set the time: normal once after boot on a machine without a real-time clock. Timestamps jump with it; deadlines and retries do not. Steps without a reboot mean a flaky time source.                                                                                         |
 
-The gateway reads the firmware's flags every second, so a dip between two samples is not missed. What it can read depends on the kernel. The kernel's voltage driver asks the firmware every two seconds and clears what the firmware remembered each time, so neither the gateway nor `vcgencmd get_throttled` sees anything older than two seconds, on any Raspberry Pi kernel. Raspberry Pi kernel 6.12 and later (6.12 builds since March 2025, and so all of Raspberry Pi OS 13) also stopped showing programs the firmware's whole report, and pass on only the under-voltage alarm; 6.6 and older still show it, and the kernel logs a one-time `deprecated, use hwmon sysfs instead` warning with a backtrace when the gateway first reads it, which is harmless. There the gateway reports under-voltage alone (`throttled.watched` in the status and `throttledWatched` in the health message are `["under_voltage"]`, the status page says so, and the log says so in one line when the gateway finds the sensor), and `ot_gateway_host_throttled` has no series for the other conditions rather than a 0. On every kernel the record since boot is the kernel log: `journalctl -k -g voltage`.
+The gateway reads the firmware's flags every second, so a dip between two samples is not missed. What it can read depends on the kernel. The kernel's voltage driver asks the firmware every two seconds and clears what the firmware remembered each time, so neither the gateway nor `vcgencmd get_throttled` sees anything older than two seconds, on any Raspberry Pi kernel. Raspberry Pi kernel 6.12 and later (6.12 builds since March 2025, and so all of Raspberry Pi OS 13) also stopped showing programs the firmware's whole report, and pass on only the under-voltage alarm; 6.6 and older still show it, and the kernel logs a one-time `deprecated, use hwmon sysfs instead` warning with a backtrace when the gateway first reads it, which is harmless. There the gateway reports under-voltage alone (`throttled.watched` in the status and `throttledWatched` in the health message are `["under_voltage"]`, and the log says so in one line when the gateway finds the sensor), and `ot_gateway_host_throttled` has no series for the other conditions rather than a 0. On every kernel the record since boot is the kernel log: `journalctl -k -g voltage`.
 
 [raspberry-pi-testing.md](raspberry-pi-testing.md) is how to test a gateway on a Pi before it goes into a building.
 

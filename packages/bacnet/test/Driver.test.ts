@@ -51,7 +51,7 @@ const setpoint = point("setpoint", "analog-value", 3)
 
 const deviceConfig = (points: ReadonlyArray<BacnetPoint>, address?: string): BacnetDevice => ({
   protocol: "bacnet-ip",
-  id: "ahu-2",
+  id: "ventilation-2",
   deviceInstance: 2001,
   cov: false,
   pollIntervalMs: 1000,

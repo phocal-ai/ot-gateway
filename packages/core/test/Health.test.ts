@@ -16,17 +16,17 @@ import {
 
 describe("HealthRegistry", () => {
   it("starts every device as starting, then tracks the last cycle", () => {
-    const registry = makeHealthRegistry(["ahu-1", "meter"])
+    const registry = makeHealthRegistry(["ventilation-1", "meter"])
     expect(Object.fromEntries(registry.devices)).toEqual({
-      "ahu-1": { status: "starting" },
+      "ventilation-1": { status: "starting" },
       meter: { status: "starting" }
     })
 
     registry.recordSuccess("meter", 1000)
     registry.recordFailure("meter", "timeout")
-    registry.recordFailure("ahu-1", "connection")
+    registry.recordFailure("ventilation-1", "connection")
     expect(registry.devices.get("meter")).toEqual({ status: "failing", reason: "timeout", lastSuccess: 1000 })
-    expect(registry.devices.get("ahu-1")).toEqual({ status: "failing", reason: "connection" })
+    expect(registry.devices.get("ventilation-1")).toEqual({ status: "failing", reason: "connection" })
 
     registry.recordSuccess("meter", 2000)
     expect(registry.devices.get("meter")).toEqual({ status: "ok", lastSuccess: 2000 })

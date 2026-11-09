@@ -243,6 +243,12 @@ const northbound = (
     health: { topic: health.topic, online: health.online },
     // With a buffer, a value that cannot go out now is stored, so waiting for the broker would only stall reads.
     waitForConnection: config.buffer === undefined,
+    ...(status === undefined
+      ? {}
+      : {
+          onConnected: (connection) =>
+            Effect.map(Clock.currentTimeMillis, (at) => status.recordBrokerConnection(at, connection))
+        }),
     ...(options.network === undefined ? {} : { network: options.network }),
     subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions],
     // A `$meta` topic is never a command topic (`.../$set`), so each message has one taker.

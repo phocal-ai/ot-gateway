@@ -1,5 +1,5 @@
 /**
- * The example behind the home page's chart: a supply air temperature read every 30 s for 20 minutes, and what the
+ * The example behind the home page's chart: a heat pump's flow temperature read every 30 s for 20 minutes, and what the
  * gateway sends from those reads in each publish mode, as `packages/core/src/Publish.ts` does it: every read; one
  * clock-aligned aggregate per 5 minutes (each read holds until the next, so the average is time-weighted); or the
  * first read and then each that moved at least 0.2 °C from the last one sent.
@@ -25,7 +25,7 @@ export const WINDOW_MINUTES = 5
 
 /** A slow swing with a little sensor noise; deterministic, so the page is the same on every build. */
 const temperature = (minute: number) =>
-  21 + 0.7 * Math.sin((2 * Math.PI * minute) / 16) + 0.06 * Math.sin(minute * 7.3) + 0.04 * Math.cos(minute * 13.1)
+  35 + 0.7 * Math.sin((2 * Math.PI * minute) / 16) + 0.06 * Math.sin(minute * 7.3) + 0.04 * Math.cos(minute * 13.1)
 
 /** Every read, the first at minute 0 and the last at `minutes`. */
 export const readings = (minutes = 20): ReadonlyArray<Reading> =>

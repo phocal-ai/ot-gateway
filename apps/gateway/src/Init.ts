@@ -25,22 +25,22 @@ export const simulatedDevice = {
   pollIntervalMs: 2000,
   points: [
     {
-      id: "supply-air-temp",
-      name: "Simulated supply air temperature",
+      id: "flow-temp",
+      name: "Simulated flow temperature",
       unit: "unit:DEG_C",
       deadband: 0.2,
       waveform: "sine",
-      min: 16,
-      max: 22,
+      min: 30,
+      max: 38,
       periodSeconds: 60
     },
     {
-      id: "fan-speed",
-      name: "Simulated fan speed",
-      unit: "unit:PERCENT",
+      id: "power",
+      name: "Simulated power",
+      unit: "unit:KiloW",
       waveform: "ramp",
       min: 0,
-      max: 100,
+      max: 8,
       periodSeconds: 30
     }
   ]
@@ -123,7 +123,7 @@ export const lanInterfaces = (
     })
   )
 
-const slugMessage = "lowercase letters, digits, - and _, starting with a letter or digit (vienna-hq, not Vienna HQ)"
+const slugMessage = "lowercase letters, digits, - and _, starting with a letter or digit (site-1, not Site 1)"
 
 const validSlug = (value: string) => (Schema.is(Slug)(value) ? Effect.succeed(value) : Effect.fail(slugMessage))
 

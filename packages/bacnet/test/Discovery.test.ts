@@ -15,7 +15,7 @@ describe("describeDevice", () => {
     Effect.gen(function* () {
       const device = makeSimulatedDevice({
         instance: 2001,
-        name: "AHU 2",
+        name: "Ventilation 2",
         objects: [
           {
             objectType: "analog-input",
@@ -48,7 +48,7 @@ describe("describeDevice", () => {
 
       const described = yield* describeDevice(client, { address }, 2001)
       expect(described).toEqual({
-        name: "AHU 2",
+        name: "Ventilation 2",
         listed: 5,
         objects: [
           { objectType: "analog-input", instance: 1, name: "Supply Air Temp", unit: "unit:DEG_C" },

@@ -13,7 +13,7 @@ You need Node.js 22.18 or newer (24 LTS recommended) and pnpm 10.
 
 ## Ground rules
 
-- Read [docs/VISION.md](docs/VISION.md) and [CLAUDE.md](CLAUDE.md). CLAUDE.md lists the coding rules for humans and AI assistants alike.
+- Read [docs/VISION.md](docs/VISION.md) and [CLAUDE.md](CLAUDE.md). CLAUDE.md lists the coding rules for humans and AI agents alike.
 - OT Gateway is Effect-native. Please don't add runtime dependencies outside the Effect ecosystem without opening an issue first.
 - Protocol code comes with tests built from spec examples or captured traffic, and a simulator where it makes sense.
 - Keep pull requests focused. Explain the field scenario a change addresses if there is one.
@@ -68,7 +68,7 @@ The extended preset is for the hardware: SD card, CPU, thermal throttling, NTP s
 
 ## Device profiles
 
-A profile in [`profiles/`](profiles) describes one Modbus device model's registers, so points lists can name the model instead of copying its register map (docs/first-building.md, "Meters with a profile"). An assistant can draft one from a register map; `ot-gateway profiles schema --json` gives the format and `profiles/eastron-sdm630.json` is a complete example. A pull request that adds or changes one:
+A profile in [`profiles/`](profiles) describes one Modbus device model's registers, so points lists can name the model instead of copying its register map (docs/first-building.md, "Meters with a profile"). An AI agent can draft one from a register map; `ot-gateway profiles schema --json` gives the format and `profiles/eastron-sdm630.json` is a complete example. A pull request that adds or changes one:
 
 1. **Names its source.** `source` gives the register map's title, revision and, where public, its URL. A profile from memory or from another project's code alone is not accepted; another project can serve as a cross-check, named in `notes`.
 2. **Checks every register against that source.** The reviewer does the same, point by point: address (0-based: 30001 is input register 0), table, type, word order, scale and unit. The tests check the shape, unique names and overlapping registers, not the numbers.

@@ -307,8 +307,15 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     }
   })
 
+  /**
+   * The broker failure that ended this cycle's publishing. A broker that is down fails every publish, each after
+   * waiting up to the publish timeout, so the cycle's later points are recorded but not offered to it again.
+   */
+  let unavailable: PublishError | undefined
+
   /** Publishes one point's message; false when the broker refused it (counted and logged once per topic). */
   const send = Effect.fnUntraced(function* (pointId: string, message: object) {
+    if (unavailable !== undefined) return false
     const sent = yield* publishPoint(pointTopic(topicFor(pointId)), JSON.stringify(message)).pipe(
       Effect.as(true),
       Effect.catchTag("PublishError", (error) => Effect.as(skipRefused(error), false))
@@ -379,14 +386,31 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     const readAt = yield* Clock.currentTimeMillis
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("ot_gateway.readings", readings.length)
-    const published = yield* handling
-      .withPermit(Effect.forEach(readings, (reading) => handleReading(reading, polledSince), { discard: true }))
-      .pipe(Effect.result)
+    // Every reading is handled even when the broker is down: a failed publish must not keep the points after it out
+    // of the history and the status page. After the first one, the rest of the cycle skips publishing (`send`), and
+    // the failure is reported once, after all of them.
+    const failedPublish = yield* handling.withPermit(
+      Effect.gen(function* () {
+        unavailable = undefined
+        for (const reading of readings) {
+          const handled = yield* Effect.result(handleReading(reading, polledSince))
+          if (Result.isFailure(handled)) unavailable ??= handled.failure
+        }
+        return unavailable
+      }).pipe(
+        // Also when the cycle's deadline interrupts it: pushed values and closing windows must not skip publishing.
+        Effect.ensuring(
+          Effect.sync(() => {
+            unavailable = undefined
+          })
+        )
+      )
+    )
     // The device is `ok` once its values were handled: a broker that refuses or is down does not make the device
     // failing, but a cycle that hangs in publishing (and hits the deadline) never gets here.
     ctx.health?.recordSuccess(driver.deviceId, readAt)
     yield* deviceRecovered
-    if (Result.isFailure(published)) return yield* published.failure
+    if (failedPublish !== undefined) return yield* failedPublish
     yield* countCycle("ok")
   }).pipe(
     deadline("poll-cycle"),

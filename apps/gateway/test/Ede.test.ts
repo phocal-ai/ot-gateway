@@ -28,7 +28,7 @@ describe("edeToPointsList", () => {
       expect(translation).toMatchObject({ devices: 2, points: 7, skipped: { schedule: 1, "trend-log": 1 } })
       const devices = yield* devicesFromPointsList(translation.list)
       expect(devices.map((device) => [device.id, device.points.length])).toEqual([
-        ["ahu-2", 5],
+        ["ventilation-2", 5],
         ["heating-plant", 2]
       ])
       const valve = devices[0]?.points.find((point) => point.id === "heating-valve")

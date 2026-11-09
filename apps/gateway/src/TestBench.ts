@@ -37,12 +37,12 @@ const paceOf = (speed: number): Pace => ({
 
 /** Simulated seconds since the epoch: wall time, sped up. */
 /**
- * The range a simulated analog value swings through, by its unit, so a bench reads like a building (a supply air
- * temperature of 12 to 24 °C, not 97); anything else 0 to 100.
+ * The range a simulated analog value swings through, by its unit, so a bench reads like a site (a heat pump's flow
+ * temperature of 25 to 40 °C, not 97); anything else 0 to 100.
  */
 const rangeByUnit: Readonly<Record<string, readonly [number, number]>> = {
-  "unit:DEG_C": [12, 24],
-  "unit:DEG_F": [54, 75],
+  "unit:DEG_C": [25, 40],
+  "unit:DEG_F": [77, 104],
   "unit:PERCENT_RelativeHumidity": [30, 60],
   "unit:PPM": [400, 1200],
   "unit:PA": [100, 400]

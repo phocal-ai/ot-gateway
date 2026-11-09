@@ -37,7 +37,7 @@ Install [Raspberry Pi Imager](https://www.raspberrypi.com/software/) (version 2.
 2. **Operating system:** Raspberry Pi OS (other) → **Raspberry Pi OS Lite (64-bit)**. It has to be 64-bit: the gateway image is arm64 only and does not start on the 32-bit OS. Lite has no desktop, which a gateway does not need.
 3. **Storage:** the SD card. Check the size, so you do not erase another disk.
 4. **Customisation:**
-   - **Hostname:** `ot-gateway` (or one name per gateway, such as `ot-gateway-b1`).
+   - **Hostname:** `ot-gateway` (or one name per gateway, such as `ot-gateway-site-1`).
    - **Localisation:** your time zone. The keyboard layout does not matter.
    - **User:** `pi`, with a password of your own. You need the password only for `sudo` on the Pi, never to log in.
    - **Wi-Fi:** in a building, leave it empty and use Ethernet: a gateway there should not depend on Wi-Fi. For a Pi on your desk, Wi-Fi is fine; its address may change, and a dropped connection looks like a network fault in the tests.
@@ -94,9 +94,9 @@ journalctl -k -g voltage      # "Undervoltage detected!" if the power supply is 
 
 The kernel's voltage driver clears the firmware's flags every two seconds, so `vcgencmd get_throttled` shows only the last two seconds; the kernel log is the record since boot.
 
-### Optional: let an AI assistant do the rest
+### Optional: let an AI agent do the rest
 
-An assistant such as Claude Code can run the remaining steps over SSH, but it cannot type your `sudo` password. To let it, allow your user on the Pi to use `sudo` without a password, once, from the laptop:
+An agent such as Claude Code can run the remaining steps over SSH, but it cannot type your `sudo` password. To let it, allow your user on the Pi to use `sudo` without a password, once, from the laptop:
 
 ```bash
 ssh -t ot-gateway 'echo "$USER ALL=(ALL) NOPASSWD: ALL" > /tmp/090-ot-gateway && sudo visudo -cf /tmp/090-ot-gateway && sudo install -m 440 -o root -g root /tmp/090-ot-gateway /etc/sudoers.d/ && rm /tmp/090-ot-gateway'
@@ -163,7 +163,7 @@ Check it with the gateway itself:
 ot-gateway check
 ```
 
-It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI assistant (README, "Set it up with AI"), the assistant runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
+It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI agent (README, "Set it up with AI"), the agent runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
 
 ## 7. Start it
 
@@ -199,6 +199,6 @@ curl -s http://127.0.0.1:8080/api/status
 
 On a test Pi with a few devices, expect about 130 MB of memory, a few percent of CPU and an event-loop lag (p99) of a few milliseconds once the first minute is over.
 
-On Raspberry Pi OS 13 (and any Raspberry Pi kernel from 6.12 on) the Pi lets the gateway see under-voltage (even a dip of a second), but not a capped frequency, throttling or the soft temperature limit. The Host card says `power: under-voltage only`. The gateway still warns when the SoC gets hot (80 °C), and on the Pi `vcgencmd get_throttled` shows the rest.
+On Raspberry Pi OS 13 (and any Raspberry Pi kernel from 6.12 on) the Pi lets the gateway see under-voltage (even a dip of a second), but not a capped frequency, throttling or the soft temperature limit. `host.throttled.watched` in `/api/status` is then `["under_voltage"]`. The gateway still warns when the SoC gets hot (80 °C), and on the Pi `vcgencmd get_throttled` shows the rest.
 
 From here on, [operations.md](operations.md) covers upgrades, logs and the outbox, and [raspberry-pi-testing.md](raspberry-pi-testing.md) the tests before a Pi goes into a building.

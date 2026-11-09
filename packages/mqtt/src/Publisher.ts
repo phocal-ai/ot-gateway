@@ -17,7 +17,7 @@ import {
 import { Config, Effect, Layer, Schema } from "effect"
 import { hostname } from "node:os"
 import { makeMqttClient, MqttPublishError } from "./Client.ts"
-import type { MqttClient, MqttClientOptions } from "./Client.ts"
+import type { ConnectionInfo, MqttClient, MqttClientOptions } from "./Client.ts"
 
 /** `mqtt.url` (or another setting) cannot be used. */
 export class MqttSettingsError extends Schema.TaggedError<MqttSettingsError>()("MqttSettingsError", {
@@ -70,6 +70,8 @@ export interface MqttPublisherOptions extends Pick<
   readonly health?: { readonly topic: string; readonly online: Effect.Effect<string> }
   /** Connect through this network instead of Node's (a simulation); TLS is then the network's business. */
   readonly network?: Pick<Network, "tcp">
+  /** Told on every connect what the broker allowed, before the health message and the retained replay. */
+  readonly onConnected?: (connection: ConnectionInfo) => Effect.Effect<void>
 }
 
 /** Client errors become the core `PublishError`. */
@@ -119,7 +121,7 @@ export const MqttPublisher = (
         : address.tls
           ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
           : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
-      const { health, network: _network, ...clientOptions } = options
+      const { health, network: _network, onConnected, ...clientOptions } = options
       // The latest retained payload per topic, tagged with the connection it went out on.
       const retained = new Map<string, { readonly payload: string; readonly connection: number }>()
       let connection = 0
@@ -135,6 +137,8 @@ export const MqttPublisher = (
       // If the connection drops meanwhile, this is interrupted and the next connect starts over.
       const onConnect = Effect.fnUntraced(function* (client: MqttClient) {
         connection++
+        const info = yield* client.connection
+        if (info !== undefined && onConnected !== undefined) yield* onConnected(info)
         if (health !== undefined) {
           yield* publishRetained(client, health.topic, yield* health.online).pipe(
             Effect.catchTag("MqttPublishError", (error) =>

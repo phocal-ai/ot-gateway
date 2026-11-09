@@ -5,7 +5,17 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { OtGatewayApi } from "@ot-gateway/api"
-import { bufferDropped, makeHealthRegistry, parseConfig, withMetricAttributes } from "@ot-gateway/core"
+import {
+  bufferDrained,
+  bufferDropped,
+  bufferWritten,
+  makeHealthRegistry,
+  mqttConnects,
+  parseConfig,
+  publishFailures,
+  valuesPublished,
+  withMetricAttributes
+} from "@ot-gateway/core"
 import { openHistory } from "@ot-gateway/history"
 import { Effect, FileSystem, Fiber, Metric } from "effect"
 import { FetchHttpClient } from "effect/http"
@@ -13,6 +23,7 @@ import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
 import { createServer } from "node:net"
 import type { HostSnapshot } from "../src/Host.ts"
+import { configView } from "../src/ConfigView.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
 
 const config = parseConfig(
@@ -72,6 +83,62 @@ const pointOf = (snapshot: { readonly devices: ReadonlyArray<{ readonly points: 
   snapshot.devices[0]?.points[0]
 
 describe("status", () => {
+  it.effect("adds up the broker's connects and publishes over devices and outcomes, and keeps its last terms", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseConfig(
+        JSON.stringify({ site: "broker-site", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const state = makeStatusState(parsed, makeHealthRegistry([]), 0)
+      yield* Effect.gen(function* () {
+        yield* Metric.update(Metric.withAttributes(mqttConnects, { outcome: "ok" }), 2)
+        yield* Metric.update(Metric.withAttributes(mqttConnects, { outcome: "failed" }), 3)
+        yield* Metric.update(Metric.withAttributes(mqttConnects, { outcome: "rejected" }), 1)
+        yield* Metric.update(Metric.withAttributes(valuesPublished, { device: "a" }), 10)
+        yield* Metric.update(Metric.withAttributes(valuesPublished, { device: "b" }), 5)
+        yield* Metric.update(publishFailures, 4)
+      }).pipe(withMetricAttributes({ site: "broker-site", building: "b" }))
+      const connection = {
+        protocolVersion: "5",
+        maximumQoS: 1,
+        retainAvailable: true,
+        keepAliveSeconds: 30,
+        receiveMaximum: 100
+      } as const
+      state.recordBrokerConnection(1_234, connection)
+      expect((yield* state.snapshot("none")).broker).toEqual({
+        url: "mqtt://broker",
+        connected: false,
+        connectedAt: 1_234,
+        connection,
+        connects: 2,
+        failedConnects: 4,
+        published: 15,
+        publishFailures: 4
+      })
+    })
+  )
+
+  it.effect("shows the config without points or secrets, and BACnet settings only when a device uses them", () =>
+    Effect.gen(function* () {
+      const view = configView(yield* config)
+      expect(view.sections.map((section) => section.key)).toEqual(["gateway", "mqtt", "status"])
+      expect(view.sections[0]?.entries).toEqual([
+        { key: "site", value: "s" },
+        { key: "building", value: "b" },
+        { key: "id", value: "main" },
+        { key: "healthIntervalMs", value: 60_000 }
+      ])
+      expect(view.sections[1]?.entries).toContainEqual({ key: "url", value: "mqtt://broker" })
+      expect(view.devices).toHaveLength(1)
+      expect(view.devices[0]).toMatchObject({ id: "meter", protocol: "modbus-tcp", pointCount: 2 })
+      const keys = view.devices[0]?.entries.map((entry) => entry.key) ?? []
+      expect(keys).toContain("host")
+      expect(keys).not.toContain("points")
+      expect(keys).not.toContain("id")
+      expect(view.devices[0]?.entries).toContainEqual({ key: "publish", value: "every read" })
+    })
+  )
+
   it.effect("says how full the buffer is and adds up what it dropped, whatever the reason", () =>
     Effect.gen(function* () {
       const buffered = yield* parseConfig(
@@ -84,13 +151,29 @@ describe("status", () => {
         })
       )
       const state = makeStatusState(buffered, makeHealthRegistry([]), 0)
-      expect((yield* state.snapshot).buffer).toEqual({ path: "./buffer.sqlite", rows: 0, maxRows: 500, dropped: 0 })
+      expect((yield* state.snapshot()).buffer).toEqual({
+        path: "./buffer.sqlite",
+        rows: 0,
+        maxRows: 500,
+        dropped: 0,
+        written: 0,
+        delivered: 0,
+        droppedBy: { overflow: 0, rejected: 0, unreadable: 0, undeliverable: 0, lost: 0 },
+        failures: 0,
+        disabled: false
+      })
       // As the buffer counts them: under the gateway's site and building, one series per reason.
       yield* Effect.gen(function* () {
         yield* Metric.update(Metric.withAttributes(bufferDropped, { reason: "overflow" }), 5)
         yield* Metric.update(Metric.withAttributes(bufferDropped, { reason: "rejected" }), 2)
+        yield* Metric.update(bufferWritten, 40)
+        yield* Metric.update(bufferDrained, 30)
       }).pipe(withMetricAttributes({ site: "s", building: "b" }))
-      expect((yield* state.snapshot).buffer?.dropped).toBe(7)
+      // Another gateway's counts in the same process are not this one's.
+      yield* Metric.update(bufferWritten, 1000).pipe(withMetricAttributes({ site: "other", building: "b" }))
+      const buffer = (yield* state.snapshot()).buffer
+      expect(buffer).toMatchObject({ dropped: 7, written: 40, delivered: 30 })
+      expect(buffer?.droppedBy).toMatchObject({ overflow: 5, rejected: 2 })
     })
   )
 
@@ -102,7 +185,7 @@ describe("status", () => {
       const state = makeStatusState(parsed, health, 500)
       // An undecodable payload shows as no value, not an error; the next good one replaces it.
       state.recordPublish("s/b/meter/power", "not json", { retained: false, at: 1 })
-      expect((yield* state.snapshot).devices[0]?.points[0]?.value).toBeUndefined()
+      expect((yield* state.snapshot()).devices[0]?.points[0]?.value).toBeUndefined()
       state.recordPublish("s/b/meter/power", '{"value":12.5,"ts":900,"unit":"unit:KiloW"}', { retained: false, at: 1 })
       state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: false, at: 1 })
       state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}', { retained: false, at: 1 })
@@ -119,7 +202,7 @@ describe("status", () => {
         }
       )
 
-      const snapshot = yield* state.snapshot
+      const snapshot = yield* state.snapshot()
       expect(snapshot.devices).toEqual([
         {
           id: "meter",
@@ -127,6 +210,7 @@ describe("status", () => {
           status: "ok",
           pollIntervalMs: 5000,
           lastSuccess: 1_000,
+          pointCount: 2,
           points: [
             { id: "power", name: "Power", unit: "unit:KiloW", writable: false, value: 12.5, ts: 900 },
             { id: "setpoint", name: "Setpoint", writable: true }
@@ -141,9 +225,34 @@ describe("status", () => {
         status: "rejected",
         reason: "out-of-range"
       })
-      expect(snapshot.broker).toEqual({ url: "mqtt://broker", connected: false })
+      expect(snapshot.broker).toEqual({
+        url: "mqtt://broker",
+        connected: false,
+        connects: 0,
+        failedConnects: 0,
+        published: 0,
+        publishFailures: 0
+      })
       // No host monitor, no host section.
       expect(snapshot).not.toHaveProperty("host")
+      // Without points: the health and the count, not a value per point.
+      const overview = yield* state.snapshot("none")
+      expect(overview.devices[0]).toMatchObject({ id: "meter", status: "ok", pointCount: 2, points: [] })
+    })
+  )
+
+  it.effect("gives the last reads of the points asked for, in that order, and only configured ones", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      state.reads.record("meter", "power", 4.5, 800)
+      expect(yield* state.values("meter/setpoint,meter/power,meter/nope,other/power,,meter")).toEqual({
+        readings: [
+          { device: "meter", point: "setpoint" },
+          { device: "meter", point: "power", value: 4.5, ts: 800 }
+        ]
+      })
+      const tooMany = Array.from({ length: 501 }, () => "meter/power").join(",")
+      expect((yield* Effect.flip(state.values(tooMany)))._tag).toBe("ValuesQueryInvalid")
     })
   )
 
@@ -192,11 +301,11 @@ describe("status", () => {
       const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
       // An aggregate's first message comes at the end of its window; the read is there now.
       state.reads.record("meter", "power", 4.2, 20)
-      expect(pointOf(yield* state.snapshot)).toMatchObject({ value: 4.2, ts: 20 })
+      expect(pointOf(yield* state.snapshot())).toMatchObject({ value: 4.2, ts: 20 })
       // A change or deadband point publishes less often than it is read.
       state.recordPublish("s/b/meter/power", '{"value":4.2,"ts":20}', { retained: false, at: 20 })
       state.reads.record("meter", "power", 4.25, 25)
-      expect(pointOf(yield* state.snapshot)).toMatchObject({ value: 4.25, ts: 25 })
+      expect(pointOf(yield* state.snapshot())).toMatchObject({ value: 4.25, ts: 25 })
     })
   )
 
@@ -235,7 +344,7 @@ describe("status", () => {
         latest: () => sample,
         version: "v1.2.3"
       })
-      expect(yield* state.snapshot).not.toHaveProperty("host")
+      expect(yield* state.snapshot()).not.toHaveProperty("host")
       sample = {
         memoryBytes: 1e8,
         heapBytes: 4e7,
@@ -244,7 +353,7 @@ describe("status", () => {
         clockSteps: 0,
         temperatureC: 55
       }
-      expect((yield* state.snapshot).host).toEqual({ version: "v1.2.3", node: process.versions.node, ...sample })
+      expect((yield* state.snapshot()).host).toEqual({ version: "v1.2.3", node: process.versions.node, ...sample })
     })
   )
 
@@ -260,10 +369,20 @@ describe("status", () => {
       )
       yield* Effect.sleep("300 millis")
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
-      const status = yield* client.status.status()
+      const status = yield* client.status.status({ query: {} })
       expect(status.devices[0]?.points[0]?.value).toBe(3)
+      expect((yield* client.status.status({ query: { points: "none" } })).devices[0]?.points).toEqual([])
+      const { readings } = yield* client.status.values({ query: { points: "meter/power" } })
+      expect(readings).toEqual([{ device: "meter", point: "power", value: 3, ts: 700 }])
       const { messages } = yield* client.status.messages()
       expect(messages.map((message) => message.topic)).toEqual(["s/b/meter/power"])
+      const { points } = yield* client.status.points()
+      expect(points.map((point) => [point.topic, point.source])).toEqual([
+        ["s/b/meter/power", "holding 0 · float32 ABCD"],
+        ["s/b/meter/setpoint", "holding 2 · float32 ABCD"]
+      ])
+      const settings = yield* client.status.config()
+      expect(settings.devices.map((device) => [device.id, device.pointCount])).toEqual([["meter", 2]])
       // Without a built web app, the root says so instead of failing.
       const root = yield* Effect.promise(() => fetch(`http://127.0.0.1:${port}/`).then((response) => response.text()))
       expect(root).toContain("/api/status")

@@ -22,6 +22,12 @@
   --viz-grid: #383835;
 }
 
+/* The home page's margin outside its frame: a quiet dot grid, as on Cloudflare's pages. */
+.home-dots {
+  background-image: radial-gradient(circle, var(--color-fd-border) 1px, transparent 1.5px);
+  background-size: 14px 14px;
+}
+
 /* A message travelling along a pipe of the flow diagram: across on wide screens, down on narrow ones. */
 @keyframes flow-across {
   from {
@@ -67,5 +73,65 @@
   .flow-dot {
     animation: none;
     opacity: 1;
+  }
+}
+
+/* A read landing in the gateway's window: the bars light up one after another, like polls through 15 minutes. */
+@keyframes read-tick {
+  0% {
+    opacity: 0.15;
+  }
+  4% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0.15;
+  }
+}
+.read-tick {
+  opacity: 0.15;
+  animation: read-tick 3.6s ease-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .read-tick {
+    animation: none;
+    opacity: 0.8;
+  }
+}
+
+/* The AI setup transcript: each line arriving in turn. */
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes value-flash {
+  0% {
+    background-color: color-mix(in oklab, var(--series-1) 35%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+.reveal {
+  animation: reveal 450ms ease-out 450ms both;
+}
+
+/* A value on the status page picture that just changed, as on the real page. */
+.value-tick {
+  animation: value-flash 1.2s ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .value-tick {
+    animation: none;
   }
 }

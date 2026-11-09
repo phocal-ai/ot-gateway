@@ -6,17 +6,17 @@ import { formatMessage, watchFilter } from "../src/Watch.ts"
 
 describe("watch", () => {
   it("subscribes to everything under the site and building", () => {
-    expect(watchFilter({ site: "vienna-hq", building: "main" })).toBe("vienna-hq/main/#")
+    expect(watchFilter({ site: "site-1", building: "building-a" })).toBe("site-1/building-a/#")
   })
 
   it("prints one line per message, marks retained ones and cuts long payloads", () => {
     const at = new Date(2026, 10, 5, 9, 4, 7)
-    expect(formatMessage({ topic: "s/b/ahu-1/temp", payload: '{"value":21.5}', retain: false }, at)).toBe(
-      '09:04:07 s/b/ahu-1/temp {"value":21.5}'
+    expect(formatMessage({ topic: "s/b/ventilation-1/temp", payload: '{"value":21.5}', retain: false }, at)).toBe(
+      '09:04:07 s/b/ventilation-1/temp {"value":21.5}'
     )
-    expect(formatMessage({ topic: "s/b/ahu-1/temp/$meta", payload: '{\n  "unit": "x"\n}', retain: true }, at)).toBe(
-      '09:04:07 retained s/b/ahu-1/temp/$meta { "unit": "x" }'
-    )
+    expect(
+      formatMessage({ topic: "s/b/ventilation-1/temp/$meta", payload: '{\n  "unit": "x"\n}', retain: true }, at)
+    ).toBe('09:04:07 retained s/b/ventilation-1/temp/$meta { "unit": "x" }')
     const long = formatMessage({ topic: "t", payload: "x".repeat(1000), retain: false }, at)
     expect(long.length).toBeLessThan(320)
     expect(long.endsWith("…")).toBe(true)
@@ -39,16 +39,42 @@ describe("status", () => {
       id: "main",
       since: 0,
       now: 600_000,
-      broker: { url: "mqtt://localhost:1883", connected: false },
-      buffer: { path: "buf.sqlite", rows: 42, maxRows: 1000, dropped: 3 },
+      broker: {
+        url: "mqtt://localhost:1883",
+        connected: false,
+        connects: 1,
+        failedConnects: 4,
+        published: 900,
+        publishFailures: 0
+      },
+      buffer: {
+        path: "buf.sqlite",
+        rows: 42,
+        maxRows: 1000,
+        dropped: 3,
+        written: 45,
+        delivered: 0,
+        droppedBy: { overflow: 3 },
+        failures: 0,
+        disabled: false
+      },
       devices: [
-        { id: "ahu-1", protocol: "simulator", status: "ok", pollIntervalMs: 2000, lastSuccess: 598_000, points: [] },
         {
-          id: "main-meter",
+          id: "ventilation-1",
+          protocol: "simulator",
+          status: "ok",
+          pollIntervalMs: 2000,
+          lastSuccess: 598_000,
+          pointCount: 0,
+          points: []
+        },
+        {
+          id: "energy-meter",
           protocol: "modbus-tcp",
           status: "failing",
           pollIntervalMs: 5000,
           reason: "Timeout",
+          pointCount: 0,
           points: []
         }
       ],
@@ -59,8 +85,8 @@ describe("status", () => {
       "  broker mqtt://localhost:1883: NOT CONNECTED",
       "  buffer: 42 of 1000 message(s) waiting, 3 DROPPED since start",
       "  2 device(s), 1 failing",
-      "    ahu-1       ok       simulator, 0 point(s), read 2 s ago",
-      "    main-meter  failing  modbus-tcp, 0 point(s), no read yet (Timeout)"
+      "    ventilation-1  ok       simulator, 0 point(s), read 2 s ago",
+      "    energy-meter   failing  modbus-tcp, 0 point(s), no read yet (Timeout)"
     ])
   })
 })

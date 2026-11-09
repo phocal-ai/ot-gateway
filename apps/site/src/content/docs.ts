@@ -36,7 +36,8 @@ export const pages: ReadonlyArray<PageSource> = [
   {
     source: "docs/how-it-works.md",
     slug: "how-it-works",
-    description: "What the gateway does, with one example building: from a meter and two air handlers to your software."
+    description:
+      "What the gateway does, with one example building: from an energy meter, a PV inverter and a heat pump to your software."
   },
   {
     source: "docs/first-building.md",

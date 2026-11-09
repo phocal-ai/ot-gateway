@@ -183,7 +183,7 @@ describe.runIf(enabled)("interop: MQTT brokers", () => {
             const config = yield* parseConfig(
               JSON.stringify({
                 site,
-                building: "b1",
+                building: "building-a",
                 healthIntervalMs: 1_000,
                 mqtt: { url, clientId: `${site}-gateway` },
                 devices: [
@@ -218,15 +218,15 @@ describe.runIf(enabled)("interop: MQTT brokers", () => {
 
             const app = yield* appClient(url, `${site}-app`, [{ filter: `${site}/#` }])
             const gateway = yield* runGateway(config).pipe(Effect.provide(NodeServices.layer), Effect.forkScoped)
-            const health = `${site}/b1/$gateway/main/health`
+            const health = `${site}/building-a/$gateway/main/health`
             yield* waitFor(
               "a value and an online health message",
               () =>
-                app.received.some((message) => message.topic === `${site}/b1/meter/power`) &&
+                app.received.some((message) => message.topic === `${site}/building-a/meter/power`) &&
                 app.received.some((message) => message.topic === health && message.payload.includes('"online"'))
             )
 
-            const set = `${site}/b1/meter/setpoint/$set`
+            const set = `${site}/building-a/meter/setpoint/$set`
             yield* app.client.publish(set, JSON.stringify({ value: 21.5 }), { correlationData: Uint8Array.of(1) })
             yield* app.client.publish(set, JSON.stringify({ value: 99 }), { correlationData: Uint8Array.of(2) })
             yield* app.client.publish(set, JSON.stringify({ value: 22 }), {

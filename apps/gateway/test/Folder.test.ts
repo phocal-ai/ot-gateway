@@ -11,7 +11,7 @@ import { loadEnvFile, missingFromEnv } from "../src/EnvFile.ts"
 import { composeTemplatePath, envFileText, writeFolderFiles } from "../src/Folder.ts"
 import { initConfig, nextSteps } from "../src/Init.ts"
 
-const answers = { site: "vienna-hq", building: "main", brokerUrl: "mqtt://broker.lan:1883" }
+const answers = { site: "site-1", building: "building-a", brokerUrl: "mqtt://broker.lan:1883" }
 const withLogin = { ...answers, login: { username: "gateway", passwordEnv: "MQTT_PASSWORD" } }
 const config = (input: Parameters<typeof initConfig>[0]) => parseConfig(JSON.stringify(initConfig(input, [])))
 

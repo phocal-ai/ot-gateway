@@ -2,267 +2,198 @@
  * The landing page. Its claims come from docs/VISION.md and the README; keep
  * them in step with those rather than adding numbers the repo does not back.
  */
+import { Activity, MonitorCheck, RadioTower } from "lucide-react"
 import Link from "next/link"
 import type * as React from "react"
 import { PublishChart } from "@/components/home/publish-chart.tsx"
 import { Flow } from "@/components/home/flow.tsx"
+import { AiSetup } from "@/components/home/ai-setup.tsx"
+import { Audiences } from "@/components/home/audiences.tsx"
+import { CopyPrompt } from "@/components/home/copy-command.tsx"
+import { HowItWorks } from "@/components/home/how-it-works.tsx"
 import { StatusMock } from "@/components/home/status-mock.tsx"
 import { site } from "@/lib/site.ts"
 
-const journey = [
-  {
-    step: "1",
-    title: "See it work",
-    time: "1 minute",
-    text: "A small simulated building on your computer: an energy meter, an air handler, the gateway and a test broker. No devices, no accounts.",
-    command: "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo",
-    href: "/docs#quick-start",
-    link: "Quick start"
-  },
-  {
-    step: "2",
-    title: "Describe your building",
-    time: "15 minutes",
-    text: "Say which values you want, from which devices, how often and where to. A few questions write the config; BACnet devices are found for you.",
-    command: "ot-gateway init",
-    href: "/docs/first-building",
-    link: "Your first building"
-  },
-  {
-    step: "3",
-    title: "Leave it running",
-    time: "for months",
-    text: "On any always-on machine with Docker, or a Raspberry Pi. It reconnects, buffers while the network is down, and tells you when a device stops answering.",
-    command: "docker compose -f packaging/compose.yaml up -d",
-    href: "/docs/operations",
-    link: "Running a gateway"
-  }
-] as const
+type Icon = React.ComponentType<{ readonly className?: string; readonly "aria-hidden"?: "true" }>
 
-const audiences = [
+/** Where to look when something is wrong (docs/operations.md, observability/README.md). */
+const debugging: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
   [
-    "Facility and energy managers",
-    "Meter readings and plant data in the dashboard or energy report you already use, without a vendor project."
+    MonitorCheck,
+    "Status page",
+    "On the gateway, port 8080: devices, values, messages and history, for whoever is on site."
   ],
   [
-    "System integrators",
-    "One small, scripted install per building: the same config format, status page and health message every time."
-  ],
-  [
-    "Platform and software teams",
-    "Clean MQTT with names, units and semantics on every point, so building data looks like any other data."
-  ]
-] as const
-
-const features: ReadonlyArray<readonly [string, React.ReactNode]> = [
-  [
-    "Modbus TCP and BACnet/IP in",
+    RadioTower,
+    "Health on MQTT",
     <>
-      Polling, BACnet change-of-value, scaling and QUDT units per point. <code>ot-gateway discover</code> finds BACnet
-      devices and drafts their config.
+      <code>…/$gateway/main/health</code>, retained: online or offline and which devices fail, for your alerts.
     </>
   ],
   [
-    "MQTT 5 out",
-    <>
-      Values on <code>site/building/device/point</code>, metadata on the retained <code>$meta</code> topic, gateway
-      health on its own retained topic.
-    </>
-  ],
-  [
-    "Safe writes",
-    "Writing is opt-in per point, range-checked and logged. A command is written once or not at all, never replayed from a buffer."
-  ],
-  [
-    "Store-and-forward",
-    "While the broker is unreachable, values go to a SQLite outbox on the gateway and are sent, in order, when it returns."
-  ],
-  [
-    "Observable",
-    "Each device is ok, starting or failing with a reason, on the status page and in the health message. Metrics, logs and traces go out over OpenTelemetry."
-  ],
-  [
-    "Testable without hardware",
-    "Every driver has a simulator, and CI runs the gateway end to end against Mosquitto, EMQX, a BACnet server and pymodbus."
+    Activity,
+    "OpenTelemetry",
+    "Metrics, logs and traces to Grafana or any OpenTelemetry backend, set with the standard OTEL_* variables."
   ]
 ]
 
-const positioning = [
-  [
-    "Node-RED",
-    "Fast visual prototyping, big ecosystem",
-    "Typed, version-controlled config and code; testable without hardware"
-  ],
-  ["EMQX Neuron", "Many industrial protocols", "Open, small, library-first; focused on building automation"],
-  ["ThingsBoard IoT Gateway", "Broad connector set", "Not tied to one platform; generic MQTT output"],
-  ["Telegraf", "Excellent metrics collection", "Two-way, with safe command write-back and point semantics"],
-  ["Vendor gateways", "Supported, certified", "Open source, extensible, no lock-in"]
-] as const
+/** The prompt from the README's "Set it up with AI", for agents other than Claude Code; keep the two the same. */
+const setupPrompt = `Set up an OT Gateway for my site. Read https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my devices reach the broker.`
 
-const message = `vienna-hq/main/ahu-1/supply-air-temp
-{"value":21.5,"ts":1793631666939,"unit":"unit:DEG_C"}`
+const setupSkill = `${site.repository}/blob/main/.claude/skills/setup/SKILL.md`
 
-const Section = ({ title, children }: { readonly title: string; readonly children: React.ReactNode }) => (
-  <section className="border-t py-14">
-    <h2 className="mb-6 text-2xl font-semibold tracking-tight">{title}</h2>
-    {children}
+/** A horizontal line of the page's frame, with a small square where it meets each side rail. */
+const Rule = () => (
+  <div aria-hidden="true" className="relative border-t">
+    <span className="bg-fd-background absolute -top-[5px] -left-[5px] size-[9px] border" />
+    <span className="bg-fd-background absolute -top-[5px] -right-[5px] size-[9px] border" />
+  </div>
+)
+
+/** A row of the page: a centered heading cell with its lead, a rule, then the content. */
+const Section = ({
+  id,
+  title,
+  lead,
+  flush = false,
+  children
+}: {
+  /** An anchor to link to the section. */
+  readonly id?: string
+  readonly title: string
+  readonly lead?: React.ReactNode
+  /** Content that brings its own cells, edge to edge, instead of padding. */
+  readonly flush?: boolean
+  readonly children: React.ReactNode
+}) => (
+  <section className="scroll-mt-14" id={id}>
+    <Rule />
+    <header className="px-6 py-14 text-center md:px-12 md:py-20">
+      <h2 className="mx-auto max-w-3xl text-3xl font-semibold tracking-tight md:text-4xl">{title}</h2>
+      {lead === undefined ? null : <p className="text-fd-muted-foreground mx-auto mt-4 max-w-2xl">{lead}</p>}
+    </header>
+    <Rule />
+    <div className={flush ? "" : "px-6 py-10 md:px-12 md:py-14"}>{children}</div>
   </section>
 )
 
-const Code = ({ children }: { readonly children: string }) => (
-  <pre className="bg-fd-card overflow-x-auto rounded-lg border p-4 text-sm leading-relaxed">
-    <code>{children}</code>
-  </pre>
-)
+const primaryButton = "bg-fd-primary text-fd-primary-foreground rounded-md px-4 py-2 text-sm font-medium"
 
 const HomePage = () => (
-  <main className="mx-auto w-full max-w-5xl px-6">
-    <section className="py-16 md:py-20">
-      <p className="text-fd-muted-foreground mb-3 text-sm font-medium">Open source · MIT · early</p>
-      <h1 className="mb-5 max-w-3xl text-4xl font-semibold tracking-tight md:text-5xl">
-        Your building&apos;s data, in your software
-      </h1>
-      <p className="text-fd-muted-foreground mb-8 max-w-2xl text-lg">
-        Meters and controllers speak old building protocols. Dashboards and platforms speak MQTT. OT Gateway is the
-        small program in between: it reads the values you choose, names them, and sends them on, unattended and for
-        months.
-      </p>
-      <div className="flex flex-wrap gap-3">
-        <Link
-          className="bg-fd-primary text-fd-primary-foreground rounded-md px-4 py-2 text-sm font-medium"
-          href="/docs"
-        >
-          Try it in one minute
-        </Link>
-        <Link className="hover:bg-fd-accent rounded-md border px-4 py-2 text-sm font-medium" href="/docs/how-it-works">
-          How it works
-        </Link>
-        <a className="hover:bg-fd-accent rounded-md border px-4 py-2 text-sm font-medium" href={site.repository}>
-          GitHub
-        </a>
-      </div>
-    </section>
-
-    <section className="pb-16">
-      <Flow />
-    </section>
-
-    <Section title="You know what you want. It does the rest.">
-      <p className="text-fd-muted-foreground mb-8 max-w-2xl">
-        A points list is usually where it starts: the energy meter&apos;s active power every 5 seconds, each air
-        handler&apos;s supply temperature every 30, all of it to the company broker. That list becomes one config file,
-        and every value arrives under a name that says where it came from:
-      </p>
-      <Code>{message}</Code>
-      <p className="text-fd-muted-foreground mt-3 text-sm">
-        site / building / device / point, with the value, the time it was read and its unit.
-      </p>
-    </Section>
-
-    <Section title="Read often, send what you need">
-      <div className="grid gap-8 md:grid-cols-[2fr_1fr] md:items-center">
-        <PublishChart />
-        <div className="text-fd-muted-foreground space-y-3 text-sm">
-          <p>How often a device is read and what goes to the broker are set separately, per device or per point.</p>
-          <p>
-            <span className="text-fd-foreground font-medium">Every read</span> for live dashboards.{" "}
-            <span className="text-fd-foreground font-medium">Aggregates</span> for energy reports and analytics:
-            minimum, maximum and time-weighted average per window, aligned to the clock like the meter&apos;s 15
-            minutes. <span className="text-fd-foreground font-medium">On change</span> for states, alarms and setpoints
-            that sit still for hours.
-          </p>
-        </div>
-      </div>
-    </Section>
-
-    <Section title="You always know whether it works">
-      <div className="grid gap-8 md:grid-cols-[3fr_2fr] md:items-center">
-        <StatusMock />
-        <p className="text-fd-muted-foreground text-sm">
-          Every gateway has a status page: each device green or red, with the reason and when it last answered, and the
-          messages that went out. The same goes to the broker as a health message, so your platform can raise an alert
-          when a device goes quiet instead of showing an old value.
+  <div className="home-dots">
+    <main className="bg-fd-background mx-auto w-full max-w-6xl border-x border-dashed">
+      <section className="px-6 py-16 md:px-12 md:py-24">
+        <p className="text-fd-muted-foreground mb-3 text-sm font-medium">Open source · MIT</p>
+        <h1 className="mb-5 max-w-3xl tracking-tight">
+          <span className="block text-4xl font-semibold md:text-5xl">OT Gateway</span>
+          <span className="text-fd-muted-foreground mt-2 block text-2xl font-medium md:text-3xl">
+            Building and industrial data in. Standard MQTT out.
+          </span>
+        </h1>
+        <p className="text-fd-muted-foreground mb-8 max-w-2xl text-lg">
+          Reads your meters and controllers and sends their values as standard MQTT. Nothing is lost when the connection
+          drops. Built for AI-native setup and debugging.
         </p>
-      </div>
-    </Section>
+        <div className="flex flex-wrap items-start gap-3">
+          <Link className={`${primaryButton} shrink-0`} href="/docs">
+            Get started
+          </Link>
+          <CopyPrompt prompt={setupPrompt} />
+        </div>
+        <p className="text-fd-muted-foreground mt-8 text-sm">
+          Modbus TCP · BACnet/IP · MQTT 3.1.1 and 5 · runs in Docker, for example on a Raspberry Pi
+        </p>
+      </section>
 
-    <Section title="From first look to a running building">
-      <ol className="grid gap-6 md:grid-cols-3">
-        {journey.map((item) => (
-          <li className="bg-fd-card flex flex-col rounded-xl border p-5" key={item.step}>
-            <p className="text-fd-muted-foreground mb-2 text-xs font-medium">
-              Step {item.step} · {item.time}
+      <Rule />
+      <section className="px-6 py-12 md:px-12 md:py-16">
+        <Flow />
+      </section>
+
+      <Section lead="Three steps from the devices on your site to data on your broker." title="How it works">
+        <HowItWorks />
+      </Section>
+
+      <Section
+        flush
+        id="ai-native"
+        lead="Tell your AI agent what you need from a site. It sets up the gateway, checks the config and, when a device fails, finds out why. You review and decide."
+        title="AI-native setup and debugging"
+      >
+        <div className="grid gap-10 px-6 py-10 md:grid-cols-[1fr_1.5fr] md:items-center md:px-12 md:py-14">
+          <div className="text-sm">
+            <p className="text-fd-muted-foreground text-xs font-medium tracking-wide uppercase">You bring</p>
+            <ul className="mt-2 list-disc space-y-1.5 pl-4">
+              <li>A machine on the site's network</li>
+              <li>Your datapoint list, or the device datasheets</li>
+              <li>What to read, how often, and where it goes</li>
+            </ul>
+            <p className="text-fd-muted-foreground mt-4">
+              The agent drives the CLI: <code>discover</code>, <code>import</code>, <code>check</code>,{" "}
+              <code>watch</code> and <code>status</code>, in plain text, and <code>check</code> names every mistake with
+              its path.
             </p>
-            <h3 className="mb-2 font-semibold">{item.title}</h3>
-            <p className="text-fd-muted-foreground mb-4 flex-1 text-sm">{item.text}</p>
-            <pre className="bg-fd-background mb-4 rounded-md border p-2 text-xs break-all whitespace-pre-wrap">
-              <code>{item.command}</code>
-            </pre>
-            <Link className="text-sm font-medium underline" href={item.href}>
-              {item.link}
-            </Link>
-          </li>
-        ))}
-      </ol>
-    </Section>
-
-    <Section title="Who it is for">
-      <dl className="grid gap-6 md:grid-cols-3">
-        {audiences.map(([title, text]) => (
-          <div key={title}>
-            <dt className="font-medium">{title}</dt>
-            <dd className="text-fd-muted-foreground mt-1 text-sm">{text}</dd>
+            <p className="text-fd-muted-foreground mt-4">
+              Copy the prompt from the top of the page, or type <code>/setup</code> in Claude Code. It follows{" "}
+              <a className="text-fd-foreground font-medium underline" href={setupSkill}>
+                the setup skill
+              </a>
+              . Rather do it yourself?{" "}
+              <Link className="text-fd-foreground font-medium underline" href="/docs/first-building">
+                Your first site
+              </Link>{" "}
+              walks you through it by hand.
+            </p>
           </div>
-        ))}
-      </dl>
-    </Section>
+          <AiSetup />
+        </div>
+      </Section>
 
-    <Section title="Under the hood">
-      <dl className="grid gap-x-8 gap-y-6 md:grid-cols-3">
-        {features.map(([title, text]) => (
-          <div key={title}>
-            <dt className="font-medium">{title}</dt>
-            <dd className="text-fd-muted-foreground mt-1 text-sm">{text}</dd>
-          </div>
-        ))}
-      </dl>
-    </Section>
+      <Section
+        lead="Every gateway has a status page, a health message on MQTT and OpenTelemetry: each device ok or failing with the reason, and the values as they arrive."
+        title="Debugging built in"
+      >
+        <StatusMock />
+        <dl className="mt-8 grid gap-6 text-sm md:grid-cols-3">
+          {debugging.map(([Icon, title, text]) => (
+            <div className="flex gap-3" key={title}>
+              <Icon aria-hidden="true" className="text-fd-muted-foreground mt-0.5 size-5 shrink-0" />
+              <div>
+                <dt className="font-medium">{title}</dt>
+                <dd className="text-fd-muted-foreground mt-1">{text}</dd>
+              </div>
+            </div>
+          ))}
+        </dl>
+      </Section>
 
-    <Section title="Where it fits">
-      <p className="text-fd-muted-foreground mb-6 max-w-2xl">
-        Between visual flow tools and closed vendor gateways: code-first, typed and testable, yet usable from a config
-        file. It is built on Effect for TypeScript, with its own Modbus, BACnet/IP and MQTT 5 stacks.
-      </p>
-      <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="border-b">
-              <th className="py-2 pr-4 font-medium">Tool</th>
-              <th className="py-2 pr-4 font-medium">Strength</th>
-              <th className="py-2 font-medium">Where OT Gateway differs</th>
-            </tr>
-          </thead>
-          <tbody className="text-fd-muted-foreground">
-            {positioning.map(([tool, strength, difference]) => (
-              <tr className="border-b" key={tool}>
-                <td className="text-fd-foreground py-2 pr-4">{tool}</td>
-                <td className="py-2 pr-4">{strength}</td>
-                <td className="py-2">{difference}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </Section>
+      <Section
+        lead="Read a device every few seconds and send only what your software needs: every read, an average per window, or only the changes."
+        title="Read often, send what you need"
+      >
+        <PublishChart />
+      </Section>
 
-    <footer className="text-fd-muted-foreground flex flex-wrap gap-6 border-t py-10 text-sm">
-      <span>OT Gateway, MIT licensed</span>
-      <Link href="/docs">Docs</Link>
-      <Link href="/docs/how-it-works">How it works</Link>
-      <Link href="/docs/vision">Vision</Link>
-      <a href={site.repository}>GitHub</a>
-    </footer>
-  </main>
+      <Section
+        flush
+        lead="The people who run the sites, set them up, build on the data and keep the network safe."
+        title="Who it is for"
+      >
+        <Audiences />
+      </Section>
+
+      <Rule />
+      <footer className="text-fd-muted-foreground flex flex-wrap gap-6 px-6 py-10 text-sm md:px-12">
+        <span>OT Gateway, MIT licensed</span>
+        <Link href="/docs">Docs</Link>
+        <Link href="/docs/how-it-works">How it works</Link>
+        <Link href="/docs/operations">Operations</Link>
+        <Link href="/docs/troubleshooting">Troubleshooting</Link>
+        <Link href="/docs/vision">Vision</Link>
+        <a href={site.repository}>GitHub</a>
+      </footer>
+    </main>
+  </div>
 )
 
 export default HomePage

@@ -41,7 +41,7 @@ const missing = point("missing", 99, "object-type")
 
 const deviceConfig = (points: ReadonlyArray<BacnetPoint>, address?: string): BacnetDevice => ({
   protocol: "bacnet-ip",
-  id: "ahu-2",
+  id: "ventilation-2",
   deviceInstance: 2001,
   cov: true,
   pollIntervalMs: 1000,

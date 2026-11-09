@@ -36,7 +36,7 @@ const setup = Effect.fnUntraced(function* (retainAsPublished = false, protocolVe
 })
 
 const command = (value: number, extra: { retain?: boolean } = {}) => ({
-  topic: "s/b/ahu-1/setpoint/$set",
+  topic: "s/b/ventilation-1/setpoint/$set",
   payload: JSON.stringify({ value }),
   qos: 1 as const,
   retain: extra.retain ?? false,
@@ -51,11 +51,11 @@ describe("MQTT subscriptions", () => {
       yield* startBroker
       yield* TestClock.adjust("2 seconds")
       publishToSubscribers(control, command(1))
-      publishToSubscribers(control, { ...command(2), topic: "s/b/ahu-1/setpoint/$meta" })
+      publishToSubscribers(control, { ...command(2), topic: "s/b/ventilation-1/setpoint/$meta" })
       yield* TestClock.adjust("1 second")
       expect(received).toEqual([
         {
-          topic: "s/b/ahu-1/setpoint/$set",
+          topic: "s/b/ventilation-1/setpoint/$set",
           payload: '{"value":1}',
           retain: false,
           responseTopic: "app/responses",
@@ -120,8 +120,8 @@ describe("MQTT subscriptions", () => {
       publishToSubscribers(control, command(2, { retain: true }))
       yield* TestClock.adjust("1 second")
       expect(received).toEqual([
-        { topic: "s/b/ahu-1/setpoint/$set", payload: '{"value":1}', retain: true },
-        { topic: "s/b/ahu-1/setpoint/$set", payload: '{"value":2}', retain: false }
+        { topic: "s/b/ventilation-1/setpoint/$set", payload: '{"value":1}', retain: true },
+        { topic: "s/b/ventilation-1/setpoint/$set", payload: '{"value":2}', retain: false }
       ])
       expect(control.connects.map((connect) => connect.protocolVersion)).toEqual([4])
     })
