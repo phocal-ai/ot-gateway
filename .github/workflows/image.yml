@@ -13,6 +13,8 @@ on:
       - ".dockerignore"
       - "packages/**"
       - "apps/**"
+      # The project site is not in the image; a site-only change skips the build.
+      - "!apps/site/**"
       - "pnpm-lock.yaml"
       - ".github/workflows/image.yml"
   push:

@@ -10,11 +10,21 @@ on:
     paths:
       - "packages/**"
       - "apps/**"
+      # The project site talks to no broker or device; a site-only change skips interop.
+      - "!apps/site/**"
       - "test/interop/**"
       - "scripts/interop.sh"
       - ".github/workflows/interop.yml"
   push:
     branches: [dev]
+    paths:
+      - "packages/**"
+      - "apps/**"
+      # The project site talks to no broker or device; a site-only change skips interop.
+      - "!apps/site/**"
+      - "test/interop/**"
+      - "scripts/interop.sh"
+      - ".github/workflows/interop.yml"
   workflow_dispatch:
 
 permissions:
