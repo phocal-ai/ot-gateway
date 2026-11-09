@@ -7,6 +7,9 @@ import type { NextConfig } from "next"
 
 const config: NextConfig = {
   output: "export",
+  // Each page as `<route>/index.html`, which the gateway's static server finds for `/points` (it redirects to
+  // `/points/`); `points.html` would fall through to the SPA fallback and show the status page.
+  trailingSlash: true,
   // `@ot-gateway/api` is TypeScript source in the workspace, like every OT Gateway package.
   transpilePackages: ["@ot-gateway/api"],
   // Types are checked by the repo's `pnpm typecheck` (TypeScript 7 with the Effect language service).

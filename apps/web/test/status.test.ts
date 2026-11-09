@@ -3,7 +3,16 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import type { DeviceStatus } from "@ot-gateway/api"
-import { clockTime, every, fillPercent, freshness, since, topicKind } from "../src/lib/status.ts"
+import {
+  byAttention,
+  clockTime,
+  every,
+  failureLabel,
+  fillPercent,
+  freshness,
+  since,
+  topicKind
+} from "../src/lib/status.ts"
 
 describe("topicKind", () => {
   it("tells values, metadata, health and command results apart", () => {
@@ -48,6 +57,29 @@ describe("freshness", () => {
       lastSuccess: now - 1000
     })
     expect(freshness(device({ status: "starting" }), now)).toEqual({ _tag: "starting" })
+  })
+})
+
+describe("byAttention", () => {
+  const now = 1_793_881_441_000
+
+  it("puts failing, then late, then starting devices before the ones that answer, each in config order", () => {
+    const devices = [
+      device({ id: "ok-1", lastSuccess: now }),
+      device({ id: "late", lastSuccess: now - 60_000 }),
+      device({ id: "failing", status: "failing", reason: "timeout" }),
+      device({ id: "ok-2", lastSuccess: now }),
+      device({ id: "starting", status: "starting" })
+    ]
+    expect(byAttention(devices, now).map((each) => each.id)).toEqual(["failing", "late", "starting", "ok-1", "ok-2"])
+  })
+})
+
+describe("failureLabel", () => {
+  it("says a failure reason in words, and passes an unknown one through", () => {
+    expect(failureLabel("connection")).toBe("cannot connect")
+    expect(failureLabel("cycle-timeout")).toBe("read hangs")
+    expect(failureLabel("something-new")).toBe("something-new")
   })
 })
 

@@ -98,6 +98,19 @@ describe("BufferedPublisher", () => {
     }).pipe(withMetricAttributes({ test: "outage" }))
   )
 
+  it.live("counts what waits under the buffer's own attributes, whichever device stored it", () =>
+    Effect.gen(function* () {
+      const broker = makeBroker()
+      const publisher = yield* openBuffer(yield* tempDatabase, broker, yield* Effect.scope)
+      broker.state.up = false
+      // Each device's pipeline publishes inside its own `device` attribute.
+      yield* publisher.publish("t/a", "1").pipe(withMetricAttributes({ device: "a" }))
+      yield* publisher.publish("t/b", "2").pipe(withMetricAttributes({ device: "b" }))
+      const rows = yield* Metric.value(Metric.withAttributes(bufferRows, { test: "per-device" }))
+      expect(rows.value).toBe(2)
+    }).pipe(withMetricAttributes({ test: "per-device" }))
+  )
+
   it.live("does not buffer retained messages or messages the broker rejects", () =>
     Effect.gen(function* () {
       const broker = makeBroker()

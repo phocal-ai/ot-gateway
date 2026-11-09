@@ -6,26 +6,41 @@
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
 import {
+  type BrokerConnection,
   type CommandStatus,
+  type ConfigView,
   type DeviceStatus,
   type GatewayStatus,
   HistoryQueryInvalid,
   HistoryUnavailable,
+  MAX_VALUES_PER_REQUEST,
   type Messages,
-  OtGatewayApi
+  OtGatewayApi,
+  type PointCatalog,
+  type PointReadings,
+  ValuesQueryInvalid
 } from "@ot-gateway/api"
 import type { History } from "@ot-gateway/history"
+import { configView } from "./ConfigView.ts"
 import type { HostSnapshot } from "./Host.ts"
+import { pointCatalog } from "./PointCatalog.ts"
 import {
+  bufferDisabled,
+  bufferDrained,
   bufferDropped,
   bufferDropReasons,
+  bufferFailures,
   bufferRows,
+  bufferWritten,
   type CommandOutcome,
   type GatewayConfig,
   type HealthRegistry,
   type HistorySink,
   mqttConnected,
-  type StatusSettings
+  mqttConnects,
+  publishFailures,
+  type StatusSettings,
+  valuesPublished
 } from "@ot-gateway/core"
 import { Clock, Effect, FileSystem, Layer, Metric, Option, Schema } from "effect"
 import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse, HttpStaticServer } from "effect/http"
@@ -69,13 +84,22 @@ export interface StatusState {
    * older than what was published and is there before the first message of an aggregate or a change.
    */
   readonly reads: HistorySink
+  /** Note a connect to the broker: when, and what the broker allowed. */
+  readonly recordBrokerConnection: (at: number, connection: BrokerConnection) => void
   readonly recordCommand: (
     at: number,
     command: { readonly device: string; readonly point: string },
     outcome: CommandOutcome
   ) => void
-  readonly snapshot: Effect.Effect<GatewayStatus>
+  /** The whole status; `"none"` leaves out every point (each device keeps its `pointCount`). */
+  readonly snapshot: (points?: "all" | "none") => Effect.Effect<GatewayStatus>
+  /** The last reads of the points named by comma-separated `device/point` keys, configured ones only. */
+  readonly values: (keys: string) => Effect.Effect<PointReadings, ValuesQueryInvalid>
   readonly messages: Effect.Effect<Messages>
+  /** Every configured point with its topic, source and publish mode: built once, the config does not change. */
+  readonly points: Effect.Effect<PointCatalog>
+  /** The running config without its points, for the Settings tab: built once. */
+  readonly config: Effect.Effect<ConfigView>
 }
 
 /** Where the page's host section comes from: the host monitor's last sample, when there is a monitor. */
@@ -98,6 +122,15 @@ export const makeStatusState = (
   const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number }>()
   const droppedTopics = new Set<string>()
   const commands: Array<CommandStatus> = []
+  let broker: { readonly at: number; readonly connection: BrokerConnection } | undefined
+  const catalog = pointCatalog(config)
+  const settings = configView(config)
+  const configured = new Set(catalog.points.map((point) => `${point.device}/${point.id}`))
+  /** A point's last read: the read itself, or the value it last published (a pushed or aggregated one). */
+  const lastRead = (key: string) => {
+    const payload = payloads.get(key)
+    return reads.get(key) ?? Option.getOrUndefined(payload === undefined ? Option.none() : decodeValue(payload))
+  }
   const attributes = { site: config.site, building: config.building }
   return {
     recordPublish: (topic, payload, message) => {
@@ -121,6 +154,9 @@ export const makeStatusState = (
         reads.set(`${device}/${point}`, { value, ts })
       }
     },
+    recordBrokerConnection: (at, connection) => {
+      broker = { at, connection }
+    },
     recordCommand: (at, command, outcome) => {
       commands.unshift({
         at,
@@ -131,56 +167,104 @@ export const makeStatusState = (
       })
       if (commands.length > RECENT_COMMANDS) commands.length = RECENT_COMMANDS
     },
-    snapshot: Effect.gen(function* () {
-      const now = yield* Clock.currentTimeMillis
-      const connected = (yield* Metric.value(Metric.withAttributes(mqttConnected, attributes))).value === 1
-      const rows = (yield* Metric.value(Metric.withAttributes(bufferRows, attributes))).value
-      let dropped = 0
-      for (const reason of bufferDropReasons) {
-        dropped += (yield* Metric.value(Metric.withAttributes(bufferDropped, { ...attributes, reason }))).count
-      }
-      const devices = config.devices.map((device): DeviceStatus => {
-        const state = health.devices.get(device.id) ?? { status: "starting" as const }
+    snapshot: (points = "all") =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis
+        const connected = (yield* Metric.value(Metric.withAttributes(mqttConnected, attributes))).value === 1
+        const rows = (yield* Metric.value(Metric.withAttributes(bufferRows, attributes))).value
+        const disabled = (yield* Metric.value(Metric.withAttributes(bufferDisabled, attributes))).value === 1
+        // Counters summed over their other attributes (device, outcome, reason, ...): one pass over the registry.
+        const total = totals(yield* Metric.snapshot, attributes)
+        const droppedBy = Object.fromEntries(
+          bufferDropReasons.map((reason) => [reason, total(bufferDropped.id, { reason })])
+        )
+        const dropped = Object.values(droppedBy).reduce((sum, count) => sum + count, 0)
+        const devices = config.devices.map((device): DeviceStatus => {
+          const state = health.devices.get(device.id) ?? { status: "starting" as const }
+          return {
+            id: device.id,
+            protocol: device.protocol,
+            status: state.status,
+            pollIntervalMs: device.pollIntervalMs,
+            ...(state.reason === undefined ? {} : { reason: state.reason }),
+            ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
+            pointCount: device.points.length,
+            points:
+              points === "none"
+                ? []
+                : device.points.map((point) => {
+                    const last = lastRead(`${device.id}/${point.id}`)
+                    return {
+                      id: point.id,
+                      name: point.name,
+                      writable: point.writable,
+                      ...(point.unit === undefined ? {} : { unit: point.unit }),
+                      ...(last === undefined ? {} : { value: last.value, ts: last.ts })
+                    }
+                  })
+          }
+        })
+        const sample = host?.latest()
         return {
-          id: device.id,
-          protocol: device.protocol,
-          status: state.status,
-          pollIntervalMs: device.pollIntervalMs,
-          ...(state.reason === undefined ? {} : { reason: state.reason }),
-          ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
-          points: device.points.map((point) => {
-            const key = `${device.id}/${point.id}`
-            const payload = payloads.get(key)
-            const last =
-              reads.get(key) ?? Option.getOrUndefined(payload === undefined ? Option.none() : decodeValue(payload))
-            return {
-              id: point.id,
-              name: point.name,
-              writable: point.writable,
-              ...(point.unit === undefined ? {} : { unit: point.unit }),
-              ...(last === undefined ? {} : { value: last.value, ts: last.ts })
-            }
+          site: config.site,
+          building: config.building,
+          id: config.id,
+          since,
+          now,
+          broker: {
+            url: config.mqtt.url,
+            connected,
+            ...(broker === undefined ? {} : { connectedAt: broker.at, connection: broker.connection }),
+            connects: total(mqttConnects.id, { outcome: "ok" }),
+            failedConnects:
+              total(mqttConnects.id, { outcome: "failed" }) + total(mqttConnects.id, { outcome: "rejected" }),
+            published: total(valuesPublished.id),
+            publishFailures: total(publishFailures.id)
+          },
+          ...(config.buffer === undefined
+            ? {}
+            : {
+                buffer: {
+                  path: config.buffer.path,
+                  rows: Math.max(0, rows),
+                  maxRows: config.buffer.maxRows,
+                  dropped,
+                  written: total(bufferWritten.id),
+                  delivered: total(bufferDrained.id),
+                  droppedBy,
+                  failures: total(bufferFailures.id),
+                  disabled
+                }
+              }),
+          ...(host === undefined || sample === undefined
+            ? {}
+            : { host: { version: host.version, node: process.versions.node, ...sample } }),
+          devices,
+          commands: [...commands]
+        }
+      }),
+    values: (keys) =>
+      Effect.gen(function* () {
+        const asked = keys.split(",").filter((key) => key !== "")
+        if (asked.length > MAX_VALUES_PER_REQUEST) {
+          return yield* new ValuesQueryInvalid({
+            message: `${asked.length} points asked for, at most ${MAX_VALUES_PER_REQUEST} per request`
           })
         }
-      })
-      const sample = host?.latest()
-      return {
-        site: config.site,
-        building: config.building,
-        id: config.id,
-        since,
-        now,
-        broker: { url: config.mqtt.url, connected },
-        ...(config.buffer === undefined
-          ? {}
-          : { buffer: { path: config.buffer.path, rows: Math.max(0, rows), maxRows: config.buffer.maxRows, dropped } }),
-        ...(host === undefined || sample === undefined
-          ? {}
-          : { host: { version: host.version, node: process.versions.node, ...sample } }),
-        devices,
-        commands: [...commands]
-      }
-    }),
+        const readings = asked.flatMap((key) => {
+          if (!configured.has(key)) return []
+          const slash = key.indexOf("/")
+          const last = lastRead(key)
+          return [
+            {
+              device: key.slice(0, slash),
+              point: key.slice(slash + 1),
+              ...(last === undefined ? {} : { value: last.value, ts: last.ts })
+            }
+          ]
+        })
+        return { readings }
+      }),
     messages: Effect.sync(() => ({
       messages: [...latest.entries()]
         .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
@@ -193,9 +277,28 @@ export const makeStatusState = (
           count: message.count
         })),
       droppedTopics: droppedTopics.size
-    }))
+    })),
+    points: Effect.succeed(catalog),
+    config: Effect.succeed(settings)
   }
 }
+
+/**
+ * A sum over a registry snapshot: every counter series with this id whose attributes include `scope` (this
+ * gateway's site and building) and `match`, whatever else they carry (a device, an outcome).
+ */
+const totals =
+  (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, scope: Readonly<Record<string, string>>) =>
+  (id: string, match: Readonly<Record<string, string>> = {}) => {
+    const wanted = Object.entries({ ...scope, ...match })
+    let sum = 0
+    for (const snapshot of snapshots) {
+      if (snapshot.id !== id || snapshot.type !== "Counter") continue
+      const attributes = snapshot.attributes ?? {}
+      if (wanted.every(([key, value]) => attributes[key] === value)) sum += Number(snapshot.state.count)
+    }
+    return sum
+  }
 
 /** The range a history request asks for when it names none: the last hour. */
 const DEFAULT_HISTORY_MS = 3_600_000
@@ -253,8 +356,11 @@ export const serveStatus = (
       Layer.provide(
         HttpApiBuilder.group(OtGatewayApi, "status", (handlers) =>
           handlers
-            .handle("status", () => state.snapshot)
+            .handle("status", ({ query }) => state.snapshot(query.points))
+            .handle("values", ({ query }) => state.values(query.points))
             .handle("messages", () => state.messages)
+            .handle("points", () => state.points)
+            .handle("config", () => state.config)
             .handle("history", ({ query }) => history(query))
         )
       )

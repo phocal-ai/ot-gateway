@@ -38,6 +38,11 @@ describe("valueTicks", () => {
     expect(ticks[0]).toBeLessThan(21)
     expect(ticks.at(-1)).toBeGreaterThan(21)
   })
+
+  it("ends for a range with no reads in it, whose min and max are ±Infinity", () => {
+    expect(valueTicks(Math.min(), Math.max())).toEqual([0, 1])
+    expect(valueTicks(Number.NaN, 1)).toEqual([0, 1])
+  })
 })
 
 describe("timeTicks", () => {

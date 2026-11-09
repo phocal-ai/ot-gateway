@@ -5,7 +5,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { makeMemoryNetwork, type MqttSettings } from "@ot-gateway/core"
 import { ConfigProvider, Effect, Exit, Layer, Logger, References, Scope } from "effect"
 import { TestClock } from "effect/testing"
-import { makeBrokerControl, MqttPublisher, serveMqtt } from "../src/index.ts"
+import { type ConnectionInfo, makeBrokerControl, MqttPublisher, serveMqtt } from "../src/index.ts"
 
 const password = "not-for-the-logs"
 
@@ -108,6 +108,35 @@ describe("MqttPublisher password warning", () => {
   it.effect("does not warn without a password", () =>
     Effect.gen(function* () {
       expect(yield* passwordWarningsAtStartup({ url: "mqtt://broker.local:1883", username: "gw" })).toEqual([])
+    })
+  )
+})
+
+describe("MqttPublisher onConnected", () => {
+  it.effect("tells what the broker allowed on every connect, reconnects included", () =>
+    Effect.gen(function* () {
+      const memory = makeMemoryNetwork()
+      const seen: Array<ConnectionInfo> = []
+      const settings: MqttSettings = { version: "auto", url: "mqtt://10.0.0.2:1883", clientId: "gw" }
+      yield* Effect.gen(function* () {
+        yield* Layer.build(
+          MqttPublisher(settings, {
+            network: memory.host("10.0.0.1"),
+            onConnected: (info) => Effect.sync(() => seen.push(info))
+          })
+        )
+        const firstBroker = yield* Scope.make()
+        yield* Effect.gen(function* () {
+          yield* serveMqtt(yield* memory.listen("10.0.0.2", 1883)).pipe(Effect.forkScoped)
+        }).pipe(Scope.provide(firstBroker))
+        yield* TestClock.adjust("20 seconds")
+        expect(seen).toHaveLength(1)
+        expect(seen[0]).toMatchObject({ protocolVersion: "5", maximumQoS: 1, retainAvailable: true })
+        yield* Scope.close(firstBroker, Exit.void)
+        yield* serveMqtt(yield* memory.listen("10.0.0.2", 1883)).pipe(Effect.forkScoped)
+        yield* TestClock.adjust("20 seconds")
+        expect(seen).toHaveLength(2)
+      }).pipe(Effect.scoped)
     })
   )
 })

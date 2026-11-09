@@ -39,8 +39,25 @@ describe("status", () => {
       id: "main",
       since: 0,
       now: 600_000,
-      broker: { url: "mqtt://localhost:1883", connected: false },
-      buffer: { path: "buf.sqlite", rows: 42, maxRows: 1000, dropped: 3 },
+      broker: {
+        url: "mqtt://localhost:1883",
+        connected: false,
+        connects: 1,
+        failedConnects: 4,
+        published: 900,
+        publishFailures: 0
+      },
+      buffer: {
+        path: "buf.sqlite",
+        rows: 42,
+        maxRows: 1000,
+        dropped: 3,
+        written: 45,
+        delivered: 0,
+        droppedBy: { overflow: 3 },
+        failures: 0,
+        disabled: false
+      },
       devices: [
         {
           id: "ventilation-1",
@@ -48,6 +65,7 @@ describe("status", () => {
           status: "ok",
           pollIntervalMs: 2000,
           lastSuccess: 598_000,
+          pointCount: 0,
           points: []
         },
         {
@@ -56,6 +74,7 @@ describe("status", () => {
           status: "failing",
           pollIntervalMs: 5000,
           reason: "Timeout",
+          pointCount: 0,
           points: []
         }
       ],
