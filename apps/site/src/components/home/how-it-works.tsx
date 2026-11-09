@@ -65,9 +65,6 @@ const Terminal = ({ lines }: { readonly lines: ReadonlyArray<readonly [string, s
   </pre>
 )
 
-/** The demo from the README's quick start: simulated devices, the gateway and a test broker (hero and closing call). */
-export const demoCommand = "docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo"
-
 const steps: ReadonlyArray<{
   readonly title: string
   /** One or more paragraphs. */

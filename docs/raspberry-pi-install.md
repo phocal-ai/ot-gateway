@@ -94,9 +94,9 @@ journalctl -k -g voltage      # "Undervoltage detected!" if the power supply is 
 
 The kernel's voltage driver clears the firmware's flags every two seconds, so `vcgencmd get_throttled` shows only the last two seconds; the kernel log is the record since boot.
 
-### Optional: let an AI assistant do the rest
+### Optional: let an AI agent do the rest
 
-An assistant such as Claude Code can run the remaining steps over SSH, but it cannot type your `sudo` password. To let it, allow your user on the Pi to use `sudo` without a password, once, from the laptop:
+An agent such as Claude Code can run the remaining steps over SSH, but it cannot type your `sudo` password. To let it, allow your user on the Pi to use `sudo` without a password, once, from the laptop:
 
 ```bash
 ssh -t ot-gateway 'echo "$USER ALL=(ALL) NOPASSWD: ALL" > /tmp/090-ot-gateway && sudo visudo -cf /tmp/090-ot-gateway && sudo install -m 440 -o root -g root /tmp/090-ot-gateway /etc/sudoers.d/ && rm /tmp/090-ot-gateway'
@@ -163,7 +163,7 @@ Check it with the gateway itself:
 ot-gateway check
 ```
 
-It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI assistant (README, "Set it up with AI"), the assistant runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
+It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI agent (README, "Set it up with AI"), the agent runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
 
 ## 7. Start it
 
