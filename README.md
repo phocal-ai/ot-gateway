@@ -1,6 +1,6 @@
 # OT Gateway
 
-**An open-source OT gateway for buildings and industrial sites, set up and debugged with your AI assistant.**
+**An open-source OT gateway for buildings and industrial sites, set up and debugged with your AI agent.**
 
 OT Gateway gets the values you care about out of a site's meters and controllers and into your software. It runs as one container wherever Docker runs (a mini PC, an industrial PC, a server, a Raspberry Pi), reads protocols such as Modbus TCP and BACnet/IP, and forwards clean, named values with units as standard MQTT, without losing values when the connection drops. Debugging and telemetry are built in: a local status page, a health message and OpenTelemetry. [How it works](docs/how-it-works.md) explains it with one example building.
 
