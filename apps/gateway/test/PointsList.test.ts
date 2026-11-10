@@ -217,6 +217,15 @@ describe("devicesFromPointsList", () => {
     })
   )
 
+  it.effect("reads a list with two unknown columns of the same name, which it ignores", () =>
+    Effect.gen(function* () {
+      const devices = yield* devicesFromPointsList(
+        "device,point,host,register,type,notes,Notes\nm,p,1.2.3.4,1,int16,first,second\n"
+      )
+      expect(devices.map((device) => device.id)).toEqual(["m"])
+    })
+  )
+
   it.effect("names the line as the file has it, past blank lines and quoted line breaks", () =>
     Effect.gen(function* () {
       expect(

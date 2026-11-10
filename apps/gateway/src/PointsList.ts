@@ -163,6 +163,34 @@ export const columnAliases: Readonly<Record<string, string>> = {
   publish_every_s: "publish_s"
 }
 
+/**
+ * The columns this reader reads, the same as PointsSchema.ts's `pointsListColumns` (its test checks they agree).
+ * Kept here so the reader does not import the schema, which imports the reader.
+ */
+export const readColumns: ReadonlyArray<string> = [
+  "device",
+  "point",
+  "unit",
+  "interval_s",
+  "publish",
+  "publish_s",
+  "deadband",
+  "scale",
+  "offset",
+  "host",
+  "port",
+  "unit_id",
+  "profile",
+  "register",
+  "table",
+  "type",
+  "byte_order",
+  "device_instance",
+  "address",
+  "object_type",
+  "object_instance"
+]
+
 /** A header as the column it names: lower case, `_` for spaces and `-`, aliases resolved. */
 export const columnName = (header: string) => {
   const normal = header
@@ -444,9 +472,10 @@ export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function
       return yield* fail(`the points list needs a "${required}" column; its header has ${header.join(", ")}`)
     }
   }
+  // Only columns the reader reads: unknown ones are ignored, so two of the same name (two "Notes") are fine.
   for (const [index, column] of columns.entries()) {
     const first = columns.indexOf(column)
-    if (column !== "" && first !== index) {
+    if (readColumns.includes(column) && first !== index) {
       return yield* fail(
         `the header has both "${header[first]?.trim()}" and "${header[index]?.trim()}", which are the same column`
       )
