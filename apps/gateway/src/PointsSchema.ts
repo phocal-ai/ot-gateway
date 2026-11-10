@@ -135,7 +135,7 @@ export const pointsListRules: ReadonlyArray<string> = [
   "CSV with a header row and one row per point; commas, semicolons or tabs, as the header line uses",
   "Column names in any order and case; spaces and - count as _; unknown columns are named and ignored",
   "A row with host is Modbus TCP, a row with device_instance is BACnet/IP; one list can hold both",
-  "A decimal comma is read as a point",
+  "A decimal comma is read as a point; a value that contains the delimiter (1,5 in a comma-separated list) goes in double quotes",
   "A row with a profile takes its registers from the profile; its other columns (unit, scale, byte_order, publish) still win",
   "A BACnet EDE file (the semicolon CSV engineering tools export) is read as a list too; points from-ede shows it as one",
   "Nothing is made writable: writes are set in the config, on purpose"
