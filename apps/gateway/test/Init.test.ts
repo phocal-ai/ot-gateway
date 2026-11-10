@@ -175,6 +175,76 @@ describe("runInit with flags", () => {
   )
 })
 
+const twoLans = () => [
+  { name: "eth0", address: "10.0.0.5", broadcast: "10.0.0.255" },
+  { name: "eth1", address: "192.168.7.5", broadcast: "192.168.7.255" }
+]
+/** Fails the test (a defect) if init reads the networks when it should not need them. */
+const noLans = () => {
+  throw new Error("the networks are read only when no --broadcast is given and a device needs one")
+}
+
+describe("runInit --broadcast", () => {
+  it.effect("goes into the config with no devices yet, for a discover later", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const flags = { yes: true, devices: "none", broadcast: "192.168.1.255" } as const
+        const config = yield* runInit(`${folder}/ot-gateway.json`, flags, noLans)
+        expect(config?.bacnet.broadcastAddress).toBe("192.168.1.255")
+      })
+    )
+  )
+
+  it.effect("goes into the config with the simulated device", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const flags = { yes: true, devices: "simulated", broadcast: "192.168.1.255" } as const
+        const config = yield* runInit(`${folder}/ot-gateway.json`, flags, noLans)
+        expect(config?.bacnet.broadcastAddress).toBe("192.168.1.255")
+      })
+    )
+  )
+
+  it.effect("goes into the config with a points list's BACnet device", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.writeFileString(`${folder}/points.csv`, pointsListTemplate())
+        const flags = { yes: true, points: `${folder}/points.csv`, broadcast: "192.168.1.255" }
+        const config = yield* runInit(`${folder}/ot-gateway.json`, flags, noLans)
+        expect(config?.devices.some((device) => device.protocol === "bacnet-ip")).toBe(true)
+        expect(config?.bacnet.broadcastAddress).toBe("192.168.1.255")
+      })
+    )
+  )
+
+  it.effect("without it, writes no bacnet key when no device is found by broadcast", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const path = `${folder}/ot-gateway.json`
+        yield* runInit(path, { yes: true, devices: "none" }, noLans)
+        expect(JSON.parse(yield* fs.readFileString(path))).not.toHaveProperty("bacnet")
+      })
+    )
+  )
+
+  it.effect("without it, picks the network for a points list's BACnet device that has no address", () =>
+    inFolder((folder) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        yield* fs.writeFileString(`${folder}/points.csv`, pointsListTemplate())
+        const config = yield* runInit(
+          `${folder}/ot-gateway.json`,
+          { yes: true, points: `${folder}/points.csv` },
+          twoLans
+        )
+        expect(config?.bacnet.broadcastAddress).toBe("10.0.0.255")
+      })
+    )
+  )
+})
+
 describe("configSummary", () => {
   it.effect("is what check prints, as data", () =>
     Effect.gen(function* () {
