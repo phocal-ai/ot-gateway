@@ -81,7 +81,7 @@ describe("rollup and stepFor", () => {
 describe("openHistory", () => {
   it.effect("writes reads in batches and returns them in buckets", () =>
     Effect.gen(function* () {
-      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 })
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
       for (let second = 0; second < 10; second++) history.sink.record("ventilation-1", "temp", second, second * 1000)
       // Nothing is written before the first flush.
       expect(
@@ -103,7 +103,7 @@ describe("openHistory", () => {
 
   it.effect("keeps booleans as 0 and 1, so the average is the share of time true", () =>
     Effect.gen(function* () {
-      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 })
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
       for (const [index, value] of [true, true, false, true].entries())
         history.sink.record("d", "on", value, index * 1000)
       yield* TestClock.adjust("5 seconds")
@@ -114,8 +114,8 @@ describe("openHistory", () => {
 
   it.effect("answers from the minute rollups beyond the last day, and prunes both after their time", () =>
     Effect.gen(function* () {
-      // A flush a minute, not every 5 s: three days of virtual time would otherwise run 50,000 flushes, which
-      // takes longer than the test's timeout on a slow CI runner.
+      // A write a minute: three days of virtual time with fewer writes stay within the test's timeout on a slow
+      // CI runner.
       const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2 }, { flushEveryMs: 60_000 })
       for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
       yield* TestClock.adjust("1 minute")
@@ -148,7 +148,7 @@ describe("openHistory", () => {
 
   it.effect("keeps at most MAX_PENDING reads in memory, dropping the oldest and counting them", () =>
     Effect.gen(function* () {
-      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 })
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
       const total = MAX_PENDING * 2
       for (let index = 0; index < total; index++) history.sink.record("d", "p", index, index)
       yield* TestClock.adjust("5 seconds")
@@ -164,7 +164,7 @@ describe("openHistory", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* tempPath
       yield* fs.writeFileString(path, "this is not a database, but it is long enough to have a header ".repeat(20))
-      const history = yield* openHistory({ path, retentionDays: 7 })
+      const history = yield* openHistory({ path, retentionDays: 7 }, { flushEveryMs: 5_000 })
       history.sink.record("d", "p", 1, 0)
       yield* TestClock.adjust("5 seconds")
       expect((yield* history.series({ device: "d", point: "p", from: 0, to: 1_000 })).buckets).toHaveLength(1)
@@ -189,12 +189,88 @@ describe("openHistory", () => {
   )
 })
 
+/** Counts every write the history tries, failed ones too, around `inner` (unchanged by default). */
+const countWrites = (inner: (store: Store) => Store = (store) => store) => {
+  const counter = { writes: 0 }
+  const wrapStore = (store: Store): Store => {
+    const wrapped = inner(store)
+    return {
+      ...wrapped,
+      write: (rows) =>
+        Effect.suspend(() => {
+          counter.writes++
+          return wrapped.write(rows)
+        })
+    }
+  }
+  return { counter, wrapStore }
+}
+
+describe("when the history writes", () => {
+  it.effect("writes every 30 s by default: twice a minute for 200 points read every 5 s, every read kept", () =>
+    Effect.gen(function* () {
+      const { counter, wrapStore } = countWrites()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      for (let cycle = 0; cycle < 12; cycle++) {
+        for (let point = 0; point < 200; point++) history.sink.record("d", `p-${point}`, cycle, cycle * 5_000)
+        yield* TestClock.adjust("5 seconds")
+      }
+      yield* settle(history)
+      expect(counter.writes).toBe(2)
+      let total = 0
+      for (let point = 0; point < 200; point++) {
+        const series = yield* history.series({ device: "d", point: `p-${point}`, from: 0, to: 60_000, buckets: 1 })
+        total += series.buckets[0]?.count ?? 0
+      }
+      expect(total).toBe(2_400)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("writes sooner when half the cap is waiting, and drops nothing", () =>
+    Effect.gen(function* () {
+      const { counter, wrapStore } = countWrites()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      const droppedBefore = (yield* Metric.value(historyDropped)).count
+      for (let index = 0; index < MAX_PENDING / 2; index++) history.sink.record("d", "p", index, index)
+      // The next tick, well before the 30 s interval is over.
+      yield* TestClock.adjust("5 seconds")
+      yield* settle(history)
+      expect(counter.writes).toBe(1)
+      const series = yield* history.series({ device: "d", point: "p", from: 0, to: MAX_PENDING, buckets: 1 })
+      expect(series.buckets[0]?.count).toBe(MAX_PENDING / 2)
+      expect((yield* Metric.value(historyDropped)).count).toBe(droppedBefore)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("retries a failed write only once the interval has passed again", () =>
+    Effect.gen(function* () {
+      const faulty = faultyWrites()
+      const { counter, wrapStore } = countWrites(faulty.wrapStore)
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      faulty.faults.code = SQLITE_FULL
+      history.sink.record("d", "p", 1, 0)
+      yield* TestClock.adjust("30 seconds")
+      yield* settle(history)
+      expect(counter.writes).toBe(1)
+      // Ticks come every 5 s, but none of them tries again within the interval.
+      yield* TestClock.adjust("25 seconds")
+      yield* settle(history)
+      expect(counter.writes).toBe(1)
+      faulty.faults.code = undefined
+      yield* TestClock.adjust("5 seconds")
+      yield* settle(history)
+      expect(counter.writes).toBe(2)
+      expect((yield* history.series({ device: "d", point: "p", from: 0, to: 1_000 })).buckets).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
 describe("a file that goes corrupt while the gateway runs", () => {
   it.effect("is moved aside, and the reads before and after go to a new file", () =>
     Effect.gen(function* () {
       const path = yield* tempPath
       const { faults, wrapStore } = faultyWrites()
-      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore, flushEveryMs: 5_000 })
       faults.code = SQLITE_CORRUPT
       history.sink.record("d", "p", 1, 0)
       yield* TestClock.adjust("5 seconds")
@@ -213,7 +289,7 @@ describe("a file that goes corrupt while the gateway runs", () => {
     Effect.gen(function* () {
       const path = yield* tempPath
       const { faults, wrapStore } = faultyWrites()
-      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore, flushEveryMs: 5_000 })
       faults.code = SQLITE_CORRUPT
       history.sink.record("d", "p", 1, 0)
       yield* TestClock.adjust("5 seconds")
@@ -237,7 +313,7 @@ describe("a file that goes corrupt while the gateway runs", () => {
       const fs = yield* FileSystem.FileSystem
       const path = yield* tempPath
       const { faults, wrapStore } = faultyWrites()
-      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore, flushEveryMs: 5_000 })
       // A file where the history's directory was: nothing can be moved or created under it, even by root.
       const dir = path.slice(0, path.lastIndexOf("/"))
       yield* fs.remove(dir, { recursive: true })
@@ -262,7 +338,7 @@ describe("a file that goes corrupt while the gateway runs", () => {
     Effect.gen(function* () {
       const path = yield* tempPath
       const { faults, wrapStore } = faultyWrites()
-      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore, flushEveryMs: 5_000 })
       faults.code = SQLITE_FULL
       history.sink.record("d", "p", 1, 0)
       yield* TestClock.adjust("5 seconds")
