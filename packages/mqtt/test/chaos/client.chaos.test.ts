@@ -155,6 +155,37 @@ describe("chaos: MQTT client", () => {
     })
   )
 
+  it.live("ends the connection on a PUBLISH that does not decode, then reconnects", () =>
+    Effect.gen(function* () {
+      const script = makeScript()
+      script.afterConnack = (connection, write) =>
+        // A QoS 0 PUBLISH whose topic length (16) is longer than the rest of its body.
+        connection === 1 ? write(Uint8Array.of(0x30, 0x04, 0x00, 0x10, 0x61, 0x62)) : Effect.void
+      const port = yield* startScriptedBroker(script)
+      const client = yield* clientOn(port)
+      // DISCONNECT 0x81 (malformed packet), §4.13; then a fresh connection works.
+      expect(yield* waitUntil(() => script.disconnects.includes(0x81))).toBe(true)
+      expect(yield* waitUntil(() => script.connections >= 2)).toBe(true)
+      yield* client.publish("a/b", "after")
+      expect(script.received.map((message) => message.connection)).toEqual([2])
+    })
+  )
+
+  it.live("ends the connection on a remaining length of five bytes, then reconnects", () =>
+    Effect.gen(function* () {
+      const script = makeScript()
+      script.afterConnack = (connection, write) =>
+        // §1.5.5: a Variable Byte Integer is at most four bytes; the fifth continuation makes it malformed.
+        connection === 1 ? write(Uint8Array.of(0x30, 0x80, 0x80, 0x80, 0x80, 0x01)) : Effect.void
+      const port = yield* startScriptedBroker(script)
+      const client = yield* clientOn(port)
+      expect(yield* waitUntil(() => script.disconnects.includes(0x81))).toBe(true)
+      expect(yield* waitUntil(() => script.connections >= 2)).toBe(true)
+      yield* client.publish("a/b", "after")
+      expect(script.received.map((message) => message.connection)).toEqual([2])
+    })
+  )
+
   it.live("times keep alive on the monotonic clock, so wall clock steps do not matter", () =>
     Effect.gen(function* () {
       let offsetMillis = 0
