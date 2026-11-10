@@ -84,6 +84,7 @@ External sources live under `repos/` as squashed git subtrees, so they are alway
 | -------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
 | Effect         | `repos/effect/`               | tag `effect@4.1.2` of `https://github.com/Effect-TS/effect.git`, the version in our lockfile |
 | Security audit | `repos/security-audit-skill/` | commit `c1c8a8c14710` of `https://github.com/cloudflare/security-audit-skill.git` (MIT)      |
+| Improve        | `repos/improve-skill/`        | commit `cac56e1ebd3c` of `https://github.com/shadcn/improve.git` (MIT)                       |
 
 Keep the subtree on the same version as the installed `effect` package. After bumping it in the lockfile:
 
@@ -95,6 +96,12 @@ git subtree pull --prefix=repos/effect https://github.com/Effect-TS/effect.git e
 
 ```bash
 git subtree pull --prefix=repos/security-audit-skill https://github.com/cloudflare/security-audit-skill.git main --squash
+```
+
+`repos/improve-skill/` is the workflow behind `/improve` (`.claude/skills/improve/SKILL.md`, which adds this repo's rules: plans stay in the git-ignored `plans/`, decided trade-offs, a cheaper executor that never merges). It audits and writes plans; it never edits source itself. Update it after reading the upstream diff:
+
+```bash
+git subtree pull --prefix=repos/improve-skill https://github.com/shadcn/improve.git main --squash
 ```
 
 **Before writing Effect code**, read the reference in this order:

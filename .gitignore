@@ -33,3 +33,6 @@ next-env.d.ts
 /apps/site/.source/
 # Turborepo
 .turbo
+
+# /improve: local plans for other agents (never committed; the repository is public)
+/plans/

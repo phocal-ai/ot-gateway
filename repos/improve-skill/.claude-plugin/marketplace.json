@@ -1,0 +1,15 @@
+{
+  "name": "improve",
+  "owner": {
+    "name": "shadcn"
+  },
+  "metadata": {
+    "description": "Claude marketplace catalog for the improve plugin."
+  },
+  "plugins": [
+    {
+      "name": "improve",
+      "source": "./"
+    }
+  ]
+}
