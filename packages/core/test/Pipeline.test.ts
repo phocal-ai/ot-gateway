@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Layer, Metric, Queue, Stream, Tracer } from "effect"
+import { Clock, Effect, Fiber, Layer, Metric, Queue, Stream, Tracer } from "effect"
 import { TestClock } from "effect/testing"
 import {
   DriverError,
@@ -446,6 +446,183 @@ describe("runDevice with pushed values", () => {
       yield* Fiber.interrupt(fiber)
 
       expect(messages.slice(1).map((m) => JSON.parse(m.payload).value)).toEqual([20, 25, 20, 30])
+    })
+  )
+})
+
+/** `count` points `p-0`, `p-1`, …, published on every read unless `extra` says otherwise. */
+const manyPoints = (count: number, extra: Partial<AnyPoint> = {}): ReadonlyArray<AnyPoint> =>
+  Array.from({ length: count }, (_, index) => ({ id: `p-${index}`, name: `Point ${index}`, writable: false, ...extra }))
+
+/** A driver that reads every point as `value` on every cycle. */
+const constantDriver = (deviceId: string, points: ReadonlyArray<AnyPoint>, value = 1): Driver => ({
+  deviceId,
+  points,
+  readAll: Effect.succeed(points.map((p): Reading => ({ pointId: p.id, value, timestamp: 0 }))),
+  write: () => Effect.void
+})
+
+interface Attempt {
+  readonly topic: string
+  readonly payload: string
+  readonly startedAt: number
+  readonly endedAt?: number
+}
+
+/**
+ * A publisher whose every publish takes 50 ms of test-clock time (`delayMs` decides otherwise), then fails with
+ * what `failWith` returns for the topic, if anything. Records each attempt and when it started and ended.
+ */
+const slowPublisher = (
+  options: {
+    readonly failWith?: (topic: string) => PublishError["reason"] | undefined
+    readonly delayMs?: (topic: string, payload: string) => number
+  } = {}
+) => {
+  const attempts: Array<Attempt> = []
+  const delivered: Array<Attempt> = []
+  const layer = Layer.succeed(Publisher, {
+    publish: (topic, payload) =>
+      Effect.gen(function* () {
+        const startedAt = yield* Clock.currentTimeMillis
+        attempts.push({ topic, payload, startedAt })
+        yield* Effect.sleep(options.delayMs?.(topic, payload) ?? 50)
+        const reason = options.failWith?.(topic)
+        if (reason !== undefined) return yield* new PublishError({ topic, reason, message: reason })
+        delivered.push({ topic, payload, startedAt, endedAt: yield* Clock.currentTimeMillis })
+      })
+  })
+  return { attempts, delivered, layer } as const
+}
+
+const valuesOf = (attempts: ReadonlyArray<Attempt>) => attempts.filter((attempt) => !attempt.topic.endsWith("$meta"))
+
+describe("runDevice publishing a cycle concurrently", () => {
+  it.effect("publishes a hundred values within 400 ms of 50 ms acknowledgements", () =>
+    Effect.gen(function* () {
+      const { delivered, layer } = slowPublisher()
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 60_000 },
+        constantDriver("concurrent", manyPoints(100))
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      const values = valuesOf(delivered)
+      expect(new Set(values.map((attempt) => attempt.topic)).size).toBe(100)
+      const started = Math.min(...values.map((attempt) => attempt.startedAt))
+      const ended = Math.max(...values.map((attempt) => attempt.endedAt ?? Infinity))
+      // 7 rounds of 16, 50 ms each; one at a time would take 5 s.
+      expect(ended - started).toBeLessThanOrEqual(400)
+    })
+  )
+
+  it.effect("keeps a refused point's deadband reference while its neighbours' references update", () =>
+    Effect.gen(function* () {
+      const { attempts, layer } = slowPublisher({
+        failWith: (topic) => (topic === "s/b/deadbands/p-1" ? "rejected" : undefined)
+      })
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 1000 },
+        constantDriver("deadbands", manyPoints(3, { deadband: 0.5 }))
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      // Two cycles reading the same values.
+      yield* TestClock.adjust("1500 millis")
+      yield* Fiber.interrupt(fiber)
+
+      const tries = (topic: string) => valuesOf(attempts).filter((attempt) => attempt.topic === topic).length
+      // The refused value is offered again; the others stayed inside their deadband.
+      expect(tries("s/b/deadbands/p-1")).toBe(2)
+      expect(tries("s/b/deadbands/p-0")).toBe(1)
+      expect(tries("s/b/deadbands/p-2")).toBe(1)
+    })
+  )
+
+  it.effect("starts no publish after the broker failed, and still records every reading and the device's health", () =>
+    Effect.gen(function* () {
+      const device = "concurrent-down"
+      const { attempts, layer } = slowPublisher({ failWith: () => "unavailable" })
+      const recorded: Array<string> = []
+      const history = { record: (_device: string, pointId: string) => void recorded.push(pointId) }
+      const health = makeHealthRegistry([device])
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 60_000, history, health },
+        constantDriver(device, manyPoints(100))
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      expect(valuesOf(attempts).length).toBeGreaterThan(0)
+      expect(valuesOf(attempts).length).toBeLessThanOrEqual(16)
+      expect(new Set(recorded).size).toBe(100)
+      expect(recorded).toHaveLength(100)
+      expect(yield* countOf(pollCycles, { device, outcome: "publish_failed" })).toBe(1)
+      expect(health.devices.get(device)?.status).toBe("ok")
+    })
+  )
+
+  it.effect("publishes the other 99 values when the broker refuses one in the middle", () =>
+    Effect.gen(function* () {
+      const device = "concurrent-refused"
+      const { delivered, layer } = slowPublisher({
+        failWith: (topic) => (topic === `s/b/${device}/p-50` ? "rejected" : undefined)
+      })
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 60_000 },
+        constantDriver(device, manyPoints(100))
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      const topics = new Set(valuesOf(delivered).map((attempt) => attempt.topic))
+      expect(topics.size).toBe(99)
+      expect(topics.has(`s/b/${device}/p-50`)).toBe(false)
+      expect(yield* countOf(pollCycles, { device, outcome: "ok" })).toBe(1)
+    })
+  )
+
+  it.effect("publishes two readings of one point in one cycle in the order they were read", () =>
+    Effect.gen(function* () {
+      const points = manyPoints(2)
+      const driver: Driver = {
+        deviceId: "twice",
+        points,
+        readAll: Effect.succeed<ReadonlyArray<Reading>>([
+          { pointId: "p-0", value: 1, timestamp: 0 },
+          { pointId: "p-1", value: 5, timestamp: 0 },
+          { pointId: "p-0", value: 2, timestamp: 1 }
+        ]),
+        write: () => Effect.void
+      }
+      // The first value is the slowest to publish: concurrently it would arrive after the second.
+      const { delivered, layer } = slowPublisher({
+        delayMs: (_topic, payload) => (JSON.parse(payload).value === 1 ? 100 : 10)
+      })
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 second")
+      yield* Fiber.interrupt(fiber)
+
+      const values = valuesOf(delivered)
+        .filter((attempt) => attempt.topic === "s/b/twice/p-0")
+        .map((attempt) => JSON.parse(attempt.payload).value)
+      expect(values).toEqual([1, 2])
+    })
+  )
+
+  it.effect("publishes a hundred points' metadata within 400 ms", () =>
+    Effect.gen(function* () {
+      const { delivered, layer } = slowPublisher()
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 60_000 },
+        constantDriver("concurrent-meta", manyPoints(100))
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("400 millis")
+      yield* Fiber.interrupt(fiber)
+
+      expect(delivered.filter((attempt) => attempt.topic.endsWith("$meta"))).toHaveLength(100)
     })
   )
 })
