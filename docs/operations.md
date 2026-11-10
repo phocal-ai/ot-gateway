@@ -270,7 +270,7 @@ sudo packaging/install.sh /etc/ot-gateway/gateway.json
 
 - **Size** stays bounded by retention: about 150 MB for a day of 200 points read every 5 s, plus 15 MB per week of rollups. Old rows are deleted every hour and the file returns the space.
 - **Disk full:** up to 20,000 reads wait in memory; beyond that the oldest are dropped and counted in `ot_gateway_history_dropped`. Reading and publishing go on regardless.
-- **A corrupt file** is moved aside (`history.sqlite.corrupt-<time>`) and a new one started; delete the old one.
+- **A corrupt file** is moved aside (`history.sqlite.corrupt-<time>`) and a new one started, whether it is found at start or goes corrupt while the gateway runs; delete the old one. Reads waiting in memory go to the new file. While running this happens at most once an hour, so a failing card does not fill up with copies; until then the reads wait in memory as on a full disk. If no new file can be started, the history stays off until the gateway restarts, and `ot_gateway_history_disabled` is 1.
 - **Cannot be opened at all** (a read-only directory, say): the gateway runs without history, logs why once and sets `ot_gateway_history_disabled` to 1.
 
 To move a gateway to new hardware with values still waiting, stop the service and copy the file (and any `-wal` file next to it) to the same path on the new one.
