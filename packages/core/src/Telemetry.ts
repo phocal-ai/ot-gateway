@@ -180,6 +180,18 @@ export const mqttConnects = Metric.counter("ot_gateway_mqtt_connects", {
 })
 
 /**
+ * SUBSCRIBE packets sent to the MQTT broker, one per connect, by `outcome`:
+ * `granted` (every filter granted), `refused` (at least one filter refused, or
+ * the SUBACK did not decode) or `missing` (no SUBACK within the deadline; the
+ * connection is kept, but commands do not arrive on it). No filter attribute,
+ * so it stays at three series.
+ */
+export const mqttSubscribes = Metric.counter("ot_gateway_mqtt_subscribes", {
+  description: "SUBSCRIBE packets sent to the MQTT broker, by outcome",
+  incremental: true
+})
+
+/**
  * 1 while the gateway holds a broker connection, else 0. The unit is a UCUM
  * annotation, which Grafana's OTLP translation drops, so the name gets no
  * `_ratio` suffix.
