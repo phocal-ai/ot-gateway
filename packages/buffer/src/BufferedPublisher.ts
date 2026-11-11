@@ -9,7 +9,9 @@
  *   replays retained state after a reconnect. So do transient ones (command
  *   results), which would mislead if delivered late.
  * - Once anything is waiting, new values queue behind it, so delivery keeps
- *   the order values were read in. The drainer pipelines up to 16 messages
+ *   the order values arrived in. A polling cycle publishes its points
+ *   concurrently, so that is each point's read order, not the order across
+ *   points within a cycle. The drainer pipelines up to 16 messages
  *   at a time for throughput, starts no new ones after the first failure,
  *   and removes rows as they are acknowledged, so a shutdown mid-drain
  *   resends at most a handful. A message the broker refuses for now (quota

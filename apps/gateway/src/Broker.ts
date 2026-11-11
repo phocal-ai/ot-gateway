@@ -54,8 +54,11 @@ export const brokerClient = Effect.fn("brokerClient")(function* (
   })
 })
 
-/** The first dial's outcome, as one error a person can read. */
-const firstDialOf = (client: { readonly firstDial: Effect.Effect<void, { readonly message: string }> }, url: string) =>
+/** The first dial's outcome, as one error a person can read. Shared by `watch --seconds`, `broker` and `publish`. */
+export const firstDialOf = (
+  client: { readonly firstDial: Effect.Effect<void, { readonly message: string }> },
+  url: string
+) =>
   client.firstDial.pipe(
     Effect.timeoutOrElse({
       duration: DIAL_TIMEOUT,

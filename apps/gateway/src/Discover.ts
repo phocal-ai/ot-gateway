@@ -134,10 +134,16 @@ export const draftDevices = (found: ReadonlyArray<DraftInput>, existing: Readonl
 }
 
 /**
+ * Text from the network as it may be printed to a terminal: every control and format character (C0, C1,
+ * escape sequences, bidi overrides) becomes `?`. Also used by `watch` for what the broker sends.
+ */
+export const withoutControls = (text: string) => text.replace(/[\p{Cc}\p{Cf}]/gu, "?")
+
+/**
  * A device-supplied name as it may be printed to a terminal: anyone on the
  * LAN can answer Who-Is with any name, escape sequences included.
  */
-export const printable = (name: string) => name.replace(/[\p{Cc}\p{Cf}]/gu, "?").slice(0, 120)
+export const printable = (name: string) => withoutControls(name).slice(0, 120)
 
 const hex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(":")
 
@@ -322,9 +328,17 @@ export const draftPointsList = (drafts: ReadonlyArray<Draft>) => {
   return toCsv([header, ...rows])
 }
 
+/** What `discover --points-list` wrote: the file, and how many devices and points are in it. */
+export interface PointsListWritten {
+  readonly path: string
+  readonly devices: number
+  readonly points: number
+}
+
 /**
  * `ot-gateway discover --points-list <file>`: the drafts of devices not in the config yet, written as a points
- * list to trim, check and import. An existing file is left alone, and none is written when there is nothing in it.
+ * list to trim, check and import. An existing file is left alone and none is written when there is nothing in it;
+ * both fail, so a script or agent never goes on with a list that is stale or missing.
  */
 export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* (
   config: GatewayConfig,
@@ -334,7 +348,9 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
 ) {
   const fs = yield* FileSystem.FileSystem
   if (yield* fs.exists(path)) {
-    return yield* Console.error(`${path} exists; give another file name, or move it away first. Nothing was written.`)
+    return yield* new DiscoverError({
+      message: `${path} exists; give another file name, or move it away first. Nothing was written.`
+    })
   }
   const configured = new Set(config.devices.map((device) => device.id))
   const drafts = yield* discoverDrafts(config, network, options)
@@ -345,9 +361,11 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
     )
   }
   const points = fresh.reduce((total, draft) => total + draft.points.length, 0)
-  if (points === 0) return yield* Console.error(`no points to list; ${path} was not written.`)
+  if (points === 0) return yield* new DiscoverError({ message: `no points to list; ${path} was not written.` })
   yield* fs.writeFileString(path, draftPointsList(fresh), { flag: "wx" })
   yield* Console.error(
     `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ot-gateway import ${path}`
   )
+  const written: PointsListWritten = { path, devices: fresh.length, points }
+  return written
 })

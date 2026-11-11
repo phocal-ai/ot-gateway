@@ -19,7 +19,7 @@ import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover, discoverToPointsList } from "./Discover.ts"
+import { discover, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -148,6 +148,10 @@ const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ c
   )
 ).pipe(Command.withDescription("Validate a config without connecting to anything; lists every mistake with its path"))
 
+/** What `discover --points-list` prints on stdout: with --json its outcome; without, stderr has said it already. */
+export const pointsListOutcome = (json: boolean) => (written: PointsListWritten) =>
+  json ? printJson({ ok: true, ...written }) : Effect.void
+
 const discoverCommand = Command.make(
   "discover",
   {
@@ -164,12 +168,12 @@ const discoverCommand = Command.make(
     ),
     json: jsonFlag
   },
-  // The draft is JSON already; --json makes a failure JSON too.
+  // The draft is JSON already; --json makes a failure JSON too, and what --points-list wrote.
   ({ config, pointsList, address, json }) =>
     Effect.flatMap(loadConfig(config), (decoded) => {
       const options = { address: Option.getOrUndefined(address) }
       return Option.isSome(pointsList)
-        ? discoverToPointsList(decoded, pointsList.value, undefined, options)
+        ? Effect.flatMap(discoverToPointsList(decoded, pointsList.value, undefined, options), pointsListOutcome(json))
         : discover(decoded, undefined, options)
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(

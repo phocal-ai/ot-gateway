@@ -83,7 +83,7 @@ The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads 
 | `ot-gateway import <csv> [config]`   | add the devices of a points list to the config ([the columns](docs/first-building.md#3-add-your-modbus-points)); `--dry-run` only checks it                                                               |
 | `ot-gateway points schema\|template` | the points list's columns (`--json` for agents), or a list to fill in; `points from-ede` turns a BACnet EDE file into one                                                                                 |
 | `ot-gateway profiles list\|show`     | the device profiles a points list can name in its `profile` column, so one row takes a meter's registers (`--json` for agents)                                                                            |
-| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker, until Ctrl-C or for `--seconds N`                                                                                      |
+| `ot-gateway watch [config]`          | print every message under the config's site and building as it reaches the broker, until Ctrl-C or for `--seconds N` (which fails when the broker cannot be reached)                                      |
 | `ot-gateway broker [config]`         | connect to the config's broker: the MQTT it speaks (5 or 3.1.1), what it allows, and a message there and back (`--json` for agents)                                                                       |
 | `ot-gateway publish <topic> [msg]`   | send one message as the gateway's user; `--retain` with no message clears what the broker keeps on a topic (`--qos 0\|1`, `--json`)                                                                       |
 | `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                                                     |
@@ -127,7 +127,7 @@ To draft BACnet points yourself, `discover` finds the devices through the config
 
 ```bash
 pnpm ot-gateway discover path/to/gateway.json
-pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it
+pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it (fails when the file exists or nothing answered)
 pnpm ot-gateway discover --address 10.20.3.40:47809  # only the device at that address: another subnet without a BBMD, or another port
 ```
 

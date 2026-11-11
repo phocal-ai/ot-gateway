@@ -283,9 +283,14 @@ const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, an
 
 /**
  * Asks the questions and writes the config to `path` (not on a dry run). Returns the config, or `undefined`
- * when the operator kept an existing file.
+ * when the operator kept an existing file. `lans` lists the networks to choose from, read only when one is
+ * needed: `--broadcast` is not given and BACnet devices are found by broadcast.
  */
-export const runInit = Effect.fn("runInit")(function* (path: string, flags: InitFlags = {}) {
+export const runInit = Effect.fn("runInit")(function* (
+  path: string,
+  flags: InitFlags = {},
+  lans: () => ReadonlyArray<LanInterface> = () => lanInterfaces(networkInterfaces())
+) {
   const fs = yield* FileSystem.FileSystem
   const yes = flags.yes === true
   if (flags.points !== undefined && flags.devices !== undefined && flags.devices !== "list") {
@@ -301,11 +306,19 @@ export const runInit = Effect.fn("runInit")(function* (path: string, flags: Init
   const answers: InitAnswers = { site, building, brokerUrl: yield* brokerUrl(flags), login: yield* login(flags) }
   const source: DeviceSource =
     flags.points === undefined ? (flags.devices ?? (yes ? "simulated" : yield* deviceSource)) : "list"
+  // Discovery needs the network before it can run; any other source has its devices first.
+  const network = (answersSoFar: InitAnswers) =>
+    broadcastAddress(lans(), flags).pipe(Effect.map((address) => ({ ...answersSoFar, broadcastAddress: address })))
+  const beforeDevices =
+    source === "discover" ? yield* network(answers) : { ...answers, broadcastAddress: flags.broadcast }
+  const devices: ReadonlyArray<InitDevice> = yield* devicesFrom(source, beforeDevices, flags)
+  // A BACnet device without an address is found by broadcast at run time, so the list needs the right network too.
+  const located = (device: InitDevice) => device.protocol !== "bacnet-ip" || "address" in device
   const withNetwork =
-    source === "discover"
-      ? { ...answers, broadcastAddress: yield* broadcastAddress(lanInterfaces(networkInterfaces()), flags) }
-      : answers
-  const text = `${JSON.stringify(initConfig(withNetwork, yield* devicesFrom(source, withNetwork, flags)), null, 2)}\n`
+    beforeDevices.broadcastAddress === undefined && !devices.every(located)
+      ? yield* network(beforeDevices)
+      : beforeDevices
+  const text = `${JSON.stringify(initConfig(withNetwork, devices), null, 2)}\n`
   const config = yield* parseConfig(text)
   if (flags.dryRun === true) return config
   // Made only now, so a cancelled init leaves no empty folder behind.

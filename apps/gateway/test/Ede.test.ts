@@ -82,6 +82,17 @@ describe("edeToPointsList", () => {
     })
   )
 
+  it.effect("counts lines as the file has them, past blank lines, and names an unclosed quote's line", () =>
+    Effect.gen(function* () {
+      const afterBlank = yield* edeToPointsList(ede("A1;1;Temp;0;1;;;;;;;;;;", "", "A2;one;Temp;0;2;;;;;;;;;;")).pipe(
+        Effect.flip
+      )
+      expect(afterBlank.message).toBe("EDE line 6: device obj.-instance and object-instance must be whole numbers")
+      const open = yield* edeToPointsList(ede("A1;1;Temp;0;1;;;;;;;;;;", 'A2;1;"Temp;0;2;;;;;;;;;;')).pipe(Effect.flip)
+      expect(open.message).toBe("EDE line 5: a quote opened here is never closed")
+    })
+  )
+
   it("does not take a points list for an EDE file", () => {
     expect(isEde(pointsListTemplate())).toBe(false)
   })

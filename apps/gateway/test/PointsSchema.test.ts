@@ -8,7 +8,7 @@ import { Effect, FileSystem } from "effect"
 import { fileURLToPath } from "node:url"
 import { exampleConfigPath } from "../src/Demo.ts"
 import { importPointsList } from "../src/Import.ts"
-import { columnAliases, devicesFromPointsList, parseDelimited } from "../src/PointsList.ts"
+import { columnAliases, devicesFromPointsList, parseDelimited, readColumns } from "../src/PointsList.ts"
 import { resolveProfile } from "../src/Profile.ts"
 import {
   describePointsListSchema,
@@ -29,6 +29,7 @@ describe("the points list schema", () => {
       for (const column of pointsListColumns) expect(source).toContain(`"${column.name}"`)
       const names = pointsListColumns.map((column) => column.name)
       for (const target of Object.values(columnAliases)) expect(names).toContain(target)
+      expect(readColumns).toEqual(names)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 

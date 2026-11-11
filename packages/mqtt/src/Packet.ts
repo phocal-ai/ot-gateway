@@ -447,11 +447,12 @@ export const decodeConnect = (body: Uint8Array): Result.Result<Connect, MqttCode
     if ((flags & 0x04) !== 0) {
       if (v5) r.properties()
       const topic = r.string()
-      const payload = decoder.decode(r.binary())
+      // Binary on the wire (§3.1.3.4), held as a string: decoded by the reader, so bad UTF-8 is a codec error.
+      const payload = r.string()
       will = { topic, payload, qos: (flags >> 3) & 0x01 ? 1 : 0, retain: (flags & 0x20) !== 0 }
     }
     const username = (flags & 0x80) !== 0 ? r.string() : undefined
-    const password = (flags & 0x40) !== 0 ? decoder.decode(r.binary()) : undefined
+    const password = (flags & 0x40) !== 0 ? r.string() : undefined
     const expiry = properties.get(Property.SessionExpiryInterval)
     const maximumPacketSize = properties.get(Property.MaximumPacketSize)
     return {
