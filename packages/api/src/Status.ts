@@ -25,8 +25,21 @@ export const DeviceStatus = Schema.Struct({
   status: Schema.Literals(["starting", "ok", "failing"]),
   /** How often the gateway reads it, from the config. */
   pollIntervalMs: Schema.Number,
-  /** Why the device is failing (the health topic's reason). */
+  /**
+   * Why the device is failing, as a class (the health topic's reason): `connection`, `timeout`, `protocol`,
+   * `invalid-response`, `configuration`, `not-implemented`, `cycle-timeout` or `crashed`.
+   */
   reason: Schema.optionalKey(Schema.String),
+  /** Unix ms of the first failure of the current run, while `failing`: it has failed since then without a read. */
+  failingSince: Schema.optionalKey(Schema.Number),
+  /**
+   * The latest failure in one line, from the driver's typed error, while `failing`: `could not connect: connection
+   * refused by 127.0.0.1:5020`, `no response to 4 item(s) within 3s`. It names addresses, never credentials.
+   * After the device recovers, `/api/events` still has it.
+   */
+  lastError: Schema.optionalKey(Schema.String),
+  /** Failed polling cycles in a row, while `failing` (the retries inside one cycle count once). */
+  failures: Schema.optionalKey(Schema.Number),
   lastSuccess: Schema.optionalKey(Schema.Number),
   /** How many points the config gives it, also when `points` is left out (`/api/status?points=none`). */
   pointCount: Schema.Number,
@@ -111,7 +124,18 @@ export const BrokerStatus = Schema.Struct({
   /** Unix ms of the latest successful connect, and what the broker allowed then; absent before the first. */
   connectedAt: Schema.optionalKey(Schema.Number),
   connection: Schema.optionalKey(BrokerConnection),
-  /** Successful connects (the first one and every reconnect), and attempts that failed or the broker refused. */
+  /**
+   * Unix ms since when the gateway has had no broker connection, while not `connected`: when the connection was
+   * lost, or the gateway's start when it has not connected yet and a dial has failed.
+   */
+  disconnectedSince: Schema.optionalKey(Schema.Number),
+  /** Why, in one line, while not `connected`: the lost connection's or the latest failed dial's reason. */
+  lastError: Schema.optionalKey(Schema.String),
+  /**
+   * Since the gateway started: successful connects (the first one and every reconnect), and dials that failed
+   * (unreachable, timed out) or that the broker refused (bad credentials, say). A broker that stays down adds a
+   * failed dial every 15 s at most; a connection that is lost and comes back adds one to `connects` only.
+   */
   connects: Schema.Number,
   failedConnects: Schema.Number,
   /** Point values published, and messages that could not be published (without a buffer, those are lost). */
@@ -290,6 +314,83 @@ export const ConfigView = Schema.Struct({
 })
 export type ConfigView = typeof ConfigView.Type
 
+/**
+ * What every event has: `id` counts up from 1 since the gateway started (a page asks `after` the last it has),
+ * `at` is Unix ms on the gateway's wall clock. Durations (`downMs`) are measured on a clock NTP does not step.
+ */
+const eventFields = { id: Schema.Number, at: Schema.Number }
+
+/** The gateway process started (also after a restart by Docker or systemd: the ring starts empty). */
+export const GatewayStartedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("gateway-started"),
+  version: Schema.String,
+  devices: Schema.Number
+})
+
+/** A device that read fine, or had not read yet, failed: `reason` is the class, `error` the driver's words. */
+export const DeviceFailingEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("device-failing"),
+  device: Schema.String,
+  reason: Schema.String,
+  error: Schema.String
+})
+
+/** A failing device read again, after `downMs` of failures. */
+export const DeviceRecoveredEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("device-recovered"),
+  device: Schema.String,
+  downMs: Schema.Number
+})
+
+/** The gateway lost its broker connection, or could not get one at start. Redials that fail too are not events. */
+export const BrokerDisconnectedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("broker-disconnected"),
+  error: Schema.String
+})
+
+/**
+ * The gateway connected to its broker. After an outage, `downMs` says how long it lasted and `buffered` how many
+ * messages waited in the store-and-forward buffer at that moment (absent without a buffer).
+ */
+export const BrokerConnectedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("broker-connected"),
+  downMs: Schema.optionalKey(Schema.Number),
+  buffered: Schema.optionalKey(Schema.Number)
+})
+
+/** Every message the buffer kept during an outage reached the broker. */
+export const BufferDrainedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("buffer-drained")
+})
+
+/** A transition worth knowing about later: what broke, since when, and when it came back. Never one per read. */
+export const GatewayEvent = Schema.Union([
+  GatewayStartedEvent,
+  DeviceFailingEvent,
+  DeviceRecoveredEvent,
+  BrokerDisconnectedEvent,
+  BrokerConnectedEvent,
+  BufferDrainedEvent
+])
+export type GatewayEvent = typeof GatewayEvent.Type
+
+/**
+ * The gateway's recent events, oldest first. The gateway keeps the latest `capacity` in memory, since it started;
+ * `dropped` counts the older ones it let go, so a gap is visible.
+ */
+export const EventLog = Schema.Struct({
+  events: Schema.Array(GatewayEvent),
+  capacity: Schema.Number,
+  dropped: Schema.Number
+})
+export type EventLog = typeof EventLog.Type
+
 export class StatusGroup extends HttpApiGroup.make("status")
   .add(
     HttpApiEndpoint.get("status", "/api/status", {
@@ -308,6 +409,17 @@ export class StatusGroup extends HttpApiGroup.make("status")
       },
       success: PointReadings,
       error: ValuesQueryInvalid
+    })
+  )
+  .add(
+    HttpApiEndpoint.get("events", "/api/events", {
+      query: {
+        /** Unix ms: only events at or after it. */
+        since: Schema.optional(Schema.FiniteFromString),
+        /** An event id: only the events after it, for a page that polls for what is new. */
+        after: Schema.optional(Schema.FiniteFromString)
+      },
+      success: EventLog
     })
   )
   .add(HttpApiEndpoint.get("messages", "/api/messages", { success: Messages }))
