@@ -112,24 +112,27 @@ describe("openHistory", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
-  it.effect("answers from the minute rollups beyond the last day, and prunes both after their time", () =>
-    Effect.gen(function* () {
-      // A write a minute: three days of virtual time with fewer writes stay within the test's timeout on a slow
-      // CI runner.
-      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2 }, { flushEveryMs: 60_000 })
-      for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
-      yield* TestClock.adjust("1 minute")
-      yield* TestClock.adjust(DAY + 3_600_000)
-      const older = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 2 })
-      expect(older).toMatchObject({ resolution: "minute", stepMs: 60_000 })
-      expect(older.buckets).toEqual([
-        { t: 0, min: 0, max: 59, avg: 29.5, count: 60 },
-        { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60 }
-      ])
-      // Two days on, the rollups are gone too.
-      yield* TestClock.adjust(2 * DAY)
-      expect((yield* history.series({ device: "m", point: "power", from: 0, to: 120_000 })).buckets).toEqual([])
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  it.effect(
+    "answers from the minute rollups beyond the last day, and prunes both after their time",
+    () =>
+      Effect.gen(function* () {
+        // A write a minute. Three days of virtual time are also about 52,000 of the writer's 5 s ticks: under a
+        // second here, but past the default 5 s timeout on a busy CI runner, so this test gets 30 s.
+        const history = yield* openHistory({ path: yield* tempPath, retentionDays: 2 }, { flushEveryMs: 60_000 })
+        for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
+        yield* TestClock.adjust("1 minute")
+        yield* TestClock.adjust(DAY + 3_600_000)
+        const older = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 2 })
+        expect(older).toMatchObject({ resolution: "minute", stepMs: 60_000 })
+        expect(older.buckets).toEqual([
+          { t: 0, min: 0, max: 59, avg: 29.5, count: 60 },
+          { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60 }
+        ])
+        // Two days on, the rollups are gone too.
+        yield* TestClock.adjust(2 * DAY)
+        expect((yield* history.series({ device: "m", point: "power", from: 0, to: 120_000 })).buckets).toEqual([])
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    30_000
   )
 
   it.effect("writes what is still waiting when it closes", () =>
