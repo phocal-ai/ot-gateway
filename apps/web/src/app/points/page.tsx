@@ -29,7 +29,8 @@ import {
   type LivePoint,
   matches,
   type PointFilter,
-  pointKey
+  pointKey,
+  pointTitle
 } from "@/lib/points"
 import { alarmWhen, pointFreshness } from "@/lib/glance"
 import { failureLabel, type Freshness, freshness, protocolName } from "@/lib/status"
@@ -310,12 +311,16 @@ const PointsList = () => {
                       <TableCell className="max-w-52 pl-4 sm:max-w-72">
                         <div className="flex items-center gap-2">
                           <HealthDot device={current?.device} now={now} />
-                          <span className="truncate font-mono">{point.id}</span>
+                          <span className="truncate" title={pointTitle(point)}>
+                            {pointTitle(point)}
+                          </span>
                           {point.writable ? <Badge variant="outline">writable</Badge> : null}
                         </div>
-                        <p className="truncate pl-4 text-xs text-muted-foreground" title={point.name}>
-                          <span className="font-mono md:hidden">{point.device} · </span>
-                          {point.name}
+                        <p className="truncate pl-4 text-xs text-muted-foreground" title={key}>
+                          <span className="font-mono">
+                            <span className="md:hidden">{point.device}/</span>
+                            {point.id}
+                          </span>
                           {point.brick === undefined ? "" : ` · ${point.brick}`}
                         </p>
                       </TableCell>
@@ -355,6 +360,7 @@ const PointsList = () => {
           onClose={closePoint}
           onStep={step}
           point={opened}
+          since={status?.since}
           unreachable={unreachable}
           position={openedIndex < 0 ? undefined : { index: openedIndex + 1, total: found.length }}
         />

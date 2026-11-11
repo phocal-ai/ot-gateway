@@ -3,7 +3,7 @@
  */
 import type { BufferStatus, DeviceStatus } from "@ot-gateway/api"
 import { formatNumber } from "./format"
-import { type Freshness, freshness, protocolName } from "./status"
+import { failureLabel, type Freshness, freshness, protocolName } from "./status"
 
 /** Why the buffer gave messages up, in words (the `reason` of `ot_gateway_buffer_dropped`). */
 const dropWords: Readonly<Record<string, string>> = {
@@ -28,6 +28,18 @@ export const deviceCounts = (devices: ReadonlyArray<DeviceStatus>, now: number) 
   const counts: Record<Freshness["_tag"], number> = { live: 0, starting: 0, late: 0, failing: 0 }
   for (const device of devices) counts[freshness(device, now)._tag]++
   return counts
+}
+
+/**
+ * The failing devices the Devices card names, in config order: the first `max` with why ("cannot connect"), and how
+ * many more fail, so a phone shows which device it is without scrolling to the list.
+ */
+export const failingDevices = (devices: ReadonlyArray<DeviceStatus>, max = 2) => {
+  const failing = devices.filter((device) => device.status === "failing")
+  return {
+    shown: failing.slice(0, max).map((device) => ({ id: device.id, why: failureLabel(device.reason ?? "failing") })),
+    more: Math.max(0, failing.length - max)
+  }
 }
 
 /** Devices and points per protocol, the most devices first. */

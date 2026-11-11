@@ -408,10 +408,18 @@ export interface NextStep {
 
 const step = (command: string, description: string): NextStep => ({ command, description })
 
-/** What `init` prints after the config: the files, notes, and the next commands, as text and in `--json`. */
+/**
+ * What `init` prints after the config: the files, notes, the next commands, and the status page, as text and in
+ * `--json`. The status page is not a command, so it is not in `next`: `url` is its address and `page` the sentence
+ * that says what to do there, which the text prints after the command that starts the gateway (`startedBy`).
+ */
 export interface InitNext {
   readonly notes: ReadonlyArray<string>
   readonly next: ReadonlyArray<NextStep>
+  readonly url: string
+  readonly page: string
+  /** How many of `next` come before the status page: up to the command that starts the gateway. */
+  readonly startedBy: number
 }
 
 /** Where `init` runs, for its next steps: over SSH or not, the operating system, the working directory. */
@@ -497,23 +505,10 @@ export const initNext = (
     : ` ${shellArgument(path)}`
   const inFolder = (file: string) => (here ? file : shellArgument(join(folderPath, file)))
   const pointsList = inFolder("points.csv")
-  // Without devices there is nothing to start yet: the points list comes first.
-  const devices =
-    config.devices.length > 0
-      ? []
-      : [
-          step(
-            `ot-gateway points template > ${pointsList}`,
-            "start a points list (or discover --points-list for BACnet)"
-          ),
-          step(`ot-gateway import ${pointsList}${argument}`, "add its devices to the config")
-        ]
-  const statusPage = `http://127.0.0.1:${port}`
-  const next = [
-    // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
-    step(`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
-    ...devices,
-    ...(compose && !dockerDesktop
+  const manual = config.devices.length === 0
+  const url = `http://127.0.0.1:${port}`
+  const start =
+    compose && !dockerDesktop
       ? [
           step(
             here ? "docker compose up -d" : `docker compose -f ${inFolder("compose.yaml")} up -d`,
@@ -521,21 +516,48 @@ export const initNext = (
           ),
           step("ot-gateway status", "one line per device")
         ]
-      : [step(`ot-gateway run${argument}`, "start the gateway")]),
-    step(
-      statusPage,
-      ssh === undefined
-        ? "the status page, while the gateway runs: devices, values, charts"
-        : "the status page on this machine; from your laptop, through the tunnel below"
-    ),
+      : [step(`ot-gateway run${argument}`, "start the gateway")]
+  // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
+  const before = [
+    step(`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
+    ...start
+  ]
+  // Without devices, the status page is where they are added; a points list is the way from the terminal.
+  const page = manual
+    ? `then open ${url} and add devices there (or upload a points list)`
+    : `then open ${url} for the status page: devices, values, charts`
+  const next = [
+    ...before,
     // Over SSH, 127.0.0.1 is the gateway's machine, not the laptop with the browser.
     ...(ssh === undefined ? [] : [sshTunnel(ssh, port)]),
+    ...(manual
+      ? [
+          step(
+            `ot-gateway points template > ${pointsList}`,
+            "or write a points list here (discover --points-list drafts one for BACnet)"
+          ),
+          step(`ot-gateway import ${pointsList}${argument}`, "add its devices to the config")
+        ]
+      : []),
     step(`ot-gateway check${argument}`, "validate it again after an edit"),
     // Bounded, so an agent that runs the line as printed gets its answer and its prompt back.
     step(`ot-gateway watch${argument} --seconds 10`, `ten seconds of what arrives at ${config.mqtt.url}`)
   ]
-  return { notes: [...password, ...historyNote(config), ...(dockerDesktop ? [dockerDesktopNote] : [])], next }
+  return {
+    notes: [...password, ...historyNote(config), ...(dockerDesktop ? [dockerDesktopNote] : [])],
+    next,
+    url,
+    page: ssh === undefined ? page : `${page}; ${url} is this machine, so from your laptop use the tunnel below`,
+    startedBy: before.length
+  }
 }
+
+/**
+ * Steps as text, each description on its own line under its command: an absolute path makes a command long, and
+ * padding every command to the longest one pushes the descriptions off a terminal.
+ */
+const stepLines = (steps: ReadonlyArray<NextStep>) =>
+  steps.flatMap(({ command, description }) => [`  ${command}`, `      ${description}`])
 
 /** What to do after `init` as text, for the config it wrote to `path`. */
 export const nextSteps = (
@@ -544,14 +566,15 @@ export const nextSteps = (
   folder: FolderFiles = { written: [], kept: [] },
   context: InitContext = {}
 ) => {
-  const { notes, next } = initNext(path, config, folder, context)
-  const width = Math.max(...next.map(({ command }) => command.length)) + 2
+  const { notes, next, page, startedBy } = initNext(path, config, folder, context)
   return [
     ...folder.written.map((file) => `wrote ${file}`),
     ...folder.kept.map((file) => `kept ${file} as it is`),
     ...(folder.noCompose === undefined ? [] : [`no compose.yaml: ${folder.noCompose}`]),
     ...notes.map((note) => `  ${note}`),
     "next:",
-    ...next.map(({ command, description }) => `  ${command.padEnd(width)}${description}`)
+    ...stepLines(next.slice(0, startedBy)),
+    `  ${page}`,
+    ...stepLines(next.slice(startedBy))
   ].join("\n")
 }
