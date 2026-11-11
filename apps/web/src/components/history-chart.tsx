@@ -179,9 +179,7 @@ export const HistoryChart = ({
             minWidth: 150
           }}
         >
-          <div className="text-muted-foreground tabular-nums">
-            {bucketTime(hovered.t, stepMs)}
-          </div>
+          <div className="text-muted-foreground tabular-nums">{bucketTime(hovered.t, stepMs)}</div>
           <div className="font-mono tabular-nums">
             {format(hovered.avg, boolean)} {boolean ? "" : units}
           </div>

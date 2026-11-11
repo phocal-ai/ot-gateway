@@ -552,6 +552,13 @@ export const initNext = (
   }
 }
 
+/**
+ * Steps as text, each description on its own line under its command: an absolute path makes a command long, and
+ * padding every command to the longest one pushes the descriptions off a terminal.
+ */
+const stepLines = (steps: ReadonlyArray<NextStep>) =>
+  steps.flatMap(({ command, description }) => [`  ${command}`, `      ${description}`])
+
 /** What to do after `init` as text, for the config it wrote to `path`. */
 export const nextSteps = (
   path: string,
@@ -560,18 +567,14 @@ export const nextSteps = (
   context: InitContext = {}
 ) => {
   const { notes, next, page, startedBy } = initNext(path, config, folder, context)
-  // Each description on its own line under its command: an absolute path makes a command long, and padding every
-  // command to the longest one pushes the descriptions off a terminal.
-  const lines = (steps: ReadonlyArray<NextStep>) =>
-    steps.flatMap(({ command, description }) => [`  ${command}`, `      ${description}`])
   return [
     ...folder.written.map((file) => `wrote ${file}`),
     ...folder.kept.map((file) => `kept ${file} as it is`),
     ...(folder.noCompose === undefined ? [] : [`no compose.yaml: ${folder.noCompose}`]),
     ...notes.map((note) => `  ${note}`),
     "next:",
-    ...lines(next.slice(0, startedBy)),
+    ...stepLines(next.slice(0, startedBy)),
     `  ${page}`,
-    ...lines(next.slice(startedBy))
+    ...stepLines(next.slice(startedBy))
   ].join("\n")
 }
