@@ -7,7 +7,7 @@
  * A device or point the form did not change is written back exactly as the file had it, keys the form does not
  * know (a request gap, a writable point's limits, semantics) included.
  */
-import type { ConfigIssue } from "@ot-gateway/api"
+import type { ConfigIssue, DiscoveredObject, DiscoveredObjects } from "@ot-gateway/api"
 import { parseConfigText } from "./editor"
 import { unitSymbols } from "./status"
 
@@ -23,6 +23,8 @@ export const isEditableProtocol = (protocol: unknown): protocol is EditableProto
   protocol === "modbus-tcp" || protocol === "bacnet-ip"
 
 export type PublishMode = "" | "sample" | "change" | "aggregate"
+
+export type AlarmWhenChoice = "" | "on" | "off"
 
 /** One point as the form holds it. `key` stays the same while it is edited, for React and for test results. */
 export interface PointDraft {
@@ -47,6 +49,12 @@ export interface PointDraft {
   /** Seconds between messages (sample, aggregate). */
   readonly publishSeconds: string
   readonly deadband: string
+  /** An alarm when the value is on or off (boolean points); empty: not an alarm. */
+  readonly alarmWhen: AlarmWhenChoice
+  /** Commands may write it, within `limitMin`..`limitMax` (numeric points); set only after a confirmation. */
+  readonly writable: boolean
+  readonly limitMin: string
+  readonly limitMax: string
   /** The point as the file has it; undefined for a new one. */
   readonly original: JsonObject | undefined
 }
@@ -92,6 +100,7 @@ export const pointDraft = (point: JsonObject): PointDraft => {
   const publish = isObject(point["publish"]) ? point["publish"] : undefined
   const mode = text(publish?.["mode"])
   const shortDeadband = point["deadband"]
+  const limits = isObject(point["limits"]) ? point["limits"] : undefined
   return {
     key: newKey(),
     name: text(point["name"]),
@@ -114,6 +123,10 @@ export const pointDraft = (point: JsonObject): PointDraft => {
           : "change",
     publishSeconds: seconds(publish?.["intervalMs"]),
     deadband: text(publish?.["deadband"] ?? shortDeadband),
+    alarmWhen: point["alarmWhen"] === "on" || point["alarmWhen"] === "off" ? point["alarmWhen"] : "",
+    writable: point["writable"] === true,
+    limitMin: text(limits?.["min"]),
+    limitMax: text(limits?.["max"]),
     original: point
   }
 }
@@ -136,6 +149,10 @@ export const newPoint = (protocol: EditableProtocol): PointDraft => ({
   publish: "",
   publishSeconds: "",
   deadband: "",
+  alarmWhen: "",
+  writable: false,
+  limitMin: "",
+  limitMax: "",
   original: undefined
 })
 
@@ -238,6 +255,16 @@ export const pointJson = (protocol: EditableProtocol, draft: PointDraft): JsonOb
   } else {
     point["objectType"] = draft.objectType.trim()
     point["instance"] = typedNumber(draft.instance)
+  }
+  setOrRemove(point, "alarmWhen", isBoolean(protocol, draft) ? draft.alarmWhen : "")
+  if (draft.writable) {
+    point["writable"] = true
+    if (takesLimits(protocol, draft) || draft.limitMin.trim() !== "" || draft.limitMax.trim() !== "")
+      point["limits"] = { min: typedNumber(draft.limitMin), max: typedNumber(draft.limitMax) }
+    else delete point["limits"]
+  } else {
+    delete point["writable"]
+    delete point["limits"]
   }
   delete point["deadband"]
   const previous = isObject(point["publish"]) ? point["publish"] : {}
@@ -342,7 +369,11 @@ const pointFieldOf = (protocol: EditableProtocol, key: string): string | undefin
     case "name":
     case "unit":
     case "deadband":
+    case "alarmWhen":
+    case "writable":
       return key
+    case "limits":
+      return "limits"
     case "publish":
       return "publish"
     case "scaling":
@@ -404,31 +435,49 @@ export const deviceIssues = (issues: ReadonlyArray<ConfigIssue>, index: number, 
   return { device, points, other, elsewhere }
 }
 
-const isEmptyField = (record: object, field: string) => {
-  const value: unknown = Object.entries(record).find(([key]) => key === field)?.[1]
-  return typeof value === "string" && value.trim() === ""
+/** The fields a person typed in or chose: `device:host`, `<point key>:register`. */
+export type Touched = ReadonlySet<string>
+
+export const touchedKey = (scope: string, field: string) => `${scope}:${field}`
+
+/** The fields touched by a change of `field` in `scope`: a name also touches the id that follows it. */
+export const touching = (touched: Touched, scope: string, field: string, autoId: boolean): Touched => {
+  const next = new Set(touched)
+  next.add(touchedKey(scope, field))
+  if (field === "name" && autoId) next.add(touchedKey(scope, "id"))
+  return next
 }
 
 /**
- * The issues without those of fields still empty: a new device's form does not open red. Whether any were left out
- * comes with them, so the page can say why Save waits.
+ * The issues to show under the fields: every one of a device or point the file has already, but of a new one only
+ * those of the fields typed in, unless `all` (a test or a save asked for everything). A new point does not flash red
+ * about an id still being derived or an address not typed yet. `quiet` says whether any were held back, so the page
+ * can say why Save waits.
  */
-export const withoutEmptyFields = (
+export const visibleIssues = (
   issues: DeviceIssues,
-  draft: DeviceDraft
+  draft: DeviceDraft,
+  touched: Touched,
+  all: boolean
 ): DeviceIssues & { readonly quiet: boolean } => {
+  if (all) return { ...issues, quiet: false }
   let quiet = false
-  const keep = (record: object, byField: Readonly<Record<string, ReadonlyArray<string>>>) =>
-    Object.fromEntries(
-      Object.entries(byField).filter(([field]) => {
-        const empty = isEmptyField(record, field)
-        if (empty) quiet = true
-        return !empty
-      })
-    )
-  const device = keep(draft, issues.device)
+  const keep = (scope: string, isNew: boolean, byField: Readonly<Record<string, ReadonlyArray<string>>>) =>
+    isNew
+      ? Object.fromEntries(
+          Object.entries(byField).filter(([field]) => {
+            const shown = touched.has(touchedKey(scope, field))
+            if (!shown) quiet = true
+            return shown
+          })
+        )
+      : byField
+  const device = keep("device", draft.original === undefined, issues.device)
   const points = Object.fromEntries(
-    draft.points.map((point) => [point.key, keep(point, issues.points[point.key] ?? {})])
+    draft.points.map((point) => [
+      point.key,
+      keep(point.key, point.original === undefined, issues.points[point.key] ?? {})
+    ])
   )
   return { ...issues, device, points, quiet }
 }
@@ -493,6 +542,28 @@ export const publishModes: ReadonlyArray<{ readonly value: PublishMode; readonly
   { value: "aggregate", label: "Min, max, average every n seconds" }
 ]
 
+/** Whether a point's value is true or false: a coil, a discrete input or a register bit, or a binary object. */
+export const isBoolean = (protocol: EditableProtocol, point: PointDraft) =>
+  protocol === "modbus-tcp"
+    ? point.table === "coil" || point.table === "discrete" || point.dataType === "bool"
+    : point.objectType.startsWith("binary-")
+
+/**
+ * Whether commands could write the point at all, as the gateway's schema allows: a holding register or a coil, or
+ * a BACnet object. Inputs are read-only.
+ */
+export const canWrite = (protocol: EditableProtocol, point: PointDraft) =>
+  protocol === "modbus-tcp" ? point.table === "holding" || point.table === "coil" : !point.objectType.endsWith("-input")
+
+/** Whether a writable point needs limits: every numeric one (there is no unlimited write); a boolean has none. */
+export const takesLimits = (protocol: EditableProtocol, point: PointDraft) => !isBoolean(protocol, point)
+
+export const alarmChoices: ReadonlyArray<{ readonly value: AlarmWhenChoice; readonly label: string }> = [
+  { value: "", label: "Not an alarm" },
+  { value: "on", label: "Alarm when on (true, 1)" },
+  { value: "off", label: "Alarm when off (false, 0)" }
+]
+
 /** Whether a Modbus point reads bits (a coil or discrete input), which have no type, byte order or scaling. */
 export const readsBits = (point: PointDraft) => point.table === "coil" || point.table === "discrete"
 
@@ -501,3 +572,37 @@ export const pointSource = (protocol: EditableProtocol, point: PointDraft) =>
   protocol === "modbus-tcp"
     ? `${tables.find((table) => table.value === point.table)?.label ?? point.table} ${point.register || "?"}${readsBits(point) ? "" : `, ${point.dataType || "?"}`}`
     : `${point.objectType || "?"} ${point.instance || "?"}`
+
+/** A discovered object's key in a pick list: its type and instance. */
+export const objectKey = (object: Pick<DiscoveredObject, "objectType" | "instance">) =>
+  `${object.objectType}:${object.instance}`
+
+/**
+ * Whether a discovered object is ticked to start with: inputs and values, which are what a gateway reads; outputs,
+ * which something drives, and objects the gateway reads already, are left for a person to pick.
+ */
+export const pickedByDefault = (object: DiscoveredObject) =>
+  !object.configured && (object.objectType.endsWith("-input") || object.objectType.endsWith("-value"))
+
+/**
+ * A new BACnet device for the form from a discovered one: its instance and address, an id from its name, and a point
+ * for each object picked, with the name and unit the device gave. Nothing is writable: that is a decision for later.
+ */
+export const discoveredDevice = (found: DiscoveredObjects, picked: ReadonlySet<string>): DeviceDraft => ({
+  ...newDevice("bacnet-ip"),
+  id: found.id,
+  autoId: false,
+  deviceInstance: String(found.instance),
+  address: found.address,
+  points: found.objects
+    .filter((object) => picked.has(objectKey(object)))
+    .map((object) => ({
+      ...newPoint("bacnet-ip"),
+      name: object.name,
+      id: object.id,
+      autoId: false,
+      unit: unitShown(object.unit ?? ""),
+      objectType: object.objectType,
+      instance: String(object.instance)
+    }))
+})

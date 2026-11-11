@@ -12,7 +12,9 @@ import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input, NativeSelect } from "@/components/ui/input"
 import {
+  alarmChoices,
   byteOrders,
+  canWrite,
   type DeviceDraft,
   deviceDraft,
   deviceIssues,
@@ -20,6 +22,7 @@ import {
   deviceIndex,
   devicesOf,
   type EditableProtocol,
+  isBoolean,
   isDeviceChanged,
   newDevice,
   newPoint,
@@ -30,10 +33,13 @@ import {
   readsBits,
   slugify,
   tables,
+  takesLimits,
+  type Touched,
+  touching,
   unitChoices,
+  visibleIssues,
   withDevice,
-  withoutDevice,
-  withoutEmptyFields
+  withoutDevice
 } from "@/lib/device-editor"
 import { hourMinute, savedMessage } from "@/lib/editor"
 import { checkConfig, fetchConfigFile, readToken, type SaveOutcome, saveConfig, storeToken } from "@/lib/editor-api"
@@ -244,6 +250,7 @@ const DeviceResult = ({ protocol, test }: { readonly protocol: EditableProtocol;
 
 const PointFields = ({
   protocol,
+  deviceId,
   point,
   position,
   issues,
@@ -251,14 +258,16 @@ const PointFields = ({
   disabled
 }: {
   readonly protocol: EditableProtocol
+  readonly deviceId: string
   readonly point: PointDraft
   readonly position: number
   readonly issues: Readonly<Record<string, ReadonlyArray<string>>>
-  readonly onChange: (point: PointDraft) => void
+  /** The point as changed, and the field that changed (for the issues to show). */
+  readonly onChange: (point: PointDraft, field: string) => void
   readonly disabled: boolean
 }) => {
   const id = (field: string) => `point-${point.key}-${field}`
-  const set = (field: keyof PointDraft) => (value: string) => onChange({ ...point, [field]: value })
+  const set = (field: keyof PointDraft) => (value: string) => onChange({ ...point, [field]: value }, field)
   const bits = protocol === "modbus-tcp" && readsBits(point)
   const wide = !bits && !["int16", "uint16", "bool", ""].includes(point.dataType)
   return (
@@ -269,16 +278,16 @@ const PointFields = ({
         value={point.name}
         placeholder={position === 0 ? "Active power" : undefined}
         issues={issues["name"]}
-        onChange={(name) => onChange({ ...point, name, id: point.autoId ? slugify(name) : point.id })}
+        onChange={(name) => onChange({ ...point, name, id: point.autoId ? slugify(name) : point.id }, "name")}
         disabled={disabled}
       />
       <TextField
-        id={deviceField("id")}
+        id={id("id")}
         label="Id"
         value={point.id}
         hint="The last part of its topic."
         issues={issues["id"]}
-        onChange={(value) => onChange({ ...point, id: value, autoId: false })}
+        onChange={(value) => onChange({ ...point, id: value, autoId: false }, "id")}
         disabled={disabled}
       />
       {protocol === "modbus-tcp" ? (
@@ -350,6 +359,17 @@ const PointFields = ({
           disabled={disabled}
         />
       )}
+      {isBoolean(protocol, point) ? (
+        <SelectField
+          id={id("alarmWhen")}
+          label="Alarm"
+          value={point.alarmWhen}
+          choices={alarmChoices}
+          issues={issues["alarmWhen"]}
+          onChange={set("alarmWhen")}
+          disabled={disabled}
+        />
+      ) : null}
       <details className="sm:col-span-2" open={issues["scale"] !== undefined || issues["publish"] !== undefined}>
         <summary className="cursor-pointer text-sm text-muted-foreground">
           {protocol === "modbus-tcp" && !bits ? "Scaling, word order and sending" : "Sending"}
@@ -428,6 +448,127 @@ const PointFields = ({
           ) : null}
         </div>
       </details>
+      {canWrite(protocol, point) || point.writable ? (
+        <Commands
+          protocol={protocol}
+          deviceId={deviceId}
+          point={point}
+          issues={issues}
+          onChange={onChange}
+          disabled={disabled}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Whether commands may write a point: off unless set on purpose. Turning it on needs the point's limits (a numeric
+ * one) and a confirmation that names the point and what it controls. The page itself never writes a value: commands
+ * go through MQTT and the gateway's command guard, which checks the limits and logs each one.
+ */
+const Commands = ({
+  protocol,
+  deviceId,
+  point,
+  issues,
+  onChange,
+  disabled
+}: {
+  readonly protocol: EditableProtocol
+  readonly deviceId: string
+  readonly point: PointDraft
+  readonly issues: Readonly<Record<string, ReadonlyArray<string>>>
+  readonly onChange: (point: PointDraft, field: string) => void
+  readonly disabled: boolean
+}) => {
+  const [confirming, setConfirming] = useState(false)
+  const id = (field: string) => `point-${point.key}-${field}`
+  const limits = takesLimits(protocol, point)
+  const name = point.name.trim() || point.id.trim() || "this point"
+  const path = `${deviceId.trim() || "device"}/${point.id.trim() || "point"}`
+  const limitsTyped = point.limitMin.trim() !== "" && point.limitMax.trim() !== ""
+  const range = `${point.limitMin.trim()} to ${point.limitMax.trim()}${point.unit.trim() === "" ? "" : ` ${point.unit.trim()}`}`
+  const limitFields = (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <TextField
+        id={id("limitMin")}
+        label="Lowest value a command may set"
+        value={point.limitMin}
+        numeric
+        issues={issues["limits"]}
+        onChange={(value) => onChange({ ...point, limitMin: value }, "limits")}
+        disabled={disabled}
+      />
+      <TextField
+        id={id("limitMax")}
+        label="Highest value a command may set"
+        value={point.limitMax}
+        numeric
+        hint={point.unit.trim() === "" ? "In the value's units, after scaling." : `In ${point.unit.trim()}.`}
+        onChange={(value) => onChange({ ...point, limitMax: value }, "limits")}
+        disabled={disabled}
+      />
+    </div>
+  )
+  return (
+    <div className="grid gap-2 sm:col-span-2">
+      <p className="text-sm font-medium">Commands</p>
+      {point.writable ? (
+        <>
+          <p className="text-sm">
+            Takes commands on <code className="font-mono text-xs break-all">…/{path}/$set</code>
+            {limits && limitsTyped ? `, within ${range}` : ""}. The gateway checks and logs every one.
+          </p>
+          {limits ? limitFields : null}
+          <Messages id={`${id("writable")}-help`} messages={issues["writable"]} />
+          <div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onChange({ ...point, writable: false }, "writable")}
+              disabled={disabled}
+            >
+              Make it read-only
+            </Button>
+          </div>
+        </>
+      ) : confirming ? (
+        <div className="grid gap-3 rounded-md border border-destructive/40 p-3 text-sm" role="alert">
+          {limits ? limitFields : null}
+          <p>
+            Allow commands to change <span className="font-medium">{name}</span> ({pointSource(protocol, point)}) on the
+            device? A message on <code className="font-mono text-xs break-all">…/{path}/$set</code> then sets it
+            {limits ? (limitsTyped ? `, within ${range}` : ", within the limits above") : ""}, and whatever it controls
+            follows. This page itself never writes a value.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              onClick={() => {
+                setConfirming(false)
+                onChange({ ...point, writable: true }, "writable")
+              }}
+              disabled={disabled || (limits && !limitsTyped)}
+            >
+              Allow commands
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(false)} disabled={disabled}>
+              Keep it read-only
+            </Button>
+          </div>
+          {limits && !limitsTyped ? (
+            <p className="text-xs text-muted-foreground">A command may only set a value within limits: give both.</p>
+          ) : null}
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">Read only: commands cannot change it.</span>
+          <Button size="sm" variant="outline" onClick={() => setConfirming(true)} disabled={disabled}>
+            Allow commands…
+          </Button>
+        </div>
+      )}
     </div>
   )
 }
@@ -436,6 +577,7 @@ export const DeviceEditor = ({
   edit,
   deviceId,
   protocol,
+  initial,
   onDone
 }: {
   readonly edit: EditStatus
@@ -443,16 +585,22 @@ export const DeviceEditor = ({
   readonly deviceId: string | undefined
   /** The protocol of a new device. */
   readonly protocol: EditableProtocol
+  /** A new device's fields to start from (a discovered BACnet device), instead of an empty form. */
+  readonly initial?: DeviceDraft | undefined
   /** Closed: `saved` says what was saved, so the page reads the running config again. */
   readonly onDone: (saved: string | undefined) => void
 }) => {
   const [form, setForm] = useState<Form>({ _tag: "loading" })
-  const [issues, setIssues] = useState<ReadonlyArray<ConfigIssue>>([])
+  /** The latest check, and the candidate it was about: issues of an older candidate are not shown. */
+  const [checked, setChecked] = useState<
+    { readonly candidate: string; readonly issues: ReadonlyArray<ConfigIssue> } | undefined
+  >(undefined)
+  const [touched, setTouched] = useState<Touched>(new Set())
   const [saving, setSaving] = useState<Saving>({ _tag: "idle" })
   const [deviceTest, setDeviceTest] = useState<TestState | undefined>(undefined)
   const [pointTests, setPointTests] = useState<Readonly<Record<string, TestState>>>({})
   const [confirmRemove, setConfirmRemove] = useState(false)
-  /** A new device's empty fields stay quiet until a test asks for them. */
+  /** A new device's untouched fields stay quiet until a test or a save asks for them. */
   const [attempted, setAttempted] = useState(false)
   const [token, setToken] = useState(() => readToken() ?? "")
   const checkRun = useRef(0)
@@ -460,7 +608,7 @@ export const DeviceEditor = ({
   const load = () => {
     setForm({ _tag: "loading" })
     setSaving({ _tag: "idle" })
-    setIssues([])
+    setChecked(undefined)
     void settle(fetchConfigFile).then((result) => {
       if (result._tag === "Failure") return setForm({ _tag: "unreadable", message: result.failure.message })
       const devices = devicesOf(result.success.text)
@@ -473,7 +621,7 @@ export const DeviceEditor = ({
       if (deviceId !== undefined && index < 0)
         return setForm({ _tag: "unreadable", message: `The config file has no device ${deviceId} any more.` })
       const found = index < 0 ? undefined : devices[index]
-      const draft = found === undefined ? newDevice(protocol) : deviceDraft(found)
+      const draft = found === undefined ? (initial ?? newDevice(protocol)) : deviceDraft(found)
       if (draft === undefined)
         return setForm({
           _tag: "unreadable",
@@ -499,7 +647,8 @@ export const DeviceEditor = ({
     const run = ++checkRun.current
     const timer = setTimeout(() => {
       void Effect.runPromise(Effect.result(checkConfig(candidate))).then((result) => {
-        if (run === checkRun.current && result._tag === "Success") setIssues(result.success.issues)
+        if (run === checkRun.current && result._tag === "Success")
+          setChecked({ candidate, issues: result.success.issues })
       })
     }, CHECK_DELAY_MS)
     return () => clearTimeout(timer)
@@ -522,15 +671,21 @@ export const DeviceEditor = ({
     )
 
   const { draft } = form
-  const allIssues = deviceIssues(issues, form.index, draft)
-  const byField = form.isNew && !attempted ? withoutEmptyFields(allIssues, draft) : { ...allIssues, quiet: false }
+  const pending = candidate !== undefined && checked?.candidate !== candidate
+  const issues = checked !== undefined && checked.candidate === candidate ? checked.issues : []
+  const byField = visibleIssues(deviceIssues(issues, form.index, draft), draft, touched, attempted)
   const changed = isDeviceChanged(draft)
   const busy = saving._tag === "saving"
   const testing = deviceTest?._tag === "running" || Object.values(pointTests).some((test) => test._tag === "running")
   const setDraft = (next: DeviceDraft) => setForm({ ...form, draft: next })
-  const set = (field: keyof DeviceDraft) => (value: string) => setDraft({ ...draft, [field]: value })
-  const setPoint = (position: number, point: PointDraft) =>
+  const set = (field: keyof DeviceDraft) => (value: string) => {
+    setTouched(touching(touched, "device", field, false))
+    setDraft({ ...draft, [field]: value })
+  }
+  const setPoint = (position: number, point: PointDraft, field: string) => {
+    setTouched(touching(touched, point.key, field, point.autoId))
     setDraft({ ...draft, points: draft.points.map((existing, index) => (index === position ? point : existing)) })
+  }
 
   /** Read the device (every point) or one point with the form as it is, and show what came back where it belongs. */
   const runTest = (position?: number) => {
@@ -542,7 +697,7 @@ export const DeviceEditor = ({
     else setPointTests((tests) => ({ ...tests, [point.key]: running }))
     void Effect.runPromise(testRead(candidate, form.index, position === undefined ? undefined : [position])).then(
       (outcome) => {
-        if (outcome._tag === "invalid") setIssues(outcome.issues)
+        if (outcome._tag === "invalid") setChecked({ candidate, issues: outcome.issues })
         const done: TestState = { _tag: "done", outcome }
         if (point === undefined) setDeviceTest(done)
         else setPointTests((tests) => ({ ...tests, [point.key]: done }))
@@ -576,7 +731,7 @@ export const DeviceEditor = ({
             ? `Removed ${draft.id} at ${hourMinute(Date.now())}.`
             : savedMessage(outcome.saved.applied, hourMinute(Date.now()))
         )
-      if (outcome._tag === "invalid") setIssues(outcome.issues)
+      if (outcome._tag === "invalid") setChecked({ candidate: text, issues: outcome.issues })
       setSaving({ _tag: "done", outcome })
     })
   }
@@ -588,6 +743,8 @@ export const DeviceEditor = ({
       className="grid gap-5"
       onSubmit={(event) => {
         event.preventDefault()
+        // Fields held back show what keeps the save; nothing is sent with issues.
+        if (issues.length > 0) return setAttempted(true)
         save(candidate, false)
       }}
     >
@@ -743,10 +900,11 @@ export const DeviceEditor = ({
                 )}
                 <PointFields
                   protocol={draft.protocol}
+                  deviceId={draft.id}
                   point={point}
                   position={position}
                   issues={pointIssues}
-                  onChange={(next) => setPoint(position, next)}
+                  onChange={(next, field) => setPoint(position, next, field)}
                   disabled={busy}
                 />
               </li>
@@ -833,9 +991,11 @@ export const DeviceEditor = ({
       ) : null}
       <div className="flex flex-wrap gap-2">
         {byField.quiet ? (
-          <p className="basis-full text-xs text-muted-foreground">Fill in the empty fields to save.</p>
+          <p className="basis-full text-xs text-muted-foreground">
+            Some fields still need a value or a fix: Save shows which.
+          </p>
         ) : null}
-        <Button type="submit" size="sm" disabled={busy || !changed || issues.length > 0}>
+        <Button type="submit" size="sm" disabled={busy || !changed || pending || (issues.length > 0 && !byField.quiet)}>
           {busy && !(saving._tag === "saving" && saving.removing) ? "Saving and applying…" : "Save and apply"}
         </Button>
         <Button size="sm" variant="ghost" onClick={() => onDone(undefined)} disabled={busy}>

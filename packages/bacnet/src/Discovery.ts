@@ -84,12 +84,16 @@ const text = (values: ReadonlyArray<BacnetValue>) => {
   return first?.type === "character-string" ? first.value : ""
 }
 
-/** Read a device's name and its pollable objects, at most `concurrency` requests at a time. */
+/**
+ * Read a device's name and its pollable objects, at most `concurrency` requests at a time, from the first
+ * `maxObjects` entries of its object list (at most `MAX_OBJECTS`).
+ */
 export const describeDevice = Effect.fn("Bacnet.describeDevice")(function* (
   client: BacnetClient,
   target: DeviceAddress,
   instance: number,
-  concurrency = 4
+  concurrency = 4,
+  maxObjects: number = MAX_OBJECTS
 ) {
   const device = { objectType: ObjectType.device, instance }
   const read = (
@@ -101,7 +105,7 @@ export const describeDevice = Effect.fn("Bacnet.describeDevice")(function* (
   const [count] = yield* read(device, PropertyId["object-list"], 0)
   // The length comes off the wire: bounded before anything is allocated for it.
   const listed = count?.type === "unsigned" ? count.value : 0
-  const length = Math.min(listed, MAX_OBJECTS)
+  const length = Math.min(listed, MAX_OBJECTS, Math.max(0, maxObjects))
   const entries = yield* Effect.forEach(
     Array.from({ length }, (_, index) => index + 1),
     (index) => read(device, PropertyId["object-list"], index),

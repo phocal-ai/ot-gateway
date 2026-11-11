@@ -24,6 +24,8 @@ import { DetailDialog, Facts, morphFrom } from "@/components/detail-dialog"
 import { DeviceSheet, SHEET_POINTS } from "@/components/device-sheet"
 import { useRunningConfig } from "@/components/running-config"
 import { NoDevicesYet } from "@/components/no-devices"
+import { FirstRun } from "@/components/first-run"
+import { guideStarted, showsGuide } from "@/lib/first-run"
 import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { formatNumber } from "@/lib/format"
 import { statusOf, useValues } from "@/components/live"
@@ -945,6 +947,12 @@ const StatusView = () => {
     () => pointsByDevice(catalogLoad._tag === "ok" ? catalogLoad.catalog.points : []),
     [catalogLoad]
   )
+  // The setup guide: it leads without devices, and stays after the first save until it is closed (lib/first-run.ts).
+  const [guide, setGuide] = useState(false)
+  const deviceCount = status?.devices.length
+  useEffect(() => {
+    if (deviceCount === 0 || guideStarted()) setGuide(true)
+  }, [deviceCount])
 
   const openDevice = (device: string) => {
     setMorph(canMorph())
@@ -980,15 +988,20 @@ const StatusView = () => {
     <>
       {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
       <AlarmNotice alarms={glance?.alarms ?? []} />
-      <Overview onOpenDevice={openDevice} stale={load._tag !== "ok"} status={status} />
-      <Devices
-        all={all}
-        glance={glance?.glance}
-        onOpen={openDevice}
-        onShowAll={() => setAll(true)}
-        opened={opened}
-        status={status}
-      />
+      {showsGuide(status.devices.length, guide) ? <FirstRun onClose={() => setGuide(false)} status={status} /> : null}
+      {status.devices.length === 0 ? null : (
+        <>
+          <Overview onOpenDevice={openDevice} stale={load._tag !== "ok"} status={status} />
+          <Devices
+            all={all}
+            glance={glance?.glance}
+            onOpen={openDevice}
+            onShowAll={() => setAll(true)}
+            opened={opened}
+            status={status}
+          />
+        </>
+      )}
       <RecentEvents known={known} onOpenDevice={openDevice} status={status} />
       {device === undefined ? null : (
         <DeviceSheet
