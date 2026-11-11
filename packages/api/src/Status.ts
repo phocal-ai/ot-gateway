@@ -200,6 +200,18 @@ export const BufferStatus = Schema.Struct({
 export type BufferStatus = typeof BufferStatus.Type
 
 /**
+ * How a flapping alarm point switched, from its last 16 changes: on for `onMs` and off for `offMs` on average,
+ * raised `raised` times over the last `overMs`. An average is absent when no such stretch ended yet.
+ */
+export const AlarmPattern = Schema.Struct({
+  onMs: Schema.optionalKey(Schema.Number),
+  offMs: Schema.optionalKey(Schema.Number),
+  raised: Schema.Number,
+  overMs: Schema.Number
+})
+export type AlarmPattern = typeof AlarmPattern.Type
+
+/**
  * An alarm point (one with `alarmWhen`) as the gateway sees it now. `raised` counts how often its alarm became active
  * in the last `ALARM_WINDOW_MS` (15 min), so a contact that toggles shows up even while it happens to be off.
  */
@@ -214,7 +226,9 @@ export const AlarmStatus = Schema.Struct({
   /** Times the alarm was raised in the last 15 minutes. */
   raised: Schema.Number,
   /** It changes too often to list each change in the events: they are counted until it is steady again. */
-  flapping: Schema.Boolean
+  flapping: Schema.Boolean,
+  /** While it flaps: how long it stays on and off, how often it was raised. */
+  pattern: Schema.optionalKey(AlarmPattern)
 })
 export type AlarmStatus = typeof AlarmStatus.Type
 
@@ -344,7 +358,8 @@ export const HISTORY_CHANGES_MAX = 200
  * read are left out. `resolution` says where it came from: every read (buckets under a minute, or a range of an
  * hour or less, that starts within the last day) or per-minute rollups (everything else). `changes`, when asked
  * for and the range starts within the last day: the first read and every read that changed the value, oldest
- * first, at most `HISTORY_CHANGES_MAX`.
+ * first, at most `HISTORY_CHANGES_MAX`. `live`: the answer holds the reads the gateway has not written to its file
+ * yet, so it is complete up to `to` (gateways before it lagged up to 30 s, the interval of their writes).
  */
 export const HistorySeries = Schema.Struct({
   device: Schema.String,
@@ -353,6 +368,7 @@ export const HistorySeries = Schema.Struct({
   to: Schema.Number,
   stepMs: Schema.Number,
   resolution: Schema.Literals(["read", "minute"]),
+  live: Schema.optionalKey(Schema.Boolean),
   buckets: Schema.Array(HistoryBucket),
   changes: Schema.optionalKey(Schema.Struct({ list: Schema.Array(HistoryChange), truncated: Schema.Boolean }))
 })
@@ -409,13 +425,17 @@ export const GatewayStartedEvent = Schema.Struct({
   devices: Schema.Number
 })
 
-/** A device that read fine, or had not read yet, failed: `reason` is the class, `error` the driver's words. */
+/**
+ * A device that read fine, or had not read yet, failed: `reason` is the class, `error` the driver's words.
+ * `answeredBefore`: the device read fine earlier in this run, so its config worked.
+ */
 export const DeviceFailingEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("device-failing"),
   device: Schema.String,
   reason: Schema.String,
-  error: Schema.String
+  error: Schema.String,
+  answeredBefore: Schema.optionalKey(Schema.Boolean)
 })
 
 /** A failing device read again, after `downMs` of failures. */
@@ -518,7 +538,9 @@ export const AlarmFlappingEvent = Schema.Struct({
   type: Schema.Literal("alarm-flapping"),
   device: Schema.String,
   point: Schema.String,
-  raised: Schema.Number
+  raised: Schema.Number,
+  /** How it switched up to now: on and off on average, how often over how long. */
+  pattern: Schema.optionalKey(AlarmPattern)
 })
 
 /**
@@ -532,7 +554,9 @@ export const AlarmSettledEvent = Schema.Struct({
   point: Schema.String,
   active: Schema.Boolean,
   since: Schema.Number,
-  unlisted: Schema.Number
+  unlisted: Schema.Number,
+  /** How it switched while it flapped, up to its last change. */
+  pattern: Schema.optionalKey(AlarmPattern)
 })
 
 /** How long a flapping alarm point must keep still before `alarm-settled`, and its changes are listed again. */

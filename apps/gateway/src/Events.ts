@@ -68,6 +68,8 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
   const monotonicMs = () => Number(clock.monotonicTimeNanosUnsafe() / 1_000_000n)
   /** Since when each failing device has failed, on the monotonic clock. */
   const failingSince = new Map<Slug, number>()
+  /** The devices that have read fine in this run: one of them that fails is no config mistake. */
+  const answered = new Set<Slug>()
   /** Since when the broker has been away, on the monotonic clock; undefined while connected or before the first dial. */
   let brokerDownSince: number | undefined
 
@@ -79,9 +81,16 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
   return {
     started: (version, devices) => record({ type: "gateway-started", version, devices }),
     deviceChanged: ({ device, previous, next }) => {
+      if (previous.status === "ok" || next.status === "ok") answered.add(device)
       if (next.status === "failing" && previous.status !== "failing") {
         failingSince.set(device, monotonicMs())
-        record({ type: "device-failing", device, reason: next.reason ?? "unknown", error: next.lastError ?? "" })
+        record({
+          type: "device-failing",
+          device,
+          reason: next.reason ?? "unknown",
+          error: next.lastError ?? "",
+          ...(answered.has(device) ? { answeredBefore: true } : {})
+        })
       } else if (previous.status === "failing" && next.status === "ok") {
         const since = failingSince.get(device)
         failingSince.delete(device)

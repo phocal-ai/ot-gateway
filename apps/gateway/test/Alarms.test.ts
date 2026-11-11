@@ -109,9 +109,21 @@ describe("alarm points", () => {
         yield* read(alarms, "trip", change % 2 === 0 ? 1 : 0)
       }
       expect(recorded).toHaveLength(ALARM_EVENTS_PER_POINT + 1)
-      expect(recorded.at(-1)).toEqual({ type: "alarm-flapping", device: "pump", point: "trip", raised: 4 })
-      // Raised every minute; the window is the current minute and the 14 before it.
-      expect(alarms.snapshot()[0]).toMatchObject({ active: false, flapping: true, raised: 14 })
+      // How it flaps, from its first read to the change that made it flapping: on 30 s, off 30 s, 4 times.
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-flapping",
+        device: "pump",
+        point: "trip",
+        raised: 4,
+        pattern: { onMs: 30_000, offMs: 30_000, raised: 4, overMs: 210_000 }
+      })
+      // Raised every minute; the window is the current minute and the 14 before it. The pattern: its last 16 changes.
+      expect(alarms.snapshot()[0]).toMatchObject({
+        active: false,
+        flapping: true,
+        raised: 14,
+        pattern: { onMs: 30_000, offMs: 30_000, raised: 8, overMs: 450_000 }
+      })
       // It keeps still: reads within 5 min say nothing; the first after 5 min settles it.
       yield* TestClock.adjust("4 minutes")
       yield* read(alarms, "trip", 0)
@@ -124,7 +136,9 @@ describe("alarm points", () => {
         point: "trip",
         active: false,
         since: 3_600_000,
-        unlisted: 120 - ALARM_EVENTS_PER_POINT
+        unlisted: 120 - ALARM_EVENTS_PER_POINT,
+        // Up to its last change: the five minutes it kept still are not part of the pattern.
+        pattern: { onMs: 30_000, offMs: 30_000, raised: 8, overMs: 450_000 }
       })
       // Listed again from here.
       yield* read(alarms, "trip", 1)

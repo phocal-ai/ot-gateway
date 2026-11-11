@@ -57,6 +57,24 @@ const TRUSTED_SOURCE = "a source you trust (commissioning sheet, device display,
 const withoutPrefix = (slug: string, prefix: string) =>
   prefix !== "" && slug.startsWith(`${prefix}-`) ? slug.slice(prefix.length + 1) : slug
 
+/**
+ * A point's name without the device's name in front, whole words and any case ("Heat pump flow temperature" on
+ * "Heat pump" is "Flow temperature"): the topic and the page name the device already. A symbol between the two
+ * goes with it. The name as it is when that would leave nothing, or nothing that starts with a letter or digit.
+ */
+export const withoutDeviceName = (name: string, deviceName: string) => {
+  const device = slugify(deviceName)
+  if (device === "") return name
+  const words = name.trim().split(/\s+/)
+  // The longest prefix first, so a symbol after the device's name ("Heat pump ★ flow") goes with it.
+  for (let end = words.length - 1; end >= 1; end--) {
+    if (slugify(words.slice(0, end).join(" ")) !== device) continue
+    const rest = words.slice(end).join(" ")
+    if (/^[\p{L}\p{N}]/u.test(rest)) return capitalized(rest)
+  }
+  return name
+}
+
 /** `wanted`, or `wanted-<suffix>`, or that with a counter: whichever is not taken yet. */
 const unique = (taken: Set<string>, wanted: string, suffix: string) => {
   let id = taken.has(wanted) ? `${wanted.slice(0, 63 - suffix.length)}-${suffix}` : wanted
@@ -118,7 +136,7 @@ export const draftDevices = (found: ReadonlyArray<DraftInput>, existing: Readonl
         const fallback = `${object.objectType}-${object.instance}`
         return {
           id: unique(pointIds, withoutPrefix(slugify(object.name), deviceSlug) || fallback, String(object.instance)),
-          name: object.name === "" ? fallback : object.name,
+          name: object.name === "" ? fallback : withoutDeviceName(object.name, described.name || id),
           ...(object.unit === undefined ? {} : { unit: object.unit }),
           objectType: object.objectType,
           instance: object.instance

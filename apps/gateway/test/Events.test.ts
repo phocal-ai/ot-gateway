@@ -46,7 +46,16 @@ describe("GatewayEvents", () => {
       registry.recordSuccess("energy-meter", 100_000)
       const { events: kept } = yield* events.log()
       expect(kept).toEqual([
-        { id: 1, at: 10_000, type: "device-failing", device: "energy-meter", reason: "connection", error: refused },
+        // It read fine before it failed: its config worked, which the hint takes into account.
+        {
+          id: 1,
+          at: 10_000,
+          type: "device-failing",
+          device: "energy-meter",
+          reason: "connection",
+          error: refused,
+          answeredBefore: true
+        },
         { id: 2, at: 100_000, type: "device-recovered", device: "energy-meter", downMs: 90_000 }
       ])
     }).pipe(Effect.provide(gatewayEventsLayer()))
