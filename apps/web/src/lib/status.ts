@@ -5,6 +5,7 @@
 import {
   type ConfigView,
   type DeviceStatus,
+  type EventLog,
   type GatewayStatus,
   isDeviceLate,
   type Messages,
@@ -94,6 +95,17 @@ export const fetchPoints: Effect.Effect<PointCatalog, StatusUnavailable> = gatew
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )
+
+/**
+ * The gateway's recent events (`/api/events`): all it keeps, or only those after the event id `after`, which is what
+ * the status poll asks for each time, so it is usually an empty list.
+ */
+export const fetchEvents = (after: number | undefined): Effect.Effect<EventLog, StatusUnavailable> =>
+  gateway.pipe(
+    Effect.flatMap((client) => client.status.events({ query: after === undefined ? {} : { after } })),
+    Effect.provide(FetchHttpClient.layer),
+    withinThreeSeconds
+  )
 
 /** The running config without its points, for the Settings tab; it changes only when the gateway restarts. */
 export const fetchConfig: Effect.Effect<ConfigView, StatusUnavailable> = gateway.pipe(
@@ -224,6 +236,24 @@ export const clockTime = (at: number, now: number) => {
     ? time
     : `${moment.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`
 }
+
+/**
+ * How long something lasted, to the precision that matters: seconds under two minutes ("61 s"), then minutes
+ * ("3 min"), hours and minutes ("2 h 5 min"), days and hours ("3 d 4 h").
+ */
+export const duration = (ms: number) => {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  if (seconds < 120) return `${seconds} s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? `${hours} h` : `${hours} h ${minutes % 60} min`
+  const days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`
+}
+
+/** Since when, as a clock time and how long ago: "12:18:20 (3 min)". */
+export const sinceClock = (at: number, now: number) => `${clockTime(at, now)} (${duration(now - at)})`
 
 /** "0.4 %", "37 %": how full the buffer is; under 1 % keeps a decimal, so a filling buffer never reads 0 %. */
 export const fillPercent = (rows: number, maxRows: number) => {

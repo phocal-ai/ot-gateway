@@ -24,6 +24,7 @@ const point = (fields: Partial<PointInfo>): PointInfo => ({
   topic: "site/b/ahu-1/supply-temp",
   source: "analog-input 3 · present-value",
   read: "on change of value where the device supports it, polled every 5 s otherwise",
+  cov: true,
   publish: "every read",
   ...fields
 })

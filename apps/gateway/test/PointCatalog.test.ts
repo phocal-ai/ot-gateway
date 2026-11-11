@@ -80,6 +80,7 @@ describe("point catalog", () => {
         topic: "s/b/meter/power",
         source: "holding 40 · float32 CDAB",
         read: "polled every 5 s",
+        cov: false,
         publish: "aggregate every 15 min",
         scaling: { factor: 0.1, offset: 0 },
         brick: "Electric_Power_Sensor",
@@ -100,6 +101,7 @@ describe("point catalog", () => {
         "on change of value where the device supports it, polled every 5 s otherwise",
         "polled every 5 s"
       ])
+      expect(points.map((point) => point.cov)).toEqual([false, false, false, true, false])
       // A point's own deadband or publish wins over its device's.
       expect(points.map((point) => point.publish)).toEqual([
         "aggregate every 15 min",

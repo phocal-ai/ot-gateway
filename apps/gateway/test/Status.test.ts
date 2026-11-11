@@ -17,7 +17,7 @@ import {
   withMetricAttributes
 } from "@ot-gateway/core"
 import { openHistory } from "@ot-gateway/history"
-import { Clock, Effect, FileSystem, Fiber, Layer, Metric } from "effect"
+import { Clock, Effect, FileSystem, Fiber, Layer, Metric, Schedule } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
@@ -54,6 +54,17 @@ const config = parseConfig(
     ]
   })
 )
+
+/**
+ * `ask` again every 50 ms until `done` accepts its answer, for 5 s at most: a server that is still starting, or a
+ * history that has not flushed yet under load, is waited for rather than slept past.
+ */
+const eventually = <A, E, R>(ask: Effect.Effect<A, E, R>, done: (answer: A) => boolean) =>
+  ask.pipe(
+    Effect.filterOrFail(done),
+    Effect.retry({ schedule: Schedule.spaced("50 millis") }),
+    Effect.timeout("5 seconds")
+  )
 
 /** The status code of GET /api/status with the Host header set to `host`. */
 const statusCodeFor = (port: number, host: string) =>
@@ -562,9 +573,12 @@ describe("status", () => {
         state,
         historyHandler(parsed, history)
       ).pipe(Effect.forkChild)
-      yield* Effect.sleep("300 millis")
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
-      const series = yield* client.status.history({ query: { device: "meter", point: "power", buckets: 1 } })
+      // Until the server is up and the history has flushed both readings (every 50 ms, later under load).
+      const series = yield* eventually(
+        client.status.history({ query: { device: "meter", point: "power", buckets: 1 } }),
+        (answer) => answer.buckets.reduce((sum, bucket) => sum + bucket.count, 0) === 2
+      )
       // The last hour in one bucket: an hour-wide step, so from the minute rollups.
       expect(series.resolution).toBe("minute")
       expect(series.buckets).toEqual([expect.objectContaining({ min: 3, max: 5, avg: 4, count: 2 })])
@@ -582,8 +596,10 @@ describe("status", () => {
         state,
         historyHandler(parsed, undefined)
       ).pipe(Effect.forkChild)
-      yield* Effect.sleep("300 millis")
-      const none = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "power" } }))
+      const none = yield* eventually(
+        Effect.flip(client.status.history({ query: { device: "meter", point: "power" } })),
+        (error) => error._tag === "HistoryUnavailable"
+      )
       expect(none._tag).toBe("HistoryUnavailable")
       yield* Fiber.interrupt(bare)
     }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer, gatewayEventsLayer()]))

@@ -14,8 +14,8 @@ import {
   readsOnChange
 } from "../src/lib/glance.ts"
 
-const polled = "polled every 5 s"
-const cov = "on change of value where the device supports it, polled every 5 s otherwise"
+const polled = { read: "polled every 5 s", cov: false }
+const cov = { read: "on change of value where the device supports it, polled every 5 s otherwise", cov: true }
 
 const point = (fields: Partial<PointInfo>): PointInfo => ({
   device: "meter",
@@ -24,7 +24,7 @@ const point = (fields: Partial<PointInfo>): PointInfo => ({
   writable: false,
   topic: "site/b/meter/power",
   source: "holding 0 · float32",
-  read: polled,
+  ...polled,
   publish: "every read",
   ...fields
 })
@@ -68,9 +68,9 @@ describe("isAlarm and alarmActive", () => {
 })
 
 describe("readsOnChange", () => {
-  it("reads the catalog's words", () => {
-    expect(readsOnChange({ read: cov })).toBe(true)
-    expect(readsOnChange({ read: polled })).toBe(false)
+  it("reads the catalog's flag", () => {
+    expect(readsOnChange(cov)).toBe(true)
+    expect(readsOnChange(polled)).toBe(false)
   })
 })
 
@@ -84,17 +84,17 @@ describe("pointFreshness", () => {
 
   it("calls an old COV read unchanged while its device answers, and an old polled read stale", () => {
     const old = { value: at(now - 10 * 60_000), device: device() }
-    expect(pointFreshness(point({ read: cov }), old, now, false)).toEqual({ _tag: "unchanged", ts: now - 10 * 60_000 })
-    expect(pointFreshness(point({ read: polled }), old, now, false)._tag).toBe("stale")
+    expect(pointFreshness(point(cov), old, now, false)).toEqual({ _tag: "unchanged", ts: now - 10 * 60_000 })
+    expect(pointFreshness(point(polled), old, now, false)._tag).toBe("stale")
   })
 
   it("calls every read stale while its device fails or is late, or the gateway is not reached", () => {
     const value = at(now - 2000)
     const failing = device({ status: "failing", reason: "timeout" })
     const late = device({ lastSuccess: now - 60_000 })
-    expect(pointFreshness(point({ read: cov }), { value, device: failing }, now, false)._tag).toBe("stale")
-    expect(pointFreshness(point({ read: cov }), { value, device: late }, now, false)._tag).toBe("stale")
-    expect(pointFreshness(point({ read: cov }), { value, device: device() }, now, true)._tag).toBe("stale")
+    expect(pointFreshness(point(cov), { value, device: failing }, now, false)._tag).toBe("stale")
+    expect(pointFreshness(point(cov), { value, device: late }, now, false)._tag).toBe("stale")
+    expect(pointFreshness(point(cov), { value, device: device() }, now, true)._tag).toBe("stale")
   })
 
   it("does not dim the reads of a device that is only starting", () => {

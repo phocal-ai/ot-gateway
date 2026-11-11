@@ -2,10 +2,12 @@
 
 /**
  * The status page, an overview: alarms that are on, the broker, devices, buffer and machine (each card opens its
- * details), and every device with its health and its first few values (a row each, opening its points on the
- * Points page); the messages it publishes, command results among them, are on the Messages tab. A gateway without
- * devices says how to add them.
- * Polls `/api/status` every two seconds, and the values shown like the Points tab does; read-only.
+ * details), every device with its health and its first few values (a row each, opening the device in a side panel:
+ * where it is, since when it fails, why and what to check, its points and its events), and the gateway's recent
+ * events; the messages it publishes, command results among them, are on the Messages tab. A gateway without
+ * devices says how to add them. The open device lives in the URL (`?device=`), so it can be linked.
+ * Polls `/api/status` every two seconds (and the new events with it), and the values shown like the Points tab
+ * does; read-only.
  *
  * Freshness is shown as a state, not as numbers that count up: the header says
  * Live while answers arrive, a device says how often it is read and gets a time
@@ -14,10 +16,13 @@
  */
 import type { DeviceStatus, GatewayStatus, HostStatus, PointInfo, PointReading } from "@ot-gateway/api"
 import Link from "next/link"
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
+import { useSearchParams } from "next/navigation"
+import { type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react"
 import { useCatalog } from "@/components/catalog"
-import { useGateway } from "@/components/gateway-shell"
+import { useGateway, useGatewayEvents } from "@/components/gateway-shell"
 import { DetailDialog, Facts, morphFrom } from "@/components/detail-dialog"
+import { DeviceSheet, SHEET_POINTS } from "@/components/device-sheet"
+import { useRunningConfig } from "@/components/running-config"
 import { NoDevicesYet } from "@/components/no-devices"
 import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { formatNumber } from "@/lib/format"
@@ -32,6 +37,16 @@ import {
   pointsByDevice
 } from "@/lib/glance"
 import { machineNote, machineProblems, powerLabel } from "@/lib/host"
+import { deviceAddress } from "@/lib/device"
+import {
+  deviceEvents,
+  eventSentence,
+  eventTone,
+  isIncident,
+  type KnownEvents,
+  latestEvents,
+  nothingYet
+} from "@/lib/events"
 import { filterToSearch, pointKey } from "@/lib/points"
 import {
   addSample,
@@ -56,8 +71,10 @@ import {
   freshness,
   type Freshness,
   protocolName,
-  since
+  since,
+  sinceClock
 } from "@/lib/status"
+import { canMorph, withTransition } from "@/lib/transition"
 
 const deviceBadge = (state: Freshness) => {
   switch (state._tag) {
@@ -72,15 +89,22 @@ const deviceBadge = (state: Freshness) => {
   }
 }
 
-/** Under the device's name: how often it is read, and since when it hasn't been once that matters. */
+/**
+ * Under the device's name: how often it is read, and since when it hasn't been once that matters: a failing device
+ * since the clock time it started failing ("failing since 12:18:20 (3 min)").
+ */
 const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
   const read = `read ${every(device.pollIntervalMs)}`
   switch (state._tag) {
     case "live":
     case "starting":
       return read
-    case "late":
     case "failing":
+      if (device.failingSince !== undefined) return `${read} · failing since ${sinceClock(device.failingSince, now)}`
+      return state.lastSuccess === undefined
+        ? `${read} · no answer yet`
+        : `${read} · no answer for ${since(state.lastSuccess, now)}`
+    case "late":
       return state.lastSuccess === undefined
         ? `${read} · no answer yet`
         : `${read} · no answer for ${since(state.lastSuccess, now)}`
@@ -154,19 +178,24 @@ const DeviceValues = ({
 
 /**
  * Every device, one row each: its health, how it is read, how many points it has and its first few values, the
- * ones with a problem first. A row opens the device's points on the Points page, where each point has its value
- * and history. A site with many devices lists the first few until asked for all, so this page stays a short
+ * ones with a problem first. A row opens the device in a side panel (since when it fails, why, what to check, its
+ * points and events). A site with many devices lists the first few until asked for all, so this page stays a short
  * overview.
  */
 const Devices = ({
   status,
   all,
   onShowAll,
+  onOpen,
+  opened,
   glance
 }: {
   readonly status: GatewayStatus
   readonly all: boolean
   readonly onShowAll: () => void
+  readonly onOpen: (device: string) => void
+  /** The device open in the panel, marked in the list. */
+  readonly opened: string | undefined
   readonly glance: Glance | undefined
 }) => {
   const { ordered, listed } = listedDevices(status, all)
@@ -192,13 +221,18 @@ const Devices = ({
           const state = freshness(device, status.now)
           return (
             <li key={device.id}>
-              <Link
-                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
-                href={`/points/?device=${encodeURIComponent(device.id)}`}
+              <button
+                aria-haspopup="dialog"
+                aria-pressed={device.id === opened}
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 text-left hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none aria-pressed:bg-muted sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
+                data-device={device.id}
+                onClick={() => onOpen(device.id)}
+                type="button"
               >
                 <div className="min-w-0">
                   <p className="truncate font-mono text-sm font-medium">{device.id}</p>
-                  <p className="truncate text-xs text-muted-foreground">
+                  {/* Wraps rather than cutting off "failing since …" on a phone. */}
+                  <p className="text-xs break-words text-muted-foreground">
                     {protocolName[device.protocol]} · {deviceLine(device, state, status.now)}
                   </p>
                 </div>
@@ -210,7 +244,7 @@ const Devices = ({
                   →
                 </span>
                 {glance === undefined ? null : <DeviceValues device={device} glance={glance} now={status.now} />}
-              </Link>
+              </button>
             </li>
           )
         })}
@@ -311,10 +345,15 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
             ? broker.connectedAt === undefined
               ? "Connected"
               : `Connected since ${clockTime(broker.connectedAt, status.now)}`
-            : broker.connectedAt === undefined
-              ? "Not connected yet"
-              : `Disconnected, last connected at ${clockTime(broker.connectedAt, status.now)}`}
+            : broker.disconnectedSince !== undefined
+              ? `Disconnected since ${sinceClock(broker.disconnectedSince, status.now)}`
+              : broker.connectedAt === undefined
+                ? "Not connected yet"
+                : `Disconnected, last connected at ${clockTime(broker.connectedAt, status.now)}`}
         </p>
+        {broker.connected || broker.lastError === undefined ? null : (
+          <p className="font-mono text-sm break-words text-destructive">{broker.lastError}</p>
+        )}
         {broker.connected ? null : (
           <p className="text-sm text-muted-foreground">
             {buffer === undefined
@@ -326,6 +365,8 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
       <Facts
         rows={[
           ["Broker", <span className="font-mono">{broker.url}</span>],
+          !broker.connected &&
+            broker.connectedAt !== undefined && ["Last connected", clockTime(broker.connectedAt, status.now)],
           ["Values published", formatNumber(broker.published)],
           [
             "Could not publish",
@@ -352,7 +393,13 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
   )
 }
 
-const DevicesDetails = ({ status }: { readonly status: GatewayStatus }) => {
+const DevicesDetails = ({
+  status,
+  onOpenDevice
+}: {
+  readonly status: GatewayStatus
+  readonly onOpenDevice: (device: string) => void
+}) => {
   const counts = deviceCounts(status.devices, status.now)
   const attention = byAttention(status.devices, status.now).filter((device) => {
     const tag = freshness(device, status.now)._tag
@@ -393,18 +440,19 @@ const DevicesDetails = ({ status }: { readonly status: GatewayStatus }) => {
               const state = freshness(device, status.now)
               return (
                 <li key={device.id}>
-                  <Link
-                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-muted/50"
-                    href={`/points/?device=${encodeURIComponent(device.id)}`}
+                  <button
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-muted/50"
+                    onClick={() => onOpenDevice(device.id)}
+                    type="button"
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-mono">{device.id}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
+                      <span className="block text-xs break-words text-muted-foreground">
                         {deviceLine(device, state, status.now)}
                       </span>
                     </span>
                     {deviceBadge(state)}
-                  </Link>
+                  </button>
                 </li>
               )
             })}
@@ -536,7 +584,15 @@ const machineCard = (host: HostStatus | undefined, upMs: number) => {
  * The broker, the devices, the buffer and the machine at a glance; each card opens its details in a dialog that
  * grows out of it (a view transition where the browser has them).
  */
-const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly stale: boolean }) => {
+const Overview = ({
+  status,
+  stale,
+  onOpenDevice
+}: {
+  readonly status: GatewayStatus
+  readonly stale: boolean
+  readonly onOpenDevice: (device: string) => void
+}) => {
   const [open, setOpen] = useState<Panel | undefined>(undefined)
   const [morph, setMorph] = useState(false)
   const cards = useRef<Partial<Record<Panel, HTMLDivElement | null>>>({})
@@ -575,7 +631,13 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
           )
         }
         label="Broker"
-        note={note(`${status.broker.connected ? "to " : ""}${status.broker.url}`)}
+        note={note(
+          status.broker.connected
+            ? `to ${status.broker.url}`
+            : status.broker.disconnectedSince === undefined
+              ? status.broker.url
+              : `since ${sinceClock(status.broker.disconnectedSince, status.now)}`
+        )}
         title={status.broker.connected ? "connected" : "disconnected"}
       />
       <OverviewCard
@@ -619,7 +681,13 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
           {open === "broker" ? (
             <BrokerDetails status={status} />
           ) : open === "devices" ? (
-            <DevicesDetails status={status} />
+            <DevicesDetails
+              onOpenDevice={(device) => {
+                setOpen(undefined)
+                onOpenDevice(device)
+              }}
+              status={status}
+            />
           ) : open === "buffer" ? (
             <BufferDetails status={status} view={buffer} />
           ) : (
@@ -684,7 +752,12 @@ const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<PointInfo> }) 
  * The catalog and the values the page shows: a few per listed device and every alarm point, asked for like the
  * Points tab's rows. Nothing until the catalog came; the rows show without values meanwhile.
  */
-const useGlance = (status: GatewayStatus | undefined, all: boolean, unreachable: boolean) => {
+const useGlance = (
+  status: GatewayStatus | undefined,
+  all: boolean,
+  unreachable: boolean,
+  opened: string | undefined
+) => {
   const catalogLoad = useCatalog(status?.since)
   const catalog = catalogLoad._tag === "ok" ? catalogLoad.catalog : undefined
   const listedIds =
@@ -693,35 +766,234 @@ const useGlance = (status: GatewayStatus | undefined, all: boolean, unreachable:
       : listedDevices(status, all)
           .listed.map((device) => device.id)
           .join(",")
-  const keys = useMemo(
-    () => (catalog === undefined || listedIds === "" ? [] : glanceKeys(catalog.points, listedIds.split(","))),
-    [catalog, listedIds]
-  )
-  const readings = useValues(keys)
   const byDevice = useMemo(() => pointsByDevice(catalog?.points ?? []), [catalog])
+  // The open device's first points ride on the same values poll as the rows'.
+  const keys = useMemo(() => {
+    if (catalog === undefined || listedIds === "") return []
+    const sheet = opened === undefined ? [] : (byDevice.get(opened) ?? []).slice(0, SHEET_POINTS).map(pointKey)
+    return [...new Set([...glanceKeys(catalog.points, listedIds.split(",")), ...sheet])]
+  }, [catalog, listedIds, opened, byDevice])
+  const readings = useValues(keys)
   if (catalog === undefined) return undefined
   return { glance: { byDevice, readings, unreachable }, alarms: activeAlarms(catalog.points, readings) }
 }
 
-const StatusPage = () => {
+/** Events the Recent events card lists before "Show all". */
+const CARD_EVENTS = 10
+
+const toneDot = { bad: "bg-destructive", good: "bg-success", neutral: "bg-muted-foreground/40" } as const
+
+/** Events, newest first, one line each: a dot for bad or good news, the local time and what happened. */
+const EventList = ({
+  events,
+  now,
+  onOpenDevice
+}: {
+  readonly events: KnownEvents["events"]
+  readonly now: number
+  readonly onOpenDevice: (device: string) => void
+}) => (
+  <ul className="flex flex-col text-sm">
+    {events.map((event) => {
+      const line = (
+        <>
+          <span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${toneDot[eventTone(event)]}`} />
+          <span className="shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">
+            {clockTime(event.at, now)}
+          </span>
+          <span className="min-w-0 break-words">{eventSentence(event)}</span>
+        </>
+      )
+      const row = "flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-left"
+      return (
+        <li key={event.id}>
+          {event.type === "device-failing" || event.type === "device-recovered" ? (
+            <button
+              className={`${row} hover:bg-muted/50`}
+              onClick={() => onOpenDevice(event.device)}
+              title={`Open ${event.device}`}
+              type="button"
+            >
+              {line}
+            </button>
+          ) : (
+            <div className={row}>{line}</div>
+          )}
+        </li>
+      )
+    })}
+  </ul>
+)
+
+/**
+ * What happened lately (`/api/events`), newest first: devices that stopped answering and came back, the broker
+ * going away and coming back, the buffer emptying. A fault that cleared before anyone looked still shows here.
+ * "Show all" opens every event the gateway keeps.
+ */
+const RecentEvents = ({
+  status,
+  known,
+  onOpenDevice
+}: {
+  readonly status: GatewayStatus
+  readonly known: KnownEvents | undefined
+  readonly onOpenDevice: (device: string) => void
+}) => {
+  const [all, setAll] = useState(false)
+  const [morph, setMorph] = useState(false)
+  const card = useRef<HTMLDivElement>(null)
+  // Events of an older run of the gateway are not shown against this one's start.
+  const events = known?.since === status.since ? known.events : []
+  const happened = events.some(isIncident)
+  const open = () => {
+    const transition = morphFrom(card.current)
+    setMorph(transition.morph)
+    transition.open(() => setAll(true))
+  }
+  const openDevice = (device: string) => {
+    setAll(false)
+    onOpenDevice(device)
+  }
+  return (
+    <Card className="gap-0 py-0" ref={card}>
+      <div className="flex items-center justify-between gap-2 border-b px-5 py-4">
+        <h2 className="leading-none font-semibold">Recent events</h2>
+        {happened ? (
+          <button
+            aria-haspopup="dialog"
+            className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            onClick={open}
+            type="button"
+          >
+            Show all ({formatNumber(events.length)})
+          </button>
+        ) : null}
+      </div>
+      <div className="px-3 py-3">
+        {happened ? (
+          <EventList events={latestEvents(events, CARD_EVENTS)} now={status.now} onOpenDevice={onOpenDevice} />
+        ) : (
+          <p className="px-2 py-1 text-sm text-muted-foreground">{nothingYet(status.since, status.now)}</p>
+        )}
+      </div>
+      {all ? (
+        <DetailDialog morph={morph} onClose={() => morphFrom(card.current).close(() => setAll(false))} title="Events">
+          <p className="text-sm text-muted-foreground">
+            Since the gateway started at {clockTime(status.since, status.now)}, newest first.
+            {known !== undefined && known.dropped > 0
+              ? ` It keeps the latest ${formatNumber(known.capacity)}; ${formatNumber(known.dropped)} older ones were let go.`
+              : ""}
+          </p>
+          <EventList events={events.toReversed()} now={status.now} onOpenDevice={openDevice} />
+        </DetailDialog>
+      ) : null}
+    </Card>
+  )
+}
+
+/** The open device in a URL query, if any. */
+const deviceFromSearch = (query: string) => new URLSearchParams(query).get("device") ?? undefined
+
+/**
+ * The device open in the panel, from the URL (`?device=`), so a failing device can be linked; written back with
+ * `replaceState` on open and close. A link to this page while it is open changes the URL under it: it follows.
+ */
+const useOpenDevice = () => {
+  const search = useSearchParams().toString()
+  const [opened, setOpened] = useState(() => deviceFromSearch(search))
+  useEffect(() => setOpened(deviceFromSearch(search)), [search])
+  const update = (device: string | undefined) => {
+    setOpened(device)
+    const query = device === undefined ? "" : `?${new URLSearchParams({ device }).toString()}`
+    window.history.replaceState(null, "", `${window.location.pathname}${query}`)
+  }
+  return [opened, update] as const
+}
+
+const StatusView = () => {
   const load = useGateway()
+  const known = useGatewayEvents()
   const status = statusOf(load)
   const [all, setAll] = useState(false)
-  const glance = useGlance(status, all, load._tag === "unreachable")
+  const [opened, setOpened] = useOpenDevice()
+  const [morph, setMorph] = useState(false)
+  const unreachable = load._tag === "unreachable"
+  const glance = useGlance(status, all, unreachable, opened)
+  const config = useRunningConfig(status?.since)
+  const catalogLoad = useCatalog(status?.since)
+  const byDevice = useMemo(
+    () => pointsByDevice(catalogLoad._tag === "ok" ? catalogLoad.catalog.points : []),
+    [catalogLoad]
+  )
+
+  const openDevice = (device: string) => {
+    setMorph(canMorph())
+    withTransition(() => setOpened(device))
+  }
+  /** Close the panel: it slides out, and focus goes to the row of the device it showed. */
+  const closeDevice = () => {
+    const shown = opened
+    withTransition(() => setOpened(undefined), {
+      updated: () => {
+        if (shown === undefined) return
+        document.querySelector<HTMLElement>(`[data-device="${CSS.escape(shown)}"]`)?.focus({ preventScroll: true })
+      }
+    })
+  }
+
+  if (status === undefined)
+    return (
+      <p className="text-muted-foreground">{load._tag === "loading" ? "Loading…" : "The gateway does not answer."}</p>
+    )
+
+  const { listed } = listedDevices(status, all)
+  const device = opened === undefined ? undefined : status.devices.find((candidate) => candidate.id === opened)
+  const index = device === undefined ? -1 : listed.indexOf(device)
+  /** The next or previous listed device, in the open panel, without a transition: stepping should feel instant. */
+  const step = (delta: 1 | -1) => {
+    const next = listed[index + delta]
+    if (next !== undefined) setOpened(next.id)
+  }
+  const configDevice = config?.devices.find((candidate) => candidate.id === opened)
+
   return (
     <>
-      {status === undefined ? (
-        <p className="text-muted-foreground">{load._tag === "loading" ? "Loading…" : "The gateway does not answer."}</p>
-      ) : (
-        <>
-          {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
-          <AlarmNotice alarms={glance?.alarms ?? []} />
-          <Overview status={status} stale={load._tag !== "ok"} />
-          <Devices all={all} glance={glance?.glance} onShowAll={() => setAll(true)} status={status} />
-        </>
+      {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
+      <AlarmNotice alarms={glance?.alarms ?? []} />
+      <Overview onOpenDevice={openDevice} stale={load._tag !== "ok"} status={status} />
+      <Devices
+        all={all}
+        glance={glance?.glance}
+        onOpen={openDevice}
+        onShowAll={() => setAll(true)}
+        opened={opened}
+        status={status}
+      />
+      <RecentEvents known={known} onOpenDevice={openDevice} status={status} />
+      {device === undefined ? null : (
+        <DeviceSheet
+          address={configDevice === undefined ? undefined : deviceAddress(configDevice)}
+          device={device}
+          events={known?.since === status.since ? deviceEvents(known.events, device.id) : []}
+          morph={morph}
+          now={status.now}
+          onClose={closeDevice}
+          onStep={step}
+          points={catalogLoad._tag === "ok" ? (byDevice.get(device.id) ?? []) : undefined}
+          position={index < 0 ? undefined : { index: index + 1, total: listed.length }}
+          readings={glance?.glance.readings ?? new Map()}
+          unreachable={unreachable}
+        />
       )}
     </>
   )
 }
+
+/** `useSearchParams` needs a Suspense boundary in a static export: the prerendered page shows its fallback. */
+const StatusPage = () => (
+  <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+    <StatusView />
+  </Suspense>
+)
 
 export default StatusPage
