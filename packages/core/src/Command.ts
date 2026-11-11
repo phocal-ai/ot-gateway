@@ -16,8 +16,10 @@
  *
  * The value is then unscaled into device units and written once, with a
  * deadline: never retried, so a command never happens twice or late. Every
- * command gets one result on `…/$set/result`, with its correlation data, is
- * logged and counted in `ot_gateway_commands`. Results are transient: delivered
+ * command whose topic can name a point gets one result on `…/$set/result`,
+ * with its correlation data; every command is counted in `ot_gateway_commands`
+ * and logged (a run of rejections for unknown or read-only points as a
+ * count, at most once a minute). Results are transient: delivered
  * now or not at all. A request's MQTT 5 Response Topic is ignored: answering
  * wherever a sender asks would let it make the gateway publish on topics it
  * may not publish on itself, another point's `$set` included.
@@ -26,7 +28,7 @@ import { Clock, Duration, Effect, Metric, Schema, type Scope } from "effect"
 import type { Device } from "./Config.ts"
 import type { Driver, WriteValue } from "./Driver.ts"
 import { monotonicMillis } from "./Monotonic.ts"
-import { type AnyPoint, bacnetValueKind, type Scaling } from "./Point.ts"
+import { type AnyPoint, bacnetValueKind, type Scaling, Slug } from "./Point.ts"
 import { Publisher } from "./Publisher.ts"
 import { commands } from "./Telemetry.ts"
 
@@ -128,6 +130,14 @@ const label = (level: string) => (level.length <= 64 ? level : `${level.slice(0,
 
 const rejected = (reason: RejectReason, message: string): CommandOutcome => ({ status: "rejected", reason, message })
 
+/** Whether a topic level can be a configured id: a slug, as the config schema requires. */
+const isId = Schema.is(Slug)
+
+/** Rejections that do not involve a writable point; a run of them is summarised, not logged one by one. */
+const THROTTLED: ReadonlySet<RejectReason> = new Set(["unknown-point", "not-writable"])
+/** How often a run of throttled rejections is summarised, in monotonic milliseconds. */
+const SUMMARY_INTERVAL_MS = 60_000
+
 export interface CommandGuardOptions {
   readonly site: string
   readonly building: string
@@ -198,17 +208,44 @@ export const makeCommandGuard = (options: CommandGuardOptions) => {
     )
   })
 
+  /**
+   * Logs rejections for unknown and read-only points: the first of a run in
+   * full, then at most one line a minute with how many arrived since. None of
+   * them touches a writable point, and the metric counts every one.
+   */
+  let throttle: { loggedAt: number; since: number } | undefined
+  const logThrottled = Effect.fnUntraced(function* (
+    log: Effect.Effect<void>,
+    annotations: Readonly<Record<string, string>>
+  ) {
+    const now = yield* monotonicMillis
+    if (throttle === undefined || (now - throttle.loggedAt >= SUMMARY_INTERVAL_MS && throttle.since === 0)) {
+      throttle = { loggedAt: now, since: 0 }
+      return yield* log
+    }
+    throttle.since++
+    if (now - throttle.loggedAt < SUMMARY_INTERVAL_MS) return
+    const rejectedSince = throttle.since
+    throttle = { loggedAt: now, since: 0 }
+    yield* Effect.logWarning("commands rejected").pipe(Effect.annotateLogs({ ...annotations, rejected: rejectedSince }))
+  })
+
   /** Check, write, answer, log and count one command. Never fails: a command's problems are its result. */
   const handle = Effect.fn("Command")(function* (command: InboundCommand) {
     const publisher = yield* Publisher
     const levels = command.topic.startsWith(prefix) ? command.topic.slice(prefix.length).split("/") : []
     const [deviceId = "", pointId = "", suffix] = levels
     if (levels.length !== 3 || suffix !== "$set") return
-    const device = options.devices.find((candidate) => candidate.id === deviceId)
     // The levels come from the topic, so from whoever sent it: bounded before they reach logs or spans.
     const ids = { device: label(deviceId), point: label(pointId) }
     yield* Effect.annotateCurrentSpan({ "ot_gateway.device": ids.device, "ot_gateway.point": ids.point })
-    const outcome = yield* decide(command, device, pointId)
+    // A level that is not a slug of at most 64 characters can never be a configured id, so no point is
+    // addressed and nobody waits for a result on that topic: counted and logged, but not answered.
+    const wellFormed = isId(deviceId) && isId(pointId)
+    const device = wellFormed ? options.devices.find((candidate) => candidate.id === deviceId) : undefined
+    const outcome = wellFormed
+      ? yield* decide(command, device, pointId)
+      : rejected("unknown-point", "no such device or point")
     options.onOutcome?.(ids, outcome)
     const annotations = { ...ids, payload: command.payload.slice(0, 200) }
     yield* Metric.update(
@@ -218,11 +255,14 @@ export const makeCommandGuard = (options: CommandGuardOptions) => {
       }),
       1
     )
-    yield* outcome.status === "written"
-      ? Effect.logInfo("command written").pipe(Effect.annotateLogs(annotations))
-      : Effect.logWarning(`command ${outcome.status}`).pipe(
-          Effect.annotateLogs({ ...annotations, reason: outcome.reason, message: outcome.message })
-        )
+    if (outcome.status === "written") {
+      yield* Effect.logInfo("command written").pipe(Effect.annotateLogs(annotations))
+    } else {
+      const details = { ...annotations, reason: outcome.reason, message: outcome.message }
+      const log = Effect.logWarning(`command ${outcome.status}`).pipe(Effect.annotateLogs(details))
+      yield* outcome.status === "rejected" && THROTTLED.has(outcome.reason) ? logThrottled(log, details) : log
+    }
+    if (!wellFormed) return
     const ts = yield* Clock.currentTimeMillis
     const result = outcome.status === "written" ? { status: "written", value: outcome.value } : outcome
     yield* publisher
