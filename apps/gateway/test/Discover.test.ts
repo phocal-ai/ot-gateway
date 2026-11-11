@@ -28,6 +28,7 @@ import {
   discoverToPointsList,
   draftDevices,
   draftPointsList,
+  pointColumn,
   printable,
   slugify
 } from "../src/Discover.ts"
@@ -376,6 +377,44 @@ describe("draftPointsList", () => {
       expect(device?.id).toBe("ventilation-2")
       expect(device?.points.map((point) => point.id)).toEqual(drafts[0]?.points.map((point) => point.id))
     }).pipe(Effect.runSync))
+
+  it("names points without the device's name in front, and import keeps the ids and takes the names", () =>
+    Effect.gen(function* () {
+      const drafts = draftDevices([
+        found(2001, "127.0.0.1:47809", {
+          name: "heat-pump",
+          listed: 4,
+          objects: [
+            { objectType: "analog-input", instance: 1, name: "Heat pump flow temperature", unit: "unit:DEG_C" },
+            { objectType: "analog-input", instance: 2, name: "Heat Pump return temperature", unit: "unit:DEG_C" },
+            { objectType: "binary-input", instance: 1, name: "compressor running" },
+            // Made unique with a suffix: no name slugs to its id.
+            { objectType: "binary-input", instance: 2, name: "Compressor running" }
+          ]
+        })
+      ])
+      const list = draftPointsList(drafts)
+      expect(list.split("\n").slice(1, 5)).toEqual([
+        "heat-pump,Flow temperature,unit:DEG_C,2001,127.0.0.1:47809,analog-input,1",
+        "heat-pump,Return temperature,unit:DEG_C,2001,127.0.0.1:47809,analog-input,2",
+        "heat-pump,Compressor running,,2001,127.0.0.1:47809,binary-input,1",
+        "heat-pump,compressor-running-2,,2001,127.0.0.1:47809,binary-input,2"
+      ])
+      const [device] = yield* devicesFromPointsList(list)
+      expect(device?.points.map((point) => [point.id, point.name])).toEqual([
+        ["flow-temperature", "Flow temperature"],
+        ["return-temperature", "Return temperature"],
+        ["compressor-running", "Compressor running"],
+        ["compressor-running-2", "compressor-running-2"]
+      ])
+    }).pipe(Effect.runSync))
+
+  it("starts names with a letter or digit, and writes the id for one that would run as a formula", () => {
+    expect(pointColumn({ id: "sum-a1", name: "=SUM(A1)" })).toBe("sum-a1")
+    expect(pointColumn({ id: "x", name: "Heat pump =x" })).toBe("x")
+    expect(pointColumn({ id: "flow", name: "Heat pump ★ flow" })).toBe("Flow")
+    expect(pointColumn({ id: "flow-temp", name: "Heat_pump_flow temp" })).toBe("flow-temp")
+  })
 })
 
 describe("discover --points-list", () => {
