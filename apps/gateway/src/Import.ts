@@ -34,6 +34,36 @@ export const devicesFromFile = Effect.fn("devicesFromFile")(function* (
 /** The config file as it is, every key kept, to add devices to. */
 const ConfigObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 
+/** A points list's text, as the reader takes it: an EDE file translated into one, and what to tell about it. */
+export interface PointsListText {
+  readonly list: string
+  readonly format: "points-list" | "ede"
+  /** What was translated or ignored, one sentence each, naming `source`. */
+  readonly notes: ReadonlyArray<string>
+}
+
+/** `text` as a points list: an EDE file translated (Ede.ts), the columns the reader ignores named. */
+export const pointsListFromText = Effect.fn("pointsListFromText")(function* (text: string, source: string) {
+  if (isEde(text)) {
+    const translation = yield* edeToPointsList(text)
+    return {
+      list: translation.list,
+      format: "ede",
+      notes: [describeTranslation(source, translation)]
+    } satisfies PointsListText
+  }
+  // A misspelt column would otherwise vanish without a word; extra columns (a description, a comment) are normal.
+  const ignored = unknownColumns(parseDelimited(text)[0] ?? [])
+  return {
+    list: text,
+    format: "points-list",
+    notes:
+      ignored.length === 0
+        ? []
+        : [`${source}: ignored column(s) ${ignored.join(", ")} (ot-gateway points schema lists the known ones)`]
+  } satisfies PointsListText
+})
+
 /** The points list at `path`, as text; an EDE file comes back translated into one (Ede.ts). */
 export const readPointsList = Effect.fn("readPointsList")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem
@@ -44,20 +74,30 @@ export const readPointsList = Effect.fn("readPointsList")(function* (path: strin
         Effect.fail(new PointsListError({ message: `no points list at ${path}` }))
       )
     )
-  if (isEde(text)) {
-    const translation = yield* edeToPointsList(text)
-    yield* Console.error(describeTranslation(path, translation))
-    return translation.list
-  }
-  // A misspelt column would otherwise vanish without a word; extra columns (a description, a comment) are normal.
-  const ignored = unknownColumns(parseDelimited(text)[0] ?? [])
-  if (ignored.length > 0) {
-    yield* Console.error(
-      `${path}: ignored column(s) ${ignored.join(", ")} (ot-gateway points schema lists the known ones)`
-    )
-  }
-  return text
+  const read = yield* pointsListFromText(text, path)
+  yield* Effect.forEach(read.notes, (note) => Console.error(note), { discard: true })
+  return read.list
 })
+
+/**
+ * The config file's text with `added` after its devices, every other key as it was, formatted as `init` writes
+ * it; `existing` is how many devices it had, where the added ones start.
+ */
+export const withDevicesAdded = Effect.fn("withDevicesAdded")(function* (
+  configText: string,
+  added: ReadonlyArray<PointsListDevice>
+) {
+  const raw = yield* Schema.decodeUnknownEffect(ConfigObject)(configText)
+  return devicesAppended(raw, added)
+})
+
+const devicesAppended = (raw: Readonly<Record<string, unknown>>, added: ReadonlyArray<PointsListDevice>) => {
+  const devices: ReadonlyArray<unknown> = Array.isArray(raw["devices"]) ? raw["devices"] : []
+  return {
+    text: `${JSON.stringify({ ...raw, devices: [...devices, ...added] }, null, 2)}\n`,
+    existing: devices.length
+  }
+}
 
 export interface ImportResult {
   readonly added: ReadonlyArray<PointsListDevice>
@@ -109,20 +149,19 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
   const raw = checkOnly
     ? checkOnlyConfig
     : yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(path))
-  const devices = Array.isArray(raw["devices"]) ? raw["devices"] : []
-  const text = `${JSON.stringify({ ...raw, devices: [...devices, ...added] }, null, 2)}\n`
+  const { text, existing: devices } = devicesAppended(raw, added)
   const target = checkOnly ? "a config" : path
   const outcome = options.dryRun ? "" : ", so nothing was written"
   const config = yield* parseConfig(text).pipe(
     Effect.catchTag("SchemaError", (error) =>
       Effect.fail(
         new PointsListError({
-          message: `the points list would make ${target} invalid${outcome}. Its devices start at devices[${devices.length}]:\n${error.message}`
+          message: `the points list would make ${target} invalid${outcome}. Its devices start at devices[${devices}]:\n${error.message}`
         })
       )
     )
   )
-  const decoded = config.devices.slice(devices.length)
+  const decoded = config.devices.slice(devices)
   const against = checkOnly ? undefined : path
   if (options.dryRun) return { added, decoded, config: undefined, against } satisfies ImportResult
   yield* fs.writeFileString(path, text)

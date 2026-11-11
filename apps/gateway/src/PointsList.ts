@@ -455,15 +455,21 @@ const toDevice = Effect.fnUntraced(function* (
 
 export type PointsListDevice = Effect.Success<ReturnType<typeof toDevice>>
 
+/** The rows of one device as the list has them, before they become its config entry. */
+interface DeviceRows {
+  readonly name: string
+  /** The 1-based lines of its rows. */
+  readonly lines: ReadonlyArray<number>
+  readonly rows: ReadonlyArray<Row>
+  /** A row naming a profile it cannot use: the device cannot be made, whatever its other rows say. */
+  readonly expansionError: PointsListError | undefined
+}
+
 /**
- * The devices of a points list, with ids that are not in `existing`. Fails with the first mistake, naming its
- * line, the way `check` names a path.
+ * A points list's rows by device, after the checks of the list as a whole (a quote never closed, the header, the
+ * field counts, a row without a device), which fail: nothing in such a list can be trusted.
  */
-export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function* (
-  text: string,
-  existing: ReadonlyArray<string> = [],
-  profiles: ReadonlyMap<string, Profile> = new Map()
-) {
+const groupRows = Effect.fnUntraced(function* (text: string, profiles: ReadonlyMap<string, Profile>) {
   const read = readDelimited(text)
   if (Result.isFailure(read)) return yield* fail(`line ${read.failure.line}: a quote opened here is never closed`)
   const [headerRecord, ...records] = read.success
@@ -499,13 +505,70 @@ export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function
       return value === undefined || value === "" ? undefined : value
     }
   }))
-  const byDevice = new Map<string, Array<Row>>()
+  const byDevice = new Map<string, { lines: Array<number>; rows: Array<Row>; expansionError?: PointsListError }>()
   for (const row of rows) {
     const device = row.get("device")
     if (device === undefined) return yield* fail(`line ${row.line}: no device`)
-    byDevice.set(device, [...(byDevice.get(device) ?? []), ...(yield* expandProfile(row, profiles))])
+    const entry = byDevice.get(device) ?? { lines: [], rows: [] }
+    byDevice.set(device, entry)
+    entry.lines.push(row.line)
+    const expanded = yield* Effect.result(expandProfile(row, profiles))
+    if (Result.isSuccess(expanded)) entry.rows.push(...expanded.success)
+    else entry.expansionError ??= expanded.failure
   }
+  return [...byDevice].map(([name, entry]): DeviceRows => ({
+    name,
+    lines: entry.lines,
+    rows: entry.rows,
+    expansionError: entry.expansionError
+  }))
+})
+
+/**
+ * The devices of a points list, with ids that are not in `existing`. Fails with the first mistake, naming its
+ * line, the way `check` names a path.
+ */
+export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function* (
+  text: string,
+  existing: ReadonlyArray<string> = [],
+  profiles: ReadonlyMap<string, Profile> = new Map()
+) {
+  const groups = yield* groupRows(text, profiles)
+  // Profiles are checked before any device is made, so the first such mistake in the list is the one named.
+  const expansionError = groups.find((group) => group.expansionError !== undefined)?.expansionError
+  if (expansionError !== undefined) return yield* expansionError
   const inConfig = new Set(existing)
   const listed = new Map<string, string>()
-  return yield* Effect.forEach(byDevice, ([name, deviceRows]) => toDevice(name, deviceRows, inConfig, listed))
+  return yield* Effect.forEach(groups, (group) => toDevice(group.name, group.rows, inConfig, listed))
+})
+
+/** One device of a points list, checked on its own: its config entry, or what is wrong with it. */
+export interface CheckedDevice {
+  /** The device as the list names it. */
+  readonly name: string
+  readonly lines: ReadonlyArray<number>
+  readonly result: Result.Result<PointsListDevice, PointsListError>
+}
+
+/**
+ * The devices of a points list, each checked on its own with the rules of `devicesFromPointsList` (which stops at
+ * the first mistake), for the status page: it shows every device with its mistake and adds the ones without. A
+ * mistake in the list as a whole (its header, a row without a device) still fails.
+ */
+export const checkPointsListByDevice = Effect.fn("checkPointsListByDevice")(function* (
+  text: string,
+  existing: ReadonlyArray<string> = [],
+  profiles: ReadonlyMap<string, Profile> = new Map()
+) {
+  const groups = yield* groupRows(text, profiles)
+  const inConfig = new Set(existing)
+  const listed = new Map<string, string>()
+  return yield* Effect.forEach(groups, (group) =>
+    Effect.map(
+      group.expansionError === undefined
+        ? Effect.result(toDevice(group.name, group.rows, inConfig, listed))
+        : Effect.succeed(Result.fail(group.expansionError)),
+      (result): CheckedDevice => ({ name: group.name, lines: group.lines, result })
+    )
+  )
 })

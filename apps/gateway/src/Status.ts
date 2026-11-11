@@ -18,6 +18,7 @@ import {
   type GatewayStatus,
   HistoryQueryInvalid,
   HistoryUnavailable,
+  MAX_IMPORT_BYTES,
   MAX_VALUES_PER_REQUEST,
   type Messages,
   OtGatewayApi,
@@ -27,6 +28,7 @@ import {
 } from "@ot-gateway/api"
 import type { History } from "@ot-gateway/history"
 import type { ConfigEditor } from "./ConfigEditor.ts"
+import type { SetupTools } from "./SetupTools.ts"
 import { configView } from "./ConfigView.ts"
 import { isLoopbackAddress, isReadOnlyMethod, writeRefusal } from "./EditGuard.ts"
 import { GatewayEvents } from "./Events.ts"
@@ -50,8 +52,15 @@ import {
   type StatusSettings,
   valuesPublished
 } from "@ot-gateway/core"
-import { Clock, Effect, FileSystem, Layer, Metric, Option, Schema } from "effect"
-import { HttpMiddleware, HttpRouter, HttpServerRequest, HttpServerResponse, HttpStaticServer } from "effect/http"
+import { ByteSize, Clock, Effect, FileSystem, Layer, Metric, Option, Schema } from "effect"
+import {
+  HttpIncomingMessage,
+  HttpMiddleware,
+  HttpRouter,
+  HttpServerRequest,
+  HttpServerResponse,
+  HttpStaticServer
+} from "effect/http"
 import { HttpApiBuilder } from "effect/http-api"
 import { createServer } from "node:http"
 import { fileURLToPath } from "node:url"
@@ -71,6 +80,9 @@ const MAX_TOPIC_LENGTH = 512
 
 /** Connections the server holds at once: a page polls with one; more is someone else's problem, not the gateway's memory. */
 const MAX_CONNECTIONS = 32
+
+/** The largest request body a write may send: an uploaded points list (MAX_IMPORT_BYTES) as JSON, escaped. */
+const MAX_BODY = ByteSize.bytes(MAX_IMPORT_BYTES * 2 + 64 * 1024)
 
 /** A value message as the pipeline publishes it; read back from what the gateway itself sent. */
 const ValueMessage = Schema.fromJsonString(
@@ -407,7 +419,8 @@ export const serveStatus = (
   state: StatusState,
   history: (request: HistoryRequest) => Effect.Effect<HistorySeriesOf, HistoryUnavailable | HistoryQueryInvalid> = () =>
     Effect.fail(new HistoryUnavailable({ message: "this server keeps no history" })),
-  editor?: ConfigEditor
+  editor?: ConfigEditor,
+  setup?: SetupTools
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -440,6 +453,21 @@ export const serveStatus = (
                 .handle("file", () => editor.file)
                 .handle("check", ({ payload }) => editor.check(payload.text))
                 .handle("save", ({ payload }) => editor.save(payload.text, payload.etag))
+        )
+      ),
+      Layer.provide(
+        HttpApiBuilder.group(OtGatewayApi, "setup", (handlers) =>
+          setup === undefined
+            ? handlers
+                .handle("testBroker", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
+                .handle("testRead", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
+                .handle("importCheck", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
+                .handle("importApply", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
+            : handlers
+                .handle("testBroker", ({ payload }) => setup.testBroker(payload.text))
+                .handle("testRead", ({ payload }) => setup.testRead(payload.text, payload.device, payload.points))
+                .handle("importCheck", ({ payload }) => setup.importCheck(payload.text, payload.name))
+                .handle("importApply", ({ payload }) => setup.importApply(payload.text, payload.name, payload.etag))
         )
       )
     )
@@ -516,7 +544,9 @@ const writeGuard = (editor: ConfigEditor | undefined) =>
                 editor.access,
                 editor.token
               )
-        if (refusal === undefined) return yield* httpEffect
+        // Bodies are bounded: a points list of MAX_IMPORT_BYTES, as JSON, with room for its escaping.
+        if (refusal === undefined)
+          return yield* httpEffect.pipe(Effect.provideService(HttpIncomingMessage.MaxBodySize, MAX_BODY))
         return HttpServerResponse.jsonUnsafe({ _tag: "EditingDisabled", message: refusal }, { status: 403 })
       }),
     { global: true }

@@ -56,6 +56,7 @@ import { type ConfigFileSource, makeConfigEditor } from "./ConfigEditor.ts"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { makeSetupTools } from "./SetupTools.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { historyHandler, makeStatusState, serveStatus, type StatusState, switchableStatus } from "./Status.ts"
@@ -633,11 +634,21 @@ export const runGateway = Effect.fn("Gateway")(
                   return yield* Deferred.await(done)
                 })
             })
+      const setup =
+        editor === undefined || options.configFile === undefined
+          ? undefined
+          : yield* makeSetupTools({
+              editor,
+              configPath: options.configFile.path,
+              running: () => running.config,
+              ...(options.network === undefined ? {} : { network: options.network })
+            })
       yield* serveStatus(
         config.status,
         status.state,
         historyHandler(() => running.config, history),
-        editor
+        editor,
+        setup
       ).pipe(Effect.forkScoped)
     }
     return yield* Effect.raceFirst(Deferred.await(shared.fatal), applyLoop)
