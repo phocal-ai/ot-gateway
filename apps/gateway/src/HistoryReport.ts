@@ -147,9 +147,12 @@ export const failuresOf = (log: EventLog): ReadonlyMap<string, ReadonlyArray<Fai
   return failures
 }
 
-/** Why a stretch had no read, when the gateway knows: it was not running, or the device was failing. */
+/**
+ * Why a stretch had no read, when the gateway knows: it ended at the gateway's start (what came before, in an earlier
+ * run, the history cannot tell), or the device was failing.
+ */
 export type GapCause =
-  | { readonly kind: "gateway-not-running"; readonly started: number }
+  | { readonly kind: "gateway-start"; readonly started: number }
   | { readonly kind: "device-failing"; readonly since: number; readonly error: string }
 
 /**
@@ -177,9 +180,9 @@ export interface SeriesContext {
 /**
  * The gaps of `series` with their real span and their causes. A run of empty buckets is a gap; it reaches back to
  * the last read before it and on to the first read after it. When the gateway started inside it, the part before
- * the start is the gateway not running, and the part after it is a gap of its own only when the bucket the gateway
- * started in had no read either (otherwise it is just the time to the first poll). The rest of a gap names the
- * first failure of the device that overlaps it, when there is one.
+ * the start ends at the start (why reads stopped in an earlier run is unknown), and the part after it is a gap of its
+ * own only when the bucket the gateway started in had no read either (otherwise it is just the time to the first
+ * poll). The rest of a gap names the first failure of the device that overlaps it, when there is one.
  */
 export const explainGaps = (series: HistorySeries, context: SeriesContext = {}): ReadonlyArray<ExplainedGap> => {
   const since = context.since
@@ -200,7 +203,7 @@ export const explainGaps = (series: HistorySeries, context: SeriesContext = {}):
     const buckets = { emptyFrom: empty.from, emptyTo: empty.to }
     if (since === undefined || since <= from || since > to) return [failed({ from, to, ...buckets })]
     return [
-      { from, to: since, ...buckets, cause: { kind: "gateway-not-running", started: since } },
+      { from, to: since, ...buckets, cause: { kind: "gateway-start", started: since } },
       ...(since < empty.to && since < to ? [failed({ from: since, to, ...buckets })] : [])
     ]
   })
@@ -273,11 +276,11 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     cause?.kind === "device-failing" ? `: ${point.device} failing: ${withoutControls(cause.error)}` : ""
   const gaps = explainGaps(series, context)
   if (series.buckets.length === 0) {
-    const notRunning = gaps.find((gap) => gap.cause?.kind === "gateway-not-running")?.cause
+    const start = gaps.find((gap) => gap.cause?.kind === "gateway-start")?.cause
     const failure = gaps.find((gap) => gap.cause?.kind === "device-failing")?.cause
     const why =
-      notRunning?.kind === "gateway-not-running"
-        ? ` before the gateway started at ${localTime(notRunning.started, now)}${failing(failure)}`
+      start?.kind === "gateway-start"
+        ? ` before the gateway started at ${localTime(start.started, now)}${failing(failure)}`
         : failing(failure)
     return [heading, live ? `  no reads in this range${why}` : `  no reads in this range (${notYet})`]
   }
@@ -285,8 +288,8 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     const atEnd = gap.to >= series.to
     const cause = gap.cause
     const line =
-      cause?.kind === "gateway-not-running"
-        ? `the gateway was not running (started ${localTime(cause.started, now)})`
+      cause?.kind === "gateway-start"
+        ? `no reads until the gateway started at ${localTime(cause.started, now)}`
         : live
           ? atEnd
             ? gap.emptyFrom >= series.to - series.stepMs
@@ -310,7 +313,7 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
 
 /**
  * What `history --json` prints for one point: the API's series with the point's name and unit, and its gaps, each
- * with its `cause` when known (`gateway-not-running`, `device-failing`).
+ * with its `cause` when known (`gateway-start`, `device-failing`).
  */
 export const seriesJson = (point: PointInfo, series: HistorySeries, context: SeriesContext = {}) => ({
   ...series,
