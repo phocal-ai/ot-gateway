@@ -31,6 +31,54 @@ describe("HealthRegistry", () => {
     registry.recordSuccess("meter", 2000)
     expect(registry.devices.get("meter")).toEqual({ status: "ok", lastSuccess: 2000 })
   })
+
+  it("tells listeners about status and reason changes only, until they unsubscribe", () => {
+    const registry = makeHealthRegistry(["meter"])
+    let changes = 0
+    const unsubscribe = registry.onChange(() => changes++)
+
+    registry.recordSuccess("meter", 1) // starting -> ok
+    registry.recordSuccess("meter", 2) // still ok
+    registry.recordFailure("meter", "timeout") // ok -> failing
+    registry.recordFailure("meter", "timeout") // same reason
+    registry.recordFailure("meter", "connection") // another reason
+    expect(changes).toBe(3)
+
+    unsubscribe()
+    registry.recordSuccess("meter", 3)
+    expect(changes).toBe(3)
+  })
+})
+
+describe("runHealthReporter on change", () => {
+  it.effect("stops listening to the registry when it stops", () =>
+    Effect.gen(function* () {
+      const { layer } = yield* makeMemoryPublisher
+      const registry = makeHealthRegistry(["meter"])
+      let listeners = 0
+      const counting = {
+        ...registry,
+        onChange: (listener: () => void) => {
+          listeners++
+          const unsubscribe = registry.onChange(listener)
+          return () => {
+            listeners--
+            unsubscribe()
+          }
+        }
+      }
+      const fiber = yield* runHealthReporter({
+        topic: "t",
+        intervalMs: 60_000,
+        online: Effect.succeed("{}"),
+        registry: counting
+      }).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("1 second")
+      expect(listeners).toBe(1)
+      yield* Fiber.interrupt(fiber)
+      expect(listeners).toBe(0)
+    })
+  )
 })
 
 describe("health messages", () => {
@@ -83,6 +131,67 @@ describe("runHealthReporter", () => {
         { topic: "s/b/$gateway/main/health", payload: '{"n":2}', retain: true },
         { topic: "s/b/$gateway/main/health", payload: '{"n":3}', retain: true }
       ])
+    })
+  )
+
+  it.effect("publishes soon after a device's status changes, not only every interval", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const registry = makeHealthRegistry(["meter", "heat-pump"])
+      const fiber = yield* runHealthReporter({
+        topic: "t",
+        intervalMs: 60_000,
+        online: Effect.sync(() => onlinePayload(registry, 0, 0)),
+        registry
+      }).pipe(Effect.provide(layer), Effect.forkChild)
+      const payloads = () => messages.map((message): unknown => JSON.parse(message.payload))
+
+      yield* TestClock.adjust("5 seconds")
+      expect(messages).toEqual([])
+      registry.recordSuccess("meter", 1)
+      // A read that keeps the status is not a change.
+      yield* TestClock.adjust("2 seconds")
+      registry.recordSuccess("meter", 2)
+      registry.recordSuccess("heat-pump", 2)
+      yield* TestClock.adjust("2 seconds")
+      expect(payloads()).toMatchObject([
+        { devices: { meter: { status: "ok" }, "heat-pump": { status: "starting" } } },
+        { devices: { meter: { status: "ok" }, "heat-pump": { status: "ok" } } }
+      ])
+      expect(messages.every((message) => message.retain)).toBe(true)
+
+      // The heartbeat goes on as before, at 60 s.
+      yield* TestClock.adjust("51 seconds")
+      yield* Fiber.interrupt(fiber)
+      expect(messages).toHaveLength(3)
+    })
+  )
+
+  it.effect("coalesces a flapping device into one publish per window", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const registry = makeHealthRegistry(["meter"])
+      const fiber = yield* runHealthReporter({
+        topic: "t",
+        intervalMs: 60_000,
+        online: Effect.sync(() => onlinePayload(registry, 0, 0)),
+        registry
+      }).pipe(Effect.provide(layer), Effect.forkChild)
+
+      // Ten seconds of a status change every 10 ms: 1000 changes.
+      for (let tick = 0; tick < 1_000; tick++) {
+        if (tick % 2 === 0) registry.recordSuccess("meter", tick)
+        else registry.recordFailure("meter", "timeout")
+        yield* TestClock.adjust("10 millis")
+      }
+      // At most one change-driven publish per second.
+      expect(messages.length).toBeGreaterThanOrEqual(9)
+      expect(messages.length).toBeLessThanOrEqual(10)
+      // Once the device settles, the last message has its final status.
+      registry.recordSuccess("meter", 2_000)
+      yield* TestClock.adjust("2 seconds")
+      yield* Fiber.interrupt(fiber)
+      expect(JSON.parse(messages.at(-1)?.payload ?? "{}").devices.meter.status).toBe("ok")
     })
   )
 

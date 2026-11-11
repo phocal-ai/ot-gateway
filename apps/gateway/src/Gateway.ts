@@ -197,7 +197,12 @@ const runDevices = Effect.fn("runGateway")(function* (
     [
       keepRunning(
         "health reporter",
-        runHealthReporter({ topic: health.topic, intervalMs: config.healthIntervalMs, online: health.online })
+        runHealthReporter({
+          topic: health.topic,
+          intervalMs: config.healthIntervalMs,
+          online: health.online,
+          registry: health.registry
+        })
       ),
       // A bug in one device's pipeline restarts that device only; suspended, so a restart builds a fresh driver.
       ...config.devices.map((device) =>
