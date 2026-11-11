@@ -178,8 +178,9 @@ export const failuresOf = (events: ReadonlyArray<GatewayEvent>, device: string):
 export type GapCause = { readonly kind: "gateway-not-running" } | { readonly kind: "device-failing" }
 
 /**
- * A stretch of the time axis without reads, `[from, to)` in Unix ms: from the end of the last bucket before it to
- * the start of the next (or the end of the range), with its cause when known.
+ * A stretch of the time axis without reads, `[from, to)` in Unix ms: from the last read before it to the first read
+ * after it (or the end of the range), with its cause when known. Buckets from gateways that do not say when their
+ * reads came (`first`, `last`) give the end of the bucket before it and the start of the bucket after it instead.
  */
 export interface ChartGap {
   readonly from: number
@@ -201,12 +202,23 @@ export const chartGaps = (
   const { buckets, stepMs, to } = series
   if (buckets.length === 0) return []
   const holes: Array<{ readonly from: number; readonly to: number }> = []
-  // Where the line breaks: two reads (or a read and an edge of the axis) more than two steps apart.
-  const edges = [from - stepMs, ...buckets.map((bucket) => bucket.t), to]
+  // Where the line breaks: two buckets (or a bucket and an edge of the axis) more than two steps apart. The hole runs
+  // from the last read before it to the first read after it, when the buckets say when those came (`last`, `first`);
+  // otherwise from the end of the bucket before it to the start of the bucket after it, up to a step too wide.
+  const edges: ReadonlyArray<{ readonly t: number; readonly first: number; readonly last: number }> = [
+    { t: from - stepMs, first: from, last: from },
+    ...buckets.map((bucket) => ({
+      t: bucket.t,
+      first: bucket.first ?? bucket.t,
+      last: bucket.last ?? bucket.t + stepMs
+    })),
+    { t: to, first: to, last: to }
+  ]
   for (let index = 1; index < edges.length; index++) {
-    const previous = edges[index - 1] ?? from
-    const next = edges[index] ?? to
-    if (next - previous > 2 * stepMs) holes.push({ from: Math.max(from, previous + stepMs), to: Math.min(to, next) })
+    const previous = edges[index - 1]
+    const next = edges[index]
+    if (previous === undefined || next === undefined || next.t - previous.t <= 2 * stepMs) continue
+    holes.push({ from: Math.max(from, previous.last), to: Math.min(to, next.first) })
   }
   const startedAt = context.startedAt
   const failed = (hole: { readonly from: number; readonly to: number }): ChartGap => {

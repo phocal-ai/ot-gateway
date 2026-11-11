@@ -7,13 +7,15 @@ import {
   activeAlarms,
   alarmActive,
   alarmCount,
+  alarmNote,
   alarmWhen,
   glanceKeys,
   glancePoints,
   isAlarm,
   pointFreshness,
   readLabel,
-  readsOnChange
+  readsOnChange,
+  shownAlarms
 } from "../src/lib/glance.ts"
 
 const polled = { read: "polled every 5 s", cov: false }
@@ -166,5 +168,73 @@ describe("glanceKeys, glancePoints and activeAlarms", () => {
     expect(activeAlarms(catalog, readings([[breaker, false]]))).toEqual([])
     expect(alarmCount(1)).toBe("1 alarm active")
     expect(alarmCount(2)).toBe("2 alarms active")
+  })
+})
+
+const clock = (hours: number, minutes: number) => new Date(2026, 10, 11, hours, minutes, 0).getTime()
+
+describe("shownAlarms", () => {
+  const later = clock(16, 5)
+  const tripped = point({ device: "energy-meter", id: "breaker", name: "Main breaker tripped", alarmWhen: "on" })
+  const smoke = point({ device: "ahu-1", id: "smoke", name: "Smoke detected", alarmWhen: "on" })
+  const reads = new Map<string, PointReading>([
+    ["energy-meter/breaker", { device: "energy-meter", point: "breaker", value: true, ts: clock(15, 57) }],
+    ["ahu-1/smoke", { device: "ahu-1", point: "smoke", value: true, ts: later - 1000 }]
+  ])
+  const ahu = device({ id: "ahu-1", lastSuccess: later - 1000 })
+  const failingMeter = device({
+    id: "energy-meter",
+    status: "failing",
+    reason: "timeout",
+    failingSince: clock(15, 58),
+    lastSuccess: clock(15, 57)
+  })
+
+  it("lists an alarm of a device that does not answer as last known, after the ones known to be on", () => {
+    const devices = new Map([
+      ["energy-meter", failingMeter],
+      ["ahu-1", ahu]
+    ])
+    expect(shownAlarms([tripped, smoke], reads, devices, later, false)).toEqual([
+      { point: smoke },
+      { point: tripped, lastKnown: "device not answering since 15:58" }
+    ])
+  })
+
+  it("lists an alarm as active while its device answers", () => {
+    const answering = device({ id: "energy-meter", lastSuccess: later - 1000 })
+    const fresh = new Map(reads).set("energy-meter/breaker", {
+      device: "energy-meter",
+      point: "breaker",
+      value: true,
+      ts: later - 1000
+    })
+    expect(shownAlarms([tripped], fresh, new Map([["energy-meter", answering]]), later, false)).toEqual([
+      { point: tripped }
+    ])
+  })
+
+  it("says why else a value is stale: a late device, or the gateway out of reach", () => {
+    const late = device({ id: "energy-meter", lastSuccess: clock(15, 57) })
+    expect(shownAlarms([tripped], reads, new Map([["energy-meter", late]]), later, false)).toEqual([
+      { point: tripped, lastKnown: "device late, last read 15:57" }
+    ])
+    expect(shownAlarms([smoke], reads, new Map([["ahu-1", ahu]]), later, true)).toEqual([
+      { point: smoke, lastKnown: "gateway not answering, last read 16:04" }
+    ])
+  })
+
+  it("says last known after the name only when the headline does not", () => {
+    const stale = { point: tripped, lastKnown: "device not answering since 15:58" }
+    expect(alarmNote(stale, 0)).toBe("device not answering since 15:58")
+    expect(alarmNote(stale, 1)).toBe("last known active, device not answering since 15:58")
+    expect(alarmNote({ point: smoke }, 1)).toBeUndefined()
+  })
+
+  it("counts the last known apart from the ones known to be on", () => {
+    expect(alarmCount(1)).toBe("1 alarm active")
+    expect(alarmCount(0, 1)).toBe("1 alarm last known active")
+    expect(alarmCount(0, 2)).toBe("2 alarms last known active")
+    expect(alarmCount(2, 1)).toBe("2 alarms active, 1 last known active")
   })
 })

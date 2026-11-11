@@ -197,6 +197,30 @@ describe("chartGaps", () => {
     expect(chartGaps(soon, from, { startedAt: 150_000 })).toEqual([])
   })
 
+  it("runs a gap from the last read before it to the first read after it when the buckets say when they came", () => {
+    const exact = {
+      ...series([]),
+      buckets: [
+        ...every(0, 100_000).map((t) => ({ ...bucket(t), first: t + 1_000, last: t + 6_000 })),
+        ...every(220_000, 300_000).map((t) => ({ ...bucket(t), first: t + 3_000, last: t + 8_000 }))
+      ]
+    }
+    expect(chartGaps(exact, 0, { failures: [{ from: 97_000, to: 223_000 }] })).toEqual([
+      { from: 96_000, to: 223_000, cause: { kind: "device-failing" } }
+    ])
+  })
+
+  it("falls back to the bucket edges on a side whose bucket does not say when its read came", () => {
+    const mixed = {
+      ...series([]),
+      buckets: [...every(0, 100_000).map((t) => bucket(t)), { ...bucket(220_000), first: 224_500, last: 224_500 }]
+    }
+    expect(chartGaps(mixed, 0)).toEqual([
+      { from: 100_000, to: 224_500 },
+      { from: 224_500, to: 300_000 }
+    ])
+  })
+
   it("has no gaps without buckets (the chart says there are no reads)", () => {
     expect(chartGaps(series([]), 0)).toEqual([])
   })
@@ -216,6 +240,14 @@ describe("gapSentence", () => {
       gapSentence({ from: clock(9, 0), to: clock(9, 30), cause: { kind: "gateway-not-running" } }, "m", clock(16, 0))
     ).toBe("No reads 09:00–09:30: the gateway was not running")
     expect(gapSentence({ from: clock(15, 0), to: clock(15, 5) }, "m", clock(16, 0))).toBe("No reads 15:00–15:05")
+  })
+
+  it("gives the exact edges of a gap from read times to the second when it is short", () => {
+    const last = new Date(2026, 10, 11, 15, 58, 13).getTime()
+    const first = new Date(2026, 10, 11, 15, 59, 41).getTime()
+    expect(gapSentence({ from: last, to: first, cause: { kind: "device-failing" } }, "m", clock(16, 10))).toBe(
+      "No reads 15:58:13–15:59:41: m not answering"
+    )
   })
 
   it("gives seconds for a gap under two minutes", () => {
