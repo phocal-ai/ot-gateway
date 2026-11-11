@@ -10,8 +10,9 @@
  *   ot-gateway watch [config]       print what arrives at the config's broker
  *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
  *   ot-gateway publish <topic> [payload]  one message to the config's broker (empty and --retain clears)
- *   ot-gateway status [--url]       the running gateway's status, one line per device (exit 1 when failing)
- *   ot-gateway events [--since 1h]  what changed lately: devices failing and recovering, the broker lost and back
+ *   ot-gateway status [config]      the running gateway's status, one line per device (exit 1 when failing)
+ *   ot-gateway events [config]      what changed lately: devices failing and recovering, the broker lost and back
+ *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
@@ -27,6 +28,8 @@ import { writeFolderFiles } from "./Folder.ts"
 import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
+import { DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
+import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { watch } from "./Watch.ts"
 import {
   type BrokerReport,
@@ -628,42 +631,93 @@ const publishCommand = Command.make(
 )
 
 const urlFlag = Flag.String("url").pipe(
-  Flag.withDescription("Where the gateway's status page is"),
-  Flag.withDefault("http://127.0.0.1:8080")
+  Flag.withDescription(
+    `Ask the status page at this address instead of the one the config's status block gives (without a config: ${DEFAULT_STATUS_URL})`
+  ),
+  Flag.optional,
+  Flag.map(Option.getOrUndefined)
 )
+
+/** The config of the gateway to ask, for status, events and history: optional, as `ot-gateway.json` is found. */
+const targetConfig = Argument.String("config").pipe(
+  Argument.withDescription(
+    `Path of the gateway's JSON config (default ${defaultConfigPath} when it is in this folder): its status block says where to ask, its site, building and id which gateway should answer`
+  ),
+  Argument.optional,
+  Argument.map(Option.getOrUndefined)
+)
+
+const secondsFlag = (description: string) =>
+  Flag.Int("seconds").pipe(
+    Flag.withDescription(description),
+    Flag.filter(
+      (seconds) => seconds >= 1,
+      (seconds) => `--seconds takes 1 or more, not ${seconds}`
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined)
+  )
 
 // The report is printed before the failure that sets the exit code, and outside `jsonFailure`, so `--json` prints
 // one document: the status with `ok: false`.
-const status = Command.make("status", { url: urlFlag, json: jsonFlag }, ({ url, json }) =>
-  fetchStatusFor(url, { json }).pipe(jsonFailure(json, { url }), Effect.flatMap(statusOutcome(json)))
+const status = Command.make("status", { config: targetConfig, url: urlFlag, json: jsonFlag }, ({ config, url, json }) =>
+  resolveTarget({ config, url }).pipe(
+    Effect.flatMap((target) => fetchStatusFor(target, { json })),
+    jsonFailure(json, { url: url ?? null, path: config ?? null }),
+    Effect.flatMap(statusOutcome(json))
+  )
 ).pipe(
   Command.withDescription(
-    "The running gateway's status: its broker, buffer and one line per device. Exits with 1 when a device is failing or the broker is not connected"
+    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one. Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers"
   ),
   Command.withExamples([
-    { command: "ot-gateway status", description: "The gateway on this machine" },
-    { command: "ot-gateway status --json", description: "Everything /api/status says, with ok: true or false" },
+    { command: "ot-gateway status", description: "The gateway of ot-gateway.json in this folder" },
+    { command: "ot-gateway status site-1/ot-gateway.json", description: "The gateway of another config" },
+    { command: "ot-gateway status --json", description: "Everything /api/status says, with ok and hints" },
     { command: "ot-gateway status --url http://10.0.0.20:8080", description: "A gateway elsewhere on the LAN" }
   ])
 )
 
+const sinceFlag = (fallback: string, all: boolean) =>
+  Flag.String("since").pipe(
+    Flag.withDescription(
+      all
+        ? "How far back: 30s, 10m, 2h, 1d, or all (the gateway keeps its latest 500 events)"
+        : "How far back: 30s, 10m, 2h or 1d (reads are kept a day, per-minute values for retentionDays)"
+    ),
+    Flag.filter(
+      (since) => parseSince(since) !== undefined && (all || since !== "all"),
+      (since) => `--since takes 30s, 10m, 2h, 1d${all ? " or all" : ""}, not ${since}`
+    ),
+    Flag.withDefault(fallback)
+  )
+
 const eventsCommand = Command.make(
   "events",
   {
+    config: targetConfig,
     url: urlFlag,
-    since: Flag.String("since").pipe(
-      Flag.withDescription("How far back: 30s, 10m, 2h, 1d, or all (the gateway keeps its latest 500 events)"),
-      Flag.filter(
-        (since) => parseSince(since) !== undefined,
-        (since) => `--since takes 30s, 10m, 2h, 1d or all, not ${since}`
-      ),
-      Flag.withDefault("1h")
+    since: sinceFlag("1h", true),
+    follow: Flag.Boolean("follow").pipe(
+      Flag.withAlias("f"),
+      Flag.withDescription("Then print each new event as it comes, until Ctrl-C (or --seconds)"),
+      Flag.withDefault(false)
     ),
+    seconds: secondsFlag("With --follow, stop after this many seconds instead of at Ctrl-C, for scripts and agents"),
     json: jsonFlag
   },
-  ({ url, since, json }) =>
-    eventsReport(url, { since, sinceMs: parseSince(since) ?? Number.POSITIVE_INFINITY, json }).pipe(
-      jsonFailure(json, { url })
+  ({ config, url, since, follow, seconds, json }) =>
+    resolveTarget({ config, url }).pipe(
+      Effect.flatMap((target) =>
+        eventsReport(target, {
+          since,
+          sinceMs: parseSince(since) ?? Number.POSITIVE_INFINITY,
+          json,
+          follow: follow || seconds !== undefined,
+          seconds
+        })
+      ),
+      jsonFailure(json, { url: url ?? null, path: config ?? null })
     )
 ).pipe(
   Command.withDescription(
@@ -671,7 +725,58 @@ const eventsCommand = Command.make(
   ),
   Command.withExamples([
     { command: "ot-gateway events", description: "The last hour" },
+    { command: "ot-gateway events --follow", description: "The last hour, then each new event as it comes" },
+    { command: "ot-gateway events --since 10m --follow --seconds 60 --json", description: "A minute of it, NDJSON" },
     { command: "ot-gateway events --since all --json", description: "Everything it keeps, as JSON" }
+  ])
+)
+
+const historyCommand = Command.make(
+  "history",
+  {
+    points: Argument.String("points").pipe(
+      Argument.withDescription(
+        "device/point, a device for all its points, or several of either comma-separated: energy-meter/active-power"
+      ),
+      Argument.filter(
+        (text) => parseSelection(text) !== undefined,
+        () => "name a device/point, or a device"
+      )
+    ),
+    config: targetConfig,
+    url: urlFlag,
+    since: sinceFlag("10m", false),
+    buckets: Flag.Int("buckets").pipe(
+      Flag.withDescription("About how many buckets the range is cut into (default 10, at most 2000)"),
+      Flag.filter(
+        (buckets) => buckets >= 1 && buckets <= 2000,
+        (buckets) => `--buckets takes 1 to 2000, not ${buckets}`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    json: jsonFlag
+  },
+  ({ points: selection, config, url, since, buckets, json }) =>
+    resolveTarget({ config, url }).pipe(
+      Effect.flatMap((target) =>
+        historyReport(target, parseSelection(selection) ?? [], {
+          since,
+          sinceMs: parseSince(since) ?? 600_000,
+          buckets,
+          json
+        })
+      ),
+      jsonFailure(json, { url: url ?? null, path: config ?? null })
+    )
+).pipe(
+  Command.withDescription(
+    "What points did lately, from the running gateway's history: per bucket the average with its unit, minimum, maximum and reads, and the gaps, in local time"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway history energy-meter/active-power", description: "The last 10 minutes, a line a minute" },
+    { command: "ot-gateway history energy-meter --since 1h --buckets 4", description: "Every point of a device" },
+    { command: "ot-gateway history energy-meter/active-power --json", description: "The series as JSON" }
   ])
 )
 
@@ -686,8 +791,10 @@ export const rootDescription = [
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
   "    check --json                     every mistake in a config, with its path",
   "    broker --json                    the broker: MQTT version, limits, a round trip",
-  "    status --json                    the running gateway, device by device; exits 1 when something fails",
-  "    events --since 1h --json         what broke, since when and why, and when it came back"
+  "    status --json                    the running gateway, device by device, with what to check; exits 1 when something fails",
+  "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
+  "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
+  "  status, events and history ask the gateway of ./ot-gateway.json (or the config named) at its status port."
 ].join("\n")
 
 export const cli = Command.make("ot-gateway").pipe(
@@ -705,7 +812,8 @@ export const cli = Command.make("ot-gateway").pipe(
     brokerCommand,
     publishCommand,
     status,
-    eventsCommand
+    eventsCommand,
+    historyCommand
   ])
 )
 
@@ -722,7 +830,8 @@ const subcommands = new Set([
   "broker",
   "publish",
   "status",
-  "events"
+  "events",
+  "history"
 ])
 
 /**

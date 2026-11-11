@@ -104,6 +104,7 @@ describe("status", () => {
       "  2 device(s), 1 failing",
       "    ventilation-1  ok       simulator, 0 point(s), read 2 s ago",
       "    energy-meter   failing  modbus-tcp, 4 point(s), failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020",
+      "                   check: Is the device switched on and its Modbus TCP server (or its network module) enabled?",
       "",
       "  What changed and when: ot-gateway events",
       "  The gateway's log (in its folder): docker compose logs gateway --since 10m"
@@ -217,7 +218,7 @@ describe("events", () => {
       },
       { id: 5, at: at(12, 19, 0), type: "device-recovered", device: "energy-meter", downMs: 40_000 },
       { id: 6, at: at(12, 19, 10), type: "broker-connected", downMs: 70_000, buffered: 1204 },
-      { id: 7, at: at(12, 19, 20), type: "buffer-drained" }
+      { id: 7, at: at(12, 19, 20), type: "buffer-drained", delivered: 1266 }
     ]
   }
 
@@ -236,8 +237,8 @@ describe("events", () => {
       "12:18:00  broker        disconnected: connection closed by the peer",
       "12:18:20  energy-meter  failing: could not connect: connection refused by 127.0.0.1:5020",
       "12:19:00  energy-meter  ok again after 40 s",
-      "12:19:10  broker        connected again after 70 s, 1204 message(s) waiting in the buffer",
-      "12:19:20  buffer        drained: every waiting message delivered"
+      "12:19:10  broker        connected again after 70 s, 1204 message(s) waiting in the buffer at reconnect",
+      "12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since it was last empty"
     ])
     expect(formatEvents(log, Number.POSITIVE_INFINITY, "all").split("\n")[0]).toBe(
       "10:19:30  gateway       started (v1.2.3, 2 device(s))"
