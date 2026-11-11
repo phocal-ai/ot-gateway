@@ -17,7 +17,8 @@ export const PointValue = ({
   now,
   alarm,
   stale = false,
-  className = ""
+  className = "",
+  onChange = false
 }: {
   readonly value: LastRead | undefined
   readonly unit: string | undefined
@@ -27,12 +28,14 @@ export const PointValue = ({
   readonly className?: string
   /** The value is the last one known, not a live one (`pointFreshness` says `stale`). */
   readonly stale?: boolean
+  /** The point is sent on change of value (`readsOnChange`): its time is its last change. */
+  readonly onChange?: boolean
 }) => {
   const [firstTs] = useState(value?.ts)
   const changed = !stale && value?.ts !== undefined && value.ts !== firstTs
   const active = alarm !== undefined && alarmOn(value?.value, alarm)
   const tone = stale ? "text-muted-foreground" : active ? "font-semibold text-destructive" : ""
-  const read = readLabel(value?.ts, now, stale)
+  const read = readLabel(value?.ts, now, stale, onChange)
   return (
     <span
       key={value?.ts}
