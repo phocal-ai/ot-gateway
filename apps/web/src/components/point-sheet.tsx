@@ -10,7 +10,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { HistoryChart } from "@/components/history-chart"
 import { PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
-import { fetchHistory, type PointHistory, type Range, ranges } from "@/lib/history"
+import { fetchHistory, type GatewayClock, gatewayTime, type PointHistory, type Range, ranges } from "@/lib/history"
 import type { LivePoint } from "@/lib/points"
 import { clockTime, failureLabel, freshness, settle, unitLabel } from "@/lib/status"
 
@@ -27,15 +27,22 @@ interface HistoryState {
 /**
  * The point's history over `range`, refreshed while mounted. Stepping to another point or range keeps the last
  * chart on screen (dimmed, see `stale`) until the new one arrives, so the panel does not blank out on every step.
+ * It asks in the gateway's time (`now`, from the last status), moved on by the monotonic clock between status polls:
+ * the browser's clock can be far off a gateway without network time. A new `now` only updates the clock it reads;
+ * it does not fetch again.
  */
-const useHistory = (device: string, point: string, range: Range) => {
+const useHistory = (device: string, point: string, range: Range, now: number) => {
   const of = `${device}/${point}@${range.id}`
   const [history, setHistory] = useState<HistoryState>({})
+  const clock = useRef<GatewayClock>({ now, at: performance.now() })
+  useEffect(() => {
+    clock.current = { now, at: performance.now() }
+  }, [now])
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const load = () =>
-      settle(fetchHistory(device, point, range, Date.now())).then((result) => {
+      settle(fetchHistory(device, point, range, gatewayTime(clock.current, performance.now()))).then((result) => {
         if (cancelled) return
         setHistory((previous) =>
           result._tag === "Success"
@@ -112,7 +119,7 @@ export const PointSheet = ({
 }) => {
   const dialog = useRef<HTMLDialogElement>(null)
   const [range, setRange] = useState<Range>(ranges[1])
-  const history = useHistory(point.device, point.id, range)
+  const history = useHistory(point.device, point.id, range, now)
   const value = live?.value
   const device = live?.device
   const state = device === undefined ? undefined : freshness(device, now)

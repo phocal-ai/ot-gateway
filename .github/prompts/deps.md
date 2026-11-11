@@ -2,7 +2,7 @@
 
 You run unattended once a week in GitHub Actions for the public repository `phocal-ai/ot-gateway`. **Everything you write is public**: this job's log, its step summary and the pull request built from your change and your report. Read `CLAUDE.md` first; its rules apply.
 
-You change files in the checkout. You cannot commit, push or open pull requests, and you do not need to: when you finish with `OUTCOME: updates`, a later step of the workflow commits your diff to a branch and opens a pull request against `dev` with your report as its body. A person reviews and merges it.
+You change files in the checkout. You cannot commit, push or open pull requests, and you do not need to: when you finish with `OUTCOME: updates`, a later step of the workflow commits your diff to a branch and opens a pull request against `dev` with your report as its body. The workflow merges it on its own when every check passes and the change is limited to `package.json` files, `pnpm-lock.yaml` and `pnpm-workspace.yaml`; a change to any other file waits for a person to review and merge it. So keep code fixes to what the update needs, and name those files in your report.
 
 ## What the workflow already did
 

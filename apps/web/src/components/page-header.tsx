@@ -4,6 +4,7 @@
  */
 import Link from "next/link"
 import { LiveBadge, type Load, statusOf } from "@/components/live"
+import { formatNumber } from "@/lib/format"
 import { since } from "@/lib/status"
 
 const pages = [
@@ -70,8 +71,8 @@ export const PageHeader = ({
         ))}
         {count === undefined ? null : (
           <span aria-live="polite" className="ml-auto self-center text-sm text-muted-foreground tabular-nums">
-            {count.matching === undefined ? "" : `${count.matching.toLocaleString()} of `}
-            {count.total.toLocaleString()} {count.total === 1 ? count.noun : `${count.noun}s`}
+            {count.matching === undefined ? "" : `${formatNumber(count.matching)} of `}
+            {formatNumber(count.total)} {count.total === 1 ? count.noun : `${count.noun}s`}
           </span>
         )}
       </nav>

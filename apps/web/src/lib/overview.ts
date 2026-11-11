@@ -2,6 +2,7 @@
  * What the Status page's Broker, Devices and Buffer cards open into: the counts and words behind each card.
  */
 import type { BufferStatus, DeviceStatus } from "@ot-gateway/api"
+import { formatNumber } from "./format"
 import { type Freshness, freshness, protocolName } from "./status"
 
 /** Why the buffer gave messages up, in words (the `reason` of `ot_gateway_buffer_dropped`). */
@@ -119,7 +120,7 @@ export const bufferView = (
       bad: false,
       dropped
     }
-  const title = `${rows.toLocaleString()} waiting`
+  const title = `${formatNumber(rows)} waiting`
   if (!brokerConnected)
     return {
       title,

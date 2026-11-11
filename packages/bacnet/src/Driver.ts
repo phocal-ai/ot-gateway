@@ -662,6 +662,12 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
   /** This cycle asks ReadPropertyMultiple again after a rejection; a second one is not logged again. */
   let reprobing = false
   let cleanCycles = 0
+  /** The smallest batch the device refused as too large; batches grow back only to below it. */
+  let refusedAt: number | undefined
+  /** The largest batch the device answered; a probe above it that fails falls back to it, not below. */
+  let largestAnswered = 0
+  /** Batch sizes the shrink was logged for, so settling on a size is said once. */
+  const shrinksLogged = new Set<number>()
   let lostCycles = 0
   let nextBroadcastAt = 0
   let broadcastBackoffMs = LOCATE_BACKOFF.firstMs
@@ -691,6 +697,10 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       multiple = true
       reprobing = false
       cleanCycles = 0
+      // A device found again may have restarted with other limits: what it refused before is asked again.
+      refusedAt = undefined
+      largestAnswered = 0
+      shrinksLogged.clear()
       lostCycles = 0
       broadcastBackoffMs = LOCATE_BACKOFF.firstMs
       isolated.clear()
@@ -850,6 +860,16 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     )
   })
 
+  /**
+   * A batch of `refused` points was too much: ask for half as many, but not
+   * fewer than a batch the device answered, since a larger probe failing says
+   * nothing about that size. Always fewer than `refused`, so retrying ends.
+   */
+  const shrinkFrom = (refused: number) => {
+    const answered = largestAnswered < refused ? largestAnswered : 1
+    batchSize = Math.max(1, Math.floor(refused / 2), answered)
+  }
+
   /** One ReadPropertyMultiple, its failures as data so the caller decides per kind. */
   const readBatch = (target: DeviceAddress, batch: ReadonlyArray<ResolvedPoint>) =>
     client.readPropertyMultiple(target, specificationsOf(batch)).pipe(
@@ -913,6 +933,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
         reprobing = false
         yield* Effect.log("device answers ReadPropertyMultiple again")
       }
+      largestAnswered = Math.max(largestAnswered, batch.length)
       const timestamp = yield* Clock.currentTimeMillis
       const byKey = new Map<string, PropertyResult>()
       for (const result of results) {
@@ -1031,24 +1052,28 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
           continue
         case "Refused": {
           const { error } = answer
-          const full = batch.length === batchSize && batchSize > 1
+          // A short batch counts too: a device with fewer points than the batch size would otherwise be bisected every cycle.
+          const several = batch.length > 1
           const refusal = refusalOf(error)
           switch (refusal) {
             case "unsupported":
               yield* downgrade(error.message)
               continue
             case "too-large":
-              if (!full) break
-              batchSize = Math.max(1, Math.floor(batchSize / 2))
+              if (!several) break
+              refusedAt = Math.min(refusedAt ?? batch.length, batch.length)
+              shrinkFrom(batch.length)
               shrunk = true
+              if (shrinksLogged.has(batchSize)) continue
+              shrinksLogged.add(batchSize)
               yield* Effect.log("answer too large for the device, reading fewer points per request").pipe(
                 Effect.annotateLogs({ batchSize })
               )
               continue
             case "busy":
               // Out of buffer space may also mean the batch was too much: the next cycle asks for less.
-              if (full && outOfRoom(error)) {
-                batchSize = Math.max(1, Math.floor(batchSize / 2))
+              if (several && outOfRoom(error)) {
+                shrinkFrom(batch.length)
                 shrunk = true
               }
               stop.busy = new DeviceBusy({ message: error.message })
@@ -1056,7 +1081,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
             case "refused":
               break
           }
-          // A short last batch that is too large, or an error for the whole request
+          // One point whose answer is too large, or an error for the whole request
           // (some devices answer that way when one object is missing): find the point by halves.
           yield* bisect(batch, refusal, error.message)
           index += batch.length
@@ -1077,17 +1102,26 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     return { outcomes, requests, shrunk, ...stop }
   })
 
-  /** After enough clean cycles, try a batch twice as large again, up to what the device allows. */
+  /**
+   * After enough clean cycles, try a larger batch again: twice as large, or,
+   * once the device refused a size as too large, at most halfway to it, so
+   * each failed probe narrows the gap and the size settles instead of being
+   * refused again every few cycles.
+   */
   const regrow = (shrunk: boolean) =>
     Effect.suspend(() => {
-      if (shrunk || !multiple || batchSize >= largestBatch) {
+      const ceiling = refusedAt === undefined ? largestBatch : Math.min(largestBatch, refusedAt - 1)
+      if (shrunk || !multiple || batchSize >= ceiling) {
         cleanCycles = 0
         return Effect.void
       }
       cleanCycles++
       if (cleanCycles < REGROW_AFTER_CYCLES) return Effect.void
       cleanCycles = 0
-      batchSize = Math.min(largestBatch, batchSize * 2)
+      batchSize =
+        refusedAt === undefined
+          ? Math.min(ceiling, batchSize * 2)
+          : Math.min(batchSize * 2, Math.ceil((batchSize + ceiling) / 2))
       return Effect.log("trying more points per request again").pipe(Effect.annotateLogs({ batchSize }))
     })
 
@@ -1185,6 +1219,9 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       const waitSeconds = Math.ceil((busyUntil - now) / 1000)
       return yield* fail("protocol", `device is busy (${busyReason ?? "aborted"}); asking again in ${waitSeconds} s`)
     }
+    // Taken before `locate`: finding the device again by Who-Is resets `lostCycles`, and it still needs a resync.
+    const wasLost = lostCycles > 0
+    const locatedBefore = location
     const target = yield* locate
     const { outcomes, requests, shrunk, timedOut, busy } = yield* readPoints(target, polled)
     yield* report(outcomes)
@@ -1210,9 +1247,10 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       const reasons = [...new Set(outcomes.flatMap((outcome) => (outcome._tag === "Failed" ? [outcome.reason] : [])))]
       return yield* fail("protocol", `no point could be read (${reasons.join(", ")})`)
     }
-    if (lostCycles > 0) {
+    if (wasLost) {
       cov?.resync()
-      yield* Effect.log("BACnet device answers again")
+      // A device found again by Who-Is was already logged as found; one line per recovery.
+      if (target === locatedBefore) yield* Effect.log("BACnet device answers again")
     }
     lostCycles = 0
     yield* countPointFailures("not_read", notReadPoints)

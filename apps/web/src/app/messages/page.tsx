@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { formatNumber } from "@/lib/format"
 import { countKinds, type MessageFilter, matchesMessage } from "@/lib/messages"
 import { clockTime, fetchMessages, settle, type TopicKind, topicKind } from "@/lib/status"
 import { useWindowRows } from "@/lib/virtual"
@@ -62,7 +63,7 @@ const kindLabels: ReadonlyArray<readonly [TopicKind, string]> = [
   ["other", "Other"]
 ]
 
-const topicCount = (count: number) => `${count.toLocaleString()} ${count === 1 ? "topic" : "topics"}`
+const topicCount = (count: number) => `${formatNumber(count)} ${count === 1 ? "topic" : "topics"}`
 
 const MessagesPage = () => {
   const status = statusOf(useGateway())
@@ -189,7 +190,7 @@ const MessagesPage = () => {
                         </code>
                       </TableCell>
                       <TableCell className="hidden text-right tabular-nums sm:table-cell">
-                        {message.count.toLocaleString()}
+                        {formatNumber(message.count)}
                       </TableCell>
                       <TableCell className="pr-4 text-right text-muted-foreground tabular-nums">
                         {clockTime(message.at, now)}
@@ -207,8 +208,8 @@ const MessagesPage = () => {
       </Card>
       {list.droppedTopics > 0 ? (
         <p className="text-sm text-muted-foreground">
-          {list.droppedTopics.toLocaleString()} more topics are not shown, and search does not find them: the gateway
-          keeps the latest message of at most {list.messages.length.toLocaleString()} topics.
+          {formatNumber(list.droppedTopics)} more topics are not shown, and search does not find them: the gateway keeps
+          the latest message of at most {formatNumber(list.messages.length)} topics.
         </p>
       ) : null}
     </>

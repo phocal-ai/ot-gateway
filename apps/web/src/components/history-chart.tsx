@@ -6,6 +6,7 @@
  */
 import type { HistorySeries } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"
+import { formatNumber } from "@/lib/format"
 import { nearest, segments, timeLabel, timeTicks, valueTicks } from "@/lib/history"
 import { formatValue, unitLabel } from "@/lib/status"
 
@@ -27,7 +28,7 @@ const useWidth = () => {
 }
 
 const format = (value: number, boolean: boolean) =>
-  boolean ? `${Math.round(value * 100)} % on` : Number(value.toPrecision(4)).toLocaleString()
+  boolean ? `${Math.round(value * 100)} % on` : formatNumber(Number(value.toPrecision(4)))
 
 export const HistoryChart = ({
   series,
@@ -88,7 +89,7 @@ export const HistoryChart = ({
                 x={margin.left - 6}
                 y={y(tick) + 4}
               >
-                {boolean ? (tick === 1 ? "on" : "off") : tick.toLocaleString()}
+                {boolean ? (tick === 1 ? "on" : "off") : formatNumber(tick)}
               </text>
             </g>
           ))}
@@ -181,7 +182,7 @@ export const HistoryChart = ({
             </div>
           )}
           <div className="text-muted-foreground tabular-nums">
-            {hovered.count.toLocaleString()} {hovered.count === 1 ? "read" : "reads"}
+            {formatNumber(hovered.count)} {hovered.count === 1 ? "read" : "reads"}
           </div>
         </div>
       )}

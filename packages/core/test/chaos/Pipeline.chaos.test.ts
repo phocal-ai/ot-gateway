@@ -129,6 +129,30 @@ describe("chaos: values that are not finite numbers", () => {
       expect(valuesOn(messages, "s/b/nan-between/temp")).toEqual([20, 22])
     })
   )
+
+  it.effect("a NaN in aggregate mode ends the last good value instead of carrying it into later windows", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const driver = scripted(
+        "nan-aggregate",
+        [pointNamed("temp", { publish: { mode: "aggregate", intervalMs: 5000 } })],
+        [[["temp", 20]], [["temp", Number.NaN]]]
+      )
+      // Off the window boundaries: reads at 0.5 s, 1.5 s, …
+      yield* TestClock.adjust("500 millis")
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("20 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      // The window with the good read reports it; the windows that only read NaN report nothing.
+      const aggregates = payloadsOn(messages, "s/b/nan-aggregate/temp").map((payload) => JSON.parse(payload))
+      expect(aggregates).toHaveLength(1)
+      expect(aggregates[0]).toMatchObject({ avg: 20, count: 1, to: 5000 })
+    })
+  )
 })
 
 describe("chaos: hangs", () => {

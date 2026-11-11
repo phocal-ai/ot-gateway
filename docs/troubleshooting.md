@@ -8,7 +8,7 @@ Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operati
 | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | A `SchemaError` with a path, e.g. `at ["devices"][2]["points"][0]["address"]` | The config. The message names the key and the rule; [configuration.md](configuration.md) has every key. Check with `--check` before restarting. |
 | `mqtt.url must not contain credentials`                                       | Move them: `mqtt.username`, and the password in the env file under the name in `mqtt.passwordEnv`.                                              |
-| A missing environment variable                                                | `mqtt.passwordEnv` names a variable that is not set. Under systemd it goes in `/etc/ot-gateway/gateway.env`.                                    |
+| `MQTT_PASSWORD is not set` (the name `mqtt.passwordEnv` gives)                | The variable is unset or empty: put the password in `ot-gateway.env` next to the config, or in `/etc/ot-gateway/gateway.env` under systemd.     |
 | `BufferLocked`                                                                | Another gateway has the same `buffer.path` open. Two gateways never share an outbox.                                                            |
 | `could not open the BACnet/IP endpoint, trying again`                         | UDP 47808 is taken, usually by another BACnet program on the host (or `--discover` still running). Readings from other devices carry on.        |
 
@@ -23,6 +23,8 @@ Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operati
 | Connected, then lost again every few seconds                                      | Another client uses the same client id (two gateways with one config, or `mqtt.clientId` copied). Each connect kicks the other.                                                                                         |
 | `mqtt://localhost` works on the host, not in a container (or the other way round) | `localhost` is both `127.0.0.1` and `::1`, and a broker may listen on only one. The gateway tries each address for up to 2 s; if it still fails, name the address the broker listens on, e.g. `mqtt://127.0.0.1:1883`.  |
 | `mqtts://` fails                                                                  | The broker's certificate must be valid for the host name in the URL and chain to a CA the system trusts.                                                                                                                |
+| `ot-gateway broker`: `round trip: NO ANSWER` (exit code 1, `"ok": false`)         | The broker took the message but did not deliver it back: its ACL lets this user publish under `site/building/#` but not subscribe there, or the reverse. Allow both; the gateway needs to read its own topics.          |
+| `ot-gateway publish` prints `QoS 0: the broker allows QoS 0 only`                 | The broker's CONNACK caps QoS at 0, so the message went out unacknowledged and the outbox cannot confirm delivery. Raise the broker's maximum QoS if it has one.                                                        |
 | `MQTT broker refused a subscription; nothing published on it will arrive`         | The broker's ACL does not let the gateway subscribe to the filters the log names: `site/building/+/+/$set` (commands) or `site/building/<device>/+/$meta` (to clear the metadata of removed points). Values still flow. |
 
 ## Modbus TCP devices
@@ -53,7 +55,7 @@ Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operati
 
 ## Commands
 
-Every command gets a result on `…/$set/result`. `rejected` never reached the device; `failed` was attempted.
+Every command gets a result on `…/$set/result`, unless its device or point level could never be an id (not a slug of at most 64 characters): such a command is only counted as `unknown-point`. `rejected` never reached the device; `failed` was attempted. Rejections for unknown and read-only points are logged when a run of them starts, then as a count at most once a minute; every other command is logged one by one.
 
 | Result                      | Meaning                                                                                                                                                 |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -3,7 +3,7 @@
  * command gets back. A recording driver stands in for the device.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Fiber, Metric, Schema } from "effect"
+import { Effect, Fiber, Logger, Metric, References, Schema } from "effect"
 import { TestClock } from "effect/testing"
 import {
   commands,
@@ -150,6 +150,16 @@ const setup = Effect.fnUntraced(function* () {
   yield* drivers.register(meter.driver)
   yield* drivers.register(ahu.driver)
   const { messages, layer } = yield* makeMemoryPublisher
+  /** What the guard logged: level, message and annotations. */
+  const logs: Array<{ readonly line: string; readonly annotations: Record<string, unknown> }> = []
+  const logger = Logger.layer([
+    Logger.make(({ logLevel, message, fiber }) => {
+      logs.push({
+        line: `${logLevel}: ${(Array.isArray(message) ? message : [message]).join(" ")}`,
+        annotations: { ...fiber.getRef(References.CurrentLogAnnotations) }
+      })
+    })
+  ])
   const outcomes: Array<{ readonly device: string; readonly point: string }> = []
   const guard = makeCommandGuard({
     site: "s",
@@ -173,9 +183,9 @@ const setup = Effect.fnUntraced(function* () {
         ...(extra.expirySeconds === undefined ? {} : { expirySeconds: extra.expirySeconds }),
         correlationData: Uint8Array.of(7)
       })
-    }).pipe(Effect.provide(layer))
+    }).pipe(Effect.provide([layer, logger]))
   const results = () => messages.map((message) => decodeResult(message.payload))
-  return { meter, ahu, messages, send, results, guard, outcomes }
+  return { meter, ahu, messages, send, results, guard, outcomes, logs }
 })
 
 describe("command guard", () => {
@@ -289,6 +299,78 @@ describe("command guard", () => {
       yield* send(`${"x".repeat(100_000)}/p`, { value: 1 })
       expect(outcomes[0]?.device).toHaveLength(65)
       expect(outcomes[0]?.point).toBe("p")
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("drops a command whose topic levels cannot be ids, counting it but sending no result", () =>
+    Effect.gen(function* () {
+      const { meter, messages, send } = yield* setup()
+      yield* send(`${"m".repeat(65)}/setpoint`, { value: 20 })
+      yield* send(`meter/${"p".repeat(65)}`, { value: 20 })
+      yield* send("Meter/setpoint", { value: 20 })
+      yield* send("meter/set point", { value: 20 })
+      yield* send("meter/-setpoint", { value: 20 })
+      expect(messages).toEqual([])
+      expect(meter.writes).toEqual([])
+      expect(yield* count({ outcome: "rejected", reason: "unknown-point" })).toBe(5)
+    }).pipe(Effect.scoped, withMetricAttributes({ test: "commands" }))
+  )
+
+  it.effect("still answers a well-formed command for a device or point that does not exist", () =>
+    Effect.gen(function* () {
+      const { messages, send, results } = yield* setup()
+      yield* send("meter/nothing", { value: 20 })
+      yield* send("nothing/setpoint", { value: 20 })
+      expect(messages.map((message) => message.topic)).toEqual([
+        "s/b/meter/nothing/$set/result",
+        "s/b/nothing/setpoint/$set/result"
+      ])
+      expect(results().map(({ status, reason }) => `${status} ${reason ?? ""}`)).toEqual([
+        "rejected unknown-point",
+        "rejected unknown-point"
+      ])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("logs a run of commands for unknown or read-only points once, then a count at most once a minute", () =>
+    Effect.gen(function* () {
+      const { send, logs } = yield* setup()
+      for (let index = 0; index < 50; index++) yield* send("meter/nothing", { value: 20 })
+      for (let index = 0; index < 50; index++) yield* send("meter/power", { value: 20 })
+      expect(logs.map(({ line }) => line)).toEqual(["Warn: command rejected"])
+      yield* TestClock.adjust("30 seconds")
+      for (let index = 0; index < 10; index++) yield* send(`${"m".repeat(100)}/p`, { value: 20 })
+      expect(logs).toHaveLength(1)
+      yield* TestClock.adjust("30 seconds")
+      yield* send("meter/nothing", { value: 20 })
+      expect(logs.map(({ line }) => line)).toEqual(["Warn: command rejected", "Warn: commands rejected"])
+      expect(logs[1]?.annotations).toMatchObject({ rejected: 110 })
+      // Nothing more arrives: nothing more is logged.
+      yield* TestClock.adjust("5 minutes")
+      expect(logs).toHaveLength(2)
+      // A new run starts with a full line again.
+      yield* send("meter/power", { value: 20 })
+      expect(logs.map(({ line }) => line)).toEqual([
+        "Warn: command rejected",
+        "Warn: commands rejected",
+        "Warn: command rejected"
+      ])
+      expect(yield* count({ test: "commands-throttle", outcome: "rejected", reason: "unknown-point" })).toBe(61)
+      expect(yield* count({ test: "commands-throttle", outcome: "rejected", reason: "not-writable" })).toBe(51)
+    }).pipe(Effect.scoped, withMetricAttributes({ test: "commands-throttle" }))
+  )
+
+  it.effect("logs every command on a writable point, rejected or written", () =>
+    Effect.gen(function* () {
+      const { send, logs } = yield* setup()
+      for (let index = 0; index < 3; index++) yield* send("meter/setpoint", { value: 99 })
+      yield* send("meter/setpoint", { value: 20 })
+      expect(logs.map(({ line }) => line)).toEqual([
+        "Warn: command rejected",
+        "Warn: command rejected",
+        "Warn: command rejected",
+        "Info: command written"
+      ])
     }).pipe(Effect.scoped)
   )
 

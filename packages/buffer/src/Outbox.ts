@@ -43,6 +43,15 @@ export const outboxMigrations = Migrator.fromRecord({
   })
 })
 
+/**
+ * Runs `effect` without trace spans. Effect's SQL client opens a span for every statement and transaction, and the
+ * outbox's run on every buffered value and every few seconds from the drainer and the check, mostly from fibers
+ * that no poll cycle samples, so they would reach the trace exporter whatever the sampler says. Their failures are
+ * counted in the buffer's metrics instead. A span the caller opened around them, a poll cycle's, is kept. Every
+ * statement on the outbox file goes through this.
+ */
+export const withoutSpans = Effect.withTracerEnabled(false)
+
 /** Queries on the outbox of one open database. */
 export const makeOutbox = (sql: SqlClient.SqlClient) => {
   const countRows = SqlSchema.findAll({
@@ -89,22 +98,24 @@ export const makeOutbox = (sql: SqlClient.SqlClient) => {
 
   return {
     /** Rows with an id above `after` (0 for all of them). */
-    count: (after = 0) => Effect.map(countRows(after), (rows) => rows[0]?.n ?? 0),
+    count: (after = 0) => Effect.map(countRows(after), (rows) => rows[0]?.n ?? 0).pipe(withoutSpans),
     append: (topic: string, payload: string, qos: 0 | 1, createdAt: number) =>
       sql`INSERT INTO outbox (topic, payload, qos, created_at) VALUES (${topic}, ${payload}, ${qos}, ${createdAt})`.pipe(
-        Effect.asVoid
+        Effect.asVoid,
+        withoutSpans
       ),
     /** The `limit` oldest rows with an id above `after`. */
-    oldest,
+    oldest: (limit: number, after: number) => oldest(limit, after).pipe(withoutSpans),
     /** Delete the given rows; returns how many were still there. */
     remove: (ids: ReadonlyArray<number>) =>
-      ids.length === 0 ? Effect.succeed(0) : Effect.map(removeRows(ids), (rows) => rows.length),
+      ids.length === 0 ? Effect.succeed(0) : Effect.map(removeRows(ids), (rows) => rows.length).pipe(withoutSpans),
     /** Delete every row up to and including `id`. */
-    removeThrough: (id: number) => sql`DELETE FROM outbox WHERE id <= ${id}`.pipe(Effect.asVoid),
+    removeThrough: (id: number) => sql`DELETE FROM outbox WHERE id <= ${id}`.pipe(Effect.asVoid, withoutSpans),
     /** Delete the `count` oldest rows with an id above `after`; returns how many were deleted. */
-    dropOldest: (count: number, after: number) => Effect.map(dropOldestRows({ count, after }), (rows) => rows.length),
+    dropOldest: (count: number, after: number) =>
+      Effect.map(dropOldestRows({ count, after }), (rows) => rows.length).pipe(withoutSpans),
     /** Return free pages to the file system (new files use `auto_vacuum = INCREMENTAL`; elsewhere a no-op). */
-    vacuum: sql`PRAGMA incremental_vacuum`.pipe(Effect.asVoid)
+    vacuum: sql`PRAGMA incremental_vacuum`.pipe(Effect.asVoid, withoutSpans)
   }
 }
 

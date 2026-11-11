@@ -17,6 +17,10 @@ on:
       - "examples/gateway.json"
       - "pnpm-lock.yaml"
       - "scripts/build-package.sh"
+      # What build-package.sh bundles and copies into the package.
+      - "scripts/bundle.sh"
+      - "profiles/**"
+      - "packaging/compose.yaml"
       - "packaging/npm/**"
       - ".github/workflows/package.yml"
   push:
@@ -79,6 +83,9 @@ jobs:
           bin="$work/node_modules/.bin/ot-gateway"
           "$bin" --version
           "$bin" check examples/gateway.json
+          # The files the package ships and finds through import.meta.url: the profile library and init's compose.yaml.
+          "$bin" profiles list --json | grep -q '"id": "eastron-sdm630"'
+          "$bin" init "$work/site" --dry-run --json --yes --site s --broker mqtt://127.0.0.1:1883
           # The demo from the package: example config, simulated devices, broker and status page, all from inside it.
           (cd "$work" && "$bin" demo >"$work/demo.log" 2>&1 &)
           for _ in $(seq 30); do

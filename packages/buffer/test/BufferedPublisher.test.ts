@@ -14,7 +14,7 @@ import {
   PublishError,
   withMetricAttributes
 } from "@ot-gateway/core"
-import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope } from "effect"
+import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope, Tracer } from "effect"
 import { SqlClient } from "effect/sql"
 import { BufferedPublisher } from "../src/index.ts"
 
@@ -202,4 +202,26 @@ describe("BufferedPublisher", () => {
       expect(second.state.delivered).toEqual(["1", "2"])
     })
   )
+
+  it.live("exports no span for its SQL statements, so the trace sampler is not bypassed", () => {
+    const names: Array<string> = []
+    const tracer = Tracer.make({
+      span: (options) => {
+        names.push(options.name)
+        return new Tracer.NativeSpan(options)
+      }
+    })
+    return Effect.gen(function* () {
+      const broker = makeBroker()
+      const publisher = yield* openBuffer(yield* tempDatabase, broker, yield* Effect.scope)
+      broker.state.up = false
+      // Buffered on the publish path, inside a poll cycle's span.
+      yield* publisher.publish("t", "1").pipe(Effect.withSpan("Device.pollCycle"))
+      broker.state.up = true
+      yield* eventually(() => broker.state.delivered.length === 1)
+      // The caller's own span stays; only the SQL statements under it are gone.
+      expect(names).toContain("Device.pollCycle")
+      expect(names.filter((name) => name.startsWith("sql"))).toEqual([])
+    }).pipe(Effect.withTracer(tracer), withMetricAttributes({ test: "tracing" }))
+  })
 })

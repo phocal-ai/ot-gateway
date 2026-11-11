@@ -27,7 +27,14 @@ import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
-import { checkBroker, formatBrokerReport, formatPublished, publishOnce } from "./Broker.ts"
+import {
+  type BrokerReport,
+  checkBroker,
+  formatBrokerReport,
+  formatPublished,
+  publishOnce,
+  roundTripFailure
+} from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
 import { ConfigFileError, loadConfig } from "./LoadConfig.ts"
@@ -464,11 +471,21 @@ const watchCommand = Command.make(
   ])
 )
 
+/**
+ * `broker`'s report, as JSON or text, then a failure when its message did not come back, so the exit code is 1.
+ * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON.
+ */
+export const brokerOutcome = (json: boolean) =>
+  Effect.fnUntraced(function* (report: BrokerReport) {
+    yield* json ? printJson(report) : Console.log(formatBrokerReport(report))
+    if (!report.ok) return yield* roundTripFailure(report)
+  })
+
 const brokerCommand = Command.make("broker", { config: configPath, json: jsonFlag }, ({ config, json }) =>
   loadConfig(config).pipe(
     Effect.flatMap(checkBroker),
-    Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatBrokerReport(report)))),
-    jsonFailure(json, { path: config })
+    jsonFailure(json, { path: config }),
+    Effect.flatMap(brokerOutcome(json))
   )
 ).pipe(
   Command.withDescription(

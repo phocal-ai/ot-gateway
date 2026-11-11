@@ -17,6 +17,7 @@ import Link from "next/link"
 import { type ReactNode, useEffect, useRef, useState } from "react"
 import { useGateway } from "@/components/gateway-shell"
 import { DetailDialog, Facts, morphFrom } from "@/components/detail-dialog"
+import { formatNumber } from "@/lib/format"
 import { statusOf } from "@/components/live"
 import { machineProblems } from "@/lib/host"
 import {
@@ -113,7 +114,7 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
                   </p>
                 </div>
                 <span className="hidden text-sm text-muted-foreground tabular-nums sm:block">
-                  {device.pointCount.toLocaleString()} {device.pointCount === 1 ? "point" : "points"}
+                  {formatNumber(device.pointCount)} {device.pointCount === 1 ? "point" : "points"}
                 </span>
                 <span className="justify-self-end">{deviceBadge(state)}</span>
                 <span aria-hidden="true" className="hidden text-muted-foreground sm:block">
@@ -131,7 +132,7 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
             onClick={() => setAll(true)}
             type="button"
           >
-            Show all {ordered.length.toLocaleString()} devices
+            Show all {formatNumber(ordered.length)} devices
           </button>
         </div>
       ) : null}
@@ -235,15 +236,15 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
       <Facts
         rows={[
           ["Broker", <span className="font-mono">{broker.url}</span>],
-          ["Values published", broker.published.toLocaleString()],
+          ["Values published", formatNumber(broker.published)],
           [
             "Could not publish",
             <span className={broker.publishFailures > 0 ? "text-destructive" : ""}>
-              {broker.publishFailures.toLocaleString()}
+              {formatNumber(broker.publishFailures)}
             </span>
           ],
-          ["Reconnects", reconnects(broker.connects).toLocaleString()],
-          ["Failed connection attempts", broker.failedConnects.toLocaleString()],
+          ["Reconnects", formatNumber(reconnects(broker.connects))],
+          ["Failed connection attempts", formatNumber(broker.failedConnects)],
           connection !== undefined && ["MQTT version", connection.protocolVersion],
           connection !== undefined && ["Keep-alive", `${connection.keepAliveSeconds} s`],
           connection !== undefined && ["Retained messages", connection.retainAvailable ? "supported" : "not supported"],
@@ -278,7 +279,7 @@ const DevicesDetails = ({ status }: { readonly status: GatewayStatus }) => {
       <div className="grid grid-cols-4 gap-3">
         {states.map(([label, count, tone]) => (
           <div className="flex flex-col gap-0.5" key={label}>
-            <span className={`text-2xl font-semibold tabular-nums ${tone}`}>{count.toLocaleString()}</span>
+            <span className={`text-2xl font-semibold tabular-nums ${tone}`}>{formatNumber(count)}</span>
             <span className="text-xs text-muted-foreground">{label}</span>
           </div>
         ))}
@@ -288,7 +289,7 @@ const DevicesDetails = ({ status }: { readonly status: GatewayStatus }) => {
           ({ name, devices, points }) =>
             [
               name,
-              `${devices.toLocaleString()} ${devices === 1 ? "device" : "devices"} · ${points.toLocaleString()} ${points === 1 ? "point" : "points"}`
+              `${formatNumber(devices)} ${devices === 1 ? "device" : "devices"} · ${formatNumber(points)} ${points === 1 ? "point" : "points"}`
             ] as const
         )}
       />
@@ -364,14 +365,14 @@ const BufferDetails = ({ status, view }: { readonly status: GatewayStatus; reado
       </div>
       <Facts
         rows={[
-          ["Holds up to", `${buffer.maxRows.toLocaleString()} messages`],
-          ["Stored", buffer.written.toLocaleString()],
-          ["Sent on later", buffer.delivered.toLocaleString()],
+          ["Holds up to", `${formatNumber(buffer.maxRows)} messages`],
+          ["Stored", formatNumber(buffer.written)],
+          ["Sent on later", formatNumber(buffer.delivered)],
           [
             "Dropped",
-            <span className={buffer.dropped > 0 ? "text-destructive" : ""}>{buffer.dropped.toLocaleString()}</span>
+            <span className={buffer.dropped > 0 ? "text-destructive" : ""}>{formatNumber(buffer.dropped)}</span>
           ],
-          ["Disk errors", buffer.failures.toLocaleString()],
+          ["Disk errors", formatNumber(buffer.failures)],
           status.host?.diskFreeBytes !== undefined && ["Disk free", formatBytes(status.host.diskFreeBytes)],
           ["File", <span className="font-mono">{buffer.path}</span>]
         ]}
@@ -380,7 +381,7 @@ const BufferDetails = ({ status, view }: { readonly status: GatewayStatus; reado
         <ul className="flex flex-col gap-1 text-sm text-destructive">
           {reasons.map(({ reason, count, words }) => (
             <li key={reason}>
-              {count.toLocaleString()} dropped because {words}
+              {formatNumber(count)} dropped because {words}
             </li>
           ))}
         </ul>
@@ -454,7 +455,7 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
         extra={
           buffer.dropped === 0 ? null : (
             <CardDescription className="text-destructive">
-              {buffer.dropped.toLocaleString()} dropped since start
+              {formatNumber(buffer.dropped)} dropped since start
             </CardDescription>
           )
         }

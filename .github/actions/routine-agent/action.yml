@@ -31,7 +31,9 @@ runs:
   steps:
     # Code from the checkout and from npm runs as ot-routine (routine-run.sh), not as the
     # runner user that runs the agent and holds its token. The checkout is writable for
-    # both, except .git, which only the runner user may change.
+    # both, except .git, .github and .claude, which only the runner user may change:
+    # .github and .claude hold the scripts and settings the runner user executes
+    # (.github/scripts/routine-sandbox-perms.sh).
     - name: Sandbox
       shell: bash
       run: |
@@ -41,8 +43,7 @@ runs:
           sudo chmod o+x "$dir"
           dir=$(dirname "$dir")
         done
-        chmod -R a+rwX "$GITHUB_WORKSPACE"
-        chmod -R go-w "$GITHUB_WORKSPACE/.git"
+        "$GITHUB_WORKSPACE/.github/scripts/routine-sandbox-perms.sh" "$GITHUB_WORKSPACE"
         # The workflow's inputs to the agent stay out of the change.
         mkdir -p .routine
         echo "/.routine/" >> .git/info/exclude

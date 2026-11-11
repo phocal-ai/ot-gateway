@@ -9,6 +9,7 @@ import type { ConfigView } from "@ot-gateway/api"
 import { useEffect, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { formatNumber } from "@/lib/format"
 import { deviceAddress, deviceColumns, duration, formatSetting, sectionTitle, settingLabel } from "@/lib/settings"
 import { fetchConfig, protocolName, settle } from "@/lib/status"
 
@@ -137,7 +138,7 @@ const SettingsPage = () => {
                     <TableCell className="text-right tabular-nums">
                       {typeof interval === "number" ? duration(interval) : "–"}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{device.pointCount.toLocaleString()}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatNumber(device.pointCount)}</TableCell>
                     <TableCell
                       className="hidden max-w-md truncate pr-5 text-xs text-muted-foreground lg:table-cell"
                       title={others}

@@ -28,7 +28,19 @@ const gateway = HttpApiClient.make(OtGatewayApi, {
   baseUrl: typeof window === "undefined" ? "http://127.0.0.1" : window.location.origin
 })
 
-/** The last `range` of a point, up to `now`; `off` when the gateway keeps no history. */
+/** The gateway's time as last reported (`now`) and the monotonic time (`performance.now()`) when it arrived. */
+export interface GatewayClock {
+  readonly now: number
+  readonly at: number
+}
+
+/**
+ * The gateway's time at `monotonicNow`: its last reported time moved on by the monotonic time since. History is
+ * kept by the gateway's wall clock, which on a device without network time can be far from the browser's.
+ */
+export const gatewayTime = (clock: GatewayClock, monotonicNow: number) => clock.now + (monotonicNow - clock.at)
+
+/** The last `range` of a point, up to `now` (the gateway's time, see `gatewayTime`); `off` when the gateway keeps no history. */
 export const fetchHistory = (device: string, point: string, range: Range, now: number) =>
   gateway.pipe(
     Effect.flatMap((client) =>
