@@ -67,6 +67,30 @@ const statusCodeFor = (port: number, host: string) =>
       })
   )
 
+/** GET /api/status with the Host header set to `host`, or sent without one. */
+const responseFor = (port: number, host: string | undefined) =>
+  Effect.promise(
+    () =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = get(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/api/status",
+            setHost: false,
+            headers: host === undefined ? {} : { host }
+          },
+          (response) => {
+            let body = ""
+            response.setEncoding("utf8")
+            response.on("data", (chunk: string) => (body += chunk))
+            response.on("end", () => resolve({ status: response.statusCode ?? 0, body }))
+          }
+        )
+        request.on("error", reject)
+      })
+  )
+
 /** A port nothing listens on right now. */
 const freePort = Effect.promise(
   () =>
@@ -409,6 +433,42 @@ describe("status", () => {
       expect(yield* statusCodeFor(port, `localhost:${port}`)).toBe(200)
       yield* Fiber.interrupt(server)
     }).pipe(Effect.provide(FetchHttpClient.layer))
+  )
+
+  it.live("on loopback, answers a loopback host name on any port, and refuses other names", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      const port = yield* freePort
+      const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
+      const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
+        Effect.provide(NodeServices.layer),
+        Effect.forkChild
+      )
+      yield* Effect.sleep("300 millis")
+      // An SSH tunnel from another local port keeps the loopback name but not the port.
+      for (const host of ["127.0.0.1:18080", "localhost:3000", "[::1]:9", "localhost"]) {
+        expect([host, (yield* responseFor(port, host)).status]).toEqual([host, 200])
+      }
+      const misdirected =
+        `Misdirected request: open the status page as http://127.0.0.1:${port} or ` +
+        `http://localhost:${port} (an SSH tunnel to it works on any local port)`
+      const refused = [
+        `evil.example:${port}`,
+        `127.0.0.1.evil.example:${port}`,
+        "localhost.evil.example",
+        "127.0.0.1:abc",
+        "127.0.0.1:0",
+        "127.0.0.1:70000",
+        "127.0.0.1@evil.example",
+        ""
+      ]
+      for (const host of refused) {
+        expect({ host, ...(yield* responseFor(port, host)) }).toEqual({ host, status: 421, body: misdirected })
+      }
+      // Without a Host header, Node's HTTP server refuses an HTTP/1.1 request before the page sees it.
+      expect((yield* responseFor(port, undefined)).status).toBe(400)
+      yield* Fiber.interrupt(server)
+    })
   )
 
   it.live("serves a point's history on /api/history, and says why when it cannot", () =>

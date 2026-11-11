@@ -416,6 +416,37 @@ export const serveStatus = (
 /** Loopback addresses a page served on this machine is reached at. */
 const isLoopback = (address: string) => address === "localhost" || address === "::1" || address.startsWith("127.")
 
+/** An IPv4 address in 127.0.0.0/8, written as four decimal octets. */
+const isLoopbackIpv4 = (name: string) => {
+  const octets = name.split(".")
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)
+  )
+}
+
+/** A port in a Host header: digits only, 1-65535. */
+const isValidPort = (port: string) => /^\d{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535
+
+/**
+ * Whether a Host header names this machine by a loopback name (`localhost`,
+ * `127.x.x.x`, `[::1]` or the bind address), with any valid port or none.
+ * DNS rebinding depends on the name, not the port, and an SSH tunnel often
+ * forwards from another local port.
+ */
+export const isLoopbackHost = (host: string, bindAddress: string): boolean => {
+  const bracketEnd = host.startsWith("[") ? host.indexOf("]") : -1
+  if (host.startsWith("[") && bracketEnd < 0) return false
+  const colon = host.indexOf(":")
+  const nameEnd = bracketEnd >= 0 ? bracketEnd + 1 : colon >= 0 ? colon : host.length
+  const name = host.slice(0, nameEnd).toLowerCase()
+  const rest = host.slice(nameEnd)
+  if (rest !== "" && !(rest.startsWith(":") && isValidPort(rest.slice(1)))) return false
+  const bindName = (bindAddress.includes(":") ? `[${bindAddress}]` : bindAddress).toLowerCase()
+  return name === "localhost" || name === "[::1]" || isLoopbackIpv4(name) || name === bindName
+}
+
 /**
  * On a loopback address, answer only requests for a loopback host name. A
  * web page in a browser on the gateway's machine could otherwise point a DNS
@@ -424,16 +455,16 @@ const isLoopback = (address: string) => address === "localhost" || address === "
  */
 const hostCheck = (settings: StatusSettings) => {
   if (!isLoopback(settings.bindAddress)) return Layer.empty
-  const port = String(settings.port)
-  const allowed = new Set(
-    ["localhost", "127.0.0.1", "[::1]", settings.bindAddress].flatMap((host) => [host, `${host}:${port}`])
-  )
+  // A fixed message: the Host header is not echoed back.
+  const misdirected =
+    `Misdirected request: open the status page as http://127.0.0.1:${settings.port} or ` +
+    `http://localhost:${settings.port} (an SSH tunnel to it works on any local port)`
   return HttpRouter.middleware(
     (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        if (allowed.has(request.headers.host ?? "")) return yield* httpEffect
-        return HttpServerResponse.text("Misdirected request: use a loopback address", { status: 421 })
+        if (isLoopbackHost(request.headers.host ?? "", settings.bindAddress)) return yield* httpEffect
+        return HttpServerResponse.text(misdirected, { status: 421 })
       }),
     { global: true }
   )
