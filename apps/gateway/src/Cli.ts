@@ -82,6 +82,9 @@ export const describeConfig = (config: GatewayConfig) => {
     config.buffer === undefined
       ? "  no buffer: values read while the broker is down are lost"
       : `  buffer ${config.buffer.path}`,
+    ...(config.history === undefined
+      ? []
+      : [`  history ${config.history.path}, per-minute values for ${config.history.retentionDays} days`]),
     ...config.devices.map((device) => {
       const where =
         device.protocol === "modbus-tcp"
@@ -106,6 +109,7 @@ export const configSummary = (config: GatewayConfig) => {
     gateway: config.id,
     broker: config.mqtt.url,
     buffer: config.buffer?.path ?? null,
+    history: config.history?.path ?? null,
     warnings: [
       ...(passwordWarning === undefined ? [] : [passwordWarning]),
       ...(config.buffer === undefined ? ["no buffer: values read while the broker is down are lost"] : [])
@@ -305,6 +309,12 @@ const init = Command.make(
       Flag.withDefault(false)
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false)),
+    history: Flag.Boolean("history").pipe(
+      Flag.withDescription(
+        "Keep every read on the gateway for the status page's charts and /api/history (on; --no-history leaves it out)"
+      ),
+      Flag.withDefault(true)
+    ),
     dryRun: dryRunFlag("Work out the config and the files, print them, and write nothing"),
     json: Flag.Boolean("json").pipe(
       Flag.withDescription("Ask nothing and print the result as JSON (a failure too), for scripts and agents"),
@@ -326,9 +336,9 @@ const init = Command.make(
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun })
       const files = { ...folder, written: [config, ...folder.written] }
-      const ssh = sshSession(yield* sshEnvironment)
+      const context = { ssh: sshSession(yield* sshEnvironment), platform: process.platform, cwd: process.cwd() }
       if (json) {
-        const { notes, next } = initNext(config, written, files, ssh)
+        const { notes, next } = initNext(config, written, files, context)
         return yield* printJson({
           ...configSummary(written),
           dryRun: flags.dryRun,
@@ -348,7 +358,7 @@ const init = Command.make(
         )
       }
       yield* Console.log(describeConfig(written))
-      yield* Console.log(nextSteps(config, written, files, ssh))
+      yield* Console.log(nextSteps(config, written, files, context))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
