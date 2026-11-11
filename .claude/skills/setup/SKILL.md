@@ -131,7 +131,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 - **No Docker** (systemd, from a checkout): with a yes, `sudo packaging/install.sh ot-gateway.json`, then `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env` and `sudo systemctl restart ot-gateway`. Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
 - **This machine, for now** (macOS and Windows always): the one command to start it again is `otg run` in the folder (`otg run <config path>` elsewhere). Say that it stops with the terminal or the session, and that a Linux box with Compose is the way to run it unattended.
 
-The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>` (any free local port works). Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`; the Settings tab then saves nothing unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env`. On loopback, the user can change the site, building and broker on the Settings tab without a restart (docs/operations.md, "Editing in the status page").
+The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>` (any free local port works). Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`; the Settings tab then saves nothing unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env`. On loopback, the user can change the site, building and broker, and add, test and edit devices or upload a points list, on the Settings tab without a restart (docs/operations.md, "Editing in the status page").
 
 ## 9. Wrap up
 

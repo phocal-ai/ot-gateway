@@ -222,6 +222,14 @@ export const DeviceSheet = ({
           ) : null}
           <Health device={device} now={now} />
           {state._tag === "failing" ? <WhatToCheck device={device} /> : null}
+          {device.protocol === "modbus-tcp" || device.protocol === "bacnet-ip" ? (
+            <Link
+              className="w-fit text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+              href={`/settings/?edit=${encodeURIComponent(device.id)}`}
+            >
+              Edit and test its settings →
+            </Link>
+          ) : null}
         </div>
 
         <section className="flex flex-col gap-2">

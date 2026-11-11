@@ -7,6 +7,7 @@
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api"
 import { ConfigEditGroup } from "./Editor.ts"
+import { SetupGroup } from "./Setup.ts"
 
 /** A point as the page shows it: its last published value, if any since the gateway started. */
 export const PointStatus = Schema.Struct({
@@ -526,4 +527,4 @@ export class StatusGroup extends HttpApiGroup.make("status")
     })
   ) {}
 
-export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup).add(ConfigEditGroup) {}
+export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup).add(ConfigEditGroup).add(SetupGroup) {}

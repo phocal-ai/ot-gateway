@@ -122,7 +122,7 @@ export const protocolName: Readonly<Record<string, string>> = {
 }
 
 /** QUDT unit names as people write them: shared with `ot-gateway history`. */
-export { unitLabel } from "@ot-gateway/api"
+export { unitLabel, unitSymbols } from "@ot-gateway/api"
 
 /**
  * A point's value for people: whole numbers and values from 1000 grouped with up to three decimals (1,500; 1,234.5),

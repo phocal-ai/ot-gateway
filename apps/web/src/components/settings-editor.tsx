@@ -6,7 +6,7 @@
  * restart. A save the gateway cannot start is rolled back there and the page says why; a file that changed in the
  * meantime is never overwritten: the page offers to load it again.
  */
-import type { ConfigIssue, EditStatus } from "@ot-gateway/api"
+import type { BrokerTest, ConfigIssue, EditStatus } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -15,6 +15,7 @@ import {
   type EditCard,
   editFields,
   type EditValues,
+  hourMinute,
   isChanged,
   issuesByField,
   savedMessage,
@@ -22,6 +23,7 @@ import {
   withValues
 } from "@/lib/editor"
 import { checkConfig, fetchConfigFile, readToken, type SaveOutcome, saveConfig, storeToken } from "@/lib/editor-api"
+import { type Outcome, testBroker } from "@/lib/setup-api"
 import { settle } from "@/lib/status"
 
 /** Check this long after the last key stroke. */
@@ -31,6 +33,39 @@ type Form =
   | { readonly _tag: "loading" }
   | { readonly _tag: "unreadable"; readonly message: string }
   | { readonly _tag: "ready"; readonly text: string; readonly etag: string; readonly values: EditValues }
+
+/** The broker's test as the form shows it: connecting while `outcome` is undefined. */
+const BrokerResult = ({ outcome }: { readonly outcome: Outcome<BrokerTest> | undefined }) => {
+  if (outcome === undefined) return <p className="text-sm text-muted-foreground">Connecting…</p>
+  if (outcome._tag !== "ok")
+    return (
+      <p className="text-sm break-words text-destructive" role="status">
+        {outcome._tag === "busy" ? `Try again in a moment: ${outcome.message}` : `Not tested: ${outcome.message}`}
+      </p>
+    )
+  const result = outcome.value
+  return (
+    <div className="grid gap-1 text-sm" role="status">
+      {result.ok ? (
+        <p className="text-success">
+          Connected to {result.broker}
+          {result.protocolVersion === undefined ? "" : ` with MQTT ${result.protocolVersion}`}
+          {result.roundTripMs === undefined ? "" : `; a test message came back in ${Math.round(result.roundTripMs)} ms`}
+          .
+        </p>
+      ) : (
+        <p className="break-words text-destructive">
+          No connection: {result.error ?? `no answer from ${result.broker}`}
+        </p>
+      )}
+      {result.warnings.map((warning) => (
+        <p className="text-xs text-muted-foreground" key={warning}>
+          {warning}
+        </p>
+      ))}
+    </div>
+  )
+}
 
 type Saving =
   | { readonly _tag: "idle" }
@@ -51,6 +86,10 @@ export const EditForm = ({
   const [issues, setIssues] = useState<ReadonlyArray<ConfigIssue>>([])
   const [saving, setSaving] = useState<Saving>({ _tag: "idle" })
   const [token, setToken] = useState(() => readToken() ?? "")
+  /** The broker test: not run, running (no outcome yet) or done. */
+  const [brokerTest, setBrokerTest] = useState<{ readonly outcome: Outcome<BrokerTest> | undefined } | undefined>(
+    undefined
+  )
   const checkRun = useRef(0)
 
   const load = () => {
@@ -112,9 +151,19 @@ export const EditForm = ({
     if (edit.auth === "token") storeToken(token)
     setSaving({ _tag: "saving" })
     void Effect.runPromise(saveConfig(candidate, form.etag)).then((outcome) => {
-      if (outcome._tag === "saved") return onDone(savedMessage(outcome.saved.applied))
+      if (outcome._tag === "saved") return onDone(savedMessage(outcome.saved.applied, hourMinute(Date.now())))
       if (outcome._tag === "invalid") setIssues(outcome.issues)
       setSaving({ _tag: "done", outcome })
+    })
+  }
+
+  const runBrokerTest = () => {
+    if (candidate === undefined) return
+    if (edit.auth === "token") storeToken(token)
+    setBrokerTest({ outcome: undefined })
+    void Effect.runPromise(testBroker(candidate)).then((result) => {
+      if (result._tag === "invalid") setIssues(result.issues)
+      setBrokerTest({ outcome: result })
     })
   }
 
@@ -182,6 +231,22 @@ export const EditForm = ({
           The password stays in <code className="font-mono">ot-gateway.env</code> ({edit.password.variable}, now{" "}
           {edit.password.set ? "set" : "not set"}); this page never sees it.
         </p>
+      ) : null}
+      {card === "mqtt" ? (
+        <div className="grid gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={runBrokerTest}
+              disabled={busy || (brokerTest !== undefined && brokerTest.outcome === undefined)}
+            >
+              Test the connection
+            </Button>
+            <span className="text-xs text-muted-foreground">With the settings above; nothing is saved.</span>
+          </div>
+          {brokerTest === undefined ? null : <BrokerResult outcome={brokerTest.outcome} />}
+        </div>
       ) : null}
       {elsewhere.length > 0 ? (
         <div className="text-xs text-destructive">
