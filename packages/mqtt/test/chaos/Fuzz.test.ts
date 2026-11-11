@@ -224,7 +224,9 @@ const readFrames = (random: () => number, buffer: Uint8Array, maximumPacketSize:
   }
 }
 
-describe("chaos: MQTT codec fuzzing", () => {
+// Fixed, seeded work: well under a second on a laptop, but up to several seconds on a CI runner that runs every
+// package's tests at once, which crossed the default 5 s. The limit is for a hang, not for a busy runner.
+describe("chaos: MQTT codec fuzzing", { timeout: 30_000 }, () => {
   it("covers every decoder of broker bytes", () => {
     // 3 version-free decoders, and per version CONNACK, SUBSCRIBE, SUBACK and PUBLISH with 16 flag values.
     expect(decoders).toHaveLength(3 + 2 * (3 + 16))
