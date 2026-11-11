@@ -38,7 +38,7 @@ import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { historyHandler, makeStatusState, serveStatus, type StatusState } from "./Status.ts"
 import { openHistory } from "@ot-gateway/history"
-import { traceSampleRatio } from "./Telemetry.ts"
+import { traceSampleRatio, tracesExported } from "./Telemetry.ts"
 
 export interface GatewayOptions {
   /** Reach devices and the broker through this network instead of Node's. */
@@ -178,8 +178,10 @@ const runDevices = Effect.fn("runGateway")(function* (
     sinks.length === 0
       ? undefined
       : { record: (device, point, value, ts) => sinks.forEach((sink) => sink.record(device, point, value, ts)) }
+  // The sample ratio only when traces are exported: without an exporter it describes nothing.
+  const sampling = (yield* tracesExported) ? { traceSampleRatio: sampleRatio } : {}
   yield* Effect.log(`OT Gateway starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
-    Effect.annotateLogs({ traceSampleRatio: sampleRatio, health: health.topic })
+    Effect.annotateLogs({ ...sampling, health: health.topic })
   )
   let bacnet: BacnetNetwork
   if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
