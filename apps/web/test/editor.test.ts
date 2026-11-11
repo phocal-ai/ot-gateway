@@ -74,6 +74,39 @@ describe("withValues", () => {
   })
 })
 
+/** The BACnet/IP card's values: every field empty (its default) but those given. */
+const bacnet = (values: Record<string, string>) => ({
+  port: "",
+  broadcastAddress: "",
+  bbmdAddress: "",
+  bindAddress: "",
+  requestTimeoutMs: "",
+  retries: "",
+  covLifetimeSeconds: "",
+  ...values
+})
+
+describe("the BACnet/IP card", () => {
+  it("reads empty fields from a file without a bacnet block, and adds one with what is typed", () => {
+    expect(valuesFrom(file, "bacnet")).toEqual(bacnet({}))
+    const next = JSON.parse(withValues(file, "bacnet", bacnet({ port: "47820", broadcastAddress: "10.0.0.255" })) ?? "")
+    expect(next).toMatchObject({ bacnet: { port: 47_820, broadcastAddress: "10.0.0.255" } })
+    expect(next.devices).toHaveLength(1)
+  })
+
+  it("leaves no empty bacnet block behind when every field is back at its default", () => {
+    const withBlock = withValues(file, "bacnet", bacnet({ retries: "3" })) ?? ""
+    expect(valuesFrom(withBlock, "bacnet")).toEqual(bacnet({ retries: "3" }))
+    expect(JSON.parse(withValues(withBlock, "bacnet", bacnet({})) ?? "")).not.toHaveProperty("bacnet")
+    expect(isChanged(withBlock, "bacnet", bacnet({ retries: "3" }))).toBe(false)
+  })
+
+  it("puts the check's issues under the BACnet field", () => {
+    const issues = [{ path: ["bacnet", "port"], message: "must be between 1 and 65535" }]
+    expect(issuesByField(issues, "bacnet").byField).toEqual({ port: ["must be between 1 and 65535"] })
+  })
+})
+
 describe("issuesByField", () => {
   it("puts each issue under its field, and the rest of the file's issues apart", () => {
     const issues = [

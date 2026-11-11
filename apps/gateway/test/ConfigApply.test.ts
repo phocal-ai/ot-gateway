@@ -7,9 +7,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { EDIT_HEADER, EDIT_HEADER_VALUE } from "@ot-gateway/api"
-import { makeMemoryNetwork, parseConfig } from "@ot-gateway/core"
+import { makeBacnetNetwork } from "@ot-gateway/bacnet"
+import { BacnetSettings, makeMemoryNetwork, parseConfig } from "@ot-gateway/core"
 import { type BrokerControl, makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
-import { Clock, Effect, Fiber, FileSystem, Schema } from "effect"
+import { Clock, Effect, Exit, Fiber, FileSystem, Schema, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { createServer } from "node:net"
 import { runGateway } from "../src/Gateway.ts"
@@ -20,6 +21,7 @@ const BROKER = "10.0.0.2"
 const JsonObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
 const decodeObject = Schema.decodeUnknownSync(JsonObject)
 const decodeEvents = Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ type: Schema.String })))
+const decodeBacnetSettings = Schema.decodeUnknownSync(BacnetSettings)
 const decodeValue = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Struct({ ts: Schema.Number })))
 
 /** A port nothing listens on right now. */
@@ -34,7 +36,26 @@ const freePort = Effect.promise(
     })
 )
 
-const configText = (port: number, changes: { site?: string; id?: string; clientId?: string; buffer?: string }) =>
+/** A BACnet device nobody answers for: enough for the gateway to open its BACnet/IP port. */
+const ahu = {
+  protocol: "bacnet-ip",
+  id: "ahu",
+  deviceInstance: 2001,
+  address: "10.0.2.1",
+  points: [{ id: "supply-temp", name: "Supply temperature", objectType: "analog-input", instance: 1 }]
+}
+
+const configText = (
+  port: number,
+  changes: {
+    site?: string
+    id?: string
+    clientId?: string
+    buffer?: string
+    /** The `bacnet` block, and a BACnet device with it. */
+    bacnet?: Record<string, unknown>
+  }
+) =>
   `${JSON.stringify(
     {
       site: changes.site ?? "s",
@@ -43,13 +64,15 @@ const configText = (port: number, changes: { site?: string; id?: string; clientI
       mqtt: { url: `mqtt://${BROKER}:1883`, clientId: changes.clientId ?? "gw" },
       buffer: { path: changes.buffer ?? "./buffer.sqlite" },
       status: { port, webRoot: "/nonexistent" },
+      ...(changes.bacnet === undefined ? {} : { bacnet: changes.bacnet }),
       devices: [
         {
           protocol: "simulator",
           id: "meter",
           pollIntervalMs: 1000,
           points: [{ id: "power", name: "Power", waveform: "ramp", min: 0, max: 1000, periodSeconds: 1000 }]
-        }
+        },
+        ...(changes.bacnet === undefined ? [] : [ahu])
       ]
     },
     null,
@@ -92,13 +115,13 @@ const call = (port: number, method: string, path: string, init: { body?: unknown
 const pageHeaders = (port: number) => ({ origin: `http://127.0.0.1:${port}`, [EDIT_HEADER]: EDIT_HEADER_VALUE })
 
 /** A gateway started from `ot-gateway.json` in a folder of its own, with its status page on a free port. */
-const startGateway = (options: { readonly brokerUp: boolean }) =>
+const startGateway = (options: { readonly brokerUp: boolean; readonly bacnet?: Record<string, unknown> }) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const folder = yield* fs.makeTempDirectoryScoped()
     const path = `${folder}/ot-gateway.json`
     const port = yield* freePort
-    yield* fs.writeFileString(path, configText(port, {}))
+    yield* fs.writeFileString(path, configText(port, options.bacnet === undefined ? {} : { bacnet: options.bacnet }))
     const network = makeMemoryNetwork()
     const control = makeBrokerControl()
     const startBroker = Effect.gen(function* () {
@@ -112,7 +135,7 @@ const startGateway = (options: { readonly brokerUp: boolean }) =>
       Effect.forkScoped
     )
     yield* settle(10)
-    return { fs, folder, path, port, control, startBroker, running }
+    return { fs, folder, path, port, control, startBroker, running, network }
   })
 
 const read = (port: number) => call(port, "GET", "/api/config/file", {})
@@ -193,6 +216,40 @@ describe("applying a config saved from the status page", () => {
         .filter((message) => !message.topic.endsWith("$meta"))
         .map((message) => decodeValue(message.payload).ts)
       expect(delivered.filter((ts) => ts < appliedAt).length).toBeGreaterThanOrEqual(5)
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("moves the BACnet/IP socket to a new port in-process, and rolls back a port another program holds", () =>
+    Effect.gen(function* () {
+      const { fs, path, port, running, network } = yield* startGateway({ brokerUp: true, bacnet: {} })
+      const gatewayHost = network.host("10.0.0.1")
+      /** Whether a UDP port of the gateway's host can be bound now: free, or held by the gateway. */
+      const bindable = (udpPort: number) =>
+        makeBacnetNetwork(decodeBacnetSettings({ port: udpPort }), gatewayHost).pipe(
+          Effect.scoped,
+          Effect.exit,
+          Effect.map(Exit.isSuccess)
+        )
+      expect(yield* bindable(47808)).toBe(false)
+      // Another program holds 47830.
+      const holder = yield* Scope.make()
+      yield* makeBacnetNetwork(decodeBacnetSettings({ port: 47830 }), gatewayHost).pipe(Scope.provide(holder))
+      const before = yield* read(port)
+      const refused = yield* save(port, configText(port, { bacnet: { port: 47830 } }), before.body["etag"])
+      expect(refused.status).toBe(422)
+      expect(String(refused.body["message"])).toContain("BACnet/IP port 47830 cannot be opened")
+      expect(yield* fs.readFileString(path)).toBe(configText(port, { bacnet: {} }))
+      yield* settle(2)
+      expect(yield* bindable(47808)).toBe(false)
+      yield* Scope.close(holder, Exit.void)
+
+      const again = yield* read(port)
+      const saved = yield* save(port, configText(port, { bacnet: { port: 47831 } }), again.body["etag"])
+      expect(saved.status).toBe(200)
+      expect(saved.body).toMatchObject({ applied: { changes: ["BACnet/IP: port"], restartNeeded: [] } })
+      expect(yield* bindable(47831)).toBe(false)
+      expect(yield* bindable(47808)).toBe(true)
       yield* Fiber.interrupt(running)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )

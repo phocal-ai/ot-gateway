@@ -8,7 +8,7 @@
  */
 import type { ConfigIssue, EditStatus, PointTest, ReadTest } from "@ot-gateway/api"
 import { Effect } from "effect"
-import { useEffect, useRef, useState } from "react"
+import { Fragment, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input, NativeSelect } from "@/components/ui/input"
 import {
@@ -42,6 +42,7 @@ import {
   withoutDevice
 } from "@/lib/device-editor"
 import { hourMinute, savedMessage } from "@/lib/editor"
+import { topicParts } from "@/lib/format"
 import { checkConfig, fetchConfigFile, readToken, type SaveOutcome, saveConfig, storeToken } from "@/lib/editor-api"
 import { whatToCheck } from "@ot-gateway/api"
 import { type Outcome, testRead } from "@/lib/setup-api"
@@ -462,6 +463,20 @@ const PointFields = ({
   )
 }
 
+/** A topic that wraps after a `/` on a narrow screen, never in the middle of a device's or point's id if it fits. */
+const Topic = ({ topic }: { readonly topic: string }) => (
+  <code className="font-mono text-xs break-words">
+    {topicParts(topic).map((part, index) => (
+      // The parts of one topic never reorder, so their position is their key.
+      // oxlint-disable-next-line react/no-array-index-key
+      <Fragment key={index}>
+        {part}
+        <wbr />
+      </Fragment>
+    ))}
+  </code>
+)
+
 /**
  * Whether commands may write a point: off unless set on purpose. Turning it on needs the point's limits (a numeric
  * one) and a confirmation that names the point and what it controls. The page itself never writes a value: commands
@@ -517,7 +532,7 @@ const Commands = ({
       {point.writable ? (
         <>
           <p className="text-sm">
-            Takes commands on <code className="font-mono text-xs break-all">…/{path}/$set</code>
+            Takes commands on <Topic topic={`…/${path}/$set`} />
             {limits && limitsTyped ? `, within ${range}` : ""}. The gateway checks and logs every one.
           </p>
           {limits ? limitFields : null}
@@ -538,7 +553,7 @@ const Commands = ({
           {limits ? limitFields : null}
           <p>
             Allow commands to change <span className="font-medium">{name}</span> ({pointSource(protocol, point)}) on the
-            device? A message on <code className="font-mono text-xs break-all">…/{path}/$set</code> then sets it
+            device? A message on <Topic topic={`…/${path}/$set`} /> then sets it
             {limits ? (limitsTyped ? `, within ${range}` : ", within the limits above") : ""}, and whatever it controls
             follows. This page itself never writes a value.
           </p>

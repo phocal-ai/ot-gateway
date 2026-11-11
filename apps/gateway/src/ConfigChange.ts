@@ -61,7 +61,7 @@ export const describeConfigChange = (before: GatewayConfig, after: GatewayConfig
     if (same(was, is)) continue
     if (was === undefined) changes.push(`${name} added`)
     else if (is === undefined) changes.push(`${name} removed`)
-    else if (key === "mqtt") changes.push(`${name}: ${changedKeys(was, is).join(", ")}`)
+    else if (key === "mqtt" || key === "bacnet") changes.push(`${name}: ${changedKeys(was, is).join(", ")}`)
     else changes.push(`${name} changed`)
     if (kept) restartNeeded.push(name)
   }

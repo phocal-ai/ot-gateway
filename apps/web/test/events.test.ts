@@ -13,7 +13,8 @@ import {
   latestEvents,
   mergeEvents,
   nothingYet,
-  plainError
+  plainError,
+  sharedCauseNotes
 } from "../src/lib/events.ts"
 
 const at = (hours: number, minutes: number, seconds: number) =>
@@ -176,6 +177,61 @@ describe("deviceEvents and latestEvents", () => {
   it("lists the newest first, as many as asked", () => {
     expect(latestEvents(all, 2)).toEqual([drained, brokerBack])
     expect(latestEvents([started], 10)).toEqual([started])
+  })
+})
+
+describe("alarm events", () => {
+  const raised: GatewayEvent = {
+    id: 8,
+    at: now,
+    type: "alarm-raised",
+    device: "energy-meter",
+    point: "main-breaker-tripped",
+    value: true
+  }
+  const known = new Map([["energy-meter/main-breaker-tripped", "Main breaker tripped"]])
+  const names = (device: string, point: string) => known.get(`${device}/${point}`)
+
+  it("name the point where the page knows its name", () => {
+    expect(eventSentence(raised, names)).toBe("Alarm raised: Main breaker tripped on energy-meter")
+    expect(eventSentence({ ...raised, first: true }, names)).toBe(
+      "Alarm active at its first read: Main breaker tripped on energy-meter"
+    )
+    expect(
+      eventSentence(
+        {
+          id: 9,
+          at: now,
+          type: "alarm-cleared",
+          device: "energy-meter",
+          point: "main-breaker-tripped",
+          activeMs: 61_000
+        },
+        names
+      )
+    ).toBe("Alarm cleared after 61 s: Main breaker tripped on energy-meter")
+  })
+
+  it("fall back to device/point without a name, or when the name is the id", () => {
+    expect(eventSentence(raised)).toBe("Alarm raised: energy-meter/main-breaker-tripped")
+    expect(eventSentence(raised, () => "main-breaker-tripped")).toBe("Alarm raised: energy-meter/main-breaker-tripped")
+    expect(eventSentence(raised, () => " ")).toBe("Alarm raised: energy-meter/main-breaker-tripped")
+  })
+})
+
+describe("sharedCauseNotes", () => {
+  const boilerFailing: GatewayEvent = { ...failing, id: 10, at: failing.at + 6_000, device: "boiler" }
+
+  it("puts the shared-cause line on the newest failure of a group, as the CLI words it", () => {
+    const notes = sharedCauseNotes([started, failing, boilerFailing, recovered])
+    expect([...notes.keys()]).toEqual([10])
+    expect(notes.get(10)).toBe(
+      "2 devices (energy-meter, boiler) stopped answering within 6 s of each other: likely a shared cause (power, a switch, the gateway's own network)"
+    )
+  })
+
+  it("has none for one device's failures", () => {
+    expect(sharedCauseNotes([failing, recovered, { ...failing, id: 11, at: failing.at + 2_000 }]).size).toBe(0)
   })
 })
 

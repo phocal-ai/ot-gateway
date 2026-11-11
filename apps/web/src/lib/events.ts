@@ -2,7 +2,7 @@
  * The gateway's recent events (`/api/events`) as the page shows them: one plain sentence each, kept across polls by
  * asking only for the ones after the last it has. Pure, so it is tested without a browser.
  */
-import type { EventLog, GatewayEvent } from "@ot-gateway/api"
+import { type EventLog, type GatewayEvent, sharedCauses } from "@ot-gateway/api"
 import { formatNumber } from "./format"
 import { clockTime, duration } from "./status"
 
@@ -42,8 +42,23 @@ export const plainError = (error: string) => error.replace(/^could not connect: 
 
 const values = (count: number) => `${formatNumber(count)} ${count === 1 ? "value" : "values"}`
 
-/** What happened, in words, without the time: "energy-meter answering again after 61 s". */
-export const eventSentence = (event: GatewayEvent): string => {
+/** A point's name by its device and id, where the page knows it (the point catalog); undefined where it does not. */
+export type PointNames = (device: string, point: string) => string | undefined
+
+/**
+ * Which alarm point an event is about: "Main breaker tripped on energy-meter" with its name, or
+ * "energy-meter/main-breaker-tripped" when the page does not know it or the name is the id.
+ */
+export const alarmSubject = (device: string, point: string, names?: PointNames) => {
+  const name = names?.(device, point)?.trim()
+  return name === undefined || name === "" || name === point ? `${device}/${point}` : `${name} on ${device}`
+}
+
+/**
+ * What happened, in words, without the time: "energy-meter answering again after 61 s". `names` names the point of
+ * an alarm event.
+ */
+export const eventSentence = (event: GatewayEvent, names?: PointNames): string => {
   switch (event.type) {
     case "gateway-started":
       return `Gateway started (${event.version}, ${event.devices} ${event.devices === 1 ? "device" : "devices"})`
@@ -73,13 +88,13 @@ export const eventSentence = (event: GatewayEvent): string => {
         ? `Another gateway with this gateway's id (${event.gateway}) is online: both publish into the same topics`
         : `Gateway ${event.gateway} publishes ${event.devices.join(", ")} too: values from both gateways mix`
     case "alarm-raised":
-      return `Alarm ${event.device}/${event.point} ${event.first === true ? "active at its first read" : "raised"}`
+      return `${event.first === true ? "Alarm active at its first read" : "Alarm raised"}: ${alarmSubject(event.device, event.point, names)}`
     case "alarm-cleared":
-      return `Alarm ${event.device}/${event.point} cleared after ${duration(event.activeMs)}`
+      return `Alarm cleared after ${duration(event.activeMs)}: ${alarmSubject(event.device, event.point, names)}`
     case "alarm-flapping":
-      return `Alarm ${event.device}/${event.point} raised ${event.raised} times in 15 min: changes are counted until it keeps still`
+      return `Alarm raised ${event.raised} times in 15 min: ${alarmSubject(event.device, event.point, names)}; changes are counted until it keeps still`
     case "alarm-settled":
-      return `Alarm ${event.device}/${event.point} keeps still, ${event.active ? "active" : "not active"}, after ${event.unlisted} unlisted changes`
+      return `Alarm keeps still, ${event.active ? "active" : "not active"}, after ${event.unlisted} unlisted changes: ${alarmSubject(event.device, event.point, names)}`
   }
 }
 
@@ -110,6 +125,19 @@ export const eventTone = (event: GatewayEvent): "bad" | "good" | "neutral" =>
 
 /** The event as one line: "12:18:20 energy-meter stopped answering: connection refused by 127.0.0.1:5020". */
 export const eventLine = (event: GatewayEvent, now: number) => `${clockTime(event.at, now)} ${eventSentence(event)}`
+
+/**
+ * The shared-cause line ("2 devices (boiler, meter) stopped answering within 6 s of each other: likely a shared
+ * cause …") by the id of the newest failure of its group, which a newest-first list shows first: the same groups and
+ * words as `ot-gateway events`.
+ */
+export const sharedCauseNotes = (events: ReadonlyArray<GatewayEvent>): ReadonlyMap<number, string> =>
+  new Map(
+    sharedCauses(events.filter((event) => event.type === "device-failing")).flatMap((shared) => {
+      const newest = shared.ids.at(-1)
+      return newest === undefined ? [] : [[newest, shared.line] as const]
+    })
+  )
 
 /** The events about one device, oldest first. */
 export const deviceEvents = (events: ReadonlyArray<GatewayEvent>, device: string): ReadonlyArray<GatewayEvent> =>

@@ -101,13 +101,16 @@ type BacnetNetwork = Deferred.Deferred<BacnetClient> | undefined
  * the port may be held by another program for a while, or the bind address
  * not be assigned yet at boot. Until then the BACnet devices report
  * `connection` in the health topic. Each attempt gets its own scope, so a
- * failed one leaves no socket behind.
+ * failed one leaves no socket behind. `opened` learns how the first attempt
+ * went, for a config applied from the page that must say at once when its
+ * port cannot be opened.
  */
 const openBacnet = Effect.fn("openBacnet")(function* (
   config: GatewayConfig,
   health: HealthRegistry,
   endpoint: Deferred.Deferred<BacnetClient>,
-  network: Network | undefined
+  network: Network | undefined,
+  opened: Deferred.Deferred<void, string>
 ) {
   const gatewayScope = yield* Effect.scope
   const bacnetDevices = config.devices.filter((device) => device.protocol === "bacnet-ip")
@@ -121,6 +124,8 @@ const openBacnet = Effect.fn("openBacnet")(function* (
   const client = yield* attempt.pipe(
     Effect.tapError((error) =>
       Effect.all([
+        // Only the first attempt counts: a later outcome leaves a completed Deferred as it is.
+        Deferred.fail(opened, `the BACnet/IP port ${config.bacnet.port} cannot be opened: ${error.message}`),
         Effect.map(Clock.currentTimeMillis, (at) =>
           bacnetDevices.forEach((device) =>
             health.recordFailure(device.id, {
@@ -137,6 +142,7 @@ const openBacnet = Effect.fn("openBacnet")(function* (
     ),
     Effect.retry(Schedule.min([Schedule.exponential("5 seconds"), Schedule.spaced("5 minutes")]))
   )
+  yield* Deferred.succeed(opened, undefined)
   yield* Deferred.succeed(endpoint, client)
 })
 
@@ -209,7 +215,9 @@ const runDevices = Effect.fn("runGateway")(function* (
   network: Network | undefined,
   commands: Commands,
   reads: HistorySink | undefined,
-  staleMeta: StaleMetaCleaner
+  staleMeta: StaleMetaCleaner,
+  /** Told whether the BACnet/IP endpoint opened at its first attempt; never told without BACnet devices. */
+  bacnetOpened: Deferred.Deferred<void, string>
 ) {
   const sampleRatio = yield* traceSampleRatio
   // The sample ratio only when traces are exported: without an exporter it describes nothing.
@@ -220,7 +228,7 @@ const runDevices = Effect.fn("runGateway")(function* (
   let bacnet: BacnetNetwork
   if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
     bacnet = yield* Deferred.make<BacnetClient>()
-    yield* openBacnet(config, health.registry, bacnet, network).pipe(Effect.forkScoped)
+    yield* openBacnet(config, health.registry, bacnet, network, bacnetOpened).pipe(Effect.forkScoped)
   }
   // One connection per Modbus endpoint, for as long as the gateway runs; each opens on its first request.
   const modbusLinks = yield* makeModbusLinks(
@@ -386,6 +394,12 @@ interface StartWatch {
  */
 const BROKER_START_TIMEOUT = "10 seconds"
 
+/** How long a config applied from the page has to open its BACnet/IP port when that changed. */
+const BACNET_START_TIMEOUT = "5 seconds"
+
+/** Whether a config reads a BACnet device, and so opens the gateway's BACnet/IP port. */
+const usesBacnet = (config: GatewayConfig) => config.devices.some((device) => device.protocol === "bacnet-ip")
+
 /** A config that did not start; `message` says why. */
 class StartFailed extends Schema.TaggedError<StartFailed>()("StartFailed", { message: Schema.String }) {}
 
@@ -451,7 +465,12 @@ const openBufferFirst = Effect.fnUntraced(function* (
 const startConfig = Effect.fn("Gateway.startConfig")(function* (
   config: GatewayConfig,
   shared: Shared,
-  watch: { readonly requireBuffer: boolean; readonly awaitBroker: boolean }
+  watch: {
+    readonly requireBuffer: boolean
+    readonly awaitBroker: boolean
+    /** Fail the start when the BACnet/IP port does not open at once (a config with BACnet devices only). */
+    readonly awaitBacnet: boolean
+  }
 ) {
   const { events, options, startedAt } = shared
   const registry = makeHealthRegistry(config.devices.map((device) => device.id))
@@ -545,7 +564,8 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
     attributes,
     Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause)))
   )
-  yield* runDevices(config, health, options.network, commands, reads, staleMeta).pipe(
+  const bacnetOpened = yield* Deferred.make<void, string>()
+  yield* runDevices(config, health, options.network, commands, reads, staleMeta, bacnetOpened).pipe(
     Effect.scoped,
     Effect.provideContext(northboundServices),
     attributes,
@@ -566,6 +586,20 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
           start.brokerError === undefined ? "" : `: ${start.brokerError}`
         }`
       })
+    }
+  }
+  if (watch.awaitBacnet && usesBacnet(config)) {
+    // A port another program holds fails the bind at once; the deadline only covers a socket that never answers.
+    const failure = yield* Deferred.await(bacnetOpened).pipe(
+      Effect.match({ onSuccess: (): string | undefined => undefined, onFailure: (message) => message }),
+      Effect.timeoutOption(BACNET_START_TIMEOUT),
+      Effect.map(
+        Option.getOrElse(() => `the BACnet/IP port ${config.bacnet.port} did not open within ${BACNET_START_TIMEOUT}`)
+      )
+    )
+    if (failure !== undefined) {
+      yield* Scope.close(scope, Exit.void)
+      return yield* new StartFailed({ message: failure })
     }
   }
   return { config, scope, status } satisfies Running
@@ -618,7 +652,11 @@ export const runGateway = Effect.fn("Gateway")(
       fatal: yield* Deferred.make<never, DevicesError>(),
       configSince: startedAt - 1
     }
-    let running: Running = yield* startConfig(config, shared, { requireBuffer: false, awaitBroker: false })
+    let running: Running = yield* startConfig(config, shared, {
+      requireBuffer: false,
+      awaitBroker: false,
+      awaitBacnet: false
+    })
     const status = running.status === undefined ? undefined : switchableStatus(running.status)
     if (host !== undefined) yield* keepRunning("host monitor", host.run).pipe(Effect.forkScoped)
 
@@ -632,7 +670,10 @@ export const runGateway = Effect.fn("Gateway")(
       yield* Scope.close(previous.scope, Exit.void)
       // A changed broker must answer before the config counts as applied; an unchanged one may be away for now.
       const awaitBroker = JSON.stringify(previous.config.mqtt) !== JSON.stringify(next.mqtt)
-      const started = yield* tryStart(next, shared, { requireBuffer: true, awaitBroker })
+      // A BACnet/IP port that changed, or opens for the first BACnet device, must open: another program may hold it.
+      const awaitBacnet =
+        JSON.stringify(previous.config.bacnet) !== JSON.stringify(next.bacnet) || !usesBacnet(previous.config)
+      const started = yield* tryStart(next, shared, { requireBuffer: true, awaitBroker, awaitBacnet })
       if (Result.isSuccess(started)) {
         running = started.success
         if (running.status !== undefined) status?.switchTo(running.status)
@@ -653,7 +694,11 @@ export const runGateway = Effect.fn("Gateway")(
       yield* Effect.logError("config from the status page did not start, running the previous one again").pipe(
         Effect.annotateLogs({ error: reason, changes: change.summary })
       )
-      const restored = yield* tryStart(previous.config, shared, { requireBuffer: false, awaitBroker: false })
+      const restored = yield* tryStart(previous.config, shared, {
+        requireBuffer: false,
+        awaitBroker: false,
+        awaitBacnet: false
+      })
       if (Result.isFailure(restored)) {
         // It ran a moment ago; if it cannot start again, the process ends and its supervisor starts it afresh.
         yield* Deferred.die(shared.fatal, new Error(`the previous config did not start again: ${restored.failure}`))

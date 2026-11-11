@@ -20,6 +20,10 @@ import {
   isDeviceLate,
   OtGatewayApi,
   type Protocol,
+  roughDuration,
+  SHARED_CAUSE_WINDOW_MS,
+  sharedCauseLine,
+  sharedCauses,
   whatToCheck
 } from "@ot-gateway/api"
 import { Console, type Duration, Effect, Schema } from "effect"
@@ -40,13 +44,7 @@ export class GatewayUnhealthy extends Schema.TaggedError<GatewayUnhealthy>()("Ga
 }) {}
 
 /** `12 s`, `4 min`, `3 h`, `2 d`: how long ago, as coarse as a glance needs. */
-export const ago = (milliseconds: number) => {
-  const seconds = Math.max(0, Math.round(milliseconds / 1000))
-  if (seconds < 120) return `${seconds} s`
-  if (seconds < 7200) return `${Math.round(seconds / 60)} min`
-  if (seconds < 172_800) return `${Math.round(seconds / 3600)} h`
-  return `${Math.round(seconds / 86_400)} d`
-}
+export const ago = roughDuration
 
 /** Where to look next when something is failing: the gateway's own timeline, then its log. */
 export const failingHint = [
@@ -69,9 +67,6 @@ export const hintsFor = (device: DeviceStatus, shared = false) =>
     sharedCause: shared
   })
 
-/** Failing devices that all started failing within this much of each other point at one cause, not at each device. */
-export const SHARED_CAUSE_WINDOW_MS = 10_000
-
 /**
  * `all 3 devices stopped answering within 6 s of each other: …` when every device of two or more fails and their
  * failures began within `SHARED_CAUSE_WINDOW_MS`; undefined otherwise.
@@ -87,10 +82,6 @@ export const sharedCause = (devices: ReadonlyArray<DeviceStatus>) => {
   if (spread > SHARED_CAUSE_WINDOW_MS) return undefined
   return sharedCauseLine(`all ${devices.length} devices`, spread)
 }
-
-/** `<who> stopped answering within 6 s of each other: likely a shared cause (…)`. */
-const sharedCauseLine = (who: string, spreadMs: number) =>
-  `${who} stopped answering within ${ago(spreadMs)} of each other: likely a shared cause (power, a switch, the gateway's own network)`
 
 /** What `events` adds to an event: what to check for a device that failed, and whether others failed with it. */
 export interface EventAdvice {
@@ -110,25 +101,8 @@ export const adviseEvents = (
 ): ReadonlyMap<number, EventAdvice> => {
   const advice = new Map<number, { hint?: Hint; sharedCause?: string }>()
   const failures = events.filter((event) => event.type === "device-failing")
-  let index = 0
-  while (index < failures.length) {
-    const first = failures[index]
-    if (first === undefined) break
-    let end = index + 1
-    while (
-      end < failures.length &&
-      (failures[end]?.at ?? Number.POSITIVE_INFINITY) - first.at <= SHARED_CAUSE_WINDOW_MS
-    ) {
-      end++
-    }
-    const group = failures.slice(index, end)
-    const devices = [...new Set(group.map((event) => event.device))]
-    if (devices.length >= 2) {
-      const spread = (group.at(-1)?.at ?? first.at) - first.at
-      const line = sharedCauseLine(`${devices.length} devices (${devices.join(", ")})`, spread)
-      for (const event of group) advice.set(event.id, { sharedCause: line })
-    }
-    index = end
+  for (const shared of sharedCauses(failures)) {
+    for (const id of shared.ids) advice.set(id, { sharedCause: shared.line })
   }
   // The hint knows whether the device worked before and whether others failed with it: then not its config first.
   for (const event of failures) {
