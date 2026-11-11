@@ -156,12 +156,14 @@ export type Freshness =
   | { readonly _tag: "late"; readonly lastSuccess: number | undefined }
   | { readonly _tag: "failing"; readonly reason: string; readonly lastSuccess: number | undefined }
 
+/** How long a read may be missing before it counts as late: a few poll intervals, and never under 15 s. */
+export const lateAfterMs = (pollIntervalMs: number) => Math.max(LATE_INTERVALS * pollIntervalMs, LATE_MIN_MS)
+
 export const freshness = (device: DeviceStatus, now: number): Freshness => {
   if (device.status === "failing")
     return { _tag: "failing", reason: device.reason ?? "failing", lastSuccess: device.lastSuccess }
   if (device.status === "starting") return { _tag: "starting" }
-  const lateAfter = Math.max(LATE_INTERVALS * device.pollIntervalMs, LATE_MIN_MS)
-  return device.lastSuccess !== undefined && now - device.lastSuccess <= lateAfter
+  return device.lastSuccess !== undefined && now - device.lastSuccess <= lateAfterMs(device.pollIntervalMs)
     ? { _tag: "live" }
     : { _tag: "late", lastSuccess: device.lastSuccess }
 }

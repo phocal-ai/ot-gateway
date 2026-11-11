@@ -8,8 +8,9 @@
 import type { PointInfo } from "@ot-gateway/api"
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { HistoryChart } from "@/components/history-chart"
-import { PointValue } from "@/components/point-value"
+import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
+import { isAlarm, pointFreshness } from "@/lib/glance"
 import { fetchHistory, type GatewayClock, gatewayTime, type PointHistory, type Range, ranges } from "@/lib/history"
 import type { LivePoint } from "@/lib/points"
 import { clockTime, failureLabel, freshness, settle, unitLabel } from "@/lib/status"
@@ -123,6 +124,7 @@ export const PointSheet = ({
   const value = live?.value
   const device = live?.device
   const state = device === undefined ? undefined : freshness(device, now)
+  const read = pointFreshness(point, { value, device }, now, unreachable)
 
   // A layout effect, so the dialog is open in the frame the view transition takes as its new state.
   useLayoutEffect(() => {
@@ -199,8 +201,9 @@ export const PointSheet = ({
         </div>
 
         <div className="flex flex-col gap-1">
-          <p className={`font-mono text-3xl font-semibold tabular-nums ${unreachable ? "opacity-50" : ""}`}>
+          <p className={`font-mono text-3xl font-semibold tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}>
             <PointValue
+              alarm={isAlarm(point)}
               className="-mx-1"
               key={`${point.device}/${point.id}`}
               now={now}
@@ -215,7 +218,11 @@ export const PointSheet = ({
             ) : null}
             {state?._tag === "late" ? <Badge variant="warning">device late</Badge> : null}
             {point.writable ? <Badge variant="outline">writable</Badge> : null}
-            <span>{value?.ts === undefined ? "nothing read yet" : `read ${clockTime(value.ts, now)}`}</span>
+            {read._tag === "unchanged" ? (
+              <span title={ON_CHANGE_HINT}>unchanged since {clockTime(read.ts, now)} (sent on change of value)</span>
+            ) : (
+              <span>{value?.ts === undefined ? "nothing read yet" : `read ${clockTime(value.ts, now)}`}</span>
+            )}
           </div>
         </div>
 

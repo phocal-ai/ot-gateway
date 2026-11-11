@@ -1,25 +1,38 @@
 "use client"
 
 /**
- * The status page, an overview: the gateway, its broker and buffer (each card opens its details), the machine
- * when it has a problem, every
- * device with its health (a row each, opening its points on the Points
- * page); the messages it publishes, command results among them, are on the Messages tab.
- * Polls `/api/status` every two seconds; read-only.
+ * The status page, an overview: alarms that are on, the broker, devices, buffer and machine (each card opens its
+ * details), and every device with its health and its first few values (a row each, opening its points on the
+ * Points page); the messages it publishes, command results among them, are on the Messages tab. A gateway without
+ * devices says how to add them.
+ * Polls `/api/status` every two seconds, and the values shown like the Points tab does; read-only.
  *
  * Freshness is shown as a state, not as numbers that count up: the header says
  * Live while answers arrive, a device says how often it is read and gets a time
  * only once it is late or failing. The page renders when data arrives and
  * at no other time.
  */
-import type { DeviceStatus, GatewayStatus, HostStatus } from "@ot-gateway/api"
+import type { DeviceStatus, GatewayStatus, HostStatus, PointInfo, PointReading } from "@ot-gateway/api"
 import Link from "next/link"
-import { type ReactNode, useEffect, useRef, useState } from "react"
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react"
+import { useCatalog } from "@/components/catalog"
 import { useGateway } from "@/components/gateway-shell"
 import { DetailDialog, Facts, morphFrom } from "@/components/detail-dialog"
+import { NoDevicesYet } from "@/components/no-devices"
+import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { formatNumber } from "@/lib/format"
-import { statusOf } from "@/components/live"
-import { machineProblems } from "@/lib/host"
+import { statusOf, useValues } from "@/components/live"
+import {
+  activeAlarms,
+  alarmCount,
+  glanceKeys,
+  glancePoints,
+  isAlarm,
+  pointFreshness,
+  pointsByDevice
+} from "@/lib/glance"
+import { machineNote, machineProblems, powerLabel } from "@/lib/host"
+import { filterToSearch, pointKey } from "@/lib/points"
 import {
   addSample,
   type BufferSample,
@@ -77,16 +90,92 @@ const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
 /** Devices listed before "Show all": every one with a problem is listed anyway. */
 const DEVICE_ROWS = 10
 
-/**
- * Every device, one row each: its health, how it is read and how many points it has, the ones with a problem
- * first. A row opens the device's points on the Points page, where each point has its value and history. A
- * site with many devices lists the first few until asked for all, so this page stays a short overview.
- */
-const Devices = ({ status }: { readonly status: GatewayStatus }) => {
-  const [all, setAll] = useState(false)
+/** The devices the Status tab lists, problems first: the first `DEVICE_ROWS` and every one with a problem, or all. */
+const listedDevices = (status: GatewayStatus, all: boolean) => {
   const ordered = byAttention(status.devices, status.now)
   const problems = ordered.filter((device) => freshness(device, status.now)._tag !== "live").length
-  const listed = all ? ordered : ordered.slice(0, Math.max(DEVICE_ROWS, problems))
+  return { ordered, listed: all ? ordered : ordered.slice(0, Math.max(DEVICE_ROWS, problems)) }
+}
+
+/** The values the Status tab shows (lib/glance.ts): a few per listed device, and every alarm point. */
+interface Glance {
+  readonly byDevice: ReadonlyMap<string, ReadonlyArray<PointInfo>>
+  readonly readings: ReadonlyMap<string, PointReading>
+  readonly unreachable: boolean
+}
+
+/**
+ * A device's latest values in one wrapping line: its alarms that are on first, then its first points, each with its
+ * name (the id on hover), and how many more the Points tab has. A stale value is dimmed as on the Points tab.
+ */
+const DeviceValues = ({
+  device,
+  glance,
+  now
+}: {
+  readonly device: DeviceStatus
+  readonly glance: Glance
+  readonly now: number
+}) => {
+  const points = glance.byDevice.get(device.id) ?? []
+  if (points.length === 0) return null
+  const { shown, more } = glancePoints(points, glance.readings)
+  return (
+    <ul className="col-span-full flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-sm">
+      {shown.map((point) => {
+        const value = glance.readings.get(pointKey(point))
+        const read = pointFreshness(point, { value, device }, now, glance.unreachable)
+        return (
+          <li
+            className={`flex max-w-full min-w-0 items-baseline gap-1 ${read._tag === "stale" ? "opacity-50" : ""}`}
+            key={point.id}
+            title={`${point.id}: ${point.name}`}
+          >
+            <span className="max-w-48 truncate text-muted-foreground">{point.name}</span>
+            <PointValue
+              alarm={isAlarm(point)}
+              className="shrink-0 font-mono whitespace-nowrap tabular-nums"
+              now={now}
+              unit={point.unit}
+              value={value}
+            />
+            {read._tag === "unchanged" ? (
+              <span className="shrink-0 text-xs text-muted-foreground" title={ON_CHANGE_HINT}>
+                COV
+              </span>
+            ) : null}
+          </li>
+        )
+      })}
+      {more > 0 ? <li className="text-muted-foreground">+{formatNumber(more)} more</li> : null}
+    </ul>
+  )
+}
+
+/**
+ * Every device, one row each: its health, how it is read, how many points it has and its first few values, the
+ * ones with a problem first. A row opens the device's points on the Points page, where each point has its value
+ * and history. A site with many devices lists the first few until asked for all, so this page stays a short
+ * overview.
+ */
+const Devices = ({
+  status,
+  all,
+  onShowAll,
+  glance
+}: {
+  readonly status: GatewayStatus
+  readonly all: boolean
+  readonly onShowAll: () => void
+  readonly glance: Glance | undefined
+}) => {
+  const { ordered, listed } = listedDevices(status, all)
+  if (ordered.length === 0)
+    return (
+      <Card className="px-5 py-5">
+        <NoDevicesYet />
+      </Card>
+    )
   return (
     <Card className="gap-0 py-0">
       <div className="flex items-center justify-between gap-2 border-b px-5 py-4">
@@ -104,7 +193,7 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
           return (
             <li key={device.id}>
               <Link
-                className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-5 py-3 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
+                className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
                 href={`/points/?device=${encodeURIComponent(device.id)}`}
               >
                 <div className="min-w-0">
@@ -120,6 +209,7 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
                 <span aria-hidden="true" className="hidden text-muted-foreground sm:block">
                   →
                 </span>
+                {glance === undefined ? null : <DeviceValues device={device} glance={glance} now={status.now} />}
               </Link>
             </li>
           )
@@ -129,7 +219,7 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
         <div className="border-t p-3 text-center">
           <button
             className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            onClick={() => setAll(true)}
+            onClick={onShowAll}
             type="button"
           >
             Show all {formatNumber(ordered.length)} devices
@@ -156,9 +246,9 @@ const useBufferRate = (status: GatewayStatus) => {
   return rate
 }
 
-type Panel = "broker" | "devices" | "buffer"
+type Panel = "broker" | "devices" | "buffer" | "machine"
 
-const panelTitles = { broker: "Broker", devices: "Devices", buffer: "Buffer" } as const
+const panelTitles = { broker: "Broker", devices: "Devices", buffer: "Buffer", machine: "Machine" } as const
 
 /**
  * A card that opens its details. The button is the card's label, stretched over the whole card (valid HTML, unlike
@@ -391,9 +481,60 @@ const BufferDetails = ({ status, view }: { readonly status: GatewayStatus; reado
   )
 }
 
+const ms = (value: number) => `${formatNumber(Math.round(value))} ms`
+
+/** The machine's last sample: its problems in machineProblems' words first, then every reading calmly. */
+const MachineDetails = ({ status }: { readonly status: GatewayStatus }) => {
+  const { host } = status
+  if (host === undefined)
+    return <p className="text-sm text-muted-foreground">The gateway samples the machine every 15 s; no sample yet.</p>
+  const problems = machineProblems(host, status.now - status.since)
+  const power = powerLabel(host)
+  return (
+    <>
+      {problems.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing needs a look: power, heat, disk and load are fine.</p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm text-amber-700 dark:text-amber-300">
+          {problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+      <Facts
+        rows={[
+          ["Processor", `${Math.round(host.cpuPercent)} % of one core`],
+          ["Memory", formatBytes(host.memoryBytes)],
+          ["JavaScript heap", formatBytes(host.heapBytes)],
+          ["Event-loop lag", `${ms(host.eventLoopLagMs.p99)} (p99), up to ${ms(host.eventLoopLagMs.max)}`],
+          host.temperatureC !== undefined && ["Temperature", `${Math.round(host.temperatureC)} °C`],
+          power !== undefined && ["Power supply", power],
+          host.diskFreeBytes !== undefined && ["Disk free", formatBytes(host.diskFreeBytes)],
+          host.openFds !== undefined && ["Open files", formatNumber(host.openFds)],
+          ["Clock steps", formatNumber(host.clockSteps)],
+          ["Version", <span className="font-mono">{host.version}</span>],
+          ["Node.js", <span className="font-mono">{host.node}</span>]
+        ]}
+      />
+      <p className="text-xs text-muted-foreground">
+        Sampled every 15 s; lag over the last minute; clock steps since the gateway started.
+      </p>
+    </>
+  )
+}
+
+/** The Machine card's title and line: calm while all is fine, the first problem in its own words otherwise. */
+const machineCard = (host: HostStatus | undefined, upMs: number) => {
+  if (host === undefined) return { title: "–", note: "no sample yet", bad: false }
+  const problems = machineProblems(host, upMs)
+  const [first] = problems
+  if (first === undefined) return { title: "ok", note: machineNote(host), bad: false }
+  return { title: problems.length === 1 ? "1 problem" : `${problems.length} problems`, note: first, bad: true }
+}
+
 /**
- * The broker, the devices and the buffer at a glance; each card opens its details in a dialog that grows out of
- * it (a view transition where the browser has them).
+ * The broker, the devices, the buffer and the machine at a glance; each card opens its details in a dialog that
+ * grows out of it (a view transition where the browser has them).
  */
 const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly stale: boolean }) => {
   const [open, setOpen] = useState<Panel | undefined>(undefined)
@@ -402,6 +543,7 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
   const failing = status.devices.filter((device) => device.status === "failing").length
   const ok = status.devices.filter((device) => device.status === "ok").length
   const buffer = bufferView(status.buffer, status.broker.connected, useBufferRate(status))
+  const machine = machineCard(status.host, status.now - status.since)
   const note = (text: string) => (stale ? "page is not reaching the gateway" : text)
 
   const openPanel = (panel: Panel) => {
@@ -421,7 +563,7 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
   })
 
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <OverviewCard
         {...cardProps("broker")}
         bad={!status.broker.connected}
@@ -441,13 +583,15 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
         bad={failing > 0}
         label="Devices"
         note={note(
-          failing > 0
-            ? `devices answering, ${failing} failing`
-            : ok === status.devices.length
-              ? "devices answering"
-              : `devices answering, ${status.devices.length - ok} starting`
+          status.devices.length === 0
+            ? "no devices in the config yet"
+            : failing > 0
+              ? `devices answering, ${failing} failing`
+              : ok === status.devices.length
+                ? "devices answering"
+                : `devices answering, ${status.devices.length - ok} starting`
         )}
-        title={`${ok}/${status.devices.length}`}
+        title={status.devices.length === 0 ? "none" : `${ok}/${status.devices.length}`}
       />
       <OverviewCard
         {...cardProps("buffer")}
@@ -463,14 +607,23 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
         note={note(buffer.note)}
         title={buffer.title}
       />
+      <OverviewCard
+        {...cardProps("machine")}
+        bad={machine.bad && !stale}
+        label="Machine"
+        note={note(machine.note)}
+        title={machine.title}
+      />
       {open === undefined ? null : (
         <DetailDialog morph={morph} onClose={closePanel} title={panelTitles[open]}>
           {open === "broker" ? (
             <BrokerDetails status={status} />
           ) : open === "devices" ? (
             <DevicesDetails status={status} />
-          ) : (
+          ) : open === "buffer" ? (
             <BufferDetails status={status} view={buffer} />
+          ) : (
+            <MachineDetails status={status} />
           )}
         </DetailDialog>
       )}
@@ -497,9 +650,64 @@ const MachineNotice = ({ host, upMs }: { readonly host: HostStatus; readonly upM
   )
 }
 
+/**
+ * The alarm points that are on (lib/glance.ts), above everything else: how many, and each by name with its device,
+ * a link to the point on the Points tab.
+ */
+const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<PointInfo> }) => {
+  if (alarms.length === 0) return null
+  return (
+    <div
+      className="flex flex-col gap-1 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+      role="alert"
+    >
+      <p className="font-semibold">{alarmCount(alarms.length)}</p>
+      <ul className="flex flex-col gap-0.5">
+        {alarms.map((point) => (
+          <li className="min-w-0 truncate" key={pointKey(point)}>
+            <Link
+              className="underline-offset-4 hover:underline"
+              href={`/points/${filterToSearch({ query: "", device: point.device }, pointKey(point))}`}
+              title={pointKey(point)}
+            >
+              {point.name}
+            </Link>{" "}
+            <span className="font-mono text-xs opacity-80">on {point.device}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * The catalog and the values the page shows: a few per listed device and every alarm point, asked for like the
+ * Points tab's rows. Nothing until the catalog came; the rows show without values meanwhile.
+ */
+const useGlance = (status: GatewayStatus | undefined, all: boolean, unreachable: boolean) => {
+  const catalogLoad = useCatalog(status?.since)
+  const catalog = catalogLoad._tag === "ok" ? catalogLoad.catalog : undefined
+  const listedIds =
+    status === undefined
+      ? ""
+      : listedDevices(status, all)
+          .listed.map((device) => device.id)
+          .join(",")
+  const keys = useMemo(
+    () => (catalog === undefined || listedIds === "" ? [] : glanceKeys(catalog.points, listedIds.split(","))),
+    [catalog, listedIds]
+  )
+  const readings = useValues(keys)
+  const byDevice = useMemo(() => pointsByDevice(catalog?.points ?? []), [catalog])
+  if (catalog === undefined) return undefined
+  return { glance: { byDevice, readings, unreachable }, alarms: activeAlarms(catalog.points, readings) }
+}
+
 const StatusPage = () => {
   const load = useGateway()
   const status = statusOf(load)
+  const [all, setAll] = useState(false)
+  const glance = useGlance(status, all, load._tag === "unreachable")
   return (
     <>
       {status === undefined ? (
@@ -507,8 +715,9 @@ const StatusPage = () => {
       ) : (
         <>
           {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
+          <AlarmNotice alarms={glance?.alarms ?? []} />
           <Overview status={status} stale={load._tag !== "ok"} />
-          <Devices status={status} />
+          <Devices all={all} glance={glance?.glance} onShowAll={() => setAll(true)} status={status} />
         </>
       )}
     </>

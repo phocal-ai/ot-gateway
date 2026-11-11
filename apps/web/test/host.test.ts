@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { HostStatus } from "@ot-gateway/api"
-import { machineProblems } from "../src/lib/host.ts"
+import { machineNote, machineProblems, powerLabel } from "../src/lib/host.ts"
 
 /** Long past starting up. */
 const up = 3_600_000
@@ -69,5 +69,27 @@ describe("machineProblems", () => {
       "The machine is too hot (85 °C): give it air or a heat sink."
     ])
     expect(machineProblems(starting, 60_000)).toHaveLength(1)
+  })
+})
+
+describe("machineNote", () => {
+  it("sums a healthy machine up in one line, the temperature where there is one", () => {
+    expect(machineNote(healthy)).toBe("CPU 4 % · 85.0 MB memory · 52 °C")
+    const { temperatureC: _temperature, ...cool } = healthy
+    expect(machineNote(cool)).toBe("CPU 4 % · 85.0 MB memory")
+  })
+})
+
+describe("powerLabel", () => {
+  it("says how the power is on a Pi, and nothing elsewhere", () => {
+    expect(powerLabel(healthy)).toBe("ok")
+    expect(powerLabel({ ...healthy, throttled: { now: ["under_voltage"], watched: ["under_voltage"] } })).toBe(
+      "too weak"
+    )
+    expect(powerLabel({ ...healthy, throttled: { now: ["soft_temperature_limit"], watched: [] } })).toBe(
+      "slowed down (soft temperature limit)"
+    )
+    const { throttled: _throttled, ...plain } = healthy
+    expect(powerLabel(plain)).toBeUndefined()
   })
 })
