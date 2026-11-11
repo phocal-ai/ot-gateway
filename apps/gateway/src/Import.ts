@@ -65,7 +65,12 @@ export interface ImportResult {
   readonly decoded: ReadonlyArray<Device>
   /** The config as written, or `undefined` for a dry run. */
   readonly config: GatewayConfig | undefined
+  /** The config the devices were checked against, or `undefined` when a dry run checked them on their own. */
+  readonly against: string | undefined
 }
+
+/** The config `import` adds to when the command names none, as every command that takes a config. */
+export const defaultConfigPath = "ot-gateway.json"
 
 /**
  * Where a dry run without a config checks the devices: a broker on this machine, so only the devices can be
@@ -78,25 +83,35 @@ const checkOnlyConfig: Readonly<Record<string, unknown>> = {
 }
 
 /**
- * Adds the devices in the points list at `listPath` to the config at `configPath`, or, for a dry run, checks
- * them and prints them. Either way they pass the gateway's schema first. A dry run needs no config: without
- * one, the devices are checked on their own.
+ * Adds the devices in the points list at `listPath` to the config at `configPath` (`ot-gateway.json` when
+ * undefined), or, for a dry run, checks them and prints them. Either way they pass the gateway's schema first.
+ *
+ * A config that is not there is an error that names `init`: `import` never makes one. The one exception is a dry
+ * run that names no config, the check of a list before `init` (docs/first-building.md): without an
+ * `ot-gateway.json` here, its devices are checked on their own, and `against` says so.
  */
 export const importPointsList = Effect.fn("importPointsList")(function* (
   listPath: string,
-  configPath: string,
+  configPath: string | undefined,
   options: { readonly dryRun: boolean }
 ) {
   const fs = yield* FileSystem.FileSystem
-  const checkOnly = options.dryRun && !(yield* fs.exists(configPath))
-  const existing = checkOnly ? [] : (yield* loadConfig(configPath)).devices.map((device) => device.id)
+  const path = configPath ?? defaultConfigPath
+  const exists = yield* fs.exists(path)
+  const checkOnly = options.dryRun && configPath === undefined && !exists
+  if (!exists && !checkOnly) {
+    return yield* new PointsListError({
+      message: `no config at ${path}; import adds to one and never makes one. ot-gateway init <folder> --points ${listPath} writes the gateway's folder with this list's devices; or name the config that is there: ot-gateway import ${listPath} <config>`
+    })
+  }
+  const existing = checkOnly ? [] : (yield* loadConfig(path)).devices.map((device) => device.id)
   const added = yield* devicesFromFile(listPath, existing)
   const raw = checkOnly
     ? checkOnlyConfig
-    : yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(configPath))
+    : yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(path))
   const devices = Array.isArray(raw["devices"]) ? raw["devices"] : []
   const text = `${JSON.stringify({ ...raw, devices: [...devices, ...added] }, null, 2)}\n`
-  const target = checkOnly ? "a config" : configPath
+  const target = checkOnly ? "a config" : path
   const outcome = options.dryRun ? "" : ", so nothing was written"
   const config = yield* parseConfig(text).pipe(
     Effect.catchTag("SchemaError", (error) =>
@@ -108,7 +123,8 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
     )
   )
   const decoded = config.devices.slice(devices.length)
-  if (options.dryRun) return { added, decoded, config: undefined } satisfies ImportResult
-  yield* fs.writeFileString(configPath, text)
-  return { added, decoded, config } satisfies ImportResult
+  const against = checkOnly ? undefined : path
+  if (options.dryRun) return { added, decoded, config: undefined, against } satisfies ImportResult
+  yield* fs.writeFileString(path, text)
+  return { added, decoded, config, against } satisfies ImportResult
 })

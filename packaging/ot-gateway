@@ -96,7 +96,9 @@ else
 fi
 
 # SSH_CONNECTION and USER (passed only when set): over SSH, init's next steps name the tunnel to the status page.
+# OT_GATEWAY_DATA_DIR empty: relative paths in the config (the outbox, the history) resolve against the config's
+# folder under /work, as the CLI does without Docker, not against the image's data volume, which --rm would discard.
 if [ -t 0 ] && [ -t 1 ]; then
-  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -v "$PWD:/work" -w /work "$@"
+  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e OT_GATEWAY_DATA_DIR= -v "$PWD:/work" -w /work "$@"
 fi
-exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -v "$PWD:/work" -w /work "$@"
+exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e OT_GATEWAY_DATA_DIR= -v "$PWD:/work" -w /work "$@"

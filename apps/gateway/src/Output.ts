@@ -100,3 +100,7 @@ export const reportFailure =
 
 /** An expected failure of a one-shot command, as stderr shows it. */
 export const failureLine = (message: string) => `error: ${message}`
+
+/** A path or word as one argument of a printed command line: as it is when that is safe, else in single quotes. */
+export const shellArgument = (value: string) =>
+  /^[\w./:@%+=,-]+$/.test(value) && !value.startsWith("-") ? value : `'${value.replaceAll("'", `'\\''`)}'`

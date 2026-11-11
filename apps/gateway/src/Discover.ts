@@ -41,7 +41,7 @@ import * as NetAddress from "effect/net/NetAddress"
 import { basename, dirname, join } from "node:path"
 import { toCsv } from "./Csv.ts"
 import { isEde } from "./Ede.ts"
-import { printJson } from "./Output.ts"
+import { printJson, shellArgument } from "./Output.ts"
 import { appendToPointsList } from "./PointsListAppend.ts"
 import { slugify } from "./Slug.ts"
 
@@ -344,7 +344,8 @@ export const draftPointsList = (drafts: ReadonlyArray<Draft>) => toCsv([draftCol
 
 /**
  * What `discover --points-list` wrote: the file; the devices and points discovery listed; how many of those points
- * were added to the file and how many were in it already (`--append` only, 0 otherwise); whether it appended.
+ * were added to the file and how many were in it already (`--append` only, 0 otherwise); whether it appended;
+ * and the command that imports the list into the config discover read, when it added rows.
  */
 export interface PointsListWritten {
   readonly path: string
@@ -353,7 +354,12 @@ export interface PointsListWritten {
   readonly added: number
   readonly skipped: number
   readonly appended: boolean
+  readonly next?: string
 }
+
+/** The command that adds the list at `listPath` to the config at `configPath`, both named, so it runs anywhere. */
+export const importCommand = (listPath: string, configPath: string | undefined) =>
+  `ot-gateway import ${shellArgument(listPath)}${configPath === undefined ? "" : ` ${shellArgument(configPath)}`}`
 
 /**
  * `text` at `path` in one step: written next to it under a temporary name, then renamed over it, so an
@@ -371,6 +377,8 @@ const writeAtomically = Effect.fn("writeAtomically")(function* (path: string, te
 export interface PointsListOptions extends DiscoverOptions {
   /** Add to the list at the path when there is one, instead of refusing to touch it. */
   readonly append?: boolean | undefined
+  /** The config discover read, for the import command it names at the end. */
+  readonly configPath?: string | undefined
 }
 
 /**
@@ -421,10 +429,11 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
       message: `no points to list; ${path} was ${existing === undefined ? "not written" : "left as it was"}.`
     })
   }
+  const next = importCommand(path, options.configPath)
   if (existing === undefined) {
     yield* writeAtomically(path, draftPointsList(fresh))
     yield* Console.error(
-      `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ot-gateway import ${path}`
+      `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ${next}`
     )
     const written: PointsListWritten = {
       path,
@@ -432,7 +441,8 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
       points,
       added: points,
       skipped: 0,
-      appended: false
+      appended: false,
+      next
     }
     return written
   }
@@ -444,8 +454,16 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
   if (added > 0) yield* writeAtomically(path, merged.success.text)
   yield* Console.error(
     `added ${added} point(s), skipped ${skipped} already in the list, to ${path}` +
-      (added > 0 ? `. Delete the rows you do not need, then: ot-gateway import ${path}` : "; it was left as it was")
+      (added > 0 ? `. Delete the rows you do not need, then: ${next}` : "; it was left as it was")
   )
-  const written: PointsListWritten = { path, devices: fresh.length, points, added, skipped, appended: true }
+  const written: PointsListWritten = {
+    path,
+    devices: fresh.length,
+    points,
+    added,
+    skipped,
+    appended: true,
+    ...(added > 0 ? { next } : {})
+  }
   return written
 })

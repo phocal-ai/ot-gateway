@@ -3,9 +3,9 @@
  * written by hand and BACnet rows found by discovery end up in the one list `import` reads.
  *
  * The list is read as `import` reads it (PointsList.ts: commas, semicolons or tabs, any column order or case,
- * aliases). Its header and rows are kept byte for byte; columns it lacks are added at the end of the header in the
- * order given, and a row of the list that is shorter than the new header reads as empty there, as it does in a
- * spreadsheet. New rows use the list's separator and line breaks.
+ * aliases). Its header and rows are kept as they are; columns it lacks are added at the end of the header in the
+ * order given, and a row of the list that is shorter than the new header gets empty fields at its end, so every
+ * row has the header's column count, as a spreadsheet saves it. New rows use the list's separator and line breaks.
  *
  * A row is already in the list when its device has a point of the same name (both as import slugs them), or when
  * its BACnet object (device instance, object type, object instance) is. Those are skipped and counted. A device
@@ -59,6 +59,33 @@ const headerEnd = (text: string, separator: string) => {
     } else if (char !== separator && char !== byteOrderMark && char.trim() !== "") content = true
   }
   return text.length
+}
+
+/**
+ * `body` (rows of a delimited text, after its header) with empty fields added at the end of each row that has fewer
+ * than `width`, outside quotes and before the line break. Lines with no field in them are left as they are.
+ */
+export const padRows = (body: string, separator: string, width: number) => {
+  let result = ""
+  let quoted = false
+  let fields = 1
+  let content = false
+  const pad = () => (content && fields < width ? separator.repeat(width - fields) : "")
+  for (let index = 0; index < body.length; index++) {
+    const char = body[index] ?? ""
+    if (char === '"') {
+      quoted = !quoted
+      content = true
+    } else if (!quoted && (char === "\n" || char === "\r")) {
+      // \r\n is one line break: pad before its \r, and the \n that follows ends an empty record.
+      result += pad()
+      fields = 1
+      content = false
+    } else if (!quoted && char === separator) fields++
+    else if (char.trim() !== "") content = true
+    result += char
+  }
+  return result + pad()
 }
 
 /** How many devices `rows` hold, by the slug of the field at `deviceColumn`. */
@@ -170,7 +197,7 @@ export const appendToPointsList = (
   const newline = text.includes("\r\n") ? "\r\n" : "\n"
   const end = headerEnd(text, separator)
   const headerText = text.slice(0, end) + (newColumns.length === 0 ? "" : separator + csvLine(newColumns, separator))
-  const body = text.slice(end).replace(/[\r\n]+$/, "")
+  const body = padRows(text.slice(end).replace(/[\r\n]+$/, ""), separator, target.length)
   const lines = added.map((fields) => csvLine(fields, separator))
   return Result.succeed({
     text: `${headerText}${body}${newline}${lines.join(newline)}${newline}`,

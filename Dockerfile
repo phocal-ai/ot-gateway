@@ -107,6 +107,10 @@ ENV OT_GATEWAY_DEMO_LISTEN=0.0.0.0
 # The env file of the layout before the folder, read by the CLI when it is there and passed over in silence when
 # not (Node's --env-file-if-exists said so on every command). Compose passes ot-gateway.env as env_file.
 ENV OT_GATEWAY_ENV_FILE=/etc/ot-gateway/gateway.env
+# Relative paths in the config (`./ot-gateway-buffer.sqlite`, as init writes them) resolve here, in the data volume,
+# and not next to the config, which Compose mounts read-only at /etc/ot-gateway/gateway.json. The Docker wrapper
+# (packaging/ot-gateway) clears it, so a command run in a folder keeps them in that folder.
+ENV OT_GATEWAY_DATA_DIR=/var/lib/ot-gateway
 # A smaller young generation than V8's default: about 40 MB less resident, no measurable CPU cost.
 # An absolute path, so a container may run from another working directory (compose.yaml uses the data volume).
 ENTRYPOINT ["node", "--max-semi-space-size=4", "/opt/ot-gateway/apps/gateway/src/main.mjs"]

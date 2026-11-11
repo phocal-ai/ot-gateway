@@ -12,6 +12,8 @@ Ids (`site`, `building`, gateway, device and point ids) are slugs: lowercase let
 
 Durations are milliseconds unless the key says seconds.
 
+File paths (`buffer.path`, `history.path`) may be relative. They resolve against the folder the config file is in, not the folder the command runs from, so `ot-gateway run /home/pi/site-1/ot-gateway.json` keeps `./ot-gateway-buffer.sqlite` in `/home/pi/site-1` wherever it is started. When the environment variable `OT_GATEWAY_DATA_DIR` is set, they resolve against it instead: the container image sets it to `/var/lib/ot-gateway`, the data volume, since Docker Compose mounts the config read-only at `/etc/ot-gateway/gateway.json`. `check` and the status page's Settings show the resolved paths. Absolute paths stay as they are.
+
 ## Gateway
 
 The top level of the document.
@@ -63,7 +65,7 @@ Every read, whatever the point's publish mode, kept on the gateway for the statu
 | `path`          | string | required | The SQLite file, apart from the buffer's. Its directory is created if missing. Put it on persistent storage (`/var/lib/ot-gateway`). |
 | `retentionDays` | 1–30   | 7        | Days of per-minute minimum, maximum and average kept. Every single read is kept for the last day.                                    |
 
-Reads are written in batches every 30 s (sooner on a busy gateway), so a chart can be up to 30 s behind. Size it at about 40 bytes per read for the last day plus 50 bytes per point and minute: 200 points read every 5 s take about 150 MB for the day of reads and 15 MB per week of minutes. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
+Reads are written in batches every 30 s (sooner on a busy gateway), so a chart can be up to 30 s behind. Size it at about 50 bytes per read for the last day plus 70 bytes per point and minute (measured on its SQLite tables): 200 points read every 5 s take about 170 MB for the day of reads and 140 MB per week of minutes; 50 points every 10 s, about 20 MB and 35 MB. On a Raspberry Pi's SD card it adds one batched write every 30 s and that much space. `ot-gateway init` writes `history` with `./ot-gateway-history.sqlite` next to the buffer and says what the config's points will take on disk; `--no-history` leaves it out. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
 
 `GET /api/history?device=heat-pump&point=flow-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count }`; `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Buckets shorter than a minute come from every read while the range starts within the last day; otherwise the buckets come from the minutes.
 

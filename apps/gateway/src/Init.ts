@@ -12,10 +12,11 @@ import { parseBrokerUrl } from "@ot-gateway/mqtt"
 import { Console, Effect, FileSystem, Schema, type Terminal } from "effect"
 import { Prompt } from "effect/cli"
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { discoverDrafts, type draftDevices } from "./Discover.ts"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { devicesFromFile } from "./Import.ts"
+import { shellArgument } from "./Output.ts"
 import type { PointsListDevice } from "./PointsList.ts"
 
 /** A simulated device with two points, to see values flow before any real device is connected. */
@@ -79,13 +80,23 @@ export interface InitFlags {
   readonly force?: boolean | undefined
   /** Work out the config, but write nothing. */
   readonly dryRun?: boolean | undefined
+  /** `false` leaves the history out of the config (`--no-history`). */
+  readonly history?: boolean | undefined
 }
 
 /** A flag's value that its question would not accept, or a config in the way without `--force`. */
 export class InitError extends Schema.TaggedError<InitError>()("InitError", { message: Schema.String }) {}
 
-/** The config for the answers and devices, in the file's own shape. */
-export const initConfig = (answers: InitAnswers, devices: ReadonlyArray<InitDevice>) => ({
+/**
+ * The config for the answers and devices, in the file's own shape. The outbox and the history are files next to
+ * the config (LoadConfig.ts resolves them there; the container image, in its data volume). The history is on
+ * unless `history` is `false`, so the status page has charts from the first run.
+ */
+export const initConfig = (
+  answers: InitAnswers,
+  devices: ReadonlyArray<InitDevice>,
+  options: { readonly history?: boolean | undefined } = {}
+) => ({
   site: answers.site,
   building: answers.building,
   mqtt: {
@@ -94,6 +105,7 @@ export const initConfig = (answers: InitAnswers, devices: ReadonlyArray<InitDevi
     ...(answers.login === undefined ? {} : { username: answers.login.username, passwordEnv: answers.login.passwordEnv })
   },
   buffer: { path: "./ot-gateway-buffer.sqlite" },
+  ...(options.history === false ? {} : { history: { path: "./ot-gateway-history.sqlite" } }),
   status: {},
   ...(answers.broadcastAddress === undefined ? {} : { bacnet: { broadcastAddress: answers.broadcastAddress } }),
   devices
@@ -318,7 +330,7 @@ export const runInit = Effect.fn("runInit")(function* (
     beforeDevices.broadcastAddress === undefined && !devices.every(located)
       ? yield* network(beforeDevices)
       : beforeDevices
-  const text = `${JSON.stringify(initConfig(withNetwork, devices), null, 2)}\n`
+  const text = `${JSON.stringify(initConfig(withNetwork, devices, { history: flags.history }), null, 2)}\n`
   const config = yield* parseConfig(text)
   if (flags.dryRun === true) return config
   // Made only now, so a cancelled init leaves no empty folder behind.
@@ -402,17 +414,72 @@ export interface InitNext {
   readonly next: ReadonlyArray<NextStep>
 }
 
-/** What to do after `init`, for the config it wrote to `path`; `ssh` adds the tunnel to the status page. */
+/** Where `init` runs, for its next steps: over SSH or not, the operating system, the working directory. */
+export interface InitContext {
+  /** Adds the tunnel to the status page. */
+  readonly ssh?: SshSession | undefined
+  /** `process.platform`; on macOS and Windows, Docker Desktop cannot reach the building network (`dockerDesktopNote`). */
+  readonly platform?: string | undefined
+  /** The working directory the commands run from; the process's when undefined. */
+  readonly cwd?: string | undefined
+}
+
+/**
+ * Why `compose.yaml` is not the way to run the gateway on macOS and Windows: Docker Desktop runs containers in a VM,
+ * so host networking does not put the gateway on the building network and BACnet broadcasts never reach it.
+ */
+export const dockerDesktopNote =
+  "Docker Desktop on macOS and Windows cannot reach devices on the LAN through host networking, and BACnet broadcasts do not reach its VM: run the gateway with ot-gateway run here, or use compose.yaml on a Linux machine"
+
+/** Bytes per stored read and per point and minute of the history, measured on its SQLite tables. */
+const historyBytesPerRead = 50
+const historyBytesPerPointMinute = 70
+
+/**
+ * About how much disk the history of `config` takes once full: a day of every read plus `retentionDays` of
+ * per-minute rows, each point read every `pollIntervalMs` (a BACnet point by change of value may notify more often).
+ */
+export const historyDiskBytes = (config: GatewayConfig) => {
+  const retentionDays = config.history?.retentionDays ?? 7
+  const points = config.devices.reduce((total, device) => total + device.points.length, 0)
+  const readsPerDay = config.devices.reduce(
+    (total, device) => total + (device.points.length * 86_400_000) / device.pollIntervalMs,
+    0
+  )
+  return readsPerDay * historyBytesPerRead + points * 1440 * retentionDays * historyBytesPerPointMinute
+}
+
+const megabytes = (bytes: number) => (bytes < 1_000_000 ? "under 1 MB" : `about ${Math.round(bytes / 1_000_000)} MB`)
+
+/** What the history costs on disk, for the notes after `init`; nothing when the config has none. */
+export const historyNote = (config: GatewayConfig) => {
+  if (config.history === undefined) return []
+  const keeps = `the history keeps every read for a day and per-minute values for ${config.history.retentionDays} days for the status page's charts`
+  const leaveOut = "--no-history leaves it out"
+  if (config.devices.length === 0) {
+    return [
+      `${keeps}: about ${historyBytesPerRead} B per read and ${historyBytesPerPointMinute} B per point and minute on disk (100 points read every 10 s: about 115 MB); ${leaveOut}`
+    ]
+  }
+  return [`${keeps}: ${megabytes(historyDiskBytes(config))} on disk for these points; ${leaveOut}`]
+}
+
+/**
+ * What to do after `init`, for the config it wrote to `path`. Commands name the config when its folder is not the
+ * working directory, so they work from where `init` ran (a checkout's root with `pnpm ot-gateway`) without a `cd`.
+ */
 export const initNext = (
   path: string,
   config: GatewayConfig,
   folder: FolderFiles = { written: [], kept: [] },
-  ssh?: SshSession
+  context: InitContext = {}
 ): InitNext => {
+  const { ssh, platform } = context
   const passwordEnv = config.mqtt.passwordEnv
   const envFile = [...folder.written, ...folder.kept].find((file) => file.endsWith("ot-gateway.env"))
   const compose =
     folder.noCompose === undefined && [...folder.written, ...folder.kept].some((file) => file.endsWith("compose.yaml"))
+  const dockerDesktop = compose && (platform === "darwin" || platform === "win32")
   const port = config.status?.port ?? 8080
   const password =
     passwordEnv === undefined
@@ -420,35 +487,53 @@ export const initNext = (
       : envFile === undefined
         ? [`set ${passwordEnv} to the broker password before you start the gateway`]
         : [`put the broker password after ${passwordEnv}= in ${envFile}`]
-  // Commands run from the gateway's folder, where the config's default name needs no argument.
   const folderPath = dirname(path)
-  const name = basename(path)
-  const argument = name === folderConfigName ? "" : ` ${name}`
+  const here = resolve(folderPath) === resolve(context.cwd ?? ".")
+  // In the gateway's folder, the config's default name needs no argument; anywhere else every command names it.
+  const argument = here
+    ? basename(path) === folderConfigName
+      ? ""
+      : ` ${shellArgument(basename(path))}`
+    : ` ${shellArgument(path)}`
+  const inFolder = (file: string) => (here ? file : shellArgument(join(folderPath, file)))
+  const pointsList = inFolder("points.csv")
   // Without devices there is nothing to start yet: the points list comes first.
   const devices =
     config.devices.length > 0
       ? []
       : [
-          step("ot-gateway points template > points.csv", "start a points list (or discover --points-list for BACnet)"),
-          step(`ot-gateway import points.csv${argument}`, "add its devices to the config")
+          step(
+            `ot-gateway points template > ${pointsList}`,
+            "start a points list (or discover --points-list for BACnet)"
+          ),
+          step(`ot-gateway import ${pointsList}${argument}`, "add its devices to the config")
         ]
+  const statusPage = `http://127.0.0.1:${port}`
   const next = [
-    ...(folderPath === "." ? [] : [step(`cd ${folderPath}`, "the gateway's folder")]),
     // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
     step(`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
     ...devices,
-    ...(compose
+    ...(compose && !dockerDesktop
       ? [
-          step("docker compose up -d", "start it in Docker, restarted after a crash or a reboot"),
-          step("ot-gateway status", `one line per device (status page on http://127.0.0.1:${port})`)
+          step(
+            here ? "docker compose up -d" : `docker compose -f ${inFolder("compose.yaml")} up -d`,
+            "start it in Docker, restarted after a crash or a reboot"
+          ),
+          step("ot-gateway status", "one line per device")
         ]
-      : [step(`ot-gateway run${argument}`, `start the gateway (status page on http://127.0.0.1:${port})`)]),
+      : [step(`ot-gateway run${argument}`, "start the gateway")]),
+    step(
+      statusPage,
+      ssh === undefined
+        ? "the status page, while the gateway runs: devices, values, charts"
+        : "the status page on this machine; from your laptop, through the tunnel below"
+    ),
     // Over SSH, 127.0.0.1 is the gateway's machine, not the laptop with the browser.
     ...(ssh === undefined ? [] : [sshTunnel(ssh, port)]),
     step(`ot-gateway check${argument}`, "validate it again after an edit"),
     step(`ot-gateway watch${argument}`, `see what arrives at ${config.mqtt.url}`)
   ]
-  return { notes: password, next }
+  return { notes: [...password, ...historyNote(config), ...(dockerDesktop ? [dockerDesktopNote] : [])], next }
 }
 
 /** What to do after `init` as text, for the config it wrote to `path`. */
@@ -456,9 +541,9 @@ export const nextSteps = (
   path: string,
   config: GatewayConfig,
   folder: FolderFiles = { written: [], kept: [] },
-  ssh?: SshSession
+  context: InitContext = {}
 ) => {
-  const { notes, next } = initNext(path, config, folder, ssh)
+  const { notes, next } = initNext(path, config, folder, context)
   const width = Math.max(...next.map(({ command }) => command.length)) + 2
   return [
     ...folder.written.map((file) => `wrote ${file}`),
