@@ -96,7 +96,9 @@ export class BacnetDeviceError extends Schema.TaggedError<BacnetDeviceError>()("
 
 /** The UDP socket could not be opened or written. */
 export class BacnetSocketError extends Schema.TaggedError<BacnetSocketError>()("BacnetSocketError", {
-  message: Schema.String
+  message: Schema.String,
+  /** The UDP port could not be bound because another program holds it. */
+  addressInUse: Schema.optionalKey(Schema.Boolean)
 }) {}
 
 /** Every way a request can fail; `BacnetEncodeError` when it carries a value out of range and was never sent. */
@@ -228,7 +230,12 @@ const countConnect = (outcome: "ok" | "failed") =>
   Metric.update(Metric.withAttributes(driverConnects, { device: "$bacnet", outcome }), 1)
 
 const socketError = (error: DatagramSocket.DatagramSocketError) =>
-  new BacnetSocketError({ message: describeDatagramSocketError(error) })
+  new BacnetSocketError({
+    message: describeDatagramSocketError(error),
+    ...(error.reason._tag === "DatagramSocketOpenError" && error.reason.kind === "AddressInUse"
+      ? { addressInUse: true }
+      : {})
+  })
 
 /** Every BACnet network: routers pass a global broadcast on to all of theirs (clause 6.2.2). */
 const GLOBAL_BROADCAST: NetworkAddress = { network: 0xffff, address: new Uint8Array(0) }
