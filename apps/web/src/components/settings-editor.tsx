@@ -1,6 +1,6 @@
 "use client"
 /**
- * The Gateway and Broker cards' edit mode on the Settings tab. Edit reads the config file as it is on disk (with
+ * The Gateway, Broker and BACnet/IP cards' edit mode on the Settings tab. Edit reads the config file as it is on disk (with
  * its ETag), the form changes only that card's settings, every change is checked by the gateway while typing (the
  * same check as `ot-gateway check`, issues under their field), and Save writes the file and applies it without a
  * restart. A save the gateway cannot start is rolled back there and the page says why; a file that changed in the
@@ -230,6 +230,12 @@ export const EditForm = ({
         <p className="text-xs text-muted-foreground">
           The password stays in <code className="font-mono">ot-gateway.env</code> ({edit.password.variable}, now{" "}
           {edit.password.set ? "set" : "not set"}); this page never sees it.
+        </p>
+      ) : null}
+      {card === "bacnet" ? (
+        <p className="text-xs text-muted-foreground">
+          Save moves the gateway&apos;s BACnet/IP socket at once, without a restart. If the port cannot be opened
+          (another program holds it), nothing changes and this form says why.
         </p>
       ) : null}
       {card === "mqtt" ? (

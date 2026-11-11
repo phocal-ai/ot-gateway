@@ -137,6 +137,15 @@ describe("describeConfigChange", () => {
     expect(describeConfigChange(after, narrower).changes).toContain("write limits changed: meter/setpoint (15 to 25)")
   })
 
+  it("names the BACnet/IP settings that changed, applied without a restart", () => {
+    const change = describeConfigChange(
+      parseConfigSync(base),
+      parseConfigSync({ ...base, bacnet: { port: 47820, broadcastAddress: "192.168.1.255" } })
+    )
+    expect(change.changes).toEqual(["BACnet/IP: port, broadcastAddress"])
+    expect(change.restartNeeded).toEqual([])
+  })
+
   it("says what waits for a restart, and when nothing changed", () => {
     const same = parseConfigSync(base)
     expect(describeConfigChange(same, same)).toEqual({ summary: "nothing to apply", changes: [], restartNeeded: [] })

@@ -31,7 +31,10 @@ export interface EditField {
   readonly choices?: ReadonlyArray<{ readonly value: string; readonly label: string }>
 }
 
-export type EditCard = "gateway" | "mqtt"
+export type EditCard = "gateway" | "mqtt" | "bacnet"
+
+export const isEditCard = (key: string | null | undefined): key is EditCard =>
+  key === "gateway" || key === "mqtt" || key === "bacnet"
 
 export const editFields: Readonly<Record<EditCard, ReadonlyArray<EditField>>> = {
   gateway: [
@@ -86,6 +89,72 @@ export const editFields: Readonly<Record<EditCard, ReadonlyArray<EditField>>> = 
         { value: "3.1.1", label: "3.1.1" }
       ]
     }
+  ],
+  // Every BACnet/IP setting has a default: an empty field leaves it to the gateway.
+  bacnet: [
+    {
+      key: "port",
+      path: ["bacnet", "port"],
+      label: "Port",
+      kind: "number",
+      optional: true,
+      placeholder: "47808",
+      hint: "This gateway's UDP port. Devices answer a search on 47808; on another port, find a device by its address."
+    },
+    {
+      key: "broadcastAddress",
+      path: ["bacnet", "broadcastAddress"],
+      label: "Broadcast address",
+      kind: "text",
+      optional: true,
+      placeholder: "255.255.255.255",
+      hint: "Where a search for devices goes: this subnet's broadcast address, e.g. 192.168.1.255."
+    },
+    {
+      key: "bbmdAddress",
+      path: ["bacnet", "bbmdAddress"],
+      label: "BBMD",
+      kind: "text",
+      optional: true,
+      placeholder: "none",
+      hint: "The BBMD on this subnet that forwards devices on other subnets; leave empty without one."
+    },
+    {
+      key: "bindAddress",
+      path: ["bacnet", "bindAddress"],
+      label: "Listens on",
+      kind: "text",
+      optional: true,
+      placeholder: "0.0.0.0",
+      hint: "Leave at 0.0.0.0 (every network): bound to one address, the gateway hears no broadcast answers."
+    },
+    {
+      key: "requestTimeoutMs",
+      path: ["bacnet", "requestTimeoutMs"],
+      label: "Reply timeout (ms)",
+      kind: "number",
+      optional: true,
+      placeholder: "3000",
+      hint: "How long to wait for a device's answer before asking again."
+    },
+    {
+      key: "retries",
+      path: ["bacnet", "retries"],
+      label: "Retries",
+      kind: "number",
+      optional: true,
+      placeholder: "2",
+      hint: "How often to ask again when a device does not answer."
+    },
+    {
+      key: "covLifetimeSeconds",
+      path: ["bacnet", "covLifetimeSeconds"],
+      label: "Change subscriptions last (s)",
+      kind: "number",
+      optional: true,
+      placeholder: "300",
+      hint: "How long a device sends changes before the gateway renews; it renews at half of this."
+    }
   ]
 }
 
@@ -136,7 +205,8 @@ const fileValue = (field: EditField, typed: string): unknown => {
 }
 
 /**
- * The file with `values` written into `card`'s fields: an empty optional field removed, the order of the keys and
+ * The file with `values` written into `card`'s fields: an empty optional field removed (and a section with nothing
+ * left in it), the order of the keys and
  * every other setting as they were. Formatted as `ot-gateway init` writes it (two spaces, a final newline).
  */
 export const withValues = (text: string, card: EditCard, values: EditValues): string | undefined => {
@@ -155,7 +225,9 @@ export const withValues = (text: string, card: EditCard, values: EditValues): st
     const section: JsonObject = isObject(existing) ? existing : {}
     if (remove) delete section[second]
     else section[second] = fileValue(field, typed)
-    config[first] = section
+    // A section left empty (every BACnet/IP setting at its default) goes, as the file had it before.
+    if (Object.keys(section).length === 0) delete config[first]
+    else config[first] = section
   }
   return `${JSON.stringify(config, null, 2)}\n`
 }
