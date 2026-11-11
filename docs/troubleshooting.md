@@ -53,7 +53,7 @@ Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operati
 
 ## Commands
 
-Every command gets a result on `…/$set/result`. `rejected` never reached the device; `failed` was attempted.
+Every command gets a result on `…/$set/result`, unless its device or point level could never be an id (not a slug of at most 64 characters): such a command is only counted as `unknown-point`. `rejected` never reached the device; `failed` was attempted. Rejections for unknown and read-only points are logged when a run of them starts, then as a count at most once a minute; every other command is logged one by one.
 
 | Result                      | Meaning                                                                                                                                                 |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
