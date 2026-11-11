@@ -379,7 +379,7 @@ describe("draftPointsList", () => {
 })
 
 describe("discover --points-list", () => {
-  it.effect("writes the devices not in the config yet, and leaves an existing file alone", () =>
+  it.effect("writes the devices not in the config yet, says how many, and fails on an existing file", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const directory = yield* fs.makeTempDirectoryScoped()
@@ -413,7 +413,8 @@ describe("discover --points-list", () => {
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
         yield* TestClock.adjust("200 millis")
       }
-      yield* Fiber.join(running)
+      const written = yield* Fiber.join(running)
+      expect(written).toEqual({ path, devices: 1, points: 2 })
       const list = yield* fs.readFileString(path)
       const devices = yield* devicesFromPointsList(list, ["ahu"])
       expect(devices.map((device) => device.id)).toEqual(["ventilation-2"])
@@ -422,12 +423,14 @@ describe("discover --points-list", () => {
       expect(errors.some((line) => line.includes("1 device(s) already in the config are left out"))).toBe(true)
       expect(errors.some((line) => line.includes(`ot-gateway import ${path}`))).toBe(true)
 
-      yield* discoverToPointsList(config, path, network.host("10.0.0.1"))
+      const exists = yield* Effect.flip(discoverToPointsList(config, path, network.host("10.0.0.1")))
+      expect(exists._tag).toBe("DiscoverError")
+      expect(exists.message).toBe(`${path} exists; give another file name, or move it away first. Nothing was written.`)
       expect(yield* fs.readFileString(path)).toBe(list)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 
-  it.effect("writes no file when nothing answered", () =>
+  it.effect("fails and writes no file when nothing answered", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const directory = yield* fs.makeTempDirectoryScoped()
@@ -436,16 +439,17 @@ describe("discover --points-list", () => {
         JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
       )
       const running = yield* discoverToPointsList(config, path, makeMemoryNetwork().host("10.0.0.1")).pipe(
+        Effect.flip,
         Effect.forkChild
       )
       for (let step = 0; step < 30; step++) {
         yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
         yield* TestClock.adjust("200 millis")
       }
-      yield* Fiber.join(running)
+      const error = yield* Fiber.join(running)
+      expect(error._tag).toBe("DiscoverError")
+      expect(error.message).toBe(`no points to list; ${path} was not written.`)
       expect(yield* fs.exists(path)).toBe(false)
-      const errors = (yield* TestConsole.errorLines).map(String)
-      expect(errors.some((line) => line.includes("was not written"))).toBe(true)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })

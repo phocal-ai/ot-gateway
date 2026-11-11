@@ -7,7 +7,8 @@
 import type { GatewayConfig } from "@ot-gateway/core"
 import type { InboundMessage } from "@ot-gateway/mqtt"
 import { Console, Duration, Effect } from "effect"
-import { brokerClient } from "./Broker.ts"
+import { brokerClient, firstDialOf } from "./Broker.ts"
+import { withoutControls } from "./Discover.ts"
 import { printResult } from "./Output.ts"
 
 /** Payloads are cut here on the terminal; the status page and any MQTT client show them whole. */
@@ -18,12 +19,16 @@ export const watchFilter = (config: Pick<GatewayConfig, "site" | "building">) =>
 
 const twoDigits = (value: number) => String(value).padStart(2, "0")
 
-/** One line for a message: local time, a retained marker, the topic and the payload on one line. */
+/**
+ * One line for a message: local time, a retained marker, the topic and the payload on one line. Anyone who may
+ * publish to the broker chooses the topic and the payload, so their control characters never reach the terminal:
+ * line breaks and tabs become a space, the rest `?`.
+ */
 export const formatMessage = (message: Pick<InboundMessage, "topic" | "payload" | "retain">, at: Date) => {
   const time = `${twoDigits(at.getHours())}:${twoDigits(at.getMinutes())}:${twoDigits(at.getSeconds())}`
-  const flat = message.payload.replace(/\s*\n\s*/g, " ")
+  const flat = withoutControls(message.payload.replace(/\s*\n\s*/g, " ").replace(/[\t\r]/g, " "))
   const payload = flat.length > MAX_PAYLOAD ? `${flat.slice(0, MAX_PAYLOAD)}…` : flat
-  return `${time} ${message.retain ? "retained " : ""}${message.topic} ${payload}`
+  return `${time} ${message.retain ? "retained " : ""}${withoutControls(message.topic)} ${payload}`
 }
 
 /** One message as a JSON line: the payload parsed when it is JSON, as the gateway's own messages are, whole. */
@@ -49,11 +54,13 @@ export interface WatchOptions {
 /**
  * Prints the broker's messages until interrupted (Ctrl-C) or for `seconds`, reconnecting as the gateway does.
  * The CLI runs in a container without Node on the machine, where killing the docker client leaves the
- * container running: a watch that ends by itself needs no one to stop it.
+ * container running: a watch that ends by itself needs no one to stop it. With `seconds` a first dial that fails
+ * fails the watch (`BrokerCommandError`), so "never connected" does not look like "connected, nothing arrived";
+ * without, someone is watching and it keeps trying.
  */
 export const watch = Effect.fn("watch")(function* (config: GatewayConfig, options: WatchOptions = {}) {
   const filter = options.topic ?? watchFilter(config)
-  yield* brokerClient(config.mqtt, "watch", {
+  const client = yield* brokerClient(config.mqtt, "watch", {
     subscriptions: [{ filter, qos: 0, retainAsPublished: true }],
     onConnect: () =>
       Console.error(
@@ -66,5 +73,6 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
   })
   yield* Console.error(`connecting to ${config.mqtt.url}…`)
   if (options.seconds === undefined) return yield* Effect.never
+  yield* firstDialOf(client, config.mqtt.url)
   yield* Effect.sleep(Duration.seconds(options.seconds))
 }, Effect.scoped)
