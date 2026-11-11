@@ -434,6 +434,24 @@ timeseries(
   }
 )
 y += 8
+timeseries(
+  "Command subscription by outcome",
+  [
+    {
+      expr: `sum by (outcome) (increase(ot_gateway_mqtt_subscribes_total{${sel}}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 24,
+    stack: true,
+    description:
+      "The gateway subscribes to $set topics on every connect. granted is healthy; refused means the broker denied the filter (check its ACL); missing means no SUBACK came within 10 s. The connection is kept, but no command arrives on it until the next reconnect."
+  }
+)
+y += 8
 
 row("Buffer")
 timeseries(

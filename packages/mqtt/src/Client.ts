@@ -22,7 +22,7 @@
  * has its wall clock stepped by NTP), two publishes in a row get no PUBACK,
  * or the broker breaks the protocol.
  */
-import { describeSocketError, monotonicMillis, mqttConnected, mqttConnects } from "@ot-gateway/core"
+import { describeSocketError, monotonicMillis, mqttConnected, mqttConnects, mqttSubscribes } from "@ot-gateway/core"
 import { Deferred, Duration, Effect, Exit, Latch, Metric, Random, Redacted, Result, Schema, Semaphore } from "effect"
 import type * as Socket from "effect/socket/Socket"
 import { PacketType } from "./Codec.ts"
@@ -84,6 +84,13 @@ const stableConnectionMs = 30_000
 
 /** Publishes in a row whose PUBACK never came before the connection is presumed dead. */
 const maxPubackTimeouts = 2
+
+/**
+ * Time the broker has to answer the SUBSCRIBE sent on connect. Without an
+ * answer the connection is kept (publishing matters more than commands), but
+ * the missing SUBACK is logged and counted.
+ */
+const SUBACK_TIMEOUT = Duration.seconds(10)
 
 /** Default Maximum Packet Size announced in CONNECT: OT Gateway only receives small control packets. */
 const defaultMaximumPacketSize = 1024 * 1024
@@ -224,6 +231,9 @@ const numberProperty = (
 
 const countConnect = (outcome: "ok" | "failed" | "rejected") =>
   Metric.update(Metric.withAttributes(mqttConnects, { outcome }), 1)
+
+const countSubscribe = (outcome: "granted" | "refused" | "missing") =>
+  Metric.update(Metric.withAttributes(mqttSubscribes, { outcome }), 1)
 
 /** A topic name a client may publish to (§4.7): non-empty, no wildcards, at most 65,535 bytes. */
 const topicProblem = (topic: string): string | undefined => {
@@ -447,10 +457,27 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
         )
         if (options.onConnect !== undefined) yield* Effect.forkScoped(options.onConnect(client))
         const subscriptions = options.subscriptions ?? []
+        const filters = subscriptions.map((subscription) => subscription.filter).join(", ")
+        // The SUBSCRIBE still waiting for its SUBACK, by packet id, and whether its deadline has passed.
+        let pendingSubscribe: number | undefined
+        let subscribeMissed = false
         if (subscriptions.length > 0) {
           const packetId = current.nextPacketId
           current.nextPacketId = (packetId % 0xffff) + 1
+          pendingSubscribe = packetId
           yield* write(encodeSubscribe({ packetId, subscriptions }, dialedWith))
+          // Forked into the session's scope: a reconnect interrupts it, so an old connection counts nothing.
+          yield* Effect.forkScoped(
+            Effect.gen(function* () {
+              yield* Effect.sleep(SUBACK_TIMEOUT)
+              if (pendingSubscribe !== packetId) return
+              subscribeMissed = true
+              yield* countSubscribe("missing")
+              yield* Effect.logError(
+                "MQTT broker did not answer the SUBSCRIBE; commands will not arrive on this connection"
+              ).pipe(Effect.annotateLogs({ filters }))
+            })
+          )
         }
 
         let lastReceived = yield* monotonicMillis
@@ -498,9 +525,25 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
               }
               case PacketType.SUBACK: {
                 const suback = decodeSuback(packet.body, dialedWith)
+                // Only the answer to the pending SUBSCRIBE settles it; anything else is ignored.
+                if (
+                  pendingSubscribe === undefined ||
+                  (Result.isSuccess(suback) && suback.success.packetId !== pendingSubscribe)
+                ) {
+                  yield* Effect.logDebug("ignored a SUBACK that answers no pending SUBSCRIBE")
+                  break
+                }
+                pendingSubscribe = undefined
                 const refused = Result.isSuccess(suback)
                   ? subscriptions.filter((_, index) => (suback.success.reasonCodes[index] ?? 0x80) >= 0x80)
                   : subscriptions
+                const outcome = refused.length > 0 ? "refused" : "granted"
+                yield* countSubscribe(outcome)
+                if (subscribeMissed) {
+                  yield* Effect.logInfo("MQTT broker answered the SUBSCRIBE late").pipe(
+                    Effect.annotateLogs({ outcome })
+                  )
+                }
                 if (refused.length > 0) {
                   yield* Effect.logError(
                     "MQTT broker refused a subscription; nothing published on it will arrive"
