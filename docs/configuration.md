@@ -12,6 +12,8 @@ Ids (`site`, `building`, gateway, device and point ids) are slugs: lowercase let
 
 Durations are milliseconds unless the key says seconds.
 
+File paths (`buffer.path`, `history.path`) may be relative. They resolve against the folder the config file is in, not the folder the command runs from, so `ot-gateway run /home/pi/site-1/ot-gateway.json` keeps `./ot-gateway-buffer.sqlite` in `/home/pi/site-1` wherever it is started. When the environment variable `OT_GATEWAY_DATA_DIR` is set, they resolve against it instead: the container image sets it to `/var/lib/ot-gateway`, the data volume, since Docker Compose mounts the config read-only at `/etc/ot-gateway/gateway.json`. `check` and the status page's Settings show the resolved paths. Absolute paths stay as they are.
+
 ## Gateway
 
 The top level of the document.
