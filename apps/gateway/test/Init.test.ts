@@ -101,15 +101,31 @@ describe("lanInterfaces", () => {
 })
 
 describe("nextSteps", () => {
-  it.effect("names the password variable, then adding devices before the commands that run them", () =>
+  it.effect("names the password variable, then starts the gateway and sends a manual user to the status page", () =>
     Effect.gen(function* () {
       const config = yield* decode(initConfig({ ...answers, login: { username: "u", passwordEnv: "BROKER_PW" } }, []))
       const steps = nextSteps("site.json", config)
       expect(steps).toContain("set BROKER_PW")
-      expect(steps).toContain("ot-gateway points template > points.csv")
-      expect(steps.indexOf("ot-gateway import points.csv site.json")).toBeLessThan(steps.indexOf("ot-gateway run"))
       expect(steps).toContain("ot-gateway run site.json")
+      const page = "then open http://127.0.0.1:8080 and add devices there (or upload a points list)"
+      expect(steps.indexOf("ot-gateway run site.json")).toBeLessThan(steps.indexOf(page))
+      expect(steps.indexOf(page)).toBeLessThan(steps.indexOf("ot-gateway points template > points.csv"))
+      expect(steps.indexOf("ot-gateway points template")).toBeLessThan(steps.indexOf("ot-gateway import points.csv"))
       expect(steps).toContain("ot-gateway watch site.json --seconds 10")
+    })
+  )
+
+  it.effect("puts each description on its own line, unpadded, so a long path does not widen the others", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig(answers, [simulatedDevice]))
+      const path = `/home/someone/${"very-long-folder/".repeat(10)}ot-gateway.json`
+      const lines = nextSteps(path, config, { written: [], kept: [] }, { cwd: "/" }).split("\n")
+      expect(lines).toContain("      start the gateway")
+      expect(lines).toContain(`  ot-gateway run ${path}`)
+      const descriptions = lines.filter((line) => line.startsWith("      "))
+      expect(descriptions.length).toBeGreaterThan(3)
+      for (const line of descriptions) expect(line.length).toBeLessThan(100)
+      expect(lines).toContain("  then open http://127.0.0.1:8080 for the status page: devices, values, charts")
     })
   )
 })
@@ -141,22 +157,21 @@ describe("sshSession", () => {
 })
 
 describe("initNext over SSH", () => {
-  it.effect(
-    "adds the tunnel after the status page, which follows the command that starts it, in text and as steps",
-    () =>
-      Effect.gen(function* () {
-        const config = yield* decode(initConfig(answers, [simulatedDevice]))
-        const ssh = { host: "192.168.1.50", user: "pi" }
-        const tunnel = "ssh -L 8080:127.0.0.1:8080 pi@192.168.1.50"
-        const { next } = initNext("site.json", config, { written: [], kept: [] }, { ssh })
-        const commands = next.map((step) => step.command)
-        expect(commands.indexOf("http://127.0.0.1:8080")).toBe(commands.indexOf("ot-gateway run site.json") + 1)
-        expect(commands.indexOf(tunnel)).toBe(commands.indexOf("http://127.0.0.1:8080") + 1)
-        expect(next.find((step) => step.command === tunnel)?.description).toContain("http://localhost:8080")
-        const text = nextSteps("site.json", config, { written: [], kept: [] }, { ssh })
-        expect(text).toContain(tunnel)
-        expect(nextSteps("site.json", config)).not.toContain("ssh -L")
-      })
+  it.effect("adds the tunnel after the command that starts the gateway, in text and as steps", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig(answers, [simulatedDevice]))
+      const ssh = { host: "192.168.1.50", user: "pi" }
+      const tunnel = "ssh -L 8080:127.0.0.1:8080 pi@192.168.1.50"
+      const { next, page, startedBy } = initNext("site.json", config, { written: [], kept: [] }, { ssh })
+      const commands = next.map((step) => step.command)
+      expect(commands.indexOf(tunnel)).toBe(commands.indexOf("ot-gateway run site.json") + 1)
+      expect(startedBy).toBe(commands.indexOf(tunnel))
+      expect(page).toContain("tunnel below")
+      expect(next.find((step) => step.command === tunnel)?.description).toContain("http://localhost:8080")
+      const text = nextSteps("site.json", config, { written: [], kept: [] }, { ssh })
+      expect(text.indexOf(page)).toBeLessThan(text.indexOf(tunnel))
+      expect(nextSteps("site.json", config)).not.toContain("ssh -L")
+    })
   )
 
   it.effect("forwards the configured status port, with placeholders for what the environment does not say", () =>
@@ -164,19 +179,21 @@ describe("initNext over SSH", () => {
       const config = yield* decode({ ...initConfig(answers, [simulatedDevice]), status: { port: 8181 } })
       const ssh = { host: undefined, user: undefined }
       const { next } = initNext("site.json", config, { written: [], kept: [] }, { ssh })
+      const { url } = initNext("site.json", config, { written: [], kept: [] }, { ssh })
       expect(next.map((step) => step.command)).toContain("ssh -L 8080:127.0.0.1:8181 <user>@<host>")
-      expect(next.map((step) => step.command)).toContain("http://127.0.0.1:8181")
+      expect(url).toBe("http://127.0.0.1:8181")
     })
   )
 
   it.effect("mirrors the text's commands and notes, for --json", () =>
     Effect.gen(function* () {
       const config = yield* decode(initConfig({ ...answers, login: { username: "u", passwordEnv: "BROKER_PW" } }, []))
-      const { notes, next } = initNext("site.json", config)
+      const { notes, next, page } = initNext("site.json", config)
       const text = nextSteps("site.json", config)
       expect(notes[0]).toBe("set BROKER_PW to the broker password before you start the gateway")
       for (const note of notes) expect(text).toContain(note)
       for (const step of next) expect(text).toContain(step.command)
+      expect(text).toContain(page)
     })
   )
 })
@@ -184,11 +201,13 @@ describe("initNext over SSH", () => {
 describe("initNext", () => {
   const compose = { written: ["site-1/ot-gateway.json", "site-1/compose.yaml", "site-1/ot-gateway.env"], kept: [] }
 
-  it.effect("points at the status page without SSH too", () =>
+  it.effect("points at the status page without SSH too, as a URL apart from the commands", () =>
     Effect.gen(function* () {
       const config = yield* decode(initConfig(answers, [simulatedDevice]))
-      const { next } = initNext("ot-gateway.json", config)
-      expect(next.find((step) => step.command === "http://127.0.0.1:8080")?.description).toContain("status page")
+      const { next, url, page } = initNext("ot-gateway.json", config)
+      expect(url).toBe("http://127.0.0.1:8080")
+      expect(page).toContain("status page")
+      expect(next.map((step) => step.command)).not.toContain(url)
     })
   )
 
@@ -199,11 +218,10 @@ describe("initNext", () => {
       const commands = next.map((step) => step.command)
       expect(commands).toEqual([
         "ot-gateway broker site-1/ot-gateway.json",
-        "ot-gateway points template > site-1/points.csv",
-        "ot-gateway import site-1/points.csv site-1/ot-gateway.json",
         "docker compose -f site-1/compose.yaml up -d",
         "ot-gateway status",
-        "http://127.0.0.1:8080",
+        "ot-gateway points template > site-1/points.csv",
+        "ot-gateway import site-1/points.csv site-1/ot-gateway.json",
         "ot-gateway check site-1/ot-gateway.json",
         "ot-gateway watch site-1/ot-gateway.json --seconds 10"
       ])
@@ -449,7 +467,7 @@ describe("initTarget", () => {
         expect(steps).toContain(`ot-gateway check ${path}`)
         expect(steps).not.toContain("cd ")
         const inside = nextSteps(path, config, { written: [path], kept: [] }, { cwd: `${folder}/new/site-1` })
-        expect(inside).toMatch(/ot-gateway check {2,}validate/)
+        expect(inside).toContain("  ot-gateway check\n      validate")
       })
     )
   )

@@ -361,7 +361,7 @@ const init = Command.make(
       const files = { ...folder, written: [config, ...folder.written] }
       const context = { ssh: sshSession(yield* sshEnvironment), platform: process.platform, cwd: process.cwd() }
       if (json) {
-        const { notes, next } = initNext(config, written, files, context)
+        const { notes, next, url, page } = initNext(config, written, files, context)
         return yield* printJson({
           ...configSummary(written),
           dryRun: flags.dryRun,
@@ -370,7 +370,9 @@ const init = Command.make(
           ...(folder.noCompose === undefined ? {} : { noCompose: folder.noCompose }),
           ...(flags.dryRun ? { config: written } : {}),
           notes,
-          next
+          next,
+          url,
+          page
         })
       }
       if (flags.dryRun) {
