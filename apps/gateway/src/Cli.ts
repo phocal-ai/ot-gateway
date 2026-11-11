@@ -23,7 +23,7 @@ import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
-import { defaultConfigPath, importPointsList } from "./Import.ts"
+import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
@@ -428,7 +428,7 @@ const importCommand = Command.make(
   },
   ({ list, config, dryRun, json }) =>
     Effect.gen(function* () {
-      const { added, decoded, config: written, against } = yield* importPointsList(list, config, { dryRun })
+      const { added, decoded, config: written, against, units } = yield* importPointsList(list, config, { dryRun })
       const points = added.reduce((total, device) => total + device.points.length, 0)
       const alone = `no ${defaultConfigPath} here, so the devices were checked on their own; name a config to check them against it`
       if (json) {
@@ -438,13 +438,20 @@ const importCommand = Command.make(
           path: against ?? null,
           ...(against === undefined ? { note: alone } : {}),
           points,
+          units,
           devices: added,
           summary: decoded.map(deviceSummary)
         })
       }
       if (against === undefined) yield* Console.error(alone)
-      if (written === undefined) return yield* printJson({ devices: added })
+      // A dry run prints the devices as JSON on stdout, so the units go to stderr there.
+      const unitLines = describeUnits(units)
+      if (written === undefined) {
+        if (unitLines.length > 0) yield* Console.error(unitLines.join("\n"))
+        return yield* printJson({ devices: added })
+      }
       yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${against}, none writable`)
+      if (unitLines.length > 0) yield* Console.log(unitLines.join("\n"))
       yield* Console.log(describeConfig(written))
     }).pipe(jsonFailure(json, { path: config ?? defaultConfigPath }))
 ).pipe(
