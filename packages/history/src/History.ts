@@ -349,13 +349,13 @@ export const openHistory = (
             const target = current
             if (target === undefined) return yield* unavailable(`the gateway keeps no history: ${off ?? "it is off"}`)
             return yield* Effect.gen(function* () {
-              const buckets = yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs })
+              const bucketRows = yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs })
               // One more than shown, to tell whether there were more.
               const changes =
                 query.changes === true && recent
                   ? yield* target.store.changes({ ...query, limit: HISTORY_CHANGES_MAX + 1 })
                   : undefined
-              return { buckets, changes }
+              return { buckets: bucketRows, changes }
             }).pipe(
               Effect.tapError(() => Metric.update(Metric.withAttributes(historyFailures, { operation: "read" }), 1)),
               Effect.catchTags({
