@@ -12,6 +12,7 @@ import { createServer } from "node:net"
 import { makeGatewayEvents, GatewayEvents } from "../src/Events.ts"
 import { checkIdentity, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf, targetOf } from "../src/GatewayTarget.ts"
 import { formatSeries, gapsOf, historyReport, parseSelection, selectPoints, seriesJson } from "../src/HistoryReport.ts"
+import { messagesReport } from "../src/MessagesReport.ts"
 import { localTime } from "../src/Output.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
 import {
@@ -317,6 +318,67 @@ describe("history", () => {
     ])
   })
 
+  it("marks the current minute as so far, and a gap the gateway's start ends as the gateway", () => {
+    const running = {
+      ...series,
+      buckets: [...series.buckets, { t: at(12, 15, 0), min: 4, max: 4, avg: 4, count: 1 }]
+    }
+    expect(formatSeries(power, running, now, { since: at(12, 13, 0) })).toEqual([
+      "energy-meter/active-power (Active power, kW): 1 min buckets from the per-minute rollups",
+      "  12:10:00  avg 12.4 kW  min 12.1  max 12.9  (12 reads)",
+      "  12:11:00  no reads for 2 min, until 12:13:00: the gateway was not running, it started at 12:13:00",
+      "  12:13:00  3 kW  (1 read)",
+      "  12:14:00  no reads for 60 s, until 12:15:00",
+      "  12:15:00  4 kW  (1 read)  so far"
+    ])
+  })
+
+  it("prints a switch as on or off per bucket, then when it switched", () => {
+    const fan: PointInfo = { ...power, id: "fan-on", name: "Fan on" }
+    const { unit: _unit, ...unitless } = fan
+    const switched: HistorySeries = {
+      device: "energy-meter",
+      point: "fan-on",
+      from: at(12, 10, 0),
+      to: at(12, 13, 0),
+      stepMs: 60_000,
+      resolution: "read",
+      buckets: [
+        { t: at(12, 10, 0), min: 0, max: 0, avg: 0, count: 12 },
+        { t: at(12, 11, 0), min: 0, max: 1, avg: 0.25, count: 12 },
+        { t: at(12, 12, 0), min: 1, max: 1, avg: 1, count: 1 }
+      ],
+      changes: {
+        list: [
+          { t: at(12, 10, 0), value: 0 },
+          { t: at(12, 11, 15), value: 1 },
+          { t: at(12, 11, 30), value: 0 },
+          { t: at(12, 11, 50), value: 1 }
+        ],
+        truncated: false
+      }
+    }
+    expect(formatSeries(unitless, switched, now, { boolean: true })).toEqual([
+      "energy-meter/fan-on (Fan on): 1 min buckets from every read",
+      "  12:10:00  off, all 12 reads",
+      "  12:11:00  on in 3 of 12 reads",
+      "  12:12:00  on  (1 read)",
+      "  changes, from every read:",
+      "    12:10:00  off at the first read in this range",
+      "    12:11:15  switched on",
+      "    12:11:30  switched off",
+      "    12:11:50  switched on"
+    ])
+    expect(
+      formatSeries(unitless, { ...switched, changes: { list: switched.changes?.list ?? [], truncated: true } }, now, {
+        boolean: true
+      }).at(-1)
+    ).toBe("    and more later, see --json or a shorter --since")
+    const { changes: _changes, ...older } = switched
+    expect(formatSeries(unitless, older, now, { boolean: true }).at(-1)).toBe("  changes: only kept for the last day")
+    expect(seriesJson(unitless, switched, true)).toMatchObject({ boolean: true, changes: switched.changes })
+  })
+
   it("gives --json the API's series with the point's name, unit and gaps", () => {
     expect(seriesJson(power, series)).toMatchObject({
       ...series,
@@ -375,6 +437,29 @@ describe("against a running status page", () => {
         historyReport(target, [{ device: "meter" }], { since: "10m", sinceMs: 600_000 })
       )
       expect(unknown.message).toContain("no device meter")
+
+      // What went out per topic, since start, and how much reached the broker.
+      const power = "plant-1/hall-a/energy-meter/active-power"
+      for (let sent = 0; sent < 3; sent++) {
+        state.recordPublish(power, `{"value":${sent},"ts":1}`, { retained: false, at: Date.now() })
+      }
+      state.recordDelivered(power)
+      state.recordDelivered(power)
+      state.recordPublish(`${power}/$meta`, `{"name":"Active power"}`, { retained: true, at: Date.now() })
+      state.recordPublish("plant-1/hall-a/energy-meter/voltage", `{"value":230,"ts":1}`, {
+        retained: false,
+        at: Date.now()
+      })
+      yield* messagesReport(target, [{ device: "energy-meter", point: "active-power" }])
+      const report = String((yield* TestConsole.logLines).at(-1)).split("\n")
+      expect(report[0]).toMatch(/^plant-1\/hall-a gateway main at .*: messages per topic since it started at /)
+      expect(report[1]).toMatch(
+        /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting or lost\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
+      )
+      expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
+      yield* messagesReport(target, [], { json: true })
+      const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
+      expect(json).toMatchObject({ ok: true, since: expect.any(Number), messages: [{}, {}, { count: 1 }] })
       yield* Fiber.interrupt(server)
     }).pipe(Effect.provide(TestConsole.layer))
   )

@@ -20,6 +20,9 @@ type EventInput = GatewayEvent extends infer Event
     : never
   : never
 
+/** An alarm point's event, as the alarm tracker (Alarms.ts) hands it over: rate-limited there already. */
+export type AlarmEventInput = Extract<EventInput, { readonly type: `alarm-${string}` }>
+
 export interface EventQuery {
   /** Unix ms: only events at or after it. */
   readonly since?: number | undefined
@@ -44,6 +47,8 @@ export interface GatewayEventsShape {
   readonly configApplyFailed: (error: string) => void
   /** Another gateway publishes into this one's topics (`OtherGateways.ts`). */
   readonly gatewayConflict: (gateway: string, devices: ReadonlyArray<string>, sameId: boolean) => void
+  /** An alarm point was raised, cleared, flaps or settled (Alarms.ts decides which, and how many to list). */
+  readonly alarm: (event: AlarmEventInput) => void
   /** The events kept, oldest first, filtered by `query`. */
   readonly log: (query?: EventQuery) => Effect.Effect<EventLog>
 }
@@ -101,6 +106,7 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
     configApplied: (summary) => record({ type: "config-applied", summary }),
     configApplyFailed: (error) => record({ type: "config-apply-failed", error }),
     gatewayConflict: (gateway, devices, sameId) => record({ type: "gateway-conflict", gateway, devices, sameId }),
+    alarm: record,
     log: (query = {}) =>
       Effect.sync(() => {
         const kept = Math.min(total, capacity)

@@ -6,7 +6,7 @@ import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
 import { Effect, Exit, Fiber, Scope } from "effect"
 import { TestConsole } from "effect/testing"
 import { publishOnce } from "../src/Broker.ts"
-import { formatMessage, watch, watchFilter } from "../src/Watch.ts"
+import { clearHint, formatMessage, messageRecord, staleReason, watch, watchFilter } from "../src/Watch.ts"
 
 const configFor = (port: number) =>
   parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url: `mqtt://127.0.0.1:${port}` }, devices: [] }))
@@ -44,6 +44,28 @@ describe("watch", () => {
     expect(long.endsWith("…")).toBe(true)
   })
 
+  it("marks retained messages of another gateway, or of devices and points the config does not have", () => {
+    const config = { id: "main", site: "s", building: "b", devices: [{ id: "meter", points: [{ id: "power" }] }] }
+    const retained = (topic: string, payload = "1") => staleReason(config, { topic, payload, retain: true })
+    expect(retained("s/b/meter/power")).toBeUndefined()
+    expect(retained("s/b/meter/power/$meta", '{"gateway":"main"}')).toBeUndefined()
+    expect(retained("s/b/$gateway/main/health")).toBeUndefined()
+    expect(retained("s/b/$gateway/old-pi/health")).toBe("from gateway old-pi")
+    expect(retained("s/b/meter/power/$meta", '{"gateway":"hall-b"}')).toBe("from gateway hall-b")
+    expect(retained("s/b/meter/energy")).toBe("point not in this config")
+    expect(retained("s/b/boiler/temp/$meta", "{}")).toBe("device not in this config")
+    // Live messages, a clearing one and other buildings are not marked.
+    expect(staleReason(config, { topic: "s/b/boiler/temp", payload: "1", retain: false })).toBeUndefined()
+    expect(retained("s/b/boiler/temp", "")).toBeUndefined()
+    expect(retained("s/other/boiler/temp")).toBeUndefined()
+    const at = new Date(2026, 10, 5, 9, 4, 7)
+    const old = { topic: "s/b/$gateway/old-pi/health", payload: "offline", retain: true }
+    expect(formatMessage(old, at, "from gateway old-pi")).toBe(
+      "09:04:07 retained (from gateway old-pi) s/b/$gateway/old-pi/health offline"
+    )
+    expect(JSON.parse(messageRecord(old, at, "from gateway old-pi"))).toMatchObject({ stale: "from gateway old-pi" })
+  })
+
   it("keeps a publisher's control characters off the terminal: tabs become a space, the rest ?", () => {
     const at = new Date(2026, 10, 5, 9, 4, 7)
     const line = formatMessage(
@@ -74,7 +96,11 @@ describe("watch --seconds", () => {
       yield* watch(config, { seconds: 1 })
       // The client's own log lines reach the test console too: only the message lines count.
       const lines = (yield* TestConsole.logLines).map(String).filter((line) => line.includes("s/b/"))
-      expect(lines).toEqual([expect.stringMatching(/^\d\d:\d\d:\d\d retained s\/b\/meter\/power 42$/)])
+      // The config has no devices, so the broker keeps it for something else; how to clear it is said once.
+      expect(lines).toEqual([
+        expect.stringMatching(/^\d\d:\d\d:\d\d retained \(device not in this config\) s\/b\/meter\/power 42$/)
+      ])
+      expect((yield* TestConsole.errorLines).map(String).filter((line) => line === clearHint)).toHaveLength(1)
     }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
   )
 

@@ -72,6 +72,14 @@ export const eventSentence = (event: GatewayEvent): string => {
       return event.sameId
         ? `Another gateway with this gateway's id (${event.gateway}) is online: both publish into the same topics`
         : `Gateway ${event.gateway} publishes ${event.devices.join(", ")} too: values from both gateways mix`
+    case "alarm-raised":
+      return `Alarm ${event.device}/${event.point} ${event.first === true ? "active at its first read" : "raised"}`
+    case "alarm-cleared":
+      return `Alarm ${event.device}/${event.point} cleared after ${duration(event.activeMs)}`
+    case "alarm-flapping":
+      return `Alarm ${event.device}/${event.point} raised ${event.raised} times in 15 min: changes are counted until it keeps still`
+    case "alarm-settled":
+      return `Alarm ${event.device}/${event.point} keeps still, ${event.active ? "active" : "not active"}, after ${event.unlisted} unlisted changes`
   }
 }
 
@@ -87,9 +95,16 @@ export const eventTone = (event: GatewayEvent): "bad" | "good" | "neutral" =>
   event.type === "device-failing" ||
   event.type === "broker-disconnected" ||
   event.type === "config-apply-failed" ||
-  event.type === "gateway-conflict"
+  event.type === "gateway-conflict" ||
+  event.type === "alarm-raised" ||
+  event.type === "alarm-flapping" ||
+  (event.type === "alarm-settled" && event.active)
     ? "bad"
-    : event.type === "device-recovered" || event.type === "broker-connected" || event.type === "buffer-drained"
+    : event.type === "device-recovered" ||
+        event.type === "broker-connected" ||
+        event.type === "buffer-drained" ||
+        event.type === "alarm-cleared" ||
+        (event.type === "alarm-settled" && !event.active)
       ? "good"
       : "neutral"
 

@@ -469,6 +469,27 @@ timeseries(
   }
 )
 y += 8
+timeseries(
+  "Alarm points",
+  [
+    {
+      expr: `max by (service_instance_id) (ot_gateway_alarms_active{${hostSel}})`,
+      legendFormat: "active {{service_instance_id}}"
+    },
+    {
+      expr: `sum by (transition) (increase(ot_gateway_alarm_changes_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{transition}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 24,
+    description:
+      "Points marked as alarms (alarmWhen, the points list's alarm column): how many are active, and how often they were raised and cleared. Which point is in the events (ot-gateway events), not a label: a contact that chatters shows as many raises here and as one flapping event there."
+  }
+)
+y += 8
 
 row("Buffer")
 timeseries(

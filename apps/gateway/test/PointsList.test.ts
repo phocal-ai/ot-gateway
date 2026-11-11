@@ -7,9 +7,16 @@ import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem, Result } from "effect"
 import { exampleConfigPath } from "../src/Demo.ts"
-import { importPointsList } from "../src/Import.ts"
+import { describeUnits, importPointsList } from "../src/Import.ts"
 import { initConfig } from "../src/Init.ts"
-import { devicesFromPointsList, parseDelimited, qudtUnit, readableName, readDelimited } from "../src/PointsList.ts"
+import {
+  devicesFromPointsList,
+  parseDelimited,
+  qudtUnit,
+  readableName,
+  readDelimited,
+  unitsWritten
+} from "../src/PointsList.ts"
 
 const minimalConfig = { site: "s", building: "b", mqtt: { url: "mqtt://localhost:1883" } }
 
@@ -285,6 +292,27 @@ describe("devicesFromPointsList", () => {
       ])
     })
   )
+})
+
+describe("the units of an import", () => {
+  it("names each distinct unit once, with the QUDT name that goes out and how many points", () => {
+    const units = unitsWritten("device,point,unit\nm,p1,kW\nm,p2,kW\nm,p3,°C\nm,p4,unit:BAR\nm,p5,m/s\nm,p6,\n")
+    expect(units).toEqual([
+      { written: "kW", unit: "unit:KiloW", qudt: true, points: 2 },
+      { written: "°C", unit: "unit:DEG_C", qudt: true, points: 1 },
+      { written: "unit:BAR", unit: "unit:BAR", qudt: true, points: 1 },
+      { written: "m/s", unit: "m/s", qudt: false, points: 1 }
+    ])
+    expect(describeUnits(units)).toEqual([
+      "units, as the $meta of each point carries them (QUDT names):",
+      "  kW -> unit:KiloW  (2 points)",
+      "  °C -> unit:DEG_C  (1 point)",
+      "  unit:BAR  (1 point)",
+      "  m/s  kept as written: no QUDT name known for it; write one (unit:…) if consumers need it  (1 point)"
+    ])
+    expect(unitsWritten("device,point\nm,p\n")).toEqual([])
+    expect(describeUnits([])).toEqual([])
+  })
 })
 
 describe("importPointsList", () => {

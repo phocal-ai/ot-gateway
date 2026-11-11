@@ -17,7 +17,11 @@ export const PointStatus = Schema.Struct({
   writable: Schema.Boolean,
   value: Schema.optionalKey(Schema.Union([Schema.Number, Schema.Boolean])),
   /** Unix ms of the reading, from the gateway's wall clock. */
-  ts: Schema.optionalKey(Schema.Number)
+  ts: Schema.optionalKey(Schema.Number),
+  /** The point is an alarm, active when its value is on or off (its config's `alarmWhen`). */
+  alarmWhen: Schema.optionalKey(Schema.Literals(["on", "off"])),
+  /** For an alarm point that has been read: whether its alarm is active now. */
+  alarmActive: Schema.optionalKey(Schema.Boolean)
 })
 export type PointStatus = typeof PointStatus.Type
 
@@ -195,6 +199,28 @@ export const BufferStatus = Schema.Struct({
 })
 export type BufferStatus = typeof BufferStatus.Type
 
+/**
+ * An alarm point (one with `alarmWhen`) as the gateway sees it now. `raised` counts how often its alarm became active
+ * in the last `ALARM_WINDOW_MS` (15 min), so a contact that toggles shows up even while it happens to be off.
+ */
+export const AlarmStatus = Schema.Struct({
+  device: Schema.String,
+  point: Schema.String,
+  alarmWhen: Schema.Literals(["on", "off"]),
+  /** Whether the alarm is active; absent before the point's first read. */
+  active: Schema.optionalKey(Schema.Boolean),
+  /** Unix ms since when it has been as it is (active or not): its last change, or its first read. */
+  since: Schema.optionalKey(Schema.Number),
+  /** Times the alarm was raised in the last 15 minutes. */
+  raised: Schema.Number,
+  /** It changes too often to list each change in the events: they are counted until it is steady again. */
+  flapping: Schema.Boolean
+})
+export type AlarmStatus = typeof AlarmStatus.Type
+
+/** The window the alarm counts (`raised`) and the alarm events' rate limit look back over: 15 minutes. */
+export const ALARM_WINDOW_MS = 15 * 60_000
+
 export const GatewayStatus = Schema.Struct({
   site: Schema.String,
   building: Schema.String,
@@ -213,6 +239,8 @@ export const GatewayStatus = Schema.Struct({
   /** Absent until the host monitor's first sample. */
   host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),
+  /** Every alarm point of the config (`alarmWhen`), in config order, also with `points=none`. */
+  alarms: Schema.optionalKey(Schema.Array(AlarmStatus)),
   /** The most recent commands, newest first. */
   commands: Schema.Array(CommandStatus)
 })
@@ -304,10 +332,19 @@ export const HistoryBucket = Schema.Struct({
 })
 export type HistoryBucket = typeof HistoryBucket.Type
 
+/** A read whose value differs from the read before it: when a switch or an alarm changed. */
+export const HistoryChange = Schema.Struct({ t: Schema.Number, value: Schema.Number })
+export type HistoryChange = typeof HistoryChange.Type
+
+/** How many changes a history answer lists at most; `truncated` says there were more. */
+export const HISTORY_CHANGES_MAX = 200
+
 /**
  * A point's history between `from` and `to` (Unix ms), in buckets of `stepMs`, oldest first; buckets without a
- * read are left out. `resolution` says where it came from: every read
- * (buckets under a minute on a range that starts within the last day) or per-minute rollups (everything else).
+ * read are left out. `resolution` says where it came from: every read (buckets under a minute, or a range of an
+ * hour or less, that starts within the last day) or per-minute rollups (everything else). `changes`, when asked
+ * for and the range starts within the last day: the first read and every read that changed the value, oldest
+ * first, at most `HISTORY_CHANGES_MAX`.
  */
 export const HistorySeries = Schema.Struct({
   device: Schema.String,
@@ -316,7 +353,8 @@ export const HistorySeries = Schema.Struct({
   to: Schema.Number,
   stepMs: Schema.Number,
   resolution: Schema.Literals(["read", "minute"]),
-  buckets: Schema.Array(HistoryBucket)
+  buckets: Schema.Array(HistoryBucket),
+  changes: Schema.optionalKey(Schema.Struct({ list: Schema.Array(HistoryChange), truncated: Schema.Boolean }))
 })
 export type HistorySeries = typeof HistorySeries.Type
 
@@ -447,6 +485,59 @@ export const GatewayConflictEvent = Schema.Struct({
   sameId: Schema.Boolean
 })
 
+/**
+ * An alarm point's alarm became active (its value turned on, or off for `alarmWhen: off`), or was active at its
+ * first read (`first`).
+ */
+export const AlarmRaisedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("alarm-raised"),
+  device: Schema.String,
+  point: Schema.String,
+  value: Schema.Union([Schema.Number, Schema.Boolean]),
+  first: Schema.optionalKey(Schema.Boolean)
+})
+
+/** An active alarm cleared, after `activeMs` (measured on a clock NTP does not step). */
+export const AlarmClearedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("alarm-cleared"),
+  device: Schema.String,
+  point: Schema.String,
+  value: Schema.Union([Schema.Number, Schema.Boolean]),
+  activeMs: Schema.Number
+})
+
+/**
+ * An alarm point changes too often to list each change: it was raised `raised` times in the last 15 minutes. Its
+ * changes are counted, not listed, until it has kept still for `ALARM_SETTLE_MS`; then `alarm-settled` says how it
+ * ended.
+ */
+export const AlarmFlappingEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("alarm-flapping"),
+  device: Schema.String,
+  point: Schema.String,
+  raised: Schema.Number
+})
+
+/**
+ * A flapping alarm point kept still for `ALARM_SETTLE_MS`: `active` is how it stays, since `since` (Unix ms), after
+ * `unlisted` changes that were counted and not listed. Its changes are listed again from here.
+ */
+export const AlarmSettledEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("alarm-settled"),
+  device: Schema.String,
+  point: Schema.String,
+  active: Schema.Boolean,
+  since: Schema.Number,
+  unlisted: Schema.Number
+})
+
+/** How long a flapping alarm point must keep still before `alarm-settled`, and its changes are listed again. */
+export const ALARM_SETTLE_MS = 5 * 60_000
+
 /** A transition worth knowing about later: what broke, since when, and when it came back. Never one per read. */
 export const GatewayEvent = Schema.Union([
   GatewayStartedEvent,
@@ -457,7 +548,11 @@ export const GatewayEvent = Schema.Union([
   BufferDrainedEvent,
   ConfigAppliedEvent,
   ConfigApplyFailedEvent,
-  GatewayConflictEvent
+  GatewayConflictEvent,
+  AlarmRaisedEvent,
+  AlarmClearedEvent,
+  AlarmFlappingEvent,
+  AlarmSettledEvent
 ])
 export type GatewayEvent = typeof GatewayEvent.Type
 
@@ -520,7 +615,9 @@ export class StatusGroup extends HttpApiGroup.make("status")
         from: Schema.optional(Schema.FiniteFromString),
         to: Schema.optional(Schema.FiniteFromString),
         /** About how many buckets to return (default 300, at most 2,000). */
-        buckets: Schema.optional(Schema.FiniteFromString)
+        buckets: Schema.optional(Schema.FiniteFromString),
+        /** `true`: also list when the value changed, from every read (a switch's or an alarm's times). */
+        changes: Schema.optional(Schema.Literals(["true", "false"]))
       },
       success: HistorySeries,
       error: [HistoryUnavailable, HistoryQueryInvalid]

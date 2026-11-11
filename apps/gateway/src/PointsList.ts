@@ -415,6 +415,32 @@ const expandProfile = Effect.fnUntraced(function* (row: Row, profiles: ReadonlyM
   }))
 })
 
+/** A unit as a points list writes it, what the config gets for it, and on how many rows. */
+export interface UnitMapping {
+  readonly written: string
+  /** A QUDT name (`unit:KiloW`), or `written` itself when it is not a spelling `qudtUnit` knows. */
+  readonly unit: string
+  /** Whether `unit` is a QUDT name, as consumers of the `$meta` expect. */
+  readonly qudt: boolean
+  readonly points: number
+}
+
+/** Each distinct unit the list's `unit` column writes, in the order first written, and what it becomes. */
+export const unitsWritten = (text: string): ReadonlyArray<UnitMapping> => {
+  const [header, ...records] = parseDelimited(text)
+  const column = headerColumns(header ?? []).indexOf("unit")
+  if (column === -1) return []
+  const counted = new Map<string, number>()
+  for (const fields of records) {
+    const written = fields[column]?.trim() ?? ""
+    if (written !== "") counted.set(written, (counted.get(written) ?? 0) + 1)
+  }
+  return Array.from(counted, ([written, points]) => {
+    const unit = qudtUnit(written)
+    return { written, unit, qudt: unit.startsWith("unit:"), points }
+  })
+}
+
 /** The profiles a points list names, as written, for the caller to load before devicesFromPointsList. */
 export const profileNames = (text: string): ReadonlyArray<string> => {
   const [header, ...records] = parseDelimited(text)

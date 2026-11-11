@@ -68,6 +68,9 @@ export interface BucketQuery {
   readonly stepMs: number
 }
 
+/** A read where a point's value changed, as the query returns it. */
+const ChangeRow = Schema.Struct({ ts: Schema.Int, value: Schema.Finite })
+
 /** Rows per statement: 4 or 7 bound values each, well under SQLite's limit of 32,766. */
 const CHUNK = 500
 
@@ -130,6 +133,24 @@ export const makeStore = (sql: SqlClient.SqlClient) => {
               GROUP BY b ORDER BY b`
     })(undefined).pipe(withoutSpans)
 
+  /**
+   * The first read of `[from, to)` and every read whose value differs from the one before it, oldest first, at most
+   * `limit`: when a state (a switch, an alarm) changed. From every read, so only within the last day.
+   */
+  const changesOf = (query: Omit<BucketQuery, "stepMs"> & { readonly limit: number }) =>
+    SqlSchema.findAll({
+      Request: Schema.Void,
+      Result: ChangeRow,
+      execute: () => sql`
+        SELECT ts, value FROM (
+          SELECT ts, value, LAG(value) OVER (ORDER BY ts) AS previous
+          FROM readings
+          WHERE device = ${query.device} AND point = ${query.point} AND ts >= ${query.from} AND ts < ${query.to}
+        )
+        WHERE previous IS NULL OR value != previous
+        ORDER BY ts LIMIT ${query.limit}`
+    })(undefined).pipe(withoutSpans)
+
   return {
     /** Store a batch of reads and merge them into the minute rollups, in one transaction. */
     write: (rows: ReadonlyArray<Row>) =>
@@ -156,6 +177,8 @@ export const makeStore = (sql: SqlClient.SqlClient) => {
         .pipe(withoutSpans),
     /** One point's buckets from every read (`readings`) or from the rollups (`minutes`). */
     buckets: bucketsOf,
+    /** One point's changes of value from every read: the first read, then each read that differs from the last. */
+    changes: changesOf,
     /** Delete reads older than `rawBefore` and rollups older than `minutesBefore` (Unix ms). */
     prune: (rawBefore: number, minutesBefore: number) =>
       Effect.gen(function* () {

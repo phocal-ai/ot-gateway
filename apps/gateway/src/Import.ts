@@ -11,7 +11,9 @@ import {
   parseDelimited,
   type PointsListDevice,
   PointsListError,
-  profileNames
+  profileNames,
+  type UnitMapping,
+  unitsWritten
 } from "./PointsList.ts"
 import { unknownColumns } from "./PointsSchema.ts"
 import { describeTranslation, edeToPointsList, isEde } from "./Ede.ts"
@@ -23,7 +25,11 @@ export const devicesFromFile = Effect.fn("devicesFromFile")(function* (
   path: string,
   existing: ReadonlyArray<string> = []
 ) {
-  const text = yield* readPointsList(path)
+  return yield* devicesFromText(yield* readPointsList(path), path, existing)
+})
+
+/** The devices of a points list's `text`, read from `path`: the profiles it names are found next to it. */
+const devicesFromText = Effect.fnUntraced(function* (text: string, path: string, existing: ReadonlyArray<string>) {
   const names = profileNames(text)
   const profiles = yield* Effect.forEach(names, (name) =>
     Effect.map(resolveProfile(name, { relativeTo: dirname(path) }), (profile) => [name, profile] as const)
@@ -107,7 +113,29 @@ export interface ImportResult {
   readonly config: GatewayConfig | undefined
   /** The config the devices were checked against, or `undefined` when a dry run checked them on their own. */
   readonly against: string | undefined
+  /** Each unit the list writes and what goes out for it in `$meta`. */
+  readonly units: ReadonlyArray<UnitMapping>
 }
+
+/**
+ * The units of an import, one line each: what the list wrote, the QUDT name the `$meta` carries, on how many points.
+ * A unit without a QUDT name is kept as written and said so: consumers that read QUDT names cannot read it.
+ */
+export const describeUnits = (units: ReadonlyArray<UnitMapping>) =>
+  units.length === 0
+    ? []
+    : [
+        "units, as the $meta of each point carries them (QUDT names):",
+        ...units.map((mapping) => {
+          const points = `${mapping.points} point${mapping.points === 1 ? "" : "s"}`
+          if (!mapping.qudt) {
+            return `  ${mapping.written}  kept as written: no QUDT name known for it; write one (unit:…) if consumers need it  (${points})`
+          }
+          return mapping.unit === mapping.written
+            ? `  ${mapping.unit}  (${points})`
+            : `  ${mapping.written} -> ${mapping.unit}  (${points})`
+        })
+      ]
 
 /** The config `import` adds to when the command names none, as every command that takes a config. */
 export const defaultConfigPath = "ot-gateway.json"
@@ -145,7 +173,9 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
     })
   }
   const existing = checkOnly ? [] : (yield* loadConfig(path)).devices.map((device) => device.id)
-  const added = yield* devicesFromFile(listPath, existing)
+  const listText = yield* readPointsList(listPath)
+  const added = yield* devicesFromText(listText, listPath, existing)
+  const units = unitsWritten(listText)
   const raw = checkOnly
     ? checkOnlyConfig
     : yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(path))
@@ -163,7 +193,7 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
   )
   const decoded = config.devices.slice(devices)
   const against = checkOnly ? undefined : path
-  if (options.dryRun) return { added, decoded, config: undefined, against } satisfies ImportResult
+  if (options.dryRun) return { added, decoded, config: undefined, against, units } satisfies ImportResult
   yield* fs.writeFileString(path, text)
-  return { added, decoded, config, against } satisfies ImportResult
+  return { added, decoded, config, against, units } satisfies ImportResult
 })

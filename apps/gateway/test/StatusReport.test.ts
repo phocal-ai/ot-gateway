@@ -1,16 +1,20 @@
 /** `status` and `events`: what they print, in local clock time, and the exit code `status` gives. */
 import { describe, expect, it } from "@effect/vitest"
-import type { EventLog, GatewayStatus } from "@ot-gateway/api"
+import type { EventLog, GatewayStatus, Protocol } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { TestConsole } from "effect/testing"
 import { localTime } from "../src/Output.ts"
 import {
+  adviseEvents,
   ago,
+  eventJson,
   eventsWithin,
   formatEvents,
   formatStatus,
   isHealthy,
   parseSince,
+  recentIncidents,
+  statusJson,
   statusOutcome,
   unhealthySummary
 } from "../src/StatusReport.ts"
@@ -237,6 +241,7 @@ describe("events", () => {
     expect(formatEvents(log, 10 * 60_000, "10m").split("\n")).toEqual([
       "12:18:00  broker        disconnected: connection closed by the peer",
       "12:18:20  energy-meter  failing: could not connect: connection refused by 127.0.0.1:5020",
+      "                        check: Is the device switched on and its Modbus TCP server (or its network module) enabled?",
       "12:19:00  energy-meter  ok again after 40 s",
       "12:19:10  broker        connected again after 70 s, 1204 message(s) waiting in the buffer at reconnect",
       "12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since it was last empty"
@@ -269,4 +274,167 @@ describe("events", () => {
     // At or after `now` minus the window: 12:19:00 is in the last 30 s of 12:19:30.
     expect(eventsWithin(log, 30_000).map((event) => event.id)).toEqual([5, 6, 7])
   })
+
+  const outage: EventLog = {
+    now,
+    capacity: 500,
+    dropped: 0,
+    events: [
+      {
+        id: 1,
+        at: at(12, 10, 0),
+        type: "device-failing",
+        device: "boiler",
+        reason: "timeout",
+        error: "no answer to Who-Is for device 1201"
+      },
+      { id: 2, at: at(12, 10, 4), type: "device-failing", device: "meter", reason: "connection", error: "timed out" },
+      { id: 3, at: at(12, 12, 0), type: "device-recovered", device: "boiler", downMs: 120_000 },
+      { id: 4, at: at(12, 12, 1), type: "device-recovered", device: "meter", downMs: 117_000 },
+      { id: 5, at: at(12, 15, 0), type: "device-failing", device: "pump", reason: "protocol", error: "exception 2" }
+    ]
+  }
+  const protocols = new Map<string, Protocol>([
+    ["boiler", "bacnet-ip"],
+    ["meter", "modbus-tcp"]
+  ])
+  const protocolOf = (device: string) => protocols.get(device)
+
+  it("gives a cleared failure its hint by the device's protocol, and a shared cause after its group", () => {
+    expect(formatEvents(outage, Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")).toEqual([
+      "12:10:00  boiler  failing: no answer to Who-Is for device 1201",
+      "                  check: Is the device instance in the config the device's own (its Device object, not a point)?",
+      "12:10:04  meter   failing: timed out",
+      "                  check: Is the device switched on and its network cable plugged in (link light)?",
+      "                  2 devices (boiler, meter) stopped answering within 4 s of each other: likely a shared cause (power, a switch, the gateway's own network)",
+      "12:12:00  boiler  ok again after 2 min",
+      "12:12:01  meter   ok again after 117 s",
+      "12:15:00  pump    failing: exception 2",
+      // pump is gone from the config: only the rules for any protocol, so Modbus's words, not BACnet's.
+      "                  check: Do the register addresses match the device's register map? Maps often count from 1 (40001) where the config counts from 0."
+    ])
+  })
+
+  it("puts the hint and the shared cause into the JSON of the failures", () => {
+    const advice = adviseEvents(outage.events, protocolOf)
+    const [boiler, meter, , , pump] = outage.events.map((event) => eventJson(event, advice))
+    expect(boiler).toMatchObject({ hint: { meaning: expect.stringContaining("Who-Is") } })
+    expect(meter).toMatchObject({ sharedCause: expect.stringContaining("2 devices (boiler, meter)") })
+    expect(boiler).toHaveProperty("sharedCause", meter?.sharedCause)
+    expect(pump).not.toHaveProperty("sharedCause")
+    for (const event of log.events.filter((other) => other.type !== "device-failing")) {
+      expect(eventJson(event, adviseEvents(log.events, protocolOf))).not.toHaveProperty("hint")
+    }
+  })
+
+  it("prints alarms raised, cleared, flapping and settled", () => {
+    const alarms: EventLog = {
+      ...log,
+      events: [
+        { id: 1, at: at(12, 0, 0), type: "alarm-raised", device: "ahu", point: "filter", value: true, first: true },
+        {
+          id: 2,
+          at: at(12, 1, 0),
+          type: "alarm-cleared",
+          device: "ahu",
+          point: "filter",
+          value: false,
+          activeMs: 60_000
+        },
+        { id: 3, at: at(12, 2, 0), type: "alarm-raised", device: "pump", point: "trip", value: 1 },
+        { id: 4, at: at(12, 3, 0), type: "alarm-flapping", device: "pump", point: "trip", raised: 4 },
+        {
+          id: 5,
+          at: at(12, 12, 0),
+          type: "alarm-settled",
+          device: "pump",
+          point: "trip",
+          active: false,
+          since: at(12, 7, 0),
+          unlisted: 23
+        }
+      ]
+    }
+    expect(formatEvents(alarms, Number.POSITIVE_INFINITY, "all").split("\n")).toEqual([
+      "12:00:00  ahu/filter  alarm active at its first read (value true)",
+      "12:01:00  ahu/filter  alarm cleared after 60 s (value false)",
+      "12:02:00  pump/trip   alarm raised (value 1)",
+      "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping, so its changes are counted, not listed, until it keeps still for 5 min",
+      "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 change(s) were counted, not listed"
+    ])
+  })
+})
+
+describe("status after an outage, and its alarms", () => {
+  const recentLog: EventLog = {
+    now,
+    capacity: 500,
+    dropped: 0,
+    events: [
+      { id: 1, at: at(11, 0, 0), type: "device-failing", device: "old", reason: "timeout", error: "" },
+      { id: 2, at: at(12, 10, 0), type: "device-failing", device: "energy-meter", reason: "timeout", error: "" },
+      { id: 3, at: at(12, 10, 5), type: "broker-disconnected", error: "connection closed by the peer" },
+      { id: 4, at: at(12, 12, 30), type: "device-failing", device: "pv", reason: "timeout", error: "" },
+      { id: 5, at: at(12, 13, 0), type: "device-failing", device: "energy-meter", reason: "timeout", error: "" }
+    ]
+  }
+
+  it("names the devices that failed in the last 15 min, and the broker outages, from the events", () => {
+    const recent = recentIncidents(recentLog)
+    expect(recent).toEqual({
+      windowMs: 900_000,
+      failedDevices: ["energy-meter", "pv"],
+      from: at(12, 10, 0),
+      to: at(12, 13, 0),
+      brokerOutages: 1
+    })
+    expect(recentIncidents({ ...recentLog, events: [] })).toEqual({
+      windowMs: 900_000,
+      failedDevices: [],
+      brokerOutages: 0
+    })
+  })
+
+  it.effect("says so under a healthy gateway's devices, lists active and flapping alarms, and stays ok", () =>
+    Effect.gen(function* () {
+      const withAlarms: GatewayStatus = {
+        ...healthyGateway,
+        alarms: [
+          {
+            device: "ahu",
+            point: "filter",
+            alarmWhen: "on",
+            active: true,
+            since: at(12, 17, 0),
+            raised: 1,
+            flapping: false
+          },
+          {
+            device: "pump",
+            point: "trip",
+            alarmWhen: "off",
+            active: false,
+            since: at(12, 19, 0),
+            raised: 7,
+            flapping: true
+          },
+          { device: "pump", point: "door", alarmWhen: "on", active: false, raised: 0, flapping: false }
+        ]
+      }
+      const lines = formatStatus(withAlarms, recentIncidents(recentLog)).split("\n")
+      expect(lines.slice(-5)).toEqual([
+        "  3 alarm point(s), 1 active",
+        "    ahu/filter  ACTIVE since 12:17:00 (3 min), raised 1 time(s) in the last 15 min",
+        "    pump/trip   off since 12:19:00, raised 7 time(s) in the last 15 min (flapping: its changes are counted, not listed, until it keeps still for 5 min)",
+        "  2 device(s) failed in the last 15 min (12:10:00–12:13:00: energy-meter, pv), see ot-gateway events",
+        "  broker connection lost 1 time(s) in the last 15 min, see ot-gateway events"
+      ])
+      expect(statusJson(withAlarms, recentIncidents(recentLog))).toMatchObject({
+        ok: true,
+        recent: { failedDevices: ["energy-meter", "pv"] },
+        alarms: [{ device: "ahu", active: true }, {}, {}]
+      })
+      yield* statusOutcome(false)(withAlarms, recentIncidents(recentLog))
+    })
+  )
 })

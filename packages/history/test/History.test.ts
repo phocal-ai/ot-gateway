@@ -8,6 +8,7 @@ import { historyDisabled, historyDropped } from "@ot-gateway/core"
 import { Clock, Effect, FileSystem, Metric, Tracer } from "effect"
 import { SqlError, UnknownError } from "effect/sql/SqlError"
 import { TestClock } from "effect/testing"
+import { HISTORY_CHANGES_MAX } from "@ot-gateway/api"
 import { type History, MAX_PENDING, openHistory, rollup, type Store, stepFor } from "../src/index.ts"
 
 const DAY = 86_400_000
@@ -109,6 +110,46 @@ describe("openHistory", () => {
       yield* TestClock.adjust("5 seconds")
       const series = yield* history.series({ device: "d", point: "on", from: 0, to: 4_000, buckets: 1 })
       expect(series.buckets).toEqual([{ t: 0, min: 0, max: 1, avg: 0.75, count: 4 }])
+      expect(series.changes).toBeUndefined()
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("lists when a value changed, from every read, when asked", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      for (const [index, value] of [false, false, true, true, true, false, true].entries())
+        history.sink.record("d", "on", value, index * 500)
+      // Another point between them changes nothing.
+      history.sink.record("d", "other", 7, 600)
+      yield* TestClock.adjust("5 seconds")
+      const series = yield* history.series({ device: "d", point: "on", from: 0, to: 4_000, changes: true })
+      expect(series.changes).toEqual({
+        list: [
+          { t: 0, value: 0 },
+          { t: 1_000, value: 1 },
+          { t: 2_500, value: 0 },
+          { t: 3_000, value: 1 }
+        ],
+        truncated: false
+      })
+      // Within the range only: the first read in it starts the list.
+      const later = yield* history.series({ device: "d", point: "on", from: 1_500, to: 4_000, changes: true })
+      expect(later.changes?.list).toEqual([
+        { t: 1_500, value: 1 },
+        { t: 2_500, value: 0 },
+        { t: 3_000, value: 1 }
+      ])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("lists at most HISTORY_CHANGES_MAX changes and says there were more", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      for (let index = 0; index < HISTORY_CHANGES_MAX + 10; index++) history.sink.record("d", "on", index % 2, index)
+      yield* TestClock.adjust("5 seconds")
+      const series = yield* history.series({ device: "d", point: "on", from: 0, to: 4_000, changes: true })
+      expect(series.changes?.list).toHaveLength(HISTORY_CHANGES_MAX)
+      expect(series.changes?.truncated).toBe(true)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -311,6 +352,21 @@ describe("which table a range is read from", () => {
       const series = yield* history.series({ device: "d", point: "p", from: now - 900_000, to: now, buckets: 240 })
       expect(series).toMatchObject({ resolution: "read", stepMs: 4_000 })
       expect(tables).toEqual(["readings"])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("reads the last 10 minutes in 10 buckets from every read, so the newest bucket ends now", () =>
+    Effect.gen(function* () {
+      const { tables, wrapStore } = tablesAsked()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      // Half a minute past a whole minute: rollups would start at the minute before and lag the last 30 s.
+      yield* TestClock.adjust("90 seconds")
+      const now = yield* Clock.currentTimeMillis
+      const series = yield* history.series({ device: "d", point: "p", from: now - 600_000, to: now, buckets: 10 })
+      expect(series).toMatchObject({ resolution: "read", stepMs: 60_000, from: now - 600_000 })
+      // An hour and a half in 10 buckets is past an hour, so from the rollups.
+      yield* history.series({ device: "d", point: "p", from: now - 5_400_000, to: now, buckets: 10 })
+      expect(tables).toEqual(["readings", "minutes"])
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 

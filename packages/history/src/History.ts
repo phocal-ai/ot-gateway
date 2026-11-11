@@ -19,7 +19,7 @@
  */
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
 import type { HistorySeries } from "@ot-gateway/api"
-import { HistoryUnavailable } from "@ot-gateway/api"
+import { HISTORY_CHANGES_MAX, HistoryUnavailable } from "@ot-gateway/api"
 import {
   type HistorySettings,
   type HistorySink,
@@ -64,11 +64,13 @@ export interface SeriesQuery {
   readonly from: number
   readonly to: number
   readonly buckets?: number
+  /** Also list when the value changed, from every read; only for a range that starts within the last day. */
+  readonly changes?: boolean
 }
 
 export interface History {
   readonly sink: HistorySink
-  /** A point's reads between `from` and `to` in about `buckets` buckets: from every read for buckets under a minute on a range that starts within the last day, else per minute. */
+  /** A point's reads between `from` and `to` in about `buckets` buckets: from every read for buckets under a minute, or a range of an hour or less, that starts within the last day; else per minute. */
   readonly series: (query: SeriesQuery) => Effect.Effect<HistorySeries, HistoryUnavailable>
 }
 
@@ -327,24 +329,34 @@ export const openHistory = (
       },
       series: (query) =>
         Effect.gen(function* () {
-          // Buckets of a minute or more always come from the rollups, whatever the range's age: a 24 h chart
-          // (360 s buckets) must not let a browser's clock a few milliseconds off the gateway's pick the table, nor
-          // aggregate up to a day of reads per point for buckets the rollups draw the same. Only finer buckets
-          // consult this clock: from every read while the range starts within the last day (reads are kept that
-          // long), else from the rollups at a minute step. The status page's fine ranges (15 min, 1 h) are far from
-          // that boundary. Rollups are merged in the same transaction as the reads, so they hold everything flushed
-          // (every 30 s); the newest bucket can lag by one flush, as the raw one does.
+          // Buckets of a minute or more on a range longer than an hour come from the rollups, whatever the range's
+          // age: a 24 h chart (360 s buckets) must not let a browser's clock a few milliseconds off the gateway's
+          // pick the table, nor aggregate up to a day of reads per point for buckets the rollups draw the same.
+          // Finer buckets, and any range of an hour or less, come from every read while the range starts within
+          // the last day (reads are kept that long), else from the rollups at a minute step. So `history --since
+          // 10m` in ten buckets ends its buckets at now, not at the last whole minute. The status page's ranges
+          // (15 min, 1 h, 24 h) are far from that boundary. Rollups are merged in the same transaction as the reads,
+          // so they hold everything flushed (every 30 s); the newest bucket can lag by one flush, as the raw one does.
           const buckets = query.buckets ?? DEFAULT_BUCKETS
           const fineMs = stepFor(query.from, query.to, buckets, 1_000)
           const now = yield* Clock.currentTimeMillis
-          const raw = fineMs < MINUTE_MS && query.from >= now - RAW_MS
+          const recent = query.from >= now - RAW_MS
+          const raw = recent && (fineMs < MINUTE_MS || query.to - query.from <= HOUR_MS)
           const stepMs = raw ? fineMs : stepFor(query.from, query.to, buckets, MINUTE_MS)
           const from = raw ? query.from : Math.floor(query.from / MINUTE_MS) * MINUTE_MS
           // A corrupt file only fails this request; the flusher or the pruner replaces it, never a reader.
           const rows = yield* Effect.gen(function* () {
             const target = current
             if (target === undefined) return yield* unavailable(`the gateway keeps no history: ${off ?? "it is off"}`)
-            return yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs }).pipe(
+            return yield* Effect.gen(function* () {
+              const bucketRows = yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs })
+              // One more than shown, to tell whether there were more.
+              const changes =
+                query.changes === true && recent
+                  ? yield* target.store.changes({ ...query, limit: HISTORY_CHANGES_MAX + 1 })
+                  : undefined
+              return { buckets: bucketRows, changes }
+            }).pipe(
               Effect.tapError(() => Metric.update(Metric.withAttributes(historyFailures, { operation: "read" }), 1)),
               Effect.catchTags({
                 SqlError: (error) => unavailable(`history could not be read: ${error.message}`),
@@ -363,13 +375,21 @@ export const openHistory = (
             to: query.to,
             stepMs,
             resolution: raw ? "read" : "minute",
-            buckets: rows.map((row) => ({
+            buckets: rows.buckets.map((row) => ({
               t: from + row.b * stepMs,
               min: row.min,
               max: row.max,
               avg: row.avg,
               count: row.count
-            }))
+            })),
+            ...(rows.changes === undefined
+              ? {}
+              : {
+                  changes: {
+                    list: rows.changes.slice(0, HISTORY_CHANGES_MAX).map((row) => ({ t: row.ts, value: row.value })),
+                    truncated: rows.changes.length > HISTORY_CHANGES_MAX
+                  }
+                })
           } satisfies HistorySeries
         })
     }
