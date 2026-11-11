@@ -252,7 +252,7 @@ describe("BACnet/IP client", () => {
       expect(yield* client.locate(1001)).toMatchObject({ instance: 1001 })
       expect(yield* client.locate(1002).pipe(Effect.flip)).toMatchObject({
         _tag: "BacnetTimeout",
-        message: "device 1002 did not answer Who-Is within 150ms"
+        message: "device 1002 did not answer Who-Is within 150 ms"
       })
     })
   )
