@@ -23,7 +23,8 @@
  *   than ten hours at that pace, so it was installed or reset today, which is worth a look anyway. A meter that is
  *   that new reads little: the reading floor keeps one near 0 (a few kWh, where an hour of use is a large share) from
  *   being flagged. After an hour without a read nothing is judged this way, as a young meter may have counted that
- *   much. The event has no `usualPerHour` then. The rise counts towards no rate either.
+ *   much. A daily counter (`today`, `daily`) is never judged this way: its reading is today's use, not the meter's
+ *   life. The event has no `usualPerHour` then. The rise counts towards no rate either.
  *
  * One event per episode: after an event, a point's further implausible reads are counted, not listed, until it has
  * read plausibly for `COUNTER_EPISODE_MS` (15 min). All counters together list at most `COUNTER_EVENTS_PER_GATEWAY`
@@ -198,6 +199,7 @@ export const makeCounterTracker = (clock: Clock.Clock, record: (event: ValueEven
         const reading = Math.abs(last.value)
         if (
           !judged &&
+          !state.daily &&
           elapsed <= COUNTER_EARLY_MAX_MS &&
           reading >= COUNTER_EARLY_MIN_READING_KWH / state.perUnitKwh &&
           rise > COUNTER_EARLY_SHARE * reading &&

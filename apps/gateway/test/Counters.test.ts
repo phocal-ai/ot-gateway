@@ -204,6 +204,17 @@ describe("energy counters", () => {
     })
   )
 
+  it.effect("judges no daily counter by its share of the reading: it holds only today's use", () =>
+    Effect.gen(function* () {
+      const { counters, recorded } = yield* tracker(yield* configWith([today]))
+      // A large site at 7:00: 150 kWh since midnight, 20 kWh more in two minutes.
+      yield* read(counters, "energy-today", 150)
+      yield* TestClock.adjust("2 minutes")
+      yield* read(counters, "energy-today", 170)
+      expect(recorded).toEqual([])
+    })
+  )
+
   it.effect("allows an outage's worth of rise, and a step below the minimum", () =>
     Effect.gen(function* () {
       const { counters, recorded } = yield* tracker(yield* configWith([total]))
