@@ -122,7 +122,7 @@ export const protocolName: Readonly<Record<string, string>> = {
 }
 
 /** QUDT unit names (`unit:DEG_C`) as people write them. */
-const unitSymbols: Record<string, string> = {
+export const unitSymbols: Readonly<Record<string, string>> = {
   DEG_C: "°C",
   DEG_F: "°F",
   PERCENT: "%",

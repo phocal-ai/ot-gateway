@@ -5,11 +5,18 @@
  */
 import type { ConfigChange, ConfigIssue } from "@ot-gateway/api"
 
-/** What a save that went through says: what changed (the gateway's summary names what waits for a restart). */
-export const savedMessage = (applied: ConfigChange) =>
+/** A clock time to the minute, 13:27, for a saved message. */
+export const hourMinute = (at: number) =>
+  new Date(at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+
+/**
+ * What a save that went through says: what changed (the gateway's summary names what waits for a restart), and at
+ * what time when `at` (13:27) is given.
+ */
+export const savedMessage = (applied: ConfigChange, at?: string) =>
   applied.changes.length === 0
     ? "Saved. Nothing changed, so nothing had to be applied."
-    : `Saved and applied: ${applied.summary}.`
+    : `Saved and applied${at === undefined ? "" : ` at ${at}`}: ${applied.summary}.`
 
 /** A setting the page edits: where it is in the file, and how it is typed in. */
 export interface EditField {

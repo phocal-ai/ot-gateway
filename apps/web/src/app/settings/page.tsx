@@ -1,19 +1,24 @@
 "use client"
 
 /**
- * The Settings tab: the gateway's running config (`/api/config`), every default filled in. The Gateway and Broker
- * cards have an Edit button when the gateway lets this page edit (`/api/config/edit`): the form saves the config
- * file and the gateway applies it without a restart (components/settings-editor.tsx). When it does not, the page
- * says why and what to change. Everything else is changed in the config file, checked with `ot-gateway check` and
- * read again when the gateway restarts. Points are on the Points tab; here each device has its address, interval
- * and point count.
+ * The Settings tab: the gateway's running config (`/api/config`), every default filled in. When the gateway lets
+ * this page edit (`/api/config/edit`), the Gateway and Broker cards have an Edit button
+ * (components/settings-editor.tsx), and the Devices card adds a Modbus TCP or BACnet/IP device, edits or removes one
+ * (components/device-editor.tsx), or adds the devices of an uploaded points list or EDE file
+ * (components/import-panel.tsx). Every save writes the config file and the gateway applies it without a restart.
+ * When it does not let the page edit, the page says why and what to change.
+ *
+ * Links open a panel: `?add=modbus-tcp` or `?add=bacnet-ip` (a new device), `?edit=<device id>`, `?upload=1`.
  */
 import type { ConfigView, EditStatus } from "@ot-gateway/api"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
+import { DeviceEditor } from "@/components/device-editor"
+import { ImportPanel } from "@/components/import-panel"
 import { EditForm } from "@/components/settings-editor"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { type EditableProtocol, isEditableProtocol } from "@/lib/device-editor"
 import type { EditCard } from "@/lib/editor"
 import { fetchEditStatus } from "@/lib/editor-api"
 import { formatNumber } from "@/lib/format"
@@ -22,6 +27,9 @@ import { fetchConfig, protocolName, settle } from "@/lib/status"
 
 /** Try again after this long when the config did not come. */
 const RETRY_MS = 5000
+
+/** How long "Saved and applied" stays on its card. */
+const SAVED_SHOWN_MS = 8000
 
 type ConfigLoad =
   | { readonly _tag: "loading" }
@@ -74,12 +82,63 @@ const offWhenMissing: ReadonlyArray<readonly [string, string]> = [
 /** The cards with an Edit button. */
 const editable = (key: string): EditCard | undefined => (key === "gateway" || key === "mqtt" ? key : undefined)
 
+/** What the Devices card shows above its list. */
+type DevicePanel =
+  | { readonly _tag: "device"; readonly id: string | undefined; readonly protocol: EditableProtocol }
+  | { readonly _tag: "upload" }
+
+/** The panel a link asks for (`?add=modbus-tcp`, `?edit=meter`, `?upload=1`). */
+const panelFromLink = (search: string): DevicePanel | undefined => {
+  const params = new URLSearchParams(search)
+  const add = params.get("add")
+  if (isEditableProtocol(add)) return { _tag: "device", id: undefined, protocol: add }
+  const editId = params.get("edit")
+  if (editId !== null && editId !== "") return { _tag: "device", id: editId, protocol: "modbus-tcp" }
+  if (params.get("upload") !== null) return { _tag: "upload" }
+  return undefined
+}
+
+/** A save's result on its card: shown for a few seconds. */
+interface Saved {
+  readonly card: string
+  readonly message: string
+}
+
+const SavedNote = ({ saved, card }: { readonly saved: Saved | undefined; readonly card: string }) =>
+  saved?.card === card ? (
+    <p role="status" className="mb-3 rounded-md border border-success/40 px-3 py-2 text-sm">
+      {saved.message}
+    </p>
+  ) : null
+
 const SettingsPage = () => {
   const [reload, setReload] = useState(0)
   const load = useConfig(reload)
   const edit = useEditStatus(reload)
   const [editing, setEditing] = useState<EditCard | undefined>(undefined)
-  const [saved, setSaved] = useState<string | undefined>(undefined)
+  const [panel, setPanel] = useState<DevicePanel | undefined>(undefined)
+  const [saved, setSaved] = useState<Saved | undefined>(undefined)
+  const devicesCard = useRef<HTMLDivElement>(null)
+
+  // A link's panel, once the page knows it may edit and shows the Devices card.
+  const linked = useRef(false)
+  useEffect(() => {
+    if (linked.current || edit?.enabled !== true || load._tag !== "ok") return
+    linked.current = true
+    const fromLink = panelFromLink(window.location.search)
+    if (fromLink === undefined) return
+    setPanel(fromLink)
+    window.history.replaceState(null, "", window.location.pathname)
+    setTimeout(() => devicesCard.current?.scrollIntoView({ block: "start" }), 0)
+  }, [edit, load._tag])
+
+  // "Saved" goes after a few seconds; a failure stays in its form until it is dismissed or fixed.
+  useEffect(() => {
+    if (saved === undefined) return
+    const timer = setTimeout(() => setSaved(undefined), SAVED_SHOWN_MS)
+    return () => clearTimeout(timer)
+  }, [saved])
+
   if (load._tag !== "ok")
     return (
       <p className="text-muted-foreground">
@@ -88,22 +147,30 @@ const SettingsPage = () => {
     )
   const { sections, devices } = load.config
   const present = new Set(sections.map((section) => section.key))
-  const closeForm = (message: string | undefined) => {
+  const canEdit = edit?.enabled === true
+  const open = editing !== undefined || panel !== undefined
+  const done = (card: string) => (message: string | undefined) => {
     setEditing(undefined)
+    setPanel(undefined)
     if (message === undefined) return
-    setSaved(message)
+    setSaved({ card, message })
     setReload((count) => count + 1)
+  }
+  const openPanel = (next: DevicePanel) => {
+    setSaved(undefined)
+    setPanel(next)
   }
   return (
     <>
       <div className="grid max-w-3xl gap-2 text-sm">
-        {edit?.enabled === true ? (
-          <p className="text-muted-foreground">
-            The settings the gateway runs with. Edit changes the gateway and broker settings in{" "}
-            <code className="font-mono break-all">{edit.path}</code> and applies them at once, keeping the previous file
-            as <code className="font-mono">.bak</code>. Devices and everything else are changed in that file, then the
-            gateway is restarted.
-          </p>
+        {canEdit ? (
+          <>
+            <p>Change the settings here; they apply at once.</p>
+            <p className="text-xs break-words text-muted-foreground">
+              Saved to <code className="font-mono">{edit.path}</code>, the previous version kept as{" "}
+              <code className="font-mono">.bak</code>.
+            </p>
+          </>
         ) : (
           <p className="text-muted-foreground">
             The settings the gateway runs with. To change one, edit the config file (
@@ -117,21 +184,15 @@ const SettingsPage = () => {
             {edit.fix === undefined ? null : <p className="mt-1 text-muted-foreground">{edit.fix}</p>}
           </div>
         ) : null}
-        {saved === undefined ? null : (
-          <p role="status" className="rounded-md border border-success/40 px-3 py-2">
-            {saved}
-          </p>
-        )}
       </div>
       <div className="grid gap-4 md:grid-cols-2">
         {sections.map((section) => {
           const card = editable(section.key)
-          const canEdit = card !== undefined && edit?.enabled === true && editing === undefined
           return (
             <Card key={section.key}>
               <CardHeader className="flex items-center justify-between gap-2">
                 <CardTitle>{sectionTitle(section.key)}</CardTitle>
-                {canEdit ? (
+                {card !== undefined && canEdit && !open ? (
                   <Button
                     size="sm"
                     variant="outline"
@@ -146,8 +207,9 @@ const SettingsPage = () => {
                 ) : null}
               </CardHeader>
               <CardContent>
+                <SavedNote saved={saved} card={section.key} />
                 {card !== undefined && editing === card && edit !== undefined ? (
-                  <EditForm card={card} edit={edit} onDone={closeForm} />
+                  <EditForm card={card} edit={edit} onDone={done(card)} />
                 ) : (
                   <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
                     {section.entries.map((entry) => (
@@ -185,21 +247,69 @@ const SettingsPage = () => {
             </Card>
           ))}
       </div>
-      <Card className="gap-0 py-0">
-        <div className="border-b px-5 py-4">
+      <Card className="scroll-mt-4 gap-0 py-0" ref={devicesCard}>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-4">
           <h2 className="leading-none font-semibold">Devices</h2>
+          {canEdit && !open ? (
+            <div className="flex flex-wrap gap-2 sm:-my-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openPanel({ _tag: "device", id: undefined, protocol: "modbus-tcp" })}
+              >
+                Add Modbus device
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openPanel({ _tag: "device", id: undefined, protocol: "bacnet-ip" })}
+              >
+                Add BACnet device
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => openPanel({ _tag: "upload" })}>
+                Upload a points list
+              </Button>
+            </div>
+          ) : null}
         </div>
+        {saved?.card === "devices" ? (
+          <div className="px-5 pt-4">
+            <SavedNote saved={saved} card="devices" />
+          </div>
+        ) : null}
+        {panel !== undefined && edit !== undefined ? (
+          <div className="border-b px-5 py-4">
+            {panel._tag === "upload" ? (
+              <ImportPanel edit={edit} onDone={done("devices")} />
+            ) : (
+              <DeviceEditor
+                key={panel.id ?? `new-${panel.protocol}`}
+                edit={edit}
+                deviceId={panel.id}
+                protocol={panel.protocol}
+                onDone={done("devices")}
+              />
+            )}
+          </div>
+        ) : null}
         {devices.length === 0 ? (
-          <p className="p-5 text-sm text-muted-foreground">The config has no devices.</p>
+          <p className="p-5 text-sm text-muted-foreground">
+            {canEdit ? "No devices yet: add one, or upload a points list." : "The config has no devices."}
+          </p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Device</TableHead>
                 <TableHead className="hidden sm:table-cell">Address</TableHead>
-                <TableHead className="text-right">Read every</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Read every</TableHead>
                 <TableHead className="text-right">Points</TableHead>
-                <TableHead className="hidden pr-5 lg:table-cell">Other settings</TableHead>
+                <TableHead className="hidden lg:table-cell">Other settings</TableHead>
+                {canEdit ? (
+                  <TableHead className="pr-2 text-right sm:pr-5">
+                    <span className="sr-only">Edit</span>
+                  </TableHead>
+                ) : null}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -221,16 +331,34 @@ const SettingsPage = () => {
                     <TableCell className="hidden font-mono text-xs sm:table-cell">
                       {deviceAddress(device.protocol, device.entries)}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="hidden text-right tabular-nums sm:table-cell">
                       {typeof interval === "number" ? duration(interval) : "–"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatNumber(device.pointCount)}</TableCell>
                     <TableCell
-                      className="hidden max-w-md truncate pr-5 text-xs text-muted-foreground lg:table-cell"
+                      className="hidden max-w-md truncate text-xs text-muted-foreground lg:table-cell"
                       title={others}
                     >
                       {others}
                     </TableCell>
+                    {canEdit ? (
+                      <TableCell className="pr-2 text-right sm:pr-5">
+                        {isEditableProtocol(device.protocol) ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={open}
+                            aria-label={`Edit ${device.id}`}
+                            onClick={() => {
+                              openPanel({ _tag: "device", id: device.id, protocol: "modbus-tcp" })
+                              devicesCard.current?.scrollIntoView({ block: "start" })
+                            }}
+                          >
+                            Edit
+                          </Button>
+                        ) : null}
+                      </TableCell>
+                    ) : null}
                   </TableRow>
                 )
               })}
