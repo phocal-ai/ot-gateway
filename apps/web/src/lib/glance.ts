@@ -3,7 +3,7 @@
  * unchanged (a COV point), and which few points a device row on the Status tab shows. Pure, so it is tested without
  * a browser.
  */
-import type { PointInfo, PointReading } from "@ot-gateway/api"
+import type { DeviceStatus, PointInfo, PointReading } from "@ot-gateway/api"
 import { type LivePoint, pointKey } from "./points"
 import { clockTime, freshness, lateAfterMs } from "./status"
 
@@ -137,5 +137,69 @@ export const glancePoints = (
   return { shown, more: points.length - shown.length }
 }
 
-/** "1 alarm active", "3 alarms active". */
-export const alarmCount = (count: number) => `${count} ${count === 1 ? "alarm" : "alarms"} active`
+/**
+ * An active alarm as the banner lists it. `lastKnown`, when its value is stale (`pointFreshness`): why it is not
+ * known to be active now, "device not answering since 15:58". Its device may have cleared it meanwhile, or not.
+ * `alarmNote` words it for the banner.
+ */
+export interface ShownAlarm {
+  readonly point: PointInfo
+  readonly lastKnown?: string
+}
+
+/** A time to the minute, "15:58" (with the date on another day), as the banner says it. */
+const minuteTime = (at: number, now: number) => clockTime(at, now).slice(0, -3)
+
+/** Why a stale alarm value is not known to be current, from its device's state (`pointFreshness`'s cases). */
+const staleBecause = (device: DeviceStatus | undefined, ts: number, now: number, unreachable: boolean) => {
+  if (unreachable) return `gateway not answering, last read ${minuteTime(ts, now)}`
+  if (device?.status === "failing")
+    return `device not answering since ${minuteTime(device.failingSince ?? device.lastSuccess ?? ts, now)}`
+  if (device !== undefined && freshness(device, now)._tag === "late")
+    return `device late, last read ${minuteTime(device.lastSuccess ?? ts, now)}`
+  return `not read since ${minuteTime(ts, now)}`
+}
+
+/**
+ * The active alarms for the banner, in config order: the ones whose last read is current first, then the ones whose
+ * value is stale (its device fails, is late, or the page does not reach the gateway), which are only last known to
+ * be active.
+ */
+export const shownAlarms = (
+  points: ReadonlyArray<PointInfo>,
+  readings: ReadonlyMap<string, PointReading>,
+  devices: ReadonlyMap<string, DeviceStatus>,
+  now: number,
+  unreachable: boolean
+): ReadonlyArray<ShownAlarm> => {
+  const shown = activeAlarms(points, readings).map((point): ShownAlarm => {
+    const value = readings.get(pointKey(point))
+    const device = devices.get(point.device)
+    const read = pointFreshness(point, { value, device }, now, unreachable)
+    return read._tag === "stale" ? { point, lastKnown: staleBecause(device, read.ts, now, unreachable) } : { point }
+  })
+  return [
+    ...shown.filter((alarm) => alarm.lastKnown === undefined),
+    ...shown.filter((alarm) => alarm.lastKnown !== undefined)
+  ]
+}
+
+const alarmsText = (count: number) => `${count} ${count === 1 ? "alarm" : "alarms"}`
+
+/**
+ * The banner's headline: "1 alarm active", "2 alarms last known active" when none is known to be on now, "1 alarm
+ * active, 1 last known active" for both.
+ */
+export const alarmCount = (active: number, lastKnown = 0) =>
+  active === 0
+    ? `${alarmsText(lastKnown)} last known active`
+    : lastKnown === 0
+      ? `${alarmsText(active)} active`
+      : `${alarmsText(active)} active, ${lastKnown} last known active`
+
+/**
+ * What the banner says after a last known alarm's name: "last known active, device not answering since 15:58", or
+ * only why when the headline already says that none is known to be active now (`active` is 0).
+ */
+export const alarmNote = (alarm: ShownAlarm, active: number) =>
+  alarm.lastKnown === undefined ? undefined : active === 0 ? alarm.lastKnown : `last known active, ${alarm.lastKnown}`

@@ -123,7 +123,7 @@ export const DeviceSheet = ({
   /** Its points from the catalog, in config order; undefined until the catalog came. */
   readonly points: ReadonlyArray<PointInfo> | undefined
   readonly readings: ReadonlyMap<string, PointReading>
-  /** What happened to it, oldest first. */
+  /** What happened to it and its alarm points, oldest first. */
   readonly events: ReadonlyArray<GatewayEvent>
   readonly now: number
   /** Where the device is in the listed devices (1-based), when it is listed. */
@@ -316,7 +316,9 @@ export const DeviceSheet = ({
                   <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
                     {clockTime(event.at, now)}
                   </span>
-                  <span className="min-w-0 break-words">{eventSentence(event)}</span>
+                  <span className="min-w-0 break-words">
+                    {eventSentence(event, (_, pointId) => points?.find((point) => point.id === pointId)?.name)}
+                  </span>
                 </li>
               ))}
             </ul>

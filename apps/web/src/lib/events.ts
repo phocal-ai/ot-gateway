@@ -88,9 +88,19 @@ export const eventSentence = (event: GatewayEvent, names?: PointNames): string =
         ? `Another gateway with this gateway's id (${event.gateway}) is online: both publish into the same topics`
         : `Gateway ${event.gateway} publishes ${event.devices.join(", ")} too: values from both gateways mix`
     case "alarm-raised":
-      return `${event.first === true ? "Alarm active at its first read" : "Alarm raised"}: ${alarmSubject(event.device, event.point, names)}`
+      return `${
+        event.first === true
+          ? "Alarm active at its first read"
+          : event.afterOutage === true
+            ? `Alarm active when ${event.device} answered again`
+            : "Alarm raised"
+      }: ${alarmSubject(event.device, event.point, names)}`
     case "alarm-cleared":
-      return `Alarm cleared after ${duration(event.activeMs)}: ${alarmSubject(event.device, event.point, names)}`
+      return `${
+        event.afterOutage === true
+          ? `Alarm off when ${event.device} answered again`
+          : `Alarm cleared after ${duration(event.activeMs)}`
+      }: ${alarmSubject(event.device, event.point, names)}`
     case "alarm-flapping":
       return `Alarm raised ${event.raised} times in 15 min: ${alarmSubject(event.device, event.point, names)}; changes are counted until it keeps still`
     case "alarm-settled":
@@ -105,23 +115,29 @@ export const eventSentence = (event: GatewayEvent, names?: PointNames): string =
 export const isIncident = (event: GatewayEvent) =>
   event.type !== "gateway-started" && !(event.type === "broker-connected" && event.downMs === undefined)
 
-/** Whether an event is bad news (shown in red), good news or neither. */
+/**
+ * Whether an event is bad news (shown in red), good news or neither. An alarm found changed when its device answered
+ * again (`afterOutage`) is neither: it changed at some time during the outage, which the device's failure already
+ * said, and it is not a new trip or a clear the gateway saw happen.
+ */
 export const eventTone = (event: GatewayEvent): "bad" | "good" | "neutral" =>
-  event.type === "device-failing" ||
-  event.type === "broker-disconnected" ||
-  event.type === "config-apply-failed" ||
-  event.type === "gateway-conflict" ||
-  event.type === "alarm-raised" ||
-  event.type === "alarm-flapping" ||
-  (event.type === "alarm-settled" && event.active)
-    ? "bad"
-    : event.type === "device-recovered" ||
-        event.type === "broker-connected" ||
-        event.type === "buffer-drained" ||
-        event.type === "alarm-cleared" ||
-        (event.type === "alarm-settled" && !event.active)
-      ? "good"
-      : "neutral"
+  (event.type === "alarm-raised" || event.type === "alarm-cleared") && event.afterOutage === true
+    ? "neutral"
+    : event.type === "device-failing" ||
+        event.type === "broker-disconnected" ||
+        event.type === "config-apply-failed" ||
+        event.type === "gateway-conflict" ||
+        event.type === "alarm-raised" ||
+        event.type === "alarm-flapping" ||
+        (event.type === "alarm-settled" && event.active)
+      ? "bad"
+      : event.type === "device-recovered" ||
+          event.type === "broker-connected" ||
+          event.type === "buffer-drained" ||
+          event.type === "alarm-cleared" ||
+          (event.type === "alarm-settled" && !event.active)
+        ? "good"
+        : "neutral"
 
 /** The event as one line: "12:18:20 energy-meter stopped answering: connection refused by 127.0.0.1:5020". */
 export const eventLine = (event: GatewayEvent, now: number) => `${clockTime(event.at, now)} ${eventSentence(event)}`
@@ -139,10 +155,17 @@ export const sharedCauseNotes = (events: ReadonlyArray<GatewayEvent>): ReadonlyM
     })
   )
 
-/** The events about one device, oldest first. */
+/** The events about one device, oldest first: its failures and recoveries, and the changes of its alarm points. */
 export const deviceEvents = (events: ReadonlyArray<GatewayEvent>, device: string): ReadonlyArray<GatewayEvent> =>
   events.filter(
-    (event) => (event.type === "device-failing" || event.type === "device-recovered") && event.device === device
+    (event) =>
+      (event.type === "device-failing" ||
+        event.type === "device-recovered" ||
+        event.type === "alarm-raised" ||
+        event.type === "alarm-cleared" ||
+        event.type === "alarm-flapping" ||
+        event.type === "alarm-settled") &&
+      event.device === device
   )
 
 /** The newest `count` events, newest first, for a short list. */
