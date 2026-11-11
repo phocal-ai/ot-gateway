@@ -29,7 +29,8 @@ pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limit
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
 pnpm ot-gateway status                     # the running gateway of ./ot-gateway.json (or a config named): its devices, one line each, what to check (exit 1 when one fails)
 pnpm ot-gateway events --since 1h          # what broke, since when and why, and when it came back (/api/events; --follow for what comes)
-pnpm ot-gateway history meter/power        # a point's last 10 minutes from the gateway's history: min, max, average per minute, gaps
+pnpm ot-gateway history meter/power        # a point's last 10 minutes from the gateway's history: min, max, average per minute, gaps (on/off and switch times for a bool)
+pnpm ot-gateway messages                   # messages per topic since the gateway started, and how many reached the broker
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)

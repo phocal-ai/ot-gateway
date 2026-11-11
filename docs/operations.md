@@ -360,7 +360,7 @@ and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The
 
 ## What changed and when
 
-`ot-gateway status`, `events` and `history` ask the running gateway of a config: the one named (`ot-gateway status site-1/ot-gateway.json`), else `ot-gateway.json` in this folder, at the address its `status` block gives (`bindAddress`, asked on `127.0.0.1` when it is `0.0.0.0`, and `port`). `--url` asks elsewhere; with neither a config nor `--url` they ask `http://127.0.0.1:8080`. Each names the gateway that answered first, and when the config was given and another gateway answers there (a second gateway on the machine, an old SSH tunnel), it says `WRONG GATEWAY` with both names and exits with 1 instead of reporting on the wrong building.
+`ot-gateway status`, `events`, `history` and `messages` ask the running gateway of a config: the one named (`ot-gateway status site-1/ot-gateway.json`), else `ot-gateway.json` in this folder, at the address its `status` block gives (`bindAddress`, asked on `127.0.0.1` when it is `0.0.0.0`, and `port`). `--url` asks elsewhere; with neither a config nor `--url` they ask `http://127.0.0.1:8080`. Each names the gateway that answered first, and when the config was given and another gateway answers there (a second gateway on the machine, an old SSH tunnel), it says `WRONG GATEWAY` with both names and exits with 1 instead of reporting on the wrong building.
 
 `ot-gateway status` prints one line for the gateway, its broker and buffer, and one per device. A failing device says since when and why, and below it the first thing to check for that failure (the status page's device panel has the rest); the broker says since when it is connected or away, with the last error and the failed connects since start:
 
@@ -375,22 +375,51 @@ s/b gateway main, up 2 h (since 10:19:30)
 
 When every device (two or more) stopped answering within 10 s of the others, a line says so: `all 3 devices stopped answering within 6 s of each other: likely a shared cause (power, a switch, the gateway's own network)`.
 
-It exits with 1 while a device is `failing` or `late` (`ok`, but no read for three poll intervals and at least 15 s: a stuck polling cycle, as on the status page), or while the broker is not connected after a connection was lost or a connect failed or was refused. A gateway that has just started is fine: devices `starting`, and the broker line says `connecting (started 2 s ago)` until the first connect succeeds or fails. So a script or an agent can tell from the exit code alone. `--json` prints `/api/status` with `ok: true` or `false` in front, and each failing device with `hints`: `{meaning, checks}`, the checks most likely first. In `/api/status`, a failing device has `failingSince`, `lastError` and `failures` (failed polling cycles in a row); `lastSuccess` is when the reads of the device's last successful polling cycle came back, and it stays while the device fails. A point's `ts` can be newer than `lastSuccess`: a change-of-value notification or a pushed value arrives between cycles. The broker has `disconnectedSince` and `lastError` while it is away, `connects` (successful connects) and `failedConnects` (dials that failed or were refused) since start.
+A gateway that is fine now still says what happened lately, so an outage that is over is not missed: the alarm points (`alarmWhen` in the config) with the ones that are active or changed in the last 15 minutes, and, from the events, the devices that failed and the broker outages of the last 15 minutes:
+
+```
+plant-1/hall-a gateway main, up 6 h (since 08:02:11)
+  broker mqtt://broker.lan:1883: connected since 14:21:40, 6 failed connect(s) since start
+  buffer: 0 of 100000 message(s) waiting
+  3 device(s)
+    energy-meter  ok       modbus-tcp, 4 point(s), read 3 s ago
+    pv-inverter   ok       modbus-tcp, 3 point(s), read 1 s ago
+    ahu-1         ok       bacnet-ip, 6 point(s), read 4 s ago
+  3 alarm point(s), 1 active
+    ahu-1/filter-alarm            ACTIVE since 14:24:02 (8 min), raised 1 time(s) in the last 15 min
+    energy-meter/breaker-tripped  off since 14:22:30, raised 1 time(s) in the last 15 min
+  2 device(s) failed in the last 15 min (14:20:03–14:20:06: energy-meter, pv-inverter), see ot-gateway events
+  broker connection lost 1 time(s) in the last 15 min, see ot-gateway events
+```
+
+An active alarm does not make `status` exit with 1: it is the building's state, not the gateway's.
+
+It exits with 1 while a device is `failing` or `late` (`ok`, but no read for three poll intervals and at least 15 s: a stuck polling cycle, as on the status page), or while the broker is not connected after a connection was lost or a connect failed or was refused. A gateway that has just started is fine: devices `starting`, and the broker line says `connecting (started 2 s ago)` until the first connect succeeds or fails. So a script or an agent can tell from the exit code alone. `--json` prints `/api/status` with `ok: true` or `false` in front, each failing device with `hints`: `{meaning, checks}`, the checks most likely first, and `recent`: `{windowMs, failedDevices, from?, to?, brokerOutages}`. In `/api/status`, a failing device has `failingSince`, `lastError` and `failures` (failed polling cycles in a row); `lastSuccess` is when the reads of the device's last successful polling cycle came back, and it stays while the device fails. A point's `ts` can be newer than `lastSuccess`: a change-of-value notification or a pushed value arrives between cycles. The broker has `disconnectedSince` and `lastError` while it is away, `connects` (successful connects) and `failedConnects` (dials that failed or were refused) since start.
 
 `ot-gateway events` prints what changed, oldest first, in this machine's clock time, after the gateway's name:
 
 ```
-s/b gateway main at http://127.0.0.1:8080
-12:18:00  broker        disconnected: connection closed by the peer
-12:18:20  energy-meter  failing: could not connect: connection refused by 127.0.0.1:5020
-12:19:00  energy-meter  ok again after 40 s
-12:19:10  broker        connected again after 70 s, 1204 message(s) waiting in the buffer at reconnect
-12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since it was last empty
+plant-1/hall-a gateway main at http://127.0.0.1:8080
+14:20:01  broker                        disconnected: connection closed by the peer
+14:20:03  energy-meter                  failing: no answer within 2000 ms
+                                        check: Is the unit id in the config the device's? Many answer only to theirs (often 1, sometimes 255 over TCP).
+14:20:06  pv-inverter                   failing: could not connect: host unreachable 10.0.4.21:502
+                                        check: Is the device switched on and its network cable plugged in (link light)?
+                                        2 devices (energy-meter, pv-inverter) stopped answering within 3 s of each other: likely a shared cause (power, a switch, the gateway's own network)
+14:21:40  broker                        connected again after 99 s, 1204 message(s) waiting in the buffer at reconnect
+14:22:30  energy-meter/breaker-tripped  alarm raised (value true)
+14:22:31  buffer                        drained: 1266 message(s) delivered from the buffer since it was last empty
+14:22:40  energy-meter                  ok again after 3 min
+14:22:44  pv-inverter                   ok again after 3 min
+14:23:30  energy-meter/breaker-tripped  alarm cleared after 60 s (value false)
+14:24:02  ahu-1/filter-alarm            alarm raised (value true)
 ```
 
-`--since 10m|2h|1d|all` sets how far back (default `1h`), `--json` gives `{ok, gateway, now, capacity, dropped, events}`. `--follow` (`-f`) then prints each new event as it comes, asking every 2 s, until Ctrl-C or for `--seconds N`; with `--json` it prints one event per line (NDJSON). It says on stderr when the gateway stops answering and when it is back, and when the gateway restarted. The events are the gateway started, a device failing (with its reason and error) and ok again (with how long it was down), the broker lost (once per outage, with the error) and connected (with how long it was away and how many messages waited in the buffer at that moment), and the buffer drained (with how many messages went from it to the broker since it was last empty: the backlog and the values that queued behind it while it went out, so usually more than were waiting at the reconnect). The gateway keeps the latest 500 in memory, so they start over on a restart, and serves them as `GET /api/events` (`?after=<id>` for the ones after an event already seen, every one when the gateway has not given that id yet because it restarted; `?since=<ms epoch>` for those at or after a time). Durations are measured on the monotonic clock, so a clock step does not bend them. For more, read the log: `docker compose logs gateway --since 10m` in the gateway's folder.
+Under each failure is the first thing to check for it, by the device's protocol and the failure's reason, as `status` gives it for a device failing now; after several devices that failed within 10 s of each other, a line says they likely share a cause. In `--json` each failure has `hint` (`{meaning, checks}`) and, in such a group, `sharedCause`.
 
-`ot-gateway history <device>/<point>` prints what a point did lately, from the gateway's history (`history` in the config; [The history](#the-history)): the last 10 minutes in about 10 buckets unless `--since 30s|10m|2h|1d` and `--buckets N` say otherwise, the range ending at the gateway's own clock. A device alone gives all of its points, and several are comma-separated (`meter/power,meter/energy`). Each bucket is a line in local time with the average and its unit, the minimum, the maximum and the number of reads; a stretch without reads is a line of its own, and the newest half minute may be `not written yet`. The heading says whether the buckets come from every read (finer than a minute, within the last day) or from the per-minute rollups:
+`--since 10m|2h|1d|all` sets how far back (default `1h`), `--json` gives `{ok, gateway, now, capacity, dropped, events}`. `--follow` (`-f`) then prints each new event as it comes, asking every 2 s, until Ctrl-C or for `--seconds N`; with `--json` it prints one event per line (NDJSON). It says on stderr when the gateway stops answering and when it is back, and when the gateway restarted. The events are the gateway started, a device failing (with its reason and error) and ok again (with how long it was down), the broker lost (once per outage, with the error) and connected (with how long it was away and how many messages waited in the buffer at that moment), the buffer drained (with how many messages went from it to the broker since it was last empty: the backlog and the values that queued behind it while it went out, so usually more than were waiting at the reconnect), and an alarm point raised (`first: true` when it was already active at its first read) or cleared (with how long it was active). An alarm that chatters lists at most 6 changes in 15 minutes; then one `alarm-flapping` event says so, its changes are counted instead of listed, and `alarm-settled` comes once it has kept still for 5 minutes, with how many changes were counted. All alarm points together list at most 60 events in 15 minutes, so a building full of chattering contacts cannot push the device failures out of the 500 events kept. Every alarm change is counted in `ot_gateway_alarm_changes` (by `transition`, `raised` or `cleared`), and `ot_gateway_alarms_active` is how many are active. The gateway keeps the latest 500 in memory, so they start over on a restart, and serves them as `GET /api/events` (`?after=<id>` for the ones after an event already seen, every one when the gateway has not given that id yet because it restarted; `?since=<ms epoch>` for those at or after a time). Durations are measured on the monotonic clock, so a clock step does not bend them. For more, read the log: `docker compose logs gateway --since 10m` in the gateway's folder.
+
+`ot-gateway history <device>/<point>` prints what a point did lately, from the gateway's history (`history` in the config; [The history](#the-history)): the last 10 minutes in about 10 buckets unless `--since 30s|10m|2h|1d` and `--buckets N` say otherwise, the range ending at the gateway's own clock. A device alone gives all of its points, and several are comma-separated (`meter/power,meter/energy`). Each bucket is a line in local time with the average and its unit, the minimum, the maximum and the number of reads; a stretch without reads is a line of its own (`the gateway was not running` when the gateway's start ends it), and the newest half minute may be `not written yet`. The heading says whether the buckets come from every read (buckets finer than a minute, or a range of an hour or less, that starts within the last day: so the default 10 minutes end at now) or from the per-minute rollups, where the current minute is marked `so far`:
 
 ```
 plant-1/hall-a gateway main at http://127.0.0.1:8080: the last 2m, until 13:26:18
@@ -402,7 +431,22 @@ pv-inverter/ac-power (PV inverter AC power, kW): 15 s buckets from every read
   13:26:03  avg 6.339 kW  min 5.651  max 6.992  (3 reads)
 ```
 
-`--json` gives `{ok, gateway, now, since, series}`, each series as `/api/history` returns it plus the point's `name`, `unit` and `unitLabel` and its `gaps` (`[{from, to}]`, Unix ms). A gateway without a history, or a point it does not have, is said in words with what to do (the closest point id, or the `history` block to add).
+A switch or an alarm (a point whose value is true or false) reads as on or off per bucket instead of an average, followed by when it changed, from every read (within the last day; the text lists the first 20, `--json` up to 200):
+
+```
+energy-meter/breaker-tripped (Breaker tripped): 1 min buckets from every read
+  14:22:10  on in 8 of 12 reads
+  14:23:10  on in 4 of 12 reads
+  14:24:10  off, all 12 reads
+  ...
+  14:31:10  off, all 5 reads
+  changes, from every read:
+    14:22:10  off at the first read in this range
+    14:22:30  switched on
+    14:23:30  switched off
+```
+
+`--json` gives `{ok, gateway, now, since, series}`, each series as `/api/history` returns it plus the point's `name`, `unit` and `unitLabel`, `boolean: true` for a switch, and its `gaps` (`[{from, to}]`, Unix ms). A gateway without a history, or a point it does not have, is said in words with what to do (the closest point id, or the `history` block to add).
 
 ### What the numbers mean
 
@@ -415,14 +459,22 @@ pv-inverter/ac-power (PV inverter AC power, kW): 15 s buckets from every read
 
 All times are Unix ms on the gateway's wall clock; `now` in an answer is the gateway's clock when it answered.
 
-- `GET /api/status[?points=none]`: `{site, building, id, since, now, broker, buffer?, host?, devices: [{id, protocol, status, pollIntervalMs, reason?, failingSince?, lastError?, failures?, lastSuccess?, pointCount, points: [{id, name, unit?, writable, value?, ts?}]}], commands}`.
+- `GET /api/status[?points=none]`: `{site, building, id, since, now, broker, buffer?, host?, devices: [{id, protocol, status, pollIntervalMs, reason?, failingSince?, lastError?, failures?, lastSuccess?, pointCount, points: [{id, name, unit?, writable, value?, ts?, alarmWhen?, alarmActive?}]}], alarms?: [{device, point, alarmWhen, active?, since?, raised, flapping}], commands}`; `alarms` lists every alarm point, also with `points=none`, `raised` counting the last 15 minutes.
 - `GET /api/points`: `{points: [{device, id, name, unit?, writable, topic, source, read, cov, publish, limits?, scaling?, brick?, haystack?}]}`, every configured point in config order.
 - `GET /api/values?points=device/point,...`: `{readings: [{device, point, value?, ts?}]}`.
 - `GET /api/messages`: `{messages: [{topic, payload, truncated, retained, at, count, delivered}], droppedTopics}`, sorted by topic.
-- `GET /api/events[?after=<id>|since=<ms>]`: `{now, capacity, dropped, events: [{id, at, type, ...}]}`, oldest first; `type` is `gateway-started`, `device-failing`, `device-recovered`, `broker-disconnected`, `broker-connected`, `buffer-drained`, `config-applied` or `config-apply-failed`.
-- `GET /api/history?device=&point=[&from=&to=&buckets=]`: `{device, point, from, to, stepMs, resolution: "read"|"minute", buckets: [{t, min, max, avg, count}]}`, buckets without a read left out; 404 without a history, 400 for a point the config does not have.
+- `GET /api/events[?after=<id>|since=<ms>]`: `{now, capacity, dropped, events: [{id, at, type, ...}]}`, oldest first; `type` is `gateway-started`, `device-failing`, `device-recovered`, `broker-disconnected`, `broker-connected`, `buffer-drained`, `config-applied`, `config-apply-failed`, `alarm-raised`, `alarm-cleared`, `alarm-flapping` or `alarm-settled`.
+- `GET /api/history?device=&point=[&from=&to=&buckets=&changes=true]`: `{device, point, from, to, stepMs, resolution: "read"|"minute", buckets: [{t, min, max, avg, count}], changes?: {list: [{t, value}], truncated}}`, buckets without a read left out; `changes` (asked for, and a range that starts within the last day) is the first read and every read whose value differed from the one before, at most 200; 404 without a history, 400 for a point the config does not have.
 
-`ot-gateway watch` says when it loses the broker and when it is back; with `--seconds` it exits with 1 when the broker was lost and did not come back.
+`ot-gateway messages [device/point]` prints, per topic, how many messages the gateway published since it started and how many reached the broker (from `/api/messages`; [What the numbers mean](#what-the-numbers-mean)), with the last one's time and payload; `--json` for scripts and agents. It counts since start, not per time window: the history keeps the reads, not what went out.
+
+```
+plant-1/hall-a gateway main at http://127.0.0.1:8080: messages per topic since it started at 08:02:11 (6 h ago)
+  energy-meter/active-power        4380 sent, 4380 reached the broker,  last 14:32:08  {"value":12.4,"ts":1794403928000}
+  energy-meter/active-power/$meta     1 sent, 1 reached the broker,  last 08:02:12 retained  {"name":"Active power","unit":"unit:KiloW",…}
+```
+
+`ot-gateway watch` says when it loses the broker and when it is back; with `--seconds` it exits with 1 when the broker was lost and did not come back. A retained message the broker keeps from another gateway, or for a device or point the config does not have (an older config's), is marked, `retained (from gateway old-pi)` or `retained (point not in this config)` (`"stale"` in `--json`), and the first one prints, once, how to clear it: `ot-gateway publish <topic> --retain`. The gateway clears the `$meta` of its own points that are gone by itself; the rest it leaves, as nothing says whose they are now.
 
 ## Health on MQTT
 

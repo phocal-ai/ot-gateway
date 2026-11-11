@@ -591,12 +591,19 @@ describe("status", () => {
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
       // Until the server is up and the history has flushed both readings (every 50 ms, later under load).
       const series = yield* eventually(
-        client.status.history({ query: { device: "meter", point: "power", buckets: 1 } }),
+        client.status.history({ query: { device: "meter", point: "power", buckets: 1, changes: "true" } }),
         (answer) => answer.buckets.reduce((sum, bucket) => sum + bucket.count, 0) === 2
       )
-      // The last hour in one bucket: an hour-wide step, so from the minute rollups.
-      expect(series.resolution).toBe("minute")
+      // The last hour in one bucket: a range of an hour, so from every read, with the changes asked for.
+      expect(series.resolution).toBe("read")
       expect(series.buckets).toEqual([expect.objectContaining({ min: 3, max: 5, avg: 4, count: 2 })])
+      expect(series.changes).toEqual({
+        list: [
+          { t: now - 2_000, value: 3 },
+          { t: now - 1_000, value: 5 }
+        ],
+        truncated: false
+      })
       const unknown = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "nope" } }))
       expect(unknown._tag).toBe("HistoryQueryInvalid")
       const backwards = yield* Effect.flip(
