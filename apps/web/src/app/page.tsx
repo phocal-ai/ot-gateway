@@ -47,7 +47,9 @@ import {
   isIncident,
   type KnownEvents,
   latestEvents,
-  nothingYet
+  nothingYet,
+  type PointNames,
+  sharedCauseNotes
 } from "@/lib/events"
 import { filterToSearch, pointKey } from "@/lib/points"
 import {
@@ -805,30 +807,42 @@ const CARD_EVENTS = 10
 
 const toneDot = { bad: "bg-destructive", good: "bg-success", neutral: "bg-muted-foreground/40" } as const
 
-/** Events, newest first, one line each: a dot for bad or good news, the local time and what happened. */
+/**
+ * Events, newest first, one line each: a dot for bad or good news, the local time and what happened. Above the newest
+ * failure of devices that stopped answering within seconds of each other, a line says they likely share a cause.
+ */
 const EventList = ({
   events,
   now,
+  names,
+  shared,
   onOpenDevice
 }: {
   readonly events: KnownEvents["events"]
   readonly now: number
+  readonly names: PointNames
+  /** The shared-cause lines by the event they go above (`sharedCauseNotes`). */
+  readonly shared: ReadonlyMap<number, string>
   readonly onOpenDevice: (device: string) => void
 }) => (
   <ul className="flex flex-col text-sm">
     {events.map((event) => {
+      const sharedCause = shared.get(event.id)
       const line = (
         <>
           <span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${toneDot[eventTone(event)]}`} />
           <span className="shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">
             {clockTime(event.at, now)}
           </span>
-          <span className="min-w-0 break-words">{eventSentence(event)}</span>
+          <span className="min-w-0 break-words">{eventSentence(event, names)}</span>
         </>
       )
       const row = "flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-left"
       return (
         <li key={event.id}>
+          {sharedCause === undefined ? null : (
+            <p className="mt-1 rounded-md bg-destructive/10 px-2 py-1 text-xs break-words">{sharedCause}</p>
+          )}
           {event.type === "device-failing" || event.type === "device-recovered" ? (
             <button
               className={`${row} hover:bg-muted/50`}
@@ -855,10 +869,12 @@ const EventList = ({
 const RecentEvents = ({
   status,
   known,
+  names,
   onOpenDevice
 }: {
   readonly status: GatewayStatus
   readonly known: KnownEvents | undefined
+  readonly names: PointNames
   readonly onOpenDevice: (device: string) => void
 }) => {
   const [all, setAll] = useState(false)
@@ -867,6 +883,7 @@ const RecentEvents = ({
   // Events of an older run of the gateway are not shown against this one's start.
   const events = known?.since === status.since ? known.events : []
   const happened = events.some(isIncident)
+  const shared = useMemo(() => sharedCauseNotes(events), [events])
   const open = () => {
     const transition = morphFrom(card.current)
     setMorph(transition.morph)
@@ -893,7 +910,13 @@ const RecentEvents = ({
       </div>
       <div className="px-3 py-3">
         {happened ? (
-          <EventList events={latestEvents(events, CARD_EVENTS)} now={status.now} onOpenDevice={onOpenDevice} />
+          <EventList
+            events={latestEvents(events, CARD_EVENTS)}
+            names={names}
+            now={status.now}
+            onOpenDevice={onOpenDevice}
+            shared={shared}
+          />
         ) : (
           <p className="px-2 py-1 text-sm text-muted-foreground">{nothingYet(status.since, status.now)}</p>
         )}
@@ -906,7 +929,13 @@ const RecentEvents = ({
               ? ` It keeps the latest ${formatNumber(known.capacity)}; ${formatNumber(known.dropped)} older ones were let go.`
               : ""}
           </p>
-          <EventList events={events.toReversed()} now={status.now} onOpenDevice={openDevice} />
+          <EventList
+            events={events.toReversed()}
+            names={names}
+            now={status.now}
+            onOpenDevice={openDevice}
+            shared={shared}
+          />
         </DetailDialog>
       ) : null}
     </Card>
@@ -947,6 +976,8 @@ const StatusView = () => {
     () => pointsByDevice(catalogLoad._tag === "ok" ? catalogLoad.catalog.points : []),
     [catalogLoad]
   )
+  const pointNames: PointNames = (deviceId, pointId) =>
+    byDevice.get(deviceId)?.find((point) => point.id === pointId)?.name
   // The setup guide: it leads without devices, and stays after the first save until it is closed (lib/first-run.ts).
   const [guide, setGuide] = useState(false)
   const deviceCount = status?.devices.length
@@ -1002,7 +1033,7 @@ const StatusView = () => {
           />
         </>
       )}
-      <RecentEvents known={known} onOpenDevice={openDevice} status={status} />
+      <RecentEvents known={known} names={pointNames} onOpenDevice={openDevice} status={status} />
       {device === undefined ? null : (
         <DeviceSheet
           address={configDevice === undefined ? undefined : deviceAddress(configDevice)}
