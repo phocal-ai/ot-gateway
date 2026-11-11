@@ -390,6 +390,18 @@ export const BufferDrainedEvent = Schema.Struct({
   type: Schema.Literal("buffer-drained")
 })
 
+/**
+ * Another gateway is online in this building and publishes into this gateway's topics: it runs devices of the same
+ * ids (`devices`), or (`sameId`) it has this gateway's own id. Their values mix on the broker.
+ */
+export const GatewayConflictEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("gateway-conflict"),
+  gateway: Schema.String,
+  devices: Schema.Array(Schema.String),
+  sameId: Schema.Boolean
+})
+
 /** A transition worth knowing about later: what broke, since when, and when it came back. Never one per read. */
 export const GatewayEvent = Schema.Union([
   GatewayStartedEvent,
@@ -397,7 +409,8 @@ export const GatewayEvent = Schema.Union([
   DeviceRecoveredEvent,
   BrokerDisconnectedEvent,
   BrokerConnectedEvent,
-  BufferDrainedEvent
+  BufferDrainedEvent,
+  GatewayConflictEvent
 ])
 export type GatewayEvent = typeof GatewayEvent.Type
 

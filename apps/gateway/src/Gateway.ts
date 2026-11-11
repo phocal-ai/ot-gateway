@@ -37,6 +37,7 @@ import { Clock, Deferred, Effect, Exit, Layer, Metric, Schedule, Scope } from "e
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { historyHandler, makeStatusState, serveStatus, type StatusState } from "./Status.ts"
@@ -248,6 +249,7 @@ const northbound = (
   routing: CommandRouting | undefined,
   status: StatusState | undefined,
   staleMeta: StaleMetaCleaner,
+  otherGateways: OtherGatewaysCheck,
   events: GatewayEventsShape
 ) => {
   // What waits in the buffer when the broker comes back, for the event.
@@ -284,14 +286,16 @@ const northbound = (
         events.brokerDisconnected(failure.error)
       }),
     ...(options.network === undefined ? {} : { network: options.network }),
-    subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions],
-    // A `$meta` topic is never a command topic (`.../$set`), so each message has one taker.
+    subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions, otherGateways.subscription],
+    // `$meta`, health and command (`.../$set`) topics end differently, so each message has one taker.
     onMessage: (message) =>
       message.topic.endsWith("/$meta")
         ? staleMeta.onMessage(message)
-        : routing === undefined
-          ? Effect.void
-          : routing.onMessage(message)
+        : message.topic.endsWith("/health")
+          ? otherGateways.onMessage(message)
+          : routing === undefined
+            ? Effect.void
+            : routing.onMessage(message)
   })
   const publisher =
     config.buffer === undefined
@@ -365,11 +369,14 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     routing: writable ? yield* makeCommandRouting(config, guard.handle) : undefined
   }
   const staleMeta = yield* makeStaleMetaCleaner(config)
+  const otherGateways = makeOtherGatewaysCheck(config, startedAt, (overlap) =>
+    events.gatewayConflict(overlap.gateway, overlap.devices, overlap.sameId)
+  )
   return yield* runDevices(config, health, options.network, commands, status, host, staleMeta).pipe(
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
-    Effect.provide(northbound(config, health, options, commands.routing, status, staleMeta, events)),
+    Effect.provide(northbound(config, health, options, commands.routing, status, staleMeta, otherGateways, events)),
     withMetricAttributes({ site: config.site, building: config.building })
   )
 }, Effect.provide(gatewayEventsLayer()))

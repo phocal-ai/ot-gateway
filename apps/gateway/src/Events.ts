@@ -38,6 +38,8 @@ export interface GatewayEventsShape {
   readonly brokerDisconnected: (error: string) => void
   /** The buffer delivered its backlog. */
   readonly bufferDrained: () => void
+  /** Another gateway publishes into this one's topics (`OtherGateways.ts`). */
+  readonly gatewayConflict: (gateway: string, devices: ReadonlyArray<string>, sameId: boolean) => void
   /** The events kept, oldest first, filtered by `query`. */
   readonly log: (query?: EventQuery) => Effect.Effect<EventLog>
 }
@@ -92,6 +94,7 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
       record({ type: "broker-disconnected", error })
     },
     bufferDrained: () => record({ type: "buffer-drained" }),
+    gatewayConflict: (gateway, devices, sameId) => record({ type: "gateway-conflict", gateway, devices, sameId }),
     log: (query = {}) =>
       Effect.sync(() => {
         const kept = Math.min(total, capacity)

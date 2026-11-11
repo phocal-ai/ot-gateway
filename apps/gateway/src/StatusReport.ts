@@ -187,6 +187,8 @@ const subjectOf = (event: GatewayEvent) => {
       return "broker"
     case "buffer-drained":
       return "buffer"
+    case "gateway-conflict":
+      return event.gateway
   }
 }
 
@@ -210,6 +212,10 @@ const describeEvent = (event: GatewayEvent) => {
       ].join(", ")
     case "buffer-drained":
       return "drained: every waiting message delivered"
+    case "gateway-conflict":
+      return event.sameId
+        ? "another gateway with this gateway's id is online: both publish into the same topics"
+        : `another gateway is online with the same device ids (${event.devices.join(", ")}): both publish into the same topics`
   }
 }
 
