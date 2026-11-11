@@ -2,11 +2,14 @@
  * `ot-gateway history`: what a point did lately, from the running gateway's history (`/api/history`), without
  * working out epoch milliseconds by hand. The range ends at the gateway's own `now`, so a laptop's clock does not
  * shift it. Text is a table per point in local clock times: each bucket's average with the unit, its minimum,
- * maximum and number of reads, and a gap where no read came. A switch or an alarm (a point whose value is true or
+ * maximum and number of reads, and a gap where no read came: before the gateway started, while the device failed
+ * (from the events, with the device's error) or without a known cause. The gateway's answer holds every read up to
+ * its `now`, the ones not written to its file yet too. A switch or an alarm (a point whose value is true or
  * false) reads as on or off per bucket, followed by when it changed, from every read. `--json` is the API's
  * series, with each point's name and unit and the gaps named.
  */
 import {
+  type EventLog,
   type HistoryBucket,
   type HistorySeries,
   MAX_VALUES_PER_REQUEST,
@@ -16,8 +19,9 @@ import {
 import { Effect, Result, Schema } from "effect"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import { localTime, printJson, printResult } from "./Output.ts"
-import { ago, askGateway, fetchGatewayStatus } from "./StatusReport.ts"
+import { ago, askGateway, fetchGatewayEvents, fetchGatewayStatus } from "./StatusReport.ts"
 import { closestMatch } from "./Suggest.ts"
+import { withoutControls } from "./Discover.ts"
 
 /** The history cannot answer: it is off, or the point is not the gateway's. `message` says what to do. */
 export class HistoryError extends Schema.TaggedError<HistoryError>()("HistoryError", {
@@ -27,7 +31,7 @@ export class HistoryError extends Schema.TaggedError<HistoryError>()("HistoryErr
 /** Buckets a text report has unless asked: one a minute over the default ten minutes. */
 export const DEFAULT_TEXT_BUCKETS = 10
 
-/** How often the gateway writes its reads to the history: the newest bucket can lag by this much. */
+/** How often a gateway without `live` series wrote its reads to the history: its newest bucket lagged by this much. */
 const FLUSH_MS = 30_000
 
 /** Changes of a switch the text lists at most; `--json` has up to `HISTORY_CHANGES_MAX`. */
@@ -114,8 +118,85 @@ export const gapsOf = (series: HistorySeries): ReadonlyArray<Gap> => {
   return gaps
 }
 
-/** Why the newest reads can be missing. */
+/** Why the newest reads can be missing, from a gateway whose answers do not hold the reads it has not written. */
 const notYet = "the gateway writes reads to its history every 30 s"
+
+/** A device failing for a while, from the gateway's events: `[from, to)`, `to` absent while it still fails. */
+export interface Failure {
+  readonly from: number
+  readonly to?: number
+  readonly error: string
+}
+
+/** Each device's failures in `log`, oldest first: a `device-failing` event up to the device's next recovery. */
+export const failuresOf = (log: EventLog): ReadonlyMap<string, ReadonlyArray<Failure>> => {
+  const failures = new Map<string, Array<Failure>>()
+  const open = new Map<string, { readonly from: number; readonly error: string }>()
+  for (const event of log.events) {
+    if (event.type === "device-failing") {
+      open.set(event.device, { from: event.at, error: event.error === "" ? event.reason : event.error })
+    } else if (event.type === "device-recovered") {
+      const started = open.get(event.device)
+      if (started === undefined) continue
+      open.delete(event.device)
+      failures.set(event.device, [...(failures.get(event.device) ?? []), { ...started, to: event.at }])
+    }
+  }
+  for (const [device, started] of open) failures.set(device, [...(failures.get(device) ?? []), started])
+  return failures
+}
+
+/** Why a stretch had no read, when the gateway knows: it was not running, or the device was failing. */
+export type GapCause =
+  | { readonly kind: "gateway-not-running"; readonly started: number }
+  | { readonly kind: "device-failing"; readonly since: number; readonly error: string }
+
+/** A gap with its cause, when known. */
+export interface ExplainedGap extends Gap {
+  readonly cause?: GapCause
+}
+
+/** What `formatSeries` knows besides the series: whether the point is a switch, when the gateway started, failures. */
+export interface SeriesContext {
+  /** The point's values are true or false (a switch, an alarm): on and off instead of averages. */
+  readonly boolean?: boolean
+  /** Unix ms when the gateway started: the stretch before it is the gateway, not the device. */
+  readonly since?: number
+  /** The device's failures in this run, from the events: a gap while it failed says why. */
+  readonly failures?: ReadonlyArray<Failure>
+}
+
+/**
+ * The gaps of `series` with their causes. The stretch before the bucket the gateway started in is split off as
+ * the gateway not running, however the buckets fall (the start's bucket begins before the start); the rest of a
+ * gap names the first failure of the device that overlaps it, when there is one.
+ */
+export const explainGaps = (series: HistorySeries, context: SeriesContext = {}): ReadonlyArray<ExplainedGap> => {
+  const since = context.since
+  const startBucket =
+    since === undefined || since <= series.from || since >= series.to
+      ? undefined
+      : series.from + Math.floor((since - series.from) / series.stepMs) * series.stepMs
+  const failed = (gap: Gap): ExplainedGap => {
+    const failure = context.failures?.find(
+      (each) => each.from < gap.to && (each.to === undefined || each.to > gap.from)
+    )
+    return failure === undefined
+      ? gap
+      : { ...gap, cause: { kind: "device-failing", since: failure.from, error: failure.error } }
+  }
+  return gapsOf(series).flatMap((gap): ReadonlyArray<ExplainedGap> => {
+    if (since === undefined || startBucket === undefined || gap.from > startBucket || gap.to < startBucket) {
+      return [failed(gap)]
+    }
+    const before: ReadonlyArray<ExplainedGap> =
+      gap.from < startBucket
+        ? [{ from: gap.from, to: startBucket, cause: { kind: "gateway-not-running", started: since } }]
+        : []
+    const after = gap.to > startBucket ? [failed({ from: startBucket, to: gap.to })] : []
+    return [...before, ...after]
+  })
+}
 
 /** A number as the table shows it: up to three decimals, no trailing zeros. */
 const number = (value: number) => String(Number(value.toFixed(3)))
@@ -150,14 +231,6 @@ const changeLines = (series: HistorySeries, now: number) => {
   ]
 }
 
-/** What `formatSeries` knows besides the series: whether the point is a switch, and when the gateway started. */
-export interface SeriesContext {
-  /** The point's values are true or false (a switch, an alarm): on and off instead of averages. */
-  readonly boolean?: boolean
-  /** Unix ms when the gateway started: a gap up to then is the gateway, not the device. */
-  readonly since?: number
-}
-
 /** The lines of one point's series: a heading, then a bucket or a gap per line, oldest first. */
 export const formatSeries = (point: PointInfo, series: HistorySeries, now: number, context: SeriesContext = {}) => {
   const unit = unitLabel(point.unit)
@@ -175,22 +248,38 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     return { t: bucket.t, line: `${localTime(bucket.t, now)}  ${values}${soFar}` }
   })
   const heading = `${point.device}/${point.id} (${point.name}${unit === "" ? "" : `, ${unit}`}): ${width(series.stepMs)} buckets ${source}`
-  if (series.buckets.length === 0) return [heading, `  no reads in this range (${notYet})`]
-  for (const gap of gapsOf(series)) {
+  const live = series.live === true
+  const failing = (cause: GapCause | undefined) =>
+    cause?.kind === "device-failing" ? `: ${point.device} failing: ${withoutControls(cause.error)}` : ""
+  const gaps = explainGaps(series, context)
+  if (series.buckets.length === 0) {
+    const notRunning = gaps.find((gap) => gap.cause?.kind === "gateway-not-running")?.cause
+    const failure = gaps.find((gap) => gap.cause?.kind === "device-failing")?.cause
+    const why =
+      notRunning?.kind === "gateway-not-running"
+        ? ` before the gateway started at ${localTime(notRunning.started, now)}${failing(failure)}`
+        : failing(failure)
+    return [heading, live ? `  no reads in this range${why}` : `  no reads in this range (${notYet})`]
+  }
+  for (const gap of gaps) {
     const atEnd = gap.to >= series.to
-    // The newest reads reach the history file every 30 s: a short gap at the end is that, not the device.
+    const cause = gap.cause
     const line =
-      atEnd && gap.from >= series.to - FLUSH_MS - series.stepMs
-        ? "not written yet"
-        : atEnd
-          ? `no reads since then (${notYet})`
-          : `no reads for ${ago(gap.to - gap.from)}, until ${localTime(gap.to, now)}`
-    // A gap the gateway's start ends was the gateway not running, not the device failing.
-    const started =
-      context.since !== undefined && gap.from < context.since && gap.to >= context.since
-        ? `: the gateway was not running, it started at ${localTime(context.since, now)}`
-        : ""
-    rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}${started}` })
+      cause?.kind === "gateway-not-running"
+        ? `the gateway was not running (started ${localTime(cause.started, now)})`
+        : live
+          ? atEnd
+            ? gap.from >= series.to - series.stepMs
+              ? `no read yet in this bucket${failing(cause)}`
+              : `no reads since then${failing(cause)}`
+            : `no reads for ${ago(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
+          : // A gateway without live answers wrote its reads every 30 s: a short gap at the end is that.
+            atEnd && gap.from >= series.to - FLUSH_MS - series.stepMs
+            ? "not written yet"
+            : atEnd
+              ? `no reads since then (${notYet})${failing(cause)}`
+              : `no reads for ${ago(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
+    rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}` })
   }
   return [
     heading,
@@ -199,13 +288,16 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
   ]
 }
 
-/** What `history --json` prints for one point: the API's series with the point's name and unit, and its gaps. */
-export const seriesJson = (point: PointInfo, series: HistorySeries, boolean = false) => ({
+/**
+ * What `history --json` prints for one point: the API's series with the point's name and unit, and its gaps, each
+ * with its `cause` when known (`gateway-not-running`, `device-failing`).
+ */
+export const seriesJson = (point: PointInfo, series: HistorySeries, context: SeriesContext = {}) => ({
   ...series,
   name: point.name,
-  ...(boolean ? { boolean } : {}),
+  ...(context.boolean === true ? { boolean: true } : {}),
   ...(point.unit === undefined ? {} : { unit: point.unit, unitLabel: unitLabel(point.unit) }),
-  gaps: gapsOf(series)
+  gaps: explainGaps(series, context)
 })
 
 /** How the gateway's answer that it keeps no history reads on the command line. */
@@ -275,16 +367,19 @@ export const historyReport = Effect.fn("historyReport")(function* (
       .map((reading) => `${reading.device}/${reading.point}`),
     ...(status.alarms ?? []).map((alarm) => `${alarm.device}/${alarm.point}`)
   ])
+  // Why a device had no reads: its failures in this run, from the events the gateway keeps.
+  const failures = failuresOf(yield* fetchGatewayEvents(target.url))
   const range = { from: status.now - options.sinceMs, to: status.now }
   const buckets = options.buckets ?? DEFAULT_TEXT_BUCKETS
   const answers = yield* Effect.forEach(
     points,
     (point) => {
       const boolean = switches.has(`${point.device}/${point.id}`)
+      const context: SeriesContext = { boolean, since: status.since, failures: failures.get(point.device) ?? [] }
       return Effect.map(fetchSeries(target.url, point, range, buckets, boolean), (series) => ({
         point,
         series,
-        boolean
+        context
       }))
     },
     { concurrency: 4 }
@@ -296,16 +391,13 @@ export const historyReport = Effect.fn("historyReport")(function* (
       gateway,
       now: status.now,
       since: options.since,
-      series: answers.map(({ point, series, boolean }) => seriesJson(point, series, boolean))
+      series: answers.map(({ point, series, context }) => seriesJson(point, series, context))
     })
   }
   yield* printResult(
     [
       `${gatewayName(gateway)} at ${target.url}: the last ${options.since}, until ${localTime(status.now)}`,
-      ...answers.flatMap(({ point, series, boolean }) => [
-        "",
-        ...formatSeries(point, series, status.now, { boolean, since: status.since })
-      ])
+      ...answers.flatMap(({ point, series, context }) => ["", ...formatSeries(point, series, status.now, context)])
     ].join("\n")
   )
 })

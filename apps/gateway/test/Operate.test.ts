@@ -11,7 +11,15 @@ import { TestClock, TestConsole } from "effect/testing"
 import { createServer } from "node:net"
 import { makeGatewayEvents, GatewayEvents } from "../src/Events.ts"
 import { checkIdentity, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf, targetOf } from "../src/GatewayTarget.ts"
-import { formatSeries, gapsOf, historyReport, parseSelection, selectPoints, seriesJson } from "../src/HistoryReport.ts"
+import {
+  failuresOf,
+  formatSeries,
+  gapsOf,
+  historyReport,
+  parseSelection,
+  selectPoints,
+  seriesJson
+} from "../src/HistoryReport.ts"
 import { messagesReport } from "../src/MessagesReport.ts"
 import { localTime } from "../src/Output.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
@@ -326,11 +334,98 @@ describe("history", () => {
     expect(formatSeries(power, running, now, { since: at(12, 13, 0) })).toEqual([
       "energy-meter/active-power (Active power, kW): 1 min buckets from the per-minute rollups",
       "  12:10:00  avg 12.4 kW  min 12.1  max 12.9  (12 reads)",
-      "  12:11:00  no reads for 2 min, until 12:13:00: the gateway was not running, it started at 12:13:00",
+      "  12:11:00  the gateway was not running (started 12:13:00)",
       "  12:13:00  3 kW  (1 read)",
       "  12:14:00  no reads for 60 s, until 12:15:00",
       "  12:15:00  4 kW  (1 read)  so far"
     ])
+  })
+
+  // A gateway up 35 s: its start falls inside a bucket, which begins before it.
+  const started = at(12, 18, 55)
+  const justStarted: HistorySeries = {
+    device: "energy-meter",
+    point: "active-power",
+    from: at(12, 9, 30),
+    to: at(12, 19, 30),
+    stepMs: 60_000,
+    resolution: "read",
+    live: true,
+    buckets: [{ t: at(12, 18, 30), min: 4, max: 5, avg: 4.5, count: 7 }]
+  }
+
+  it("says the gateway was not running before its start, though the start's bucket begins earlier", () => {
+    expect(formatSeries(power, justStarted, now, { since: started })).toEqual([
+      "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
+      "  12:09:30  the gateway was not running (started 12:18:55)",
+      "  12:18:30  avg 4.5 kW  min 4  max 5  (7 reads)"
+    ])
+    expect(seriesJson(power, justStarted, { since: started }).gaps).toEqual([
+      { from: at(12, 9, 30), to: at(12, 18, 30), cause: { kind: "gateway-not-running", started } }
+    ])
+    expect(formatSeries(power, { ...justStarted, buckets: [] }, now, { since: started }).at(-1)).toBe(
+      "  no reads in this range before the gateway started at 12:18:55"
+    )
+  })
+
+  it("names the device's failure for a gap while it failed, from the events", () => {
+    const outage: HistorySeries = {
+      ...justStarted,
+      buckets: [
+        { t: at(12, 9, 30), min: 4, max: 5, avg: 4.5, count: 12 },
+        { t: at(12, 10, 30), min: 4, max: 5, avg: 4.5, count: 12 },
+        { t: at(12, 14, 30), min: 4, max: 5, avg: 4.5, count: 3 }
+      ]
+    }
+    const log: EventLog = {
+      now,
+      capacity: 500,
+      dropped: 0,
+      events: [
+        { id: 1, at: at(12, 0, 0), type: "gateway-started", version: "v1", devices: 1 },
+        {
+          id: 2,
+          at: at(12, 11, 40),
+          type: "device-failing",
+          device: "energy-meter",
+          reason: "connection",
+          error: "connection refused"
+        },
+        { id: 3, at: at(12, 14, 50), type: "device-recovered", device: "energy-meter", downMs: 190_000 },
+        {
+          id: 4,
+          at: at(12, 16, 0),
+          type: "device-failing",
+          device: "energy-meter",
+          reason: "timeout",
+          error: "no response within 3s"
+        }
+      ]
+    }
+    const failures = failuresOf(log).get("energy-meter") ?? []
+    expect(formatSeries(power, outage, now, { since: at(12, 0, 0), failures })).toEqual([
+      "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
+      "  12:09:30  avg 4.5 kW  min 4  max 5  (12 reads)",
+      "  12:10:30  avg 4.5 kW  min 4  max 5  (12 reads)",
+      "  12:11:30  no reads for 3 min, until 12:14:30: energy-meter failing: connection refused",
+      "  12:14:30  avg 4.5 kW  min 4  max 5  (3 reads)",
+      "  12:15:30  no reads since then: energy-meter failing: no response within 3s"
+    ])
+  })
+
+  it("does not call a gap at the end of a live series unwritten: it has every read", () => {
+    const live = { ...series, live: true }
+    expect(formatSeries(power, live, now).at(-1)).toBe("  12:14:00  no reads since then")
+    expect(formatSeries(power, { ...live, from: at(12, 14, 0), buckets: [] }, now).at(-1)).toBe(
+      "  no reads in this range"
+    )
+    expect(
+      formatSeries(
+        power,
+        { ...live, buckets: [...series.buckets, { t: at(12, 14, 0), min: 1, max: 1, avg: 1, count: 1 }] },
+        now
+      ).at(-1)
+    ).toBe("  12:15:00  no read yet in this bucket")
   })
 
   it("prints a switch as on or off per bucket, then when it switched", () => {
@@ -376,7 +471,10 @@ describe("history", () => {
     ).toBe("    and more later, see --json or a shorter --since")
     const { changes: _changes, ...older } = switched
     expect(formatSeries(unitless, older, now, { boolean: true }).at(-1)).toBe("  changes: only kept for the last day")
-    expect(seriesJson(unitless, switched, true)).toMatchObject({ boolean: true, changes: switched.changes })
+    expect(seriesJson(unitless, switched, { boolean: true })).toMatchObject({
+      boolean: true,
+      changes: switched.changes
+    })
   })
 
   it("gives --json the API's series with the point's name, unit and gaps", () => {
