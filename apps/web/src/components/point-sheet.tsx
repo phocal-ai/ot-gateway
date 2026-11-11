@@ -6,12 +6,21 @@
  * which the panel (`point-sheet`) slides in and out.
  */
 import type { PointInfo } from "@ot-gateway/api"
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useGatewayEvents } from "@/components/gateway-shell"
 import { HistoryChart } from "@/components/history-chart"
 import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
-import { alarmWhen, pointFreshness } from "@/lib/glance"
-import { fetchHistory, type GatewayClock, gatewayTime, type PointHistory, type Range, ranges } from "@/lib/history"
+import { alarmWhen, pointFreshness, readLabel } from "@/lib/glance"
+import {
+  failuresOf,
+  fetchHistory,
+  type GatewayClock,
+  gatewayTime,
+  type PointHistory,
+  type Range,
+  ranges
+} from "@/lib/history"
 import { type LivePoint, pointTitle, titledById } from "@/lib/points"
 import { clockTime, failureLabel, freshness, settle, unitLabel } from "@/lib/status"
 
@@ -124,6 +133,8 @@ export const PointSheet = ({
   const dialog = useRef<HTMLDialogElement>(null)
   const [range, setRange] = useState<Range>(ranges[1])
   const history = useHistory(point.device, point.id, range, now)
+  const events = useGatewayEvents()
+  const failures = useMemo(() => failuresOf(events?.events ?? [], point.device), [events, point.device])
   const value = live?.value
   const device = live?.device
   const state = device === undefined ? undefined : freshness(device, now)
@@ -210,12 +221,13 @@ export const PointSheet = ({
         </div>
 
         <div className="flex flex-col gap-1">
-          <p className={`font-mono text-3xl font-semibold tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}>
+          <p className="font-mono text-3xl font-semibold tabular-nums">
             <PointValue
               alarm={alarmWhen(point)}
               className="-mx-1"
               key={`${point.device}/${point.id}`}
               now={now}
+              stale={read._tag === "stale"}
               unit={point.unit}
               value={value}
             />
@@ -230,7 +242,7 @@ export const PointSheet = ({
             {read._tag === "unchanged" ? (
               <span title={ON_CHANGE_HINT}>unchanged since {clockTime(read.ts, now)} (sent on change of value)</span>
             ) : (
-              <span>{value?.ts === undefined ? "nothing read yet" : `read ${clockTime(value.ts, now)}`}</span>
+              <span>{readLabel(value?.ts, now, read._tag === "stale")}</span>
             )}
           </div>
         </div>
@@ -264,6 +276,8 @@ export const PointSheet = ({
             ) : (
               <HistoryChart
                 boolean={typeof value?.value === "boolean"}
+                device={point.device}
+                failures={failures}
                 label={pointTitle(point)}
                 startedAt={since}
                 series={history.series.series}

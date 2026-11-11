@@ -3,9 +3,11 @@
  * A point's value, lit up for a moment when it changes, so a list shows that data moves without a column of
  * counting seconds. The first value on screen does not light up; hovering says when it last changed. On and off are
  * plain words, as a running compressor is neither good nor bad; an alarm point that is on (lib/glance.ts) is red.
+ * A stale value (its device fails, or the page does not reach the gateway) is the last one known: muted, never lit
+ * up and never red, with "last read" and its time on hover.
  */
 import { useState } from "react"
-import { alarmOn, type PointFreshness } from "@/lib/glance"
+import { alarmOn, type PointFreshness, readLabel } from "@/lib/glance"
 import type { LastRead } from "@/lib/points"
 import { clockTime, formatValue, unitLabel } from "@/lib/status"
 
@@ -14,6 +16,7 @@ export const PointValue = ({
   unit,
   now,
   alarm,
+  stale = false,
   className = ""
 }: {
   readonly value: LastRead | undefined
@@ -22,18 +25,27 @@ export const PointValue = ({
   /** When the point's alarm is active (lib/glance.ts `alarmWhen`), if it is an alarm: such a value shows as one. */
   readonly alarm?: "on" | "off" | undefined
   readonly className?: string
+  /** The value is the last one known, not a live one (`pointFreshness` says `stale`). */
+  readonly stale?: boolean
 }) => {
   const [firstTs] = useState(value?.ts)
-  const changed = value?.ts !== undefined && value.ts !== firstTs
+  const changed = !stale && value?.ts !== undefined && value.ts !== firstTs
   const active = alarm !== undefined && alarmOn(value?.value, alarm)
+  const tone = stale ? "text-muted-foreground" : active ? "font-semibold text-destructive" : ""
+  const read = readLabel(value?.ts, now, stale)
   return (
     <span
       key={value?.ts}
-      className={`rounded px-1 ${changed ? "motion-safe:animate-[value-changed_1.2s_ease-out]" : ""} ${active ? "font-semibold text-destructive" : ""} ${className}`}
-      title={value?.ts === undefined ? "nothing read yet" : `read ${clockTime(value.ts, now)}`}
+      className={`rounded px-1 ${changed ? "motion-safe:animate-[value-changed_1.2s_ease-out]" : ""} ${tone} ${className}`}
+      data-stale={stale ? "" : undefined}
+      title={read}
     >
-      {formatValue(value?.value)} <span className={active ? "" : "text-muted-foreground"}>{unitLabel(unit)}</span>
+      {formatValue(value?.value)}{" "}
+      <span className={active && !stale ? "" : stale ? "text-muted-foreground/70" : "text-muted-foreground"}>
+        {unitLabel(unit)}
+      </span>
       {active ? <span className="sr-only"> (alarm)</span> : null}
+      {stale && value?.ts !== undefined ? <span className="sr-only"> ({read})</span> : null}
     </span>
   )
 }
@@ -57,6 +69,7 @@ export const PointRead = ({
   readonly short?: boolean
 }) => {
   if (state._tag === "none") return <>–</>
+  if (state._tag === "stale") return <span title={readLabel(state.ts, now, true)}>{clockTime(state.ts, now)}</span>
   if (state._tag !== "unchanged") return <>{clockTime(state.ts, now)}</>
   return (
     <span title={`Unchanged since ${clockTime(state.ts, now)}. ${ON_CHANGE_HINT}`}>
