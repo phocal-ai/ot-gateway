@@ -84,17 +84,18 @@ describe("openHistory", () => {
     Effect.gen(function* () {
       const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
       for (let second = 0; second < 10; second++) history.sink.record("ventilation-1", "temp", second, second * 1000)
-      // Nothing is written before the first flush.
-      expect(
-        (yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })).buckets
-      ).toEqual([])
+      const expected = [
+        { t: 0, min: 0, max: 4, avg: 2, count: 5 },
+        { t: 5_000, min: 5, max: 9, avg: 7, count: 5 }
+      ]
+      // Before the first write, the reads waiting for it are in the answer already.
+      const before = yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })
+      expect(before).toMatchObject({ stepMs: 5_000, resolution: "read", live: true })
+      expect(before.buckets).toEqual(expected)
       yield* TestClock.adjust("5 seconds")
       const series = yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })
       expect(series).toMatchObject({ stepMs: 5_000, resolution: "read" })
-      expect(series.buckets).toEqual([
-        { t: 0, min: 0, max: 4, avg: 2, count: 5 },
-        { t: 5_000, min: 5, max: 9, avg: 7, count: 5 }
-      ])
+      expect(series.buckets).toEqual(expected)
       // Another point, or another device, is another series.
       expect((yield* history.series({ device: "ventilation-1", point: "other", from: 0, to: 10_000 })).buckets).toEqual(
         []
@@ -249,6 +250,61 @@ const countWrites = (inner: (store: Store) => Store = (store) => store) => {
   }
   return { counter, wrapStore }
 }
+
+describe("a query between two writes", () => {
+  it.effect("sees every read up to now: the stored ones and the waiting ones in one bucket, without a write", () =>
+    Effect.gen(function* () {
+      const { counter, wrapStore } = countWrites()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      // A read every 5 s for a minute goes to the file in the writes at 30 s and 60 s; two more then wait.
+      for (let second = 0; second < 60; second += 5) {
+        history.sink.record("meter", "power", second, second * 1_000)
+        yield* TestClock.adjust("5 seconds")
+      }
+      yield* settle(history)
+      expect(counter.writes).toBe(2)
+      history.sink.record("meter", "power", 100, 60_000)
+      history.sink.record("meter", "power", 102, 65_000)
+      const series = yield* history.series({ device: "meter", point: "power", from: 0, to: 70_000, buckets: 2 })
+      expect(series.buckets).toEqual([
+        { t: 0, min: 0, max: 30, avg: 15, count: 7 },
+        { t: 35_000, min: 35, max: 102, avg: (35 + 40 + 45 + 50 + 55 + 100 + 102) / 7, count: 7 }
+      ])
+      // Asking wrote nothing.
+      expect(counter.writes).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("lists a change that is still waiting, after the stored ones, and not a repeat of the last", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      history.sink.record("pump", "alarm", false, 0)
+      history.sink.record("pump", "alarm", true, 1_000)
+      yield* TestClock.adjust("5 seconds")
+      history.sink.record("pump", "alarm", true, 6_000)
+      history.sink.record("pump", "alarm", false, 7_000)
+      const series = yield* history.series({ device: "pump", point: "alarm", from: 0, to: 8_000, changes: true })
+      expect(series.changes?.list).toEqual([
+        { t: 0, value: 0 },
+        { t: 1_000, value: 1 },
+        { t: 7_000, value: 0 }
+      ])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("sees waiting reads in the per-minute buckets too, by their minute", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 60_000 })
+      yield* TestClock.adjust("2 hours")
+      const now = yield* Clock.currentTimeMillis
+      history.sink.record("m", "p", 4, now - 30_000)
+      history.sink.record("m", "p", 6, now - 1_000)
+      const series = yield* history.series({ device: "m", point: "p", from: now - 2 * 3_600_000, to: now, buckets: 2 })
+      expect(series.resolution).toBe("minute")
+      expect(series.buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
 
 describe("when the history writes", () => {
   it.effect("writes every 30 s by default: twice a minute for 200 points read every 5 s, every read kept", () =>

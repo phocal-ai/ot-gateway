@@ -344,7 +344,8 @@ export const HISTORY_CHANGES_MAX = 200
  * read are left out. `resolution` says where it came from: every read (buckets under a minute, or a range of an
  * hour or less, that starts within the last day) or per-minute rollups (everything else). `changes`, when asked
  * for and the range starts within the last day: the first read and every read that changed the value, oldest
- * first, at most `HISTORY_CHANGES_MAX`.
+ * first, at most `HISTORY_CHANGES_MAX`. `live`: the answer holds the reads the gateway has not written to its file
+ * yet, so it is complete up to `to` (gateways before it lagged up to 30 s, the interval of their writes).
  */
 export const HistorySeries = Schema.Struct({
   device: Schema.String,
@@ -353,6 +354,7 @@ export const HistorySeries = Schema.Struct({
   to: Schema.Number,
   stepMs: Schema.Number,
   resolution: Schema.Literals(["read", "minute"]),
+  live: Schema.optionalKey(Schema.Boolean),
   buckets: Schema.Array(HistoryBucket),
   changes: Schema.optionalKey(Schema.Struct({ list: Schema.Array(HistoryChange), truncated: Schema.Boolean }))
 })
