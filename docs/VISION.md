@@ -80,7 +80,7 @@ Typical use cases:
 - JSON config validated with Effect Schema, loadable from a file or a database
 - Built-in health, metrics and tracing
 - A simulator for each driver
-- A local status page in v1.0
+- A local status page in v1.0, where a technician without AI can also set the gateway up: the page edits the config file and the gateway applies it without a restart (see "Decisions")
 - A public project and docs site, rendered from `docs/` so there is one source of truth
 - The `ot-gateway` CLI on npm, the gateway bundled inside, so `npx ot-gateway` works without a checkout; Docker Compose as the way to run it unattended, systemd for hosts without Docker
 - A standard points list as the input format for setting up without AI, with BACnet EDE import and device profiles for common Modbus devices
@@ -89,7 +89,6 @@ Typical use cases:
 
 - Serial protocols such as Modbus RTU or BACnet MS/TP (possible later through USB adapters)
 - A visual flow editor
-- A full configuration web app before v1.0 (it follows later, as a separate Next.js package)
 - Dashboards, historians or long-term storage
 - Being a BACnet controller or a building management system
 - Running on microcontrollers
@@ -216,10 +215,11 @@ A Raspberry Pi has run the gateway for 12 hours in real time against simulated d
    6. `/setup` and the "Set it up with AI" prompt rewritten on top of the CLI, without a clone.
 3. **A measured first run** (on a Pi with an agent: about 7 minutes, twice; on a laptop and by a newcomer: still to do). Time the path from "I found the site" to "Modbus readings in MQTT", record every step, and fix what costs the most time. The success criterion is 15 minutes; the measurement says where the minutes go. It is repeated for every release.
 4. **The MQTT contract.** Topics, payloads, `$meta`, health and commands as versioned JSON Schemas the CLI prints, values at the device's precision, and the rate a user chose visible where they look.
-5. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays read-only and on `127.0.0.1` by default.
-6. **A first real site** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
+5. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays on `127.0.0.1` by default.
+6. **Set up in the browser.** A technician without AI starts the gateway with one command, opens its status page and sets everything up there, without editing a file or opening a terminal. In stages: the gateway and broker settings on the Settings tab (done), then devices and points, then discovery and points-list import from the page.
+7. **A first real site** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
 
-After v1.0: an MCP server, so an agent can use the CLI's commands and read a running gateway's status, values and history as tools, the Next.js configuration app, a Brick or 223P exporter generated from the config, and loading the config from a database.
+After v1.0: an MCP server, so an agent can use the CLI's commands and read a running gateway's status, values and history as tools, a Brick or 223P exporter generated from the config, and loading the config from a database.
 
 ## Success criteria
 
@@ -245,11 +245,13 @@ After v1.0: an MCP server, so an agent can use the CLI's commands and read a run
 | Config format    | JSON, validated with Effect Schema                                         | Storable in a file or a database                                           |
 | Buffer storage   | SQLite via `@effect/sql-sqlite-node`                                       | Uses Node's built-in `node:sqlite`, so no native build on ARM              |
 | Monorepo         | pnpm workspaces + Turborepo                                                |                                                                            |
-| Web UI           | Local status page in v1.0; Next.js configuration app after v1.0            | Separate package                                                           |
+| Web UI           | The local status page sets the gateway up too, before v1.0                 | Edits the config file, which stays the source of truth; applied in-process |
 | Project site     | Static site on Vercel, docs rendered from `docs/`                          | Hobby plan now, Pro with the first customer                                |
 | License          | MIT                                                                        |                                                                            |
 | Semantic model   | Ontology-neutral core, optional Brick class and Haystack tags per point    | See below                                                                  |
 | Commands         | Live only on `.../point/$set`, one result each, never retained or replayed | Limits required on writable numeric points; BACnet priority 8              |
+
+**Configuration in the status page (2026-11).** The configuration web app no longer waits for v1.0 or a package of its own: the status page the gateway already serves edits the config, because a technician without AI should be able to set a gateway up with nothing but a browser. The config file stays the source of truth: the page reads it with an ETag, the gateway checks a change with the same schema as `ot-gateway check`, writes the file whole (the previous one kept as `.bak`) and applies it in the running process, rolling back to the previous config when the new one does not start. Secrets stay in `ot-gateway.env`; the page sees only whether a variable is set. Writes come only from the page itself (same origin, a custom header) and, on a page bound to the LAN, only with a token. It ships in stages: the gateway and broker settings first, then devices and points, then discovery and import.
 
 ## Semantic model
 

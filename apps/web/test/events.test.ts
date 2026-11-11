@@ -106,6 +106,18 @@ describe("eventTone", () => {
     expect(eventTone(brokerBack)).toBe("good")
     expect(eventTone(started)).toBe("neutral")
   })
+
+  it("says what a save on the Settings tab did, a rollback in red", () => {
+    const applied: GatewayEvent = { id: 7, at: now, type: "config-applied", summary: "gateway: site" }
+    const rolledBack: GatewayEvent = { id: 8, at: now, type: "config-apply-failed", error: "the broker did not answer" }
+    expect(eventSentence(applied)).toBe("Settings saved and applied: gateway: site")
+    expect(eventSentence(rolledBack)).toBe(
+      "Saved settings did not start, the previous ones run again: the broker did not answer"
+    )
+    expect(eventTone(applied)).toBe("neutral")
+    expect(eventTone(rolledBack)).toBe("bad")
+    expect(isIncident(applied)).toBe(true)
+  })
 })
 
 describe("mergeEvents", () => {

@@ -75,6 +75,7 @@ const failing: GatewayStatus = {
   id: "main",
   since: at(10, 0, 0),
   now,
+  configSince: at(10, 0, 0),
   broker: {
     url: "mqtt://broker:1883",
     connected: true,
@@ -134,7 +135,7 @@ describe("the gateway to ask", () => {
       yield* fs.writeFileString(`${folder}/gw.json`, gatewayJson())
       const named = yield* resolveTarget({ config: `${folder}/gw.json` })
       expect(named.url).toBe("http://127.0.0.1:18080")
-      expect(named.expected?.site).toBe("plant-1")
+      expect(named).toMatchObject({ expected: { site: "plant-1" } })
       // The tests run in apps/gateway, which has no ot-gateway.json.
       expect(yield* resolveTarget({})).toEqual({ url: DEFAULT_STATUS_URL })
       expect(yield* resolveTarget({ url: "http://pi:8080" })).toEqual({ url: "http://pi:8080" })

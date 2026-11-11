@@ -54,6 +54,7 @@ describe("devicesById and withReadings", () => {
       id: "main",
       since: 0,
       now: 1,
+      configSince: 0,
       broker: {
         url: "mqtt://broker",
         connected: true,

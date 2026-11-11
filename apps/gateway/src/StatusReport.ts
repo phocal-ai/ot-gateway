@@ -239,6 +239,9 @@ const subjectOf = (event: GatewayEvent) => {
       return "broker"
     case "buffer-drained":
       return "buffer"
+    case "config-applied":
+    case "config-apply-failed":
+      return "config"
   }
 }
 
@@ -264,6 +267,10 @@ const describeEvent = (event: GatewayEvent) => {
       return event.delivered === undefined
         ? "drained: every waiting message delivered"
         : `drained: ${event.delivered} message(s) delivered from the buffer since it was last empty`
+    case "config-applied":
+      return `applied from the status page: ${withoutControls(event.summary)}`
+    case "config-apply-failed":
+      return `not applied, the previous config runs again: ${withoutControls(event.error)}`
   }
 }
 

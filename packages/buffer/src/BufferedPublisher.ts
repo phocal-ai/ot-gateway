@@ -77,6 +77,11 @@ export interface BufferedPublisherOptions {
   readonly openDatabase?: typeof openDatabase
   /** Told when the drainer has delivered every waiting row: after an outage, once the backlog is out. */
   readonly onDrained?: Effect.Effect<void>
+  /**
+   * Fail with `BufferOpenFailed` when the file cannot be opened at start, instead of running unbuffered. A config
+   * applied from the status page sets it: a buffer that does not open is a reason to keep the previous config.
+   */
+  readonly requireOpen?: boolean
 }
 
 /** Messages delivered concurrently while draining; bounded by the broker's Receive Maximum anyway. */
@@ -501,7 +506,11 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   // A second gateway on the same file fails here, at startup, with `BufferLocked`.
   const opened = yield* open(settings.path).pipe(
     Effect.map((database): OutboxDatabase | undefined => database),
-    Effect.catchTag("BufferOpenFailed", (error) => Effect.as(failed("open", cannotOpen, error.message), undefined))
+    Effect.catchTag("BufferOpenFailed", (error) =>
+      options.requireOpen === true
+        ? Effect.fail(error)
+        : Effect.as(failed("open", cannotOpen, error.message), undefined)
+    )
   )
   yield* install(opened)
   yield* Effect.addFinalizer(() => Effect.suspend(() => (current === undefined ? Effect.void : current.database.close)))

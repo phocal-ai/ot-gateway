@@ -7,7 +7,7 @@
 #
 # No sudo and no folders to make: the outbox and the history live in the `ot-gateway_data` volume. The image
 # resolves relative paths in the config (`./ot-gateway-buffer.sqlite`, as `ot-gateway init` writes them) against
-# it (OT_GATEWAY_DATA_DIR), not against the read-only config's folder, so they outlive the container.
+# it (OT_GATEWAY_DATA_DIR), not against this folder, so they outlive the container.
 #
 # Upgrade by writing the new tag into the default below, then docker compose up -d; go back the same way:
 #   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-<new tag>/' compose.yaml && docker compose up -d
@@ -27,12 +27,17 @@ services:
     # The volume, where releases before OT_GATEWAY_DATA_DIR resolved relative paths (their working directory).
     # The entrypoint is absolute, so this is safe.
     working_dir: /var/lib/ot-gateway
+    # The config in this folder. The image's default (/etc/ot-gateway/gateway.json) is for compose files that
+    # mounted the file alone, read-only.
+    command: [/etc/ot-gateway/ot-gateway.json]
     volumes:
-      # Fails with a clear error when ot-gateway.json is missing, instead of mounting an empty folder in its place.
+      # This folder, writable: the status page's Settings tab saves ot-gateway.json here (written to a new file and
+      # renamed over it, which a file mounted alone does not allow) and keeps the previous one as
+      # ot-gateway.json.bak. The gateway runs as user 1000, the first user of a Pi; a folder that user may not
+      # write keeps the page read-only, and the page says why.
       - type: bind
-        source: ./ot-gateway.json
-        target: /etc/ot-gateway/gateway.json
-        read_only: true
+        source: .
+        target: /etc/ot-gateway
         bind:
           create_host_path: false
       # A named volume starts with the image's ownership (the gateway's user), so nothing needs a chown.

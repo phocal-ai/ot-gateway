@@ -1,7 +1,7 @@
 "use client"
 /**
- * The point catalog (`/api/points`), shared by the Status and Points tabs. It changes only when the gateway
- * restarts, so it is asked for once per run of the gateway and kept across tab switches.
+ * The point catalog (`/api/points`), shared by the Status and Points tabs. It changes only when the config does
+ * (a restart, or a save on the Settings tab), so it is asked for once per config and kept across tab switches.
  */
 import type { PointCatalog } from "@ot-gateway/api"
 import { useEffect, useState } from "react"
@@ -16,12 +16,12 @@ export type CatalogLoad =
   | { readonly _tag: "failed"; readonly message: string }
 
 /**
- * The catalog once it came, and from which run of the gateway (its start time): it changes only when the gateway
- * restarts, so coming back to a page shows it at once, and a restart (perhaps with a new config) asks again.
+ * The catalog once it came, and for which config (`configSince` in the status): it changes only with the config,
+ * so coming back to a page shows it at once, and a new config (a restart, a save) asks again.
  */
 let cachedCatalog: { readonly since: number; readonly catalog: PointCatalog } | undefined
 
-/** The catalog of the gateway that started at `since`, asked for until it comes once; nothing before the status says. */
+/** The catalog of the config that started at `since`, asked for until it comes once; nothing before the status says. */
 export const useCatalog = (since: number | undefined) => {
   const cached = since !== undefined && cachedCatalog?.since === since ? cachedCatalog.catalog : undefined
   const [load, setLoad] = useState<CatalogLoad>(() =>

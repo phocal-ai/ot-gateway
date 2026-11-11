@@ -41,7 +41,7 @@ import {
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
-import { ConfigFileError, loadConfig } from "./LoadConfig.ts"
+import { ConfigFileError, configFileSource, loadConfig } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
 import {
   describeProfile,
@@ -154,12 +154,18 @@ const jsonFailure =
 const dryRunFlag = (description: string) =>
   Flag.Boolean("dry-run").pipe(Flag.withDescription(description), Flag.withDefault(false))
 
-/** The gateway for `config`, with host monitoring and telemetry, until it is stopped. */
-const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfig) {
+/**
+ * The gateway for `config`, with host monitoring and telemetry, until it is stopped. With the file it came from,
+ * the status page can edit it.
+ */
+const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfig, path?: string) {
   const version = yield* readVersion
-  yield* Effect.scoped(Effect.flatMap(liveHostSources, (host) => runGateway(config, { host, version }))).pipe(
-    Effect.provide(telemetryLayer(config, version))
-  )
+  const configFile = path === undefined ? undefined : yield* configFileSource(path)
+  return yield* Effect.scoped(
+    Effect.flatMap(liveHostSources, (host) =>
+      runGateway(config, { host, version, ...(configFile === undefined ? {} : { configFile }) })
+    )
+  ).pipe(Effect.provide(telemetryLayer(config, version)))
 })
 
 const configPath = Argument.String("config").pipe(
@@ -181,7 +187,7 @@ const run = Command.make("run", { config: configPath }, ({ config }) =>
             })
       )
     }),
-    Effect.flatMap(runConfigured)
+    Effect.flatMap((loaded) => runConfigured(loaded, config))
   )
 ).pipe(
   Command.withDescription("Run the gateway: poll the devices in the config and publish to its broker"),

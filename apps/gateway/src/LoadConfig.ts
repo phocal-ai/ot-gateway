@@ -6,7 +6,7 @@
  * Relative file paths in the config (`buffer.path`, `history.path`) are resolved here, once: against the folder
  * the config file is in, so `ot-gateway run /home/pi/site-1/ot-gateway.json` keeps its outbox in that folder
  * wherever it is started from. `OT_GATEWAY_DATA_DIR` names another base: the container image sets it to its data
- * volume, since Docker Compose mounts the config read-only at `/etc/ot-gateway/gateway.json`.
+ * volume, so the outbox and the history outlive the container and stay out of the folder Compose mounts.
  */
 import { type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Config, Effect, FileSystem, Option, Schema } from "effect"
@@ -63,6 +63,15 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
   // The gateway's folder holds ot-gateway.env too: started from elsewhere (a checkout's root), the CLI finds the
   // broker password there as well. main.ts has read the working directory's already, and set variables win.
   if (folder !== process.cwd()) yield* Effect.sync(() => loadEnvFile(join(folder, envFileName)))
-  const base = Option.getOrElse(yield* dataDirectory, () => folder)
-  return resolveConfigPaths(config, base)
+  return (yield* configFileSource(path)).resolve(config)
+})
+
+/**
+ * The config file at `path` as the status page's editor needs it: its absolute path, and how a config saved there
+ * gets its relative paths resolved, the same way as at start.
+ */
+export const configFileSource = Effect.fn("configFileSource")(function* (path: string) {
+  const absolute = resolve(path)
+  const base = Option.getOrElse(yield* dataDirectory, () => dirname(absolute))
+  return { path: absolute, resolve: (config: GatewayConfig) => resolveConfigPaths(config, base) }
 })

@@ -32,25 +32,25 @@ curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubuserc
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
 
 ```bash
-docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
+docker compose run --rm gateway --check /etc/ot-gateway/ot-gateway.json
 ```
 
 ```bash
 docker compose up -d
 ```
 
-The outbox and the history live in the `ot-gateway_data` volume, mounted at `/var/lib/ot-gateway`. The image sets `OT_GATEWAY_DATA_DIR` to that folder, so a relative `buffer.path` or `history.path` such as `./ot-gateway-buffer.sqlite` (what `ot-gateway init` writes) lands in it rather than next to the read-only config, and so does an absolute one under `/var/lib/ot-gateway`. Either way they outlive the container. Outside the container, relative paths resolve against the config file's folder ([configuration.md](configuration.md)).
+The outbox and the history live in the `ot-gateway_data` volume, mounted at `/var/lib/ot-gateway`. The image sets `OT_GATEWAY_DATA_DIR` to that folder, so a relative `buffer.path` or `history.path` such as `./ot-gateway-buffer.sqlite` (what `ot-gateway init` writes) lands in it rather than in the config's folder, and so does an absolute one under `/var/lib/ot-gateway`. Either way they outlive the container. Outside the container, relative paths resolve against the config file's folder ([configuration.md](configuration.md)).
 
 Compose is for a Linux machine. Docker Desktop on macOS and Windows runs containers in a VM, so host networking does not put the gateway on the building network, and BACnet broadcasts never reach it. There, run the gateway with `ot-gateway run` (`init` says so when it writes `compose.yaml`), or put it on a Linux box.
 
-`compose.yaml` pins a release tag, uses host networking (BACnet discovery and change of value need the building network's broadcasts, and the status page listens on the host's loopback), restarts the gateway after a crash and at boot, gives it 30 seconds to stop cleanly, caps Docker's own log files (it keeps them forever on the SD card otherwise) and holds the container to 768 MB. It refuses to start without `ot-gateway.json` next to it rather than mount an empty folder in its place. Raspberry Pi OS boots with memory limits off, and Compose then warns `Your kernel does not support memory limit capabilities` and runs the gateway without one: add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt`, restart the Pi and recreate the container ([raspberry-pi-install.md](raspberry-pi-install.md), part 5). The systemd unit's 512 MB limit below needs the same.
+`compose.yaml` pins a release tag, uses host networking (BACnet discovery and change of value need the building network's broadcasts, and the status page listens on the host's loopback), restarts the gateway after a crash and at boot, gives it 30 seconds to stop cleanly, caps Docker's own log files (it keeps them forever on the SD card otherwise) and holds the container to 768 MB. It mounts its own folder, writable, at `/etc/ot-gateway` and runs `/etc/ot-gateway/ot-gateway.json`, so the status page's Settings tab can save the config ([Editing in the status page](#editing-in-the-status-page)); without `ot-gateway.json` in the folder the gateway stops at once and says how to get one. Raspberry Pi OS boots with memory limits off, and Compose then warns `Your kernel does not support memory limit capabilities` and runs the gateway without one: add `cgroup_enable=memory` to `/boot/firmware/cmdline.txt`, restart the Pi and recreate the container ([raspberry-pi-install.md](raspberry-pi-install.md), part 5). The systemd unit's 512 MB limit below needs the same.
 
 Without Compose, the same as one command, from the same folder:
 
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
-  -v "$PWD/ot-gateway.json:/etc/ot-gateway/gateway.json:ro" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.12.0
+  -v "$PWD:/etc/ot-gateway" -v ot-gateway_data:/var/lib/ot-gateway \
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.12.0 /etc/ot-gateway/ot-gateway.json
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -120,7 +120,7 @@ sudo systemctl restart ot-gateway
 With Docker Compose, edit `ot-gateway.json` next to `compose.yaml`, check it and recreate the container, from that folder:
 
 ```bash
-docker compose run --rm gateway --check /etc/ot-gateway/gateway.json
+docker compose run --rm gateway --check /etc/ot-gateway/ot-gateway.json
 ```
 
 ```bash
@@ -128,6 +128,27 @@ docker compose up -d --force-recreate
 ```
 
 Under systemd, you can also run `install.sh` again with the new file: it checks it before replacing the old one. To find BACnet devices for the config, stop the gateway first (both need UDP 47808), then run `node apps/gateway/src/main.ts --discover /etc/ot-gateway/gateway.json`.
+
+A change by hand is read when the gateway starts: the gateway does not watch the file. The status page's editor is the way to change settings without a restart.
+
+## Editing in the status page
+
+The Settings tab's Gateway and Broker cards have an Edit button: site, building, gateway id, health interval, broker URL, user name, client id and MQTT version. The gateway checks the form as you type (the same check as `ot-gateway check`, each problem under its field), and Save writes the config file and applies it without a restart. Devices and the other blocks are still changed in the file, for now.
+
+- **The file stays the source of truth.** The page reads the file as it is on disk, and a save replaces it whole: the new text goes to `ot-gateway.json.tmp`, is flushed to disk and renamed over the file, so a power cut leaves the old file or the new one, never half of one. The previous version is kept as `ot-gateway.json.bak`, with the file's permissions; to go back, copy it over the file and restart the gateway. A save is refused when the file changed since the page read it (an edit by hand, another browser): nothing is written, and the page offers to load the file again.
+- **Applied in the running process.** The devices, the broker connection and the outbox stop cleanly (what waits in the outbox stays in its file) and start again with the new config; the status page, its events and the history stay up. When the broker settings changed, the new config counts as applied only once the broker accepts it (10 s at most). A config that does not start (the outbox's file cannot be opened, the broker refuses the connection) is rolled back: the previous config runs again, the file gets its previous text back, and the page shows why. Either way there is an event (`config-applied` or `config-apply-failed`, in `ot-gateway events` and on the Status tab), a log line and the `ot_gateway_config_applies_total` metric by outcome. The status page's own address (`status`) and the history (`history`) are saved but take effect at the next restart, and the page says so.
+- **What a new site or building leaves behind.** Values go to the new topics at once, and the old health topic gets the gateway's clean `offline`. The retained `$meta` and health messages under the old site stay on the broker until something clears them (`ot-gateway publish <topic> --retain`). Telemetry's `site` and `building` attributes follow the new config, but the OpenTelemetry resource keeps the values it started with until a restart.
+- **Secrets stay in `ot-gateway.env`.** The page never sees or sends the broker password: it shows only whether the variable `mqtt.passwordEnv` names is set.
+- **Who may save.** Every request that changes something must come from the page itself: an `Origin` header that matches the address the request went to (a page on another site cannot fake it) and the `X-OT-Gateway: 1` header (which a cross-site page cannot send without a CORS preflight, never granted). With the status page on loopback (`127.0.0.1`, the default), reached on the machine or through an SSH tunnel, that is enough. Bound to the LAN (`status.bindAddress: "0.0.0.0"`), editing is off unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env` (a long random secret: `openssl rand -hex 32`); the page then asks for it once and sends it as `Authorization: Bearer <token>`, keeping it in the browser tab until it closes. The token protects writes only; anyone who can reach the page can still read it.
+- **Where it can save.** The gateway's user must be able to write the file and its folder (for the `.tmp` and the `.bak`). With Docker Compose that is the folder mount in `compose.yaml` (below); the container's user is 1000, the first user of a Pi, so a folder owned by another user keeps the page read-only. Under systemd, `/etc/ot-gateway` belongs to root and the page stays read-only: edit the file as above. When the page cannot save, the Settings tab says why and what to change instead of showing Edit, and so does `GET /api/config/edit`.
+
+The API behind it, for scripts: `GET /api/config/edit` (whether this page may save, and why not), `GET /api/config/file` (the text and its `etag`), `POST /api/config/check` with `{"text"}` (`{"valid", "issues": [{"path", "message"}]}`) and `PUT /api/config/file` with `{"text", "etag"}` (`{"etag", "applied": {"summary", "changes", "restartNeeded"}}`; 409 when the file changed, 400 when the config is invalid, 422 when it did not start and was rolled back, 403 when the request may not save). The writes need the headers above:
+
+```bash
+curl -s http://127.0.0.1:8080/api/config/file > file.json   # edit the text, keep the etag
+curl -s -X PUT http://127.0.0.1:8080/api/config/file -H 'Origin: http://127.0.0.1:8080' -H 'X-OT-Gateway: 1' \
+  -H 'Content-Type: application/json' --data @file.json
+```
 
 ## Upgrade
 
@@ -152,6 +173,25 @@ With Docker Compose, write the new tag into `compose.yaml` and recreate the cont
 ```bash
 sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.12.0/' compose.yaml && docker compose up -d
 ```
+
+### From a `compose.yaml` that mounts the config file (v0.12.0 and earlier)
+
+Until v0.12.0, `compose.yaml` mounted `ot-gateway.json` alone, read-only, at `/etc/ot-gateway/gateway.json`. Such a gateway runs on with a newer image as before, and its Settings tab says the file is read-only. To edit in the status page, mount the folder instead: in `compose.yaml`, replace the `ot-gateway.json` volume (the `type: bind` entry with `source: ./ot-gateway.json`) with the folder, and name the config's new path:
+
+```yaml
+command: [/etc/ot-gateway/ot-gateway.json]
+volumes:
+  - .:/etc/ot-gateway
+  - data:/var/lib/ot-gateway
+```
+
+or fetch the release's `compose.yaml` again (it has both, and keeps the tag it names). The folder must be writable by user 1000 (`ls -ln` shows the owner; the first user of a Pi is 1000). Then recreate the container, from the folder:
+
+```bash
+docker compose up -d
+```
+
+The outbox and the history stay in the `ot-gateway_data` volume. `ot-gateway.env` is in the mounted folder now too; Compose still passes it as before, and the gateway reads it only for a variable that is not set already.
 
 ### From the `/etc/ot-gateway` layout (v0.7.0 and earlier)
 
@@ -298,7 +338,7 @@ With `status` in the config, `http://127.0.0.1:8080` on the gateway shows the al
 ssh -L 8080:127.0.0.1:8080 pi@gateway
 ```
 
-and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The Buffer card says how many messages wait and, from the last minute of polls, when the buffer will be full while the broker is away or how long the backlog takes once it is back. The Status tab's Broker, Devices, Buffer and Machine cards open their details: when the broker connection came up and what the broker allowed (MQTT version, keep-alive, retained messages, largest message), reconnects, failed attempts, values published and publishes that failed; devices by state and protocol with the ones that need a look; and what the buffer stored, sent on and dropped, by reason; the machine's last sample (processor, memory, heap, event-loop lag, disk, temperature and power where the machine has them). A point is an alarm when its Brick class has `Alarm` in it or its Haystack tags include `alarm`: one that is on (true, or a number other than 0) is shown in red and named above the cards. A value is dimmed when it is stale: the device fails or is late, or a polled point was not read for three poll intervals (at least 15 s). A point read by change of value is not stale while its device answers, as the device sends it only when it changes: it shows "COV" and when it last changed. A device row opens the device in a side panel (`/?device=<id>`): its address from the running config, since when it fails (local clock time), the driver's error and what to check for that failure class, its first points with their values, and its events. The Recent events card lists the last ten events from `GET /api/events` in plain words, asked for with the status poll (`?after=` the newest it has), and Show all lists every event the gateway keeps. A gateway without devices says how to add them. The Settings tab (`/settings`) shows the running config from `GET /api/config`: every block with its defaults filled in and each device without its points (no secrets: the broker password is only named by `passwordEnv`). The page cannot change it. The Messages tab (`/messages`) shows the latest message the gateway published on each topic (`GET /api/messages`, at most 2,000 topics and 2,000 characters of each payload), fetched only while the tab is open, with a search over topics and payloads and a filter by kind. The Points page (`/points`) lists every configured point from `GET /api/points` (topic, source, publish mode, `cov` when it is read by change of value, scaling, limits, Brick and Haystack), fetched once. It draws only the rows on screen and polls only their values with `GET /api/values?points=device/point,...` (at most 500 per request), while the page's status poll uses `GET /api/status?points=none`: at 10,000 points, the full `/api/status` is about 1.3 MB, without points about 27 KB.
+and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The Buffer card says how many messages wait and, from the last minute of polls, when the buffer will be full while the broker is away or how long the backlog takes once it is back. The Status tab's Broker, Devices, Buffer and Machine cards open their details: when the broker connection came up and what the broker allowed (MQTT version, keep-alive, retained messages, largest message), reconnects, failed attempts, values published and publishes that failed; devices by state and protocol with the ones that need a look; and what the buffer stored, sent on and dropped, by reason; the machine's last sample (processor, memory, heap, event-loop lag, disk, temperature and power where the machine has them). A point is an alarm when its Brick class has `Alarm` in it or its Haystack tags include `alarm`: one that is on (true, or a number other than 0) is shown in red and named above the cards. A value is dimmed when it is stale: the device fails or is late, or a polled point was not read for three poll intervals (at least 15 s). A point read by change of value is not stale while its device answers, as the device sends it only when it changes: it shows "COV" and when it last changed. A device row opens the device in a side panel (`/?device=<id>`): its address from the running config, since when it fails (local clock time), the driver's error and what to check for that failure class, its first points with their values, and its events. The Recent events card lists the last ten events from `GET /api/events` in plain words, asked for with the status poll (`?after=` the newest it has), and Show all lists every event the gateway keeps. A gateway without devices says how to add them. The Settings tab (`/settings`) shows the running config from `GET /api/config`: every block with its defaults filled in and each device without its points (no secrets: the broker password is only named by `passwordEnv`, and shown as set or not set). Its Gateway and Broker cards can edit those settings and apply them without a restart ([Editing in the status page](#editing-in-the-status-page)). The Messages tab (`/messages`) shows the latest message the gateway published on each topic (`GET /api/messages`, at most 2,000 topics and 2,000 characters of each payload), fetched only while the tab is open, with a search over topics and payloads and a filter by kind. The Points page (`/points`) lists every configured point from `GET /api/points` (topic, source, publish mode, `cov` when it is read by change of value, scaling, limits, Brick and Haystack), fetched once. It draws only the rows on screen and polls only their values with `GET /api/values?points=device/point,...` (at most 500 per request), while the page's status poll uses `GET /api/status?points=none`: at 10,000 points, the full `/api/status` is about 1.3 MB, without points about 27 KB.
 
 ## What changed and when
 
@@ -361,7 +401,7 @@ All times are Unix ms on the gateway's wall clock; `now` in an answer is the gat
 - `GET /api/points`: `{points: [{device, id, name, unit?, writable, topic, source, read, cov, publish, limits?, scaling?, brick?, haystack?}]}`, every configured point in config order.
 - `GET /api/values?points=device/point,...`: `{readings: [{device, point, value?, ts?}]}`.
 - `GET /api/messages`: `{messages: [{topic, payload, truncated, retained, at, count, delivered}], droppedTopics}`, sorted by topic.
-- `GET /api/events[?after=<id>|since=<ms>]`: `{now, capacity, dropped, events: [{id, at, type, ...}]}`, oldest first; `type` is `gateway-started`, `device-failing`, `device-recovered`, `broker-disconnected`, `broker-connected` or `buffer-drained`.
+- `GET /api/events[?after=<id>|since=<ms>]`: `{now, capacity, dropped, events: [{id, at, type, ...}]}`, oldest first; `type` is `gateway-started`, `device-failing`, `device-recovered`, `broker-disconnected`, `broker-connected`, `buffer-drained`, `config-applied` or `config-apply-failed`.
 - `GET /api/history?device=&point=[&from=&to=&buckets=]`: `{device, point, from, to, stepMs, resolution: "read"|"minute", buckets: [{t, min, max, avg, count}]}`, buckets without a read left out; 404 without a history, 400 for a point the config does not have.
 
 `ot-gateway watch` says when it loses the broker and when it is back; with `--seconds` it exits with 1 when the broker was lost and did not come back.
