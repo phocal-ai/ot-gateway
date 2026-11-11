@@ -1,17 +1,23 @@
-/** `watch` and `status`: what they print, and `watch --seconds` against the in-process test broker over real TCP. */
+/** `watch`: what it prints, and `watch --seconds` against the in-process test broker over real TCP. */
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
-import type { GatewayStatus } from "@ot-gateway/api"
 import { parseConfig } from "@ot-gateway/core"
 import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
-import { Effect } from "effect"
+import { Effect, Exit, Fiber, Scope } from "effect"
 import { TestConsole } from "effect/testing"
 import { publishOnce } from "../src/Broker.ts"
-import { ago, formatStatus } from "../src/StatusReport.ts"
 import { formatMessage, watch, watchFilter } from "../src/Watch.ts"
 
 const configFor = (port: number) =>
   parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url: `mqtt://127.0.0.1:${port}` }, devices: [] }))
+
+/** A test broker on `port` (0 for any) for the current scope; its port. */
+const startBroker = (port: number) =>
+  Effect.gen(function* () {
+    const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port })
+    yield* serveMqtt(server, makeBrokerControl()).pipe(Effect.forkScoped)
+    return server.address._tag === "UnixPathAddress" ? 0 : server.address.port
+  })
 
 /** A port on this machine that nothing listens on: one a server had, closed again. */
 const closedPort = Effect.scoped(
@@ -71,72 +77,42 @@ describe("watch --seconds", () => {
       expect(lines).toEqual([expect.stringMatching(/^\d\d:\d\d:\d\d retained s\/b\/meter\/power 42$/)])
     }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
   )
-})
 
-describe("status", () => {
-  it("says how long ago as coarsely as a glance needs", () => {
-    expect(ago(12_000)).toBe("12 s")
-    expect(ago(4 * 60_000)).toBe("4 min")
-    expect(ago(3 * 3_600_000)).toBe("3 h")
-    expect(ago(3 * 86_400_000)).toBe("3 d")
-    expect(ago(-500)).toBe("0 s")
-  })
+  it.live("says when it loses the broker, and fails when the broker is still gone at the end", () =>
+    Effect.gen(function* () {
+      const brokerScope = yield* Scope.make()
+      const port = yield* startBroker(0).pipe(Scope.provide(brokerScope))
+      const config = yield* configFor(port)
+      const watching = yield* watch(config, { seconds: 2, json: true }).pipe(Effect.flip, Effect.forkChild)
+      yield* Effect.sleep("500 millis")
+      yield* Scope.close(brokerScope, Exit.void)
+      const error = yield* Fiber.join(watching)
+      expect(error.message).toMatch(/^lost mqtt:\/\/127\.0\.0\.1:\d+ at \d\d:\d\d:\d\d and it did not come back: /)
+      // The client's own log lines reach the test console too: only the JSON lines are the watch's.
+      const records = (yield* TestConsole.logLines)
+        .map(String)
+        .filter((line) => line.startsWith("{"))
+        .map((line): unknown => JSON.parse(line))
+      expect(records).toEqual([{ at: expect.any(String), event: "broker-disconnected", error: expect.any(String) }])
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
 
-  it("prints the gateway, its broker and one aligned line per device", () => {
-    const status: GatewayStatus = {
-      site: "s",
-      building: "b",
-      id: "main",
-      since: 0,
-      now: 600_000,
-      broker: {
-        url: "mqtt://localhost:1883",
-        connected: false,
-        connects: 1,
-        failedConnects: 4,
-        published: 900,
-        publishFailures: 0
-      },
-      buffer: {
-        path: "buf.sqlite",
-        rows: 42,
-        maxRows: 1000,
-        dropped: 3,
-        written: 45,
-        delivered: 0,
-        droppedBy: { overflow: 3 },
-        failures: 0,
-        disabled: false
-      },
-      devices: [
-        {
-          id: "ventilation-1",
-          protocol: "simulator",
-          status: "ok",
-          pollIntervalMs: 2000,
-          lastSuccess: 598_000,
-          pointCount: 0,
-          points: []
-        },
-        {
-          id: "energy-meter",
-          protocol: "modbus-tcp",
-          status: "failing",
-          pollIntervalMs: 5000,
-          reason: "Timeout",
-          pointCount: 0,
-          points: []
-        }
-      ],
-      commands: []
-    }
-    expect(formatStatus(status).split("\n")).toEqual([
-      "s/b gateway main, up 10 min",
-      "  broker mqtt://localhost:1883: NOT CONNECTED",
-      "  buffer: 42 of 1000 message(s) waiting, 3 DROPPED since start",
-      "  2 device(s), 1 failing",
-      "    ventilation-1  ok       simulator, 0 point(s), read 2 s ago",
-      "    energy-meter   failing  modbus-tcp, 0 point(s), no read yet (Timeout)"
-    ])
-  })
+  it.live("says when the broker is back, and ends well when it came back in time", () =>
+    Effect.gen(function* () {
+      const brokerScope = yield* Scope.make()
+      const port = yield* startBroker(0).pipe(Scope.provide(brokerScope))
+      const config = yield* configFor(port)
+      const watching = yield* watch(config, { seconds: 4 }).pipe(Effect.forkChild)
+      yield* Effect.sleep("500 millis")
+      yield* Scope.close(brokerScope, Exit.void)
+      yield* Effect.sleep("200 millis")
+      yield* startBroker(port)
+      yield* Fiber.join(watching)
+      const lines = (yield* TestConsole.logLines).map(String).filter((line) => line.includes(" -- "))
+      expect(lines).toEqual([
+        expect.stringMatching(/^\d\d:\d\d:\d\d -- lost the broker: .*; reconnecting$/),
+        expect.stringMatching(/^\d\d:\d\d:\d\d -- broker back after \d+ s$/)
+      ])
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+  )
 })

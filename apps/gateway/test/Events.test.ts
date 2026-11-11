@@ -17,6 +17,7 @@ describe("GatewayEvents", () => {
       events.bufferDrained()
       const log = yield* events.log()
       expect(log).toEqual({
+        now: 1_000,
         events: [
           { id: 1, at: 1_000, type: "gateway-started", version: "v1.2.3", devices: 2 },
           { id: 2, at: 1_000, type: "broker-connected" },

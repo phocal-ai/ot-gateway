@@ -385,6 +385,8 @@ export type GatewayEvent = typeof GatewayEvent.Type
  * `dropped` counts the older ones it let go, so a gap is visible.
  */
 export const EventLog = Schema.Struct({
+  /** Unix ms on the gateway's clock when the answer was made, to read `at` against ("5 min ago") on any machine. */
+  now: Schema.Number,
   events: Schema.Array(GatewayEvent),
   capacity: Schema.Number,
   dropped: Schema.Number

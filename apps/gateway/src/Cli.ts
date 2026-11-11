@@ -10,7 +10,8 @@
  *   ot-gateway watch [config]       print what arrives at the config's broker
  *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
  *   ot-gateway publish <topic> [payload]  one message to the config's broker (empty and --retain clears)
- *   ot-gateway status [--url]       the running gateway's status, one line per device
+ *   ot-gateway status [--url]       the running gateway's status, one line per device (exit 1 when failing)
+ *   ot-gateway events [--since 1h]  what changed lately: devices failing and recovering, the broker lost and back
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
@@ -25,7 +26,7 @@ import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
-import { statusReport } from "./StatusReport.ts"
+import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
 import {
   type BrokerReport,
@@ -603,17 +604,53 @@ const publishCommand = Command.make(
   ])
 )
 
-const status = Command.make(
-  "status",
+const urlFlag = Flag.String("url").pipe(
+  Flag.withDescription("Where the gateway's status page is"),
+  Flag.withDefault("http://127.0.0.1:8080")
+)
+
+// The report is printed before the failure that sets the exit code, and outside `jsonFailure`, so `--json` prints
+// one document: the status with `ok: false`.
+const status = Command.make("status", { url: urlFlag, json: jsonFlag }, ({ url, json }) =>
+  fetchStatusFor(url, { json }).pipe(jsonFailure(json, { url }), Effect.flatMap(statusOutcome(json)))
+).pipe(
+  Command.withDescription(
+    "The running gateway's status: its broker, buffer and one line per device. Exits with 1 when a device is failing or the broker is not connected"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway status", description: "The gateway on this machine" },
+    { command: "ot-gateway status --json", description: "Everything /api/status says, with ok: true or false" },
+    { command: "ot-gateway status --url http://10.0.0.20:8080", description: "A gateway elsewhere on the LAN" }
+  ])
+)
+
+const eventsCommand = Command.make(
+  "events",
   {
-    url: Flag.String("url").pipe(
-      Flag.withDescription("Where the gateway's status page is"),
-      Flag.withDefault("http://127.0.0.1:8080")
+    url: urlFlag,
+    since: Flag.String("since").pipe(
+      Flag.withDescription("How far back: 30s, 10m, 2h, 1d, or all (the gateway keeps its latest 500 events)"),
+      Flag.filter(
+        (since) => parseSince(since) !== undefined,
+        (since) => `--since takes 30s, 10m, 2h, 1d or all, not ${since}`
+      ),
+      Flag.withDefault("1h")
     ),
     json: jsonFlag
   },
-  ({ url, json }) => statusReport(url, { json }).pipe(jsonFailure(json, { url }))
-).pipe(Command.withDescription("The running gateway's status: its broker, buffer and one line per device"))
+  ({ url, since, json }) =>
+    eventsReport(url, { since, sinceMs: parseSince(since) ?? Number.POSITIVE_INFINITY, json }).pipe(
+      jsonFailure(json, { url })
+    )
+).pipe(
+  Command.withDescription(
+    "What changed lately in the running gateway, oldest first: devices failing and recovering, the broker lost and back, the buffer drained"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway events", description: "The last hour" },
+    { command: "ot-gateway events --since all --json", description: "Everything it keeps, as JSON" }
+  ])
+)
 
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
@@ -626,7 +663,8 @@ export const rootDescription = [
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
   "    check --json                     every mistake in a config, with its path",
   "    broker --json                    the broker: MQTT version, limits, a round trip",
-  "    status --json                    the running gateway, device by device"
+  "    status --json                    the running gateway, device by device; exits 1 when something fails",
+  "    events --since 1h --json         what broke, since when and why, and when it came back"
 ].join("\n")
 
 export const cli = Command.make("ot-gateway").pipe(
@@ -643,7 +681,8 @@ export const cli = Command.make("ot-gateway").pipe(
     watchCommand,
     brokerCommand,
     publishCommand,
-    status
+    status,
+    eventsCommand
   ])
 )
 
@@ -659,7 +698,8 @@ const subcommands = new Set([
   "watch",
   "broker",
   "publish",
-  "status"
+  "status",
+  "events"
 ])
 
 /**

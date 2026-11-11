@@ -103,7 +103,7 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
           if (query.after !== undefined && event.id <= query.after) continue
           events.push(event)
         }
-        return { events, capacity, dropped: total - kept }
+        return { now: clock.currentTimeMillisUnsafe(), events, capacity, dropped: total - kept }
       })
   }
 }
