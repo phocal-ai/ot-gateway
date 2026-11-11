@@ -11,6 +11,9 @@
  * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
  *   is on localhost with a port other than the gateway's own, with analog
  *   values on the same sine and binary values flipping every 30 s
+ * - a device with a flow and a return temperature runs like a heating circuit
+ *   (`benchAnalogOf`): return stays 3 to 7 K below flow, and its compressor
+ *   runs while that spread is above 4 K
  * - writable points are left alone, so a command's value stays; the broker
  *   routes commands to the gateway, so `$set` works against the bench too
  */
@@ -53,6 +56,58 @@ export const benchValue = (unit: string | undefined, seconds: number, index: num
   const [low, high] = (unit === undefined ? undefined : rangeByUnit[unit]) ?? [0, 100]
   const value = low + (high - low) * (0.5 + 0.5 * Math.sin((2 * Math.PI * seconds) / 120 + index))
   return Math.round(value * 100) / 100
+}
+
+/** What the bench needs to know of a point to simulate it. */
+interface BenchPoint {
+  readonly id: string
+  readonly unit?: string | undefined
+  readonly semantics?: { readonly haystack?: ReadonlyArray<string> | undefined } | undefined
+}
+
+/**
+ * Which side of a water circuit a temperature point measures, from its Haystack tags (`leaving` / `entering`) or its
+ * id (`flow` or `supply` / `return`). Anything else is not part of a circuit.
+ */
+const circuitSide = (point: BenchPoint): "flow" | "return" | undefined => {
+  const tags = point.semantics?.haystack ?? []
+  if (tags.includes("leaving") || /flow|supply/.test(point.id)) return "flow"
+  if (tags.includes("entering") || /return/.test(point.id)) return "return"
+  return undefined
+}
+
+/** How much colder the return is than the flow: 3 to 7 K, on a four-minute cycle, as a heat pump's load varies. */
+export const benchSpread = (seconds: number) => 5 + 2 * Math.sin((2 * Math.PI * seconds) / 240)
+
+/** The flow point a return point on the same device pairs with: the first flow temperature in the same unit. */
+const flowIndexFor = (points: ReadonlyArray<BenchPoint>, point: BenchPoint): number | undefined => {
+  if (circuitSide(point) !== "return") return undefined
+  const index = points.findIndex((other) => other.unit === point.unit && circuitSide(other) === "flow")
+  return index === -1 ? undefined : index
+}
+
+/**
+ * The analog value of `points[index]` over simulated seconds. A return temperature with a flow temperature beside it
+ * follows the flow `benchSpread` below, so a heating circuit never runs backwards; anything else is `benchValue`.
+ * Worked out once per device, so an update does not search the points again.
+ */
+export const benchAnalogOf = (points: ReadonlyArray<BenchPoint>, index: number): ((seconds: number) => number) => {
+  const point = points[index]
+  const flowIndex = point === undefined ? undefined : flowIndexFor(points, point)
+  const unit = point?.unit
+  if (flowIndex === undefined) return (seconds) => benchValue(unit, seconds, index)
+  return (seconds) => Math.round((benchValue(unit, seconds, flowIndex) - benchSpread(seconds)) * 100) / 100
+}
+
+/**
+ * The binary value of `points[index]`: a compressor on a device with a flow and a return temperature runs while the
+ * spread between them is above 4 K (it is putting heat in); any other binary value flips every 30 s.
+ */
+export const benchBinaryOf = (points: ReadonlyArray<BenchPoint>, index: number): ((seconds: number) => boolean) => {
+  const point = points[index]
+  const circuit = points.some((other) => flowIndexFor(points, other) !== undefined)
+  if (point !== undefined && circuit && /compressor/.test(point.id)) return (seconds) => benchSpread(seconds) > 4
+  return (seconds) => Math.floor(seconds / 30) % 2 === 0
 }
 
 const simulatedSeconds = (pace: Pace) => Effect.map(Clock.currentTimeMillis, (millis) => (millis / 1000) * pace.speed)
@@ -109,15 +164,17 @@ const runSimulator = Effect.fn("runSimulator")(function* (devices: ReadonlyArray
 const simulateDevice = Effect.fn("simulateDevice")(function* (device: ModbusDevice, bank: RegisterBank, pace: Pace) {
   // A writable point starts at its lower limit (or 0) and then changes only by command.
   for (const point of device.points) if (point.writable) setPointValue(bank, point, point.limits?.min ?? 0)
+  const analog = device.points.map((_, index) => benchAnalogOf(device.points, index))
+  const binary = device.points.map((_, index) => benchBinaryOf(device.points, index))
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
       if (point.writable) return
-      if (point.dataType === "bool") return setPointValue(bank, point, Math.floor(seconds / 30) % 2 === 0)
+      if (point.dataType === "bool") return setPointValue(bank, point, binary[index]?.(seconds) ?? false)
       // Integers count up like a meter; floats swing through their unit's range.
       const value =
         point.dataType === "float32" || point.dataType === "float64"
-          ? benchValue(point.unit, seconds, index)
+          ? (analog[index]?.(seconds) ?? 0)
           : Math.floor(seconds / 10) % 32_768
       setPointValue(bank, point, value)
     })
@@ -132,6 +189,8 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
   pace: Pace
 ) {
   const simulated = simulatedDeviceFor(device)
+  const analog = device.points.map((_, index) => benchAnalogOf(device.points, index))
+  const binary = device.points.map((_, index) => benchBinaryOf(device.points, index))
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
@@ -141,9 +200,9 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
       if (objectType === undefined) return
       const object = { objectType, instance: point.instance }
       if (point.objectType.startsWith("binary-")) {
-        setPresentValue(simulated, object, { type: "enumerated", value: Math.floor(seconds / 30) % 2 })
+        setPresentValue(simulated, object, { type: "enumerated", value: binary[index]?.(seconds) === true ? 1 : 0 })
       } else {
-        setPresentValue(simulated, object, { type: "real", value: benchValue(point.unit, seconds, index) })
+        setPresentValue(simulated, object, { type: "real", value: analog[index]?.(seconds) ?? 0 })
       }
     })
   })

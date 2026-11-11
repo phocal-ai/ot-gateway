@@ -4,7 +4,7 @@
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
-import { driverConnects, driverRequests, withMetricAttributes } from "@ot-gateway/core"
+import { driverConnects, driverRequests, makeMemoryPublisher, runDevice, withMetricAttributes } from "@ot-gateway/core"
 import type { ModbusDevice, ModbusPoint } from "@ot-gateway/core"
 import { Effect, Metric } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
@@ -115,6 +115,29 @@ describe("Modbus driver over TCP", () => {
       const driver = yield* makeModbusDriver(deviceOn(port, [swappedFloat, littleCounter, swappedBytes]))
       const values = Object.fromEntries((yield* driver.readAll).map((reading) => [reading.pointId, reading.value]))
       expect(values).toEqual({ swapped: 21.5, counter: 0x0001_0203_0405_0607, bytes: -2 })
+    })
+  )
+
+  it.live("publishes a float32 holding 6.73 as 6.73, scaled or not", () =>
+    Effect.gen(function* () {
+      const { port, bank } = yield* startSimulator
+      const power = point("active-power", "holding", 300, "float32")
+      const scaled = { ...point("scaled-power", "holding", 302, "float32"), scaling: { factor: 0.1, offset: 0 } }
+      setPointValue(bank, power, 6.73)
+      setPointValue(bank, scaled, 6.73)
+      const driver = yield* makeModbusDriver(deviceOn(port, [power, scaled]))
+      const { messages, layer } = yield* makeMemoryPublisher
+      yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkScoped
+      )
+      const payloadOf = (topic: string) => messages.find((message) => message.topic === topic)?.payload
+      yield* Effect.sleep("10 millis").pipe(
+        Effect.repeat({ until: () => payloadOf("s/b/test-meter/scaled-power") !== undefined }),
+        Effect.timeout("5 seconds")
+      )
+      expect(payloadOf("s/b/test-meter/active-power")).toMatch(/^\{"value":6\.73,"ts":\d+\}$/)
+      expect(payloadOf("s/b/test-meter/scaled-power")).toMatch(/^\{"value":0\.673,"ts":\d+\}$/)
     })
   )
 

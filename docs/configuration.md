@@ -219,7 +219,7 @@ An aggregate message replaces the plain `{ value, unit, ts }`:
 }
 ```
 
-- `avg` is time-weighted: each value counts for as long as it held, so irregular reads (BACnet change-of-value pushes, a retry) do not skew it. `value` is the average, so a consumer that reads only `value` gets a sensible number.
+- `avg` is time-weighted: each value counts for as long as it held, so irregular reads (BACnet change-of-value pushes, a retry) do not skew it. `value` is the average, so a consumer that reads only `value` gets a sensible number. An average can have more digits than the values it averages (8 / 3.5 is `2.28571428571429`); it is rounded to 15 significant digits, which drops binary noise but not those. `min`, `max` and `last` are values as read.
 - A boolean has `avg` as the share of the window it was true (0 to 1), `value` and `last` as its last state, and no `min` or `max`.
 - `count` is the number of reads. A window with no read is sent with `count: 0` when the value held through it (a change-of-value point that stayed put) and the device answers; while the device does not, nothing is sent, and the outage does not count towards the next average.
 - The first window after a start is `"partial": true`, with `from` at the first read.
@@ -239,6 +239,8 @@ An aggregate message replaces the plain `{ value, unit, ts }`:
 | -------- | ---------- | ------- | ------------------------------- |
 | `factor` | number ≠ 0 | 1       | `value = raw × factor + offset` |
 | `offset` | number     | 0       |                                 |
+
+A float32 `raw` (a Modbus `float32`, a BACnet REAL) is first the shortest decimal that is the same 32-bit float: a register holding 6.73 reads as `6.73`, not `6.730000019073486`. A scaled value is then rounded to 15 significant digits, which drops the binary noise of the arithmetic (`3 × 0.1` is `0.3`) and nothing a device measured; whole numbers keep every digit.
 
 ## semantics
 

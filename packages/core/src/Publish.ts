@@ -13,6 +13,7 @@
  * Everything here is pure; the pipeline (`Pipeline.ts`) holds the state and the timers.
  */
 import { Schema } from "effect"
+import { withoutBinaryNoise } from "./Normalize.ts"
 
 const DAY_MS = 86_400_000
 
@@ -174,7 +175,8 @@ export const closeWindow = (
   // A window says something if it had a value at all: read in it, or carried in. One the device stopped answering
   // in still reports what it read before.
   if (closed.last === undefined) return { message: undefined, next }
-  const avg = closed.weightMs > 0 ? closed.weightedSum / closed.weightMs : asNumber(closed.last)
+  // A real average has more digits than its inputs; only the float64 noise of summing them is dropped.
+  const avg = withoutBinaryNoise(closed.weightMs > 0 ? closed.weightedSum / closed.weightMs : asNumber(closed.last))
   const start = toMs - intervalMs
   const from = closed.firstReadAt === undefined ? start : Math.max(start, Math.min(closed.firstReadAt, toMs))
   const numeric = typeof closed.last === "number"
