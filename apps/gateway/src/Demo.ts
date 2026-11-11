@@ -16,7 +16,7 @@ import { networkInterfaces } from "node:os"
 import { fileURLToPath } from "node:url"
 import { lanInterfaces } from "./Init.ts"
 import { loadConfig } from "./LoadConfig.ts"
-import { runBench } from "./TestBench.ts"
+import { benchPorts, firstPortInUse, type ListenPort, runBench } from "./TestBench.ts"
 
 /** The demo's config: the example, next to this checkout or inside the image. */
 export const exampleConfigPath = fileURLToPath(new URL("../../../examples/gateway.json", import.meta.url))
@@ -59,6 +59,41 @@ export const pickPublicBroker = Effect.fn("pickPublicBroker")(function* <R>(
     message: `none of the public test brokers (${publicBrokers.map((broker) => broker.host).join(", ")}) answered on port 1883. The network may block MQTT; ot-gateway demo without --public needs no network.`
   })
 })
+
+/** A port the demo needs is held by another program, found before the demo prints anything. */
+export class DemoPortInUse extends Schema.TaggedError<DemoPortInUse>()("DemoPortInUse", {
+  message: Schema.String
+}) {}
+
+/** Every port the demo listens on for `config` (`demoConfig`'s): the bench's, the gateway's BACnet port, the status page. */
+export const demoPorts = Effect.fn("demoPorts")(function* (config: GatewayConfig, options: DemoOptions) {
+  const ports: Array<ListenPort> = [
+    ...(yield* benchPorts(config, options.public === undefined ? {} : { only: "devices" }))
+  ]
+  if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
+    ports.push({
+      transport: "UDP",
+      host: config.bacnet.bindAddress,
+      port: config.bacnet.port,
+      role: "the gateway's BACnet/IP port",
+      likelyHolder: "a running ot-gateway, another demo or a BACnet tool"
+    })
+  }
+  if (config.status !== undefined) {
+    ports.push({
+      transport: "TCP",
+      host: config.status.bindAddress,
+      port: config.status.port,
+      role: "the status page",
+      likelyHolder: "a running ot-gateway, another demo or a web server"
+    })
+  }
+  return ports
+})
+
+/** What the demo says when another program holds one of its ports: the port, what it is for, what to do. */
+export const portInUseMessage = (port: ListenPort) =>
+  `port ${port.port} (${port.transport}, ${port.role}) is in use, probably by ${port.likelyHolder}: stop it and run the demo again, or skip the demo and describe your own building with init`
 
 export interface DemoOptions {
   /** Address the status page listens on: `127.0.0.1`, or `0.0.0.0` in a container, so a published port reaches it. */
@@ -191,6 +226,9 @@ export const runDemo = Effect.fn("runDemo")(function* <E, R>(
   const fs = yield* FileSystem.FileSystem
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-demo-" })
   const config = demoConfig(yield* loadConfig(exampleConfigPath), directory, options)
+  // Before the banner: a demo that cannot start must not first tell people where to look.
+  const taken = yield* firstPortInUse(yield* demoPorts(config, options))
+  if (taken !== undefined) return yield* new DemoPortInUse({ message: portInUseMessage(taken) })
   yield* Console.log(demoBanner(config, options, addresses()))
   if (options.public !== undefined) {
     const devices = yield* runBench(config, { only: "devices" }).pipe(Effect.forkScoped)

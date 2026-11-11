@@ -48,7 +48,7 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { printJson } from "./Output.ts"
+import { failureLine, printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -279,7 +279,13 @@ const demo = Command.make(
         ? { broker: yield* pickPublicBroker(acceptsConnections), site: yield* randomDemoSite }
         : undefined
       yield* runDemo({ listen: flags.listen, public: remote }, runConfigured)
-    }).pipe(Effect.scoped)
+    }).pipe(
+      Effect.scoped,
+      // Nothing has run yet: one plain line, like a one-shot command's answer, not a log line.
+      Effect.catchTag("DemoPortInUse", (error) =>
+        Console.error(failureLine(error.message)).pipe(Effect.andThen(Effect.sync(() => (process.exitCode = 1))))
+      )
+    )
 ).pipe(
   Command.withDescription("See it work: the gateway with a test MQTT broker and simulated devices, in one process"),
   Command.withExamples([

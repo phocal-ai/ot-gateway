@@ -220,6 +220,92 @@ const simulatedBacnetAt = (config: GatewayConfig, device: BacnetDevice) => {
   return localHosts.has(host) && port !== config.bacnet.port ? { host, port } : undefined
 }
 
+/** A port the bench or the demo listens on, and what usually holds it when it is taken. */
+export interface ListenPort {
+  readonly transport: "TCP" | "UDP"
+  readonly host: string
+  readonly port: number
+  /** What it is for: `the demo's MQTT broker`. */
+  readonly role: string
+  /** What usually holds it when another program does: `another MQTT broker or ot-gateway demo`. */
+  readonly likelyHolder: string
+}
+
+/** The ports `runBench` listens on for `config`, with the same `only` (a broker that is not local is not started). */
+export const benchPorts = Effect.fn("benchPorts")(function* (
+  config: GatewayConfig,
+  options: Pick<BenchOptions, "only"> = {}
+) {
+  const ports: Array<ListenPort> = []
+  if (options.only !== "devices") {
+    const address = yield* parseBrokerUrl(config.mqtt.url)
+    if (!address.tls && localHosts.has(address.host)) {
+      ports.push({
+        transport: "TCP",
+        host: address.host === "localhost" ? "127.0.0.1" : address.host,
+        port: address.port,
+        role: "the test MQTT broker",
+        likelyHolder: "another MQTT broker or ot-gateway demo"
+      })
+    }
+  }
+  if (options.only === "broker") return ports
+  const endpoints = new Set<string>()
+  for (const device of config.devices) {
+    if (device.protocol === "modbus-tcp" && localHosts.has(device.host) && !endpoints.has(endpointOf(device))) {
+      endpoints.add(endpointOf(device))
+      ports.push({
+        transport: "TCP",
+        host: device.host === "localhost" ? "127.0.0.1" : device.host,
+        port: device.port,
+        role: `the simulated Modbus device ${device.id}`,
+        likelyHolder: "another ot-gateway demo or test bench"
+      })
+    }
+    const at = device.protocol === "bacnet-ip" ? simulatedBacnetAt(config, device) : undefined
+    if (at !== undefined) {
+      ports.push({
+        transport: "UDP",
+        host: at.host === "localhost" ? "127.0.0.1" : at.host,
+        port: at.port,
+        role: `the simulated BACnet device ${device.id}`,
+        likelyHolder: "another ot-gateway demo or test bench"
+      })
+    }
+  }
+  return ports
+})
+
+/** Whether binding failed because another program holds the address, as Node says it (`EADDRINUSE`). */
+const heldByAnother = (cause: unknown) => Reflect.get(Object(cause), "code") === "EADDRINUSE"
+
+/**
+ * The first of `ports` another program holds, found by binding each and letting go at once. An address that cannot
+ * be bound for another reason (no IPv6 loopback, say) is left to the real start to report.
+ */
+export const firstPortInUse = Effect.fn("firstPortInUse")(function* (ports: ReadonlyArray<ListenPort>) {
+  for (const port of ports) {
+    const bind =
+      port.transport === "TCP"
+        ? NodeSocketServer.make({ host: port.host, port: port.port }).pipe(
+            Effect.as(false),
+            Effect.catchTag("SocketServerError", (error) => Effect.succeed(heldByAnother(error.reason.cause)))
+          )
+        : NodeDatagramSocket.make({ bind: { address: port.host, port: port.port } }).pipe(
+            Effect.flatMap((socket) => socket.reader),
+            Effect.as(false),
+            Effect.catchTag("DatagramSocketError", (error) =>
+              Effect.succeed(
+                error.reason._tag === "DatagramSocketOpenError" &&
+                  (error.reason.kind === "AddressInUse" || heldByAnother(error.reason.cause))
+              )
+            )
+          )
+    if (yield* Effect.scoped(bind)) return port
+  }
+  return undefined
+})
+
 /** A message as the bench's broker received it. */
 export interface BrokerMessage {
   readonly topic: string

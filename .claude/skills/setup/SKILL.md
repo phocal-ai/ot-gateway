@@ -39,7 +39,7 @@ Skip this if the user says they've seen it. Otherwise:
 1. Start `otg demo` in the background: the gateway with a local MQTT test broker and simulated Modbus and BACnet devices, in one process.
 2. Within a few seconds it prints messages like `demo-site/building-a/energy-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
 3. Mention the status page at http://localhost:8080. On a machine reached over SSH it is at `http://<machine>:8080` while the demo runs, since the image's demo listens on every interface (the real gateway does not: step 8).
-4. Stop it before going on: with the Docker wrapper `docker stop ot-gateway-demo`; with npx or pnpm, stop the background process you started. Not with `pkill -f`: its pattern can match your own shell. The demo holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway or test bench already running), skip the demo.
+4. Stop it before going on: with the Docker wrapper `docker stop ot-gateway-demo`; with npx or pnpm, stop the background process you started. Not with `pkill -f`: its pattern can match your own shell. The demo holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway, broker or test bench already running), it prints nothing but `error: port <n> (...) is in use, probably by ...` and exits with 1: stop that program, or skip the demo.
 
 ## 3. Questions, one round
 

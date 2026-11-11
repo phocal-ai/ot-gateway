@@ -3,6 +3,7 @@
  * else: `main.ts` sends the `Console` (help, progress, banners) to stderr and results to `ResultConsole`, so `ot-gateway check --json | jq` and an
  * agent reading stdout always get one parseable document, a usage mistake included.
  */
+import { describeFailure } from "@ot-gateway/core"
 import { Cause, Console, Context, Effect, Result } from "effect"
 import { CliError } from "effect/cli"
 
@@ -108,8 +109,8 @@ export const reportFailure =
     }
     if (options.json) return Effect.void
     return options.longRunning
-      ? Effect.logError(error.success.message)
-      : Console.error(failureLine(error.success.message))
+      ? Effect.logError(describeFailure(error.success))
+      : Console.error(failureLine(describeFailure(error.success)))
   }
 
 /** An expected failure of a one-shot command, as stderr shows it. */
