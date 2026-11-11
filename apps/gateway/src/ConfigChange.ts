@@ -1,8 +1,9 @@
 /**
  * What a saved config changes against the running one, in short, for the `config-applied` event, the log line and
  * the page: which settings of the gateway and broker sections, which other sections, which devices were added,
- * removed or changed, and every point that takes commands now or no longer does (with its limits). And what an in-process apply cannot change: the status page's own address (its server keeps
- * running) and the history (its file stays open), which need a restart.
+ * removed or changed, and every point that takes commands now or no longer does (with its limits). And what an
+ * in-process apply cannot change: the status page's own address (its server keeps running) and the history (its
+ * file stays open), which need a restart.
  */
 import type { ConfigChange } from "@ot-gateway/api"
 import { GatewayConfig } from "@ot-gateway/core"
