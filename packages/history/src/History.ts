@@ -110,6 +110,9 @@ interface IndexedBucket {
   readonly max: number
   readonly avg: number
   readonly count: number
+  /** The times of its first and last read; null from rollups written before they were kept. */
+  readonly first: number | null
+  readonly last: number | null
 }
 
 /**
@@ -123,20 +126,34 @@ export const mergeBuckets = (
   range: { readonly from: number; readonly stepMs: number; readonly perMinute: boolean }
 ): ReadonlyArray<IndexedBucket> => {
   if (unwritten.length === 0) return stored
-  const sums = new Map<number, { min: number; max: number; sum: number; count: number }>()
+  const sums = new Map<
+    number,
+    { min: number; max: number; sum: number; count: number; first: number | null; last: number | null }
+  >()
   for (const bucket of stored) {
-    sums.set(bucket.b, { min: bucket.min, max: bucket.max, sum: bucket.avg * bucket.count, count: bucket.count })
+    sums.set(bucket.b, {
+      min: bucket.min,
+      max: bucket.max,
+      sum: bucket.avg * bucket.count,
+      count: bucket.count,
+      first: bucket.first,
+      last: bucket.last
+    })
   }
   for (const row of unwritten) {
     const at = range.perMinute ? Math.floor(row.ts / MINUTE_MS) * MINUTE_MS : row.ts
     const b = Math.floor((at - range.from) / range.stepMs)
     const current = sums.get(b)
-    if (current === undefined) sums.set(b, { min: row.value, max: row.value, sum: row.value, count: 1 })
-    else {
+    if (current === undefined) {
+      sums.set(b, { min: row.value, max: row.value, sum: row.value, count: 1, first: row.ts, last: row.ts })
+    } else {
       current.min = Math.min(current.min, row.value)
       current.max = Math.max(current.max, row.value)
       current.sum += row.value
       current.count += 1
+      // A stored bucket without times (a rollup from before they were kept) stays without them.
+      if (current.first !== null) current.first = Math.min(current.first, row.ts)
+      if (current.last !== null) current.last = Math.max(current.last, row.ts)
     }
   }
   return [...sums.entries()]
@@ -146,7 +163,9 @@ export const mergeBuckets = (
       min: bucket.min,
       max: bucket.max,
       avg: bucket.sum / bucket.count,
-      count: bucket.count
+      count: bucket.count,
+      first: bucket.first,
+      last: bucket.last
     }))
 }
 
@@ -417,7 +436,7 @@ export const openHistory = (
           // pick the table, nor aggregate up to a day of reads per point for buckets the rollups draw the same.
           // Finer buckets, and any range of an hour or less, come from every read while the range starts within
           // the last day (reads are kept that long), else from the rollups at a minute step. So `history --since
-          // 10m` in ten buckets ends its buckets at now, not at the last whole minute. The status page's ranges
+          // 10m` in ten buckets has every read up to now in its newest bucket, not only up to the last flushed minute. The status page's ranges
           // (15 min, 1 h, 24 h) are far from that boundary. Rollups are merged in the same transaction as the reads,
           // so they hold everything flushed; the reads still waiting for the next write are merged in below, so the
           // newest bucket holds every read up to now, whichever table answers.
@@ -427,7 +446,10 @@ export const openHistory = (
           const recent = query.from >= now - RAW_MS
           const raw = recent && (fineMs < MINUTE_MS || query.to - query.from <= HOUR_MS)
           const stepMs = raw ? fineMs : stepFor(query.from, query.to, buckets, MINUTE_MS)
-          const from = raw ? query.from : Math.floor(query.from / MINUTE_MS) * MINUTE_MS
+          // Buckets start on whole multiples of their width (minute buckets on whole minutes), so the same read is
+          // in the same bucket whenever it is asked, and two answers a few seconds apart count alike. The first
+          // bucket can start up to a step before `query.from`.
+          const from = Math.floor(query.from / stepMs) * stepMs
           // A corrupt file only fails this request; the flusher or the pruner replaces it, never a reader.
           const rows = yield* Effect.gen(function* () {
             const target = current
@@ -477,7 +499,9 @@ export const openHistory = (
               min: row.min,
               max: row.max,
               avg: row.avg,
-              count: row.count
+              count: row.count,
+              ...(row.first === null ? {} : { first: row.first }),
+              ...(row.last === null ? {} : { last: row.last })
             })),
             ...(rows.changes === undefined
               ? {}

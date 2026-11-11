@@ -161,15 +161,16 @@ const checkOnlyConfig: Readonly<Record<string, unknown>> = {
 export const importPointsList = Effect.fn("importPointsList")(function* (
   listPath: string,
   configPath: string | undefined,
-  options: { readonly dryRun: boolean }
+  options: { readonly dryRun: boolean; readonly command?: string | undefined }
 ) {
   const fs = yield* FileSystem.FileSystem
+  const cli = options.command ?? "ot-gateway"
   const path = configPath ?? defaultConfigPath
   const exists = yield* fs.exists(path)
   const checkOnly = options.dryRun && configPath === undefined && !exists
   if (!exists && !checkOnly) {
     return yield* new PointsListError({
-      message: `no config at ${path}; import adds to one and never makes one. ot-gateway init <folder> --points ${listPath} writes the gateway's folder with this list's devices; or name the config that is there: ot-gateway import ${listPath} <config>`
+      message: `no config at ${path}; import adds to one and never makes one. ${cli} init <folder> --points ${listPath} writes the gateway's folder with this list's devices; or name the config that is there: ${cli} import ${listPath} <config>`
     })
   }
   const existing = checkOnly ? [] : (yield* loadConfig(path)).devices.map((device) => device.id)

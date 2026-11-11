@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { roughDuration, SHARED_CAUSE_WINDOW_MS, sharedCauses } from "../src/SharedCause.ts"
+import { preciseDuration, roughDuration, SHARED_CAUSE_WINDOW_MS, sharedCauses } from "../src/SharedCause.ts"
 
 describe("sharedCauses", () => {
   it("groups two devices that failed within the window, with one line for both", () => {
@@ -40,5 +40,15 @@ describe("roughDuration", () => {
     expect(roughDuration(4 * 60_000)).toBe("4 min")
     expect(roughDuration(3 * 3_600_000)).toBe("3 h")
     expect(roughDuration(3 * 86_400_000)).toBe("3 d")
+  })
+})
+
+describe("preciseDuration", () => {
+  it("says minutes and seconds under 10 minutes, then as roughly as roughDuration", () => {
+    expect(preciseDuration(45_400)).toBe("45 s")
+    expect(preciseDuration(125_000)).toBe("2 min 5 s")
+    expect(preciseDuration(120_000)).toBe("2 min")
+    expect(preciseDuration(599_000)).toBe("9 min 59 s")
+    expect(preciseDuration(12 * 60_000 + 20_000)).toBe("12 min")
   })
 })

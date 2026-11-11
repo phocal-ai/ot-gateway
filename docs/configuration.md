@@ -69,7 +69,7 @@ Every read, whatever the point's publish mode, kept on the gateway for the statu
 
 Reads are written in batches every 30 s (sooner on a busy gateway); a chart is not behind, as the reads still waiting are merged into each answer in memory. Size it at about 50 bytes per read for the last day plus 70 bytes per point and minute (measured on its SQLite tables): 200 points read every 5 s take about 170 MB for the day of reads and 140 MB per week of minutes; 50 points every 10 s, about 20 MB and 35 MB. On a Raspberry Pi's SD card it adds one batched write every 30 s and that much space. `ot-gateway init` writes `history` with `./ot-gateway-history.sqlite` next to the buffer and says what the config's points will take on disk; `--no-history` leaves it out. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
 
-`GET /api/history?device=heat-pump&point=flow-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count }`; `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Buckets shorter than a minute come from every read while the range starts within the last day; otherwise the buckets come from the minutes.
+`GET /api/history?device=heat-pump&point=flow-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count, first?, last? }` (`first` and `last` the times of the bucket's first and last read, `t` a whole multiple of the step); `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Buckets shorter than a minute come from every read while the range starts within the last day; otherwise the buckets come from the minutes.
 
 ## status
 

@@ -430,6 +430,8 @@ export interface InitContext {
   readonly platform?: string | undefined
   /** The working directory the commands run from; the process's when undefined. */
   readonly cwd?: string | undefined
+  /** How the CLI was run (`cliCommand`): `pnpm ot-gateway` in a checkout; `ot-gateway` when undefined. */
+  readonly command?: string | undefined
 }
 
 /**
@@ -483,6 +485,7 @@ export const initNext = (
   context: InitContext = {}
 ): InitNext => {
   const { ssh, platform } = context
+  const cli = context.command ?? "ot-gateway"
   const passwordEnv = config.mqtt.passwordEnv
   const envFile = [...folder.written, ...folder.kept].find((file) => file.endsWith("ot-gateway.env"))
   const compose =
@@ -514,12 +517,12 @@ export const initNext = (
             here ? "docker compose up -d" : `docker compose -f ${inFolder("compose.yaml")} up -d`,
             "start it in Docker, restarted after a crash or a reboot"
           ),
-          step("ot-gateway status", "one line per device")
+          step(`${cli} status`, "one line per device")
         ]
-      : [step(`ot-gateway run${argument}`, "start the gateway")]
+      : [step(`${cli} run${argument}`, "start the gateway")]
   // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
   const before = [
-    step(`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
+    step(`${cli} broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
     ...start
   ]
   // Without devices, the status page is where they are added; a points list is the way from the terminal.
@@ -533,15 +536,15 @@ export const initNext = (
     ...(manual
       ? [
           step(
-            `ot-gateway points template > ${pointsList}`,
+            `${cli} points template > ${pointsList}`,
             "or write a points list here (discover --points-list drafts one for BACnet)"
           ),
-          step(`ot-gateway import ${pointsList}${argument}`, "add its devices to the config")
+          step(`${cli} import ${pointsList}${argument}`, "add its devices to the config")
         ]
       : []),
-    step(`ot-gateway check${argument}`, "validate it again after an edit"),
+    step(`${cli} check${argument}`, "validate it again after an edit"),
     // Bounded, so an agent that runs the line as printed gets its answer and its prompt back.
-    step(`ot-gateway watch${argument} --seconds 10`, `ten seconds of what arrives at ${config.mqtt.url}`)
+    step(`${cli} watch${argument} --seconds 10`, `ten seconds of what arrives at ${config.mqtt.url}`)
   ]
   return {
     notes: [...password, ...historyNote(config), ...(dockerDesktop ? [dockerDesktopNote] : [])],

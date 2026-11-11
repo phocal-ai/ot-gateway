@@ -4,7 +4,7 @@
  * `ot-gateway events`), a count in `ot_gateway_alarm_changes` and the state `/api/status` reports per alarm point.
  *
  * Changes, not states (`.claude/rules/edge.md`, budget): a read that leaves the alarm as it was costs two map
- * lookups and nothing else. A read of a point that is no alarm costs one.
+ * lookups and a look at the monotonic clock, nothing else. A read of a point that is no alarm costs one.
  *
  * A contact that chatters must not flood the 500-event ring, so the events are rate-limited, and nothing is lost
  * from the counts:
@@ -20,6 +20,12 @@
  *   stays on and off on average, raised how often over how long ("on 30 s, off 30 s, 6 times in 6 min"), so the
  *   changes that are not listed are still described.
  *
+ * A device that fails hides its alarm points' state until it answers again. That time counts as neither on nor off
+ * in the pattern (each point keeps a clock of the time it was seen, the monotonic clock less its outages), and a
+ * state found changed at the first read after the outage is recorded with `afterOutage`: it is the state now, but
+ * no new trip, since when it changed is not known. It does not count in `raised` or in the pattern's raises, nor
+ * against the point's listing budget.
+ *
  * Windows and durations run on the monotonic clock (NTP steps the wall clock of a Pi); `since` is the read's own
  * wall-clock time, as every timestamp the gateway shows.
  */
@@ -29,6 +35,7 @@ import {
   alarmsActive,
   type AlarmWhen,
   type GatewayConfig,
+  type HealthChange,
   type HistorySink,
   type PointValue
 } from "@ot-gateway/core"
@@ -81,33 +88,43 @@ type WindowCount = ReturnType<typeof makeWindowCount>
 /** Changes each alarm point remembers for its pattern: eight on and off cycles. */
 export const PATTERN_CHANGES = 16
 
-/** The last `PATTERN_CHANGES` changes of a point, in fixed memory: when (monotonic ms) and to which state. */
+/** A change ring's state byte: on or off, and whether it was found so after an outage rather than seen to change. */
+const ACTIVE = 1
+const RESUMED = 2
+
+/**
+ * The last `PATTERN_CHANGES` changes of a point, in fixed memory: when (on the point's seen clock, which leaves its
+ * device's outages out), to which state, and whether it was found after an outage.
+ */
 const makeChangeRing = () => {
   const times = new Float64Array(PATTERN_CHANGES)
   const states = new Uint8Array(PATTERN_CHANGES)
   let total = 0
   return {
-    add: (atMs: number, active: boolean) => {
+    add: (atMs: number, active: boolean, resumed = false) => {
       times[total % PATTERN_CHANGES] = atMs
-      states[total % PATTERN_CHANGES] = active ? 1 : 0
+      states[total % PATTERN_CHANGES] = (active ? ACTIVE : 0) | (resumed ? RESUMED : 0)
       total++
     },
     /**
-     * The pattern of the changes kept, up to `nowMs`: the average of each closed stretch on and off (from one
-     * change to the next), and the raises since the oldest change kept. Undefined with fewer than two changes.
+     * The pattern of the changes kept, up to `nowMs` (the last change when absent): the average of each closed
+     * stretch on and off (from one change to the next), and the raises since the oldest change kept, not counting a
+     * state found after an outage. Undefined with fewer than two changes.
      */
-    pattern: (nowMs: number): AlarmPattern | undefined => {
+    pattern: (nowMs?: number): AlarmPattern | undefined => {
       const kept = Math.min(total, PATTERN_CHANGES)
       if (kept < 2) return undefined
       const first = total - kept
+      const until = nowMs ?? times[(total - 1) % PATTERN_CHANGES] ?? 0
       let onMs = 0
       let onCount = 0
       let offMs = 0
       let offCount = 0
       let raised = 0
       for (let index = first; index < total; index++) {
-        const active = states[index % PATTERN_CHANGES] === 1
-        if (active) raised++
+        const state = states[index % PATTERN_CHANGES] ?? 0
+        const active = (state & ACTIVE) !== 0
+        if (active && (state & RESUMED) === 0) raised++
         if (index + 1 >= total) continue
         const span = (times[(index + 1) % PATTERN_CHANGES] ?? 0) - (times[index % PATTERN_CHANGES] ?? 0)
         if (active) {
@@ -122,7 +139,7 @@ const makeChangeRing = () => {
         ...(onCount === 0 ? {} : { onMs: Math.round(onMs / onCount) }),
         ...(offCount === 0 ? {} : { offMs: Math.round(offMs / offCount) }),
         raised,
-        overMs: nowMs - (times[first % PATTERN_CHANGES] ?? nowMs)
+        overMs: until - (times[first % PATTERN_CHANGES] ?? until)
       }
     }
   }
@@ -140,6 +157,12 @@ interface AlarmPoint {
   since: number | undefined
   /** Monotonic ms of the last change (or the first read). */
   changedAt: number
+  /** Monotonic ms of the last read. */
+  lastReadAt: number | undefined
+  /** Its device failed since the last read: the next read ends an outage. */
+  outage: boolean
+  /** Monotonic ms its device's outages hid its state: the seen clock is the monotonic one less this. */
+  hiddenMs: number
   readonly raises: WindowCount
   readonly listed: WindowCount
   /** The last changes, for the pattern a flapping point reports. */
@@ -165,6 +188,8 @@ export interface AlarmTracker {
   readonly hasPoints: () => boolean
   /** Every alarm point of the running config, in config order. */
   readonly snapshot: () => ReadonlyArray<AlarmStatus>
+  /** A device's health changed (the health registry's listener): one that fails hides its points' state. */
+  readonly deviceChanged: (change: HealthChange) => void
 }
 
 /** The tracker on `clock`, recording its events with `record`. */
@@ -183,18 +208,18 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     if (context !== undefined) alarmsActive.updateUnsafe(activeCount, context)
   }
 
-  /** Lists `event` when the gateway's budget allows; false when it does not. */
-  const list = (state: AlarmPoint, event: AlarmEventInput, now: number) => {
+  /** Lists `event` when the gateway's budget allows (and counts it against the point's, unless not `perPoint`). */
+  const list = (state: AlarmPoint, event: AlarmEventInput, now: number, perPoint = true) => {
     if (listedByGateway.total(now) >= ALARM_EVENTS_PER_GATEWAY) return false
     listedByGateway.add(now)
-    state.listed.add(now)
+    if (perPoint) state.listed.add(now)
     record(event)
     return true
   }
 
   const settle = (state: AlarmPoint, now: number) => {
     // Up to its last change: the stillness since then is not part of how it flapped.
-    const pattern = state.changes.pattern(state.changedAt)
+    const pattern = state.changes.pattern()
     const listed = list(
       state,
       {
@@ -219,7 +244,7 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     state.active = active
     state.since = ts
     state.changedAt = now
-    state.changes.add(now, active)
+    state.changes.add(now - state.hiddenMs, active)
     activeCount += active ? 1 : -1
     if (context !== undefined) (active ? raisedMetric : clearedMetric).updateUnsafe(1, context)
     updateGauge()
@@ -231,7 +256,7 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     if (state.listed.total(now) >= ALARM_EVENTS_PER_POINT) {
       state.flapping = true
       state.unlisted = 1
-      const pattern = state.changes.pattern(now)
+      const pattern = state.changes.pattern(now - state.hiddenMs)
       list(
         state,
         {
@@ -254,11 +279,44 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     }
   }
 
+  /**
+   * The first read after an outage found the state changed: the state from now on, listed with `afterOutage`, but no
+   * trip (not in `raised`, the metrics or the pattern's raises), and it does not count against the point's budget.
+   * `seenUntil` is when the state was last seen before the outage, on the monotonic clock.
+   */
+  const resume = (
+    state: AlarmPoint,
+    active: boolean,
+    value: PointValue,
+    ts: number,
+    now: number,
+    seenUntil: number
+  ) => {
+    const activeMs = seenUntil - state.changedAt
+    state.active = active
+    state.since = ts
+    state.changedAt = now
+    state.changes.add(now - state.hiddenMs, active, true)
+    activeCount += active ? 1 : -1
+    updateGauge()
+    const event: AlarmEventInput = active
+      ? { type: "alarm-raised", device: state.device, point: state.point, value, afterOutage: true }
+      : {
+          type: "alarm-cleared",
+          device: state.device,
+          point: state.point,
+          value,
+          activeMs: Math.max(0, activeMs),
+          afterOutage: true
+        }
+    list(state, event, now, false)
+  }
+
   const first = (state: AlarmPoint, active: boolean, value: PointValue, ts: number, now: number) => {
     state.active = active
     state.since = ts
     state.changedAt = now
-    state.changes.add(now, active)
+    state.changes.add(now - state.hiddenMs, active)
     if (!active) return
     activeCount++
     updateGauge()
@@ -276,16 +334,28 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
         const state = byDevice.get(device)?.get(point)
         if (state === undefined) return
         const active = isAlarmActive(state.alarmWhen, value)
+        const now = monotonicMs()
+        const seenUntil = state.lastReadAt ?? now
+        const resumed = state.outage
+        if (resumed) {
+          // From the last read before the outage to this one, the state was not seen.
+          state.outage = false
+          state.hiddenMs += now - seenUntil
+        }
+        state.lastReadAt = now
         if (active === state.active) {
-          if (state.flapping) {
-            const now = monotonicMs()
-            if (now - state.changedAt >= ALARM_SETTLE_MS) settle(state, now)
-          }
+          if (state.flapping && now - state.changedAt >= ALARM_SETTLE_MS) settle(state, now)
           return
         }
-        const now = monotonicMs()
         if (state.active === undefined) first(state, active, value, ts, now)
+        else if (resumed) resume(state, active, value, ts, now, seenUntil)
         else change(state, active, value, ts, now)
+      }
+    },
+    deviceChanged: ({ device, previous, next }) => {
+      if (next.status !== "failing" || previous.status === "failing") return
+      for (const state of byDevice.get(device)?.values() ?? []) {
+        if (state.active !== undefined) state.outage = true
       }
     },
     configure: (config) =>
@@ -308,6 +378,9 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
                     active: undefined,
                     since: undefined,
                     changedAt: 0,
+                    lastReadAt: undefined,
+                    outage: false,
+                    hiddenMs: 0,
                     raises: makeWindowCount(),
                     listed: makeWindowCount(),
                     changes: makeChangeRing(),
@@ -329,7 +402,7 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     snapshot: () => {
       const now = monotonicMs()
       return ordered.map((state): AlarmStatus => {
-        const pattern = state.flapping ? state.changes.pattern(state.changedAt) : undefined
+        const pattern = state.flapping ? state.changes.pattern() : undefined
         return {
           device: state.device,
           point: state.point,

@@ -347,7 +347,7 @@ describe("history", () => {
       "  12:10:00  avg 12.4 kW  min 12.1  max 12.9  (12 reads)",
       "  12:11:00  the gateway was not running (started 12:13:00)",
       "  12:13:00  3 kW  (1 read)",
-      "  12:14:00  no reads for 60 s, until 12:15:00",
+      "  12:14:00  no reads for 1 min, until 12:15:00",
       "  12:15:00  4 kW  (1 read)  so far"
     ])
   })
@@ -365,14 +365,20 @@ describe("history", () => {
     buckets: [{ t: at(12, 18, 30), min: 4, max: 5, avg: 4.5, count: 7 }]
   }
 
-  it("says the gateway was not running before its start, though the start's bucket begins earlier", () => {
+  it("says the gateway was not running before its start, and labels the start's bucket with the start", () => {
     expect(formatSeries(power, justStarted, now, { since: started })).toEqual([
       "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
       "  12:09:30  the gateway was not running (started 12:18:55)",
-      "  12:18:30  avg 4.5 kW  min 4  max 5  (7 reads)"
+      "  12:18:55  avg 4.5 kW  min 4  max 5  (7 reads)"
     ])
     expect(seriesJson(power, justStarted, { since: started }).gaps).toEqual([
-      { from: at(12, 9, 30), to: at(12, 18, 30), cause: { kind: "gateway-not-running", started } }
+      {
+        from: at(12, 9, 30),
+        to: started,
+        emptyFrom: at(12, 9, 30),
+        emptyTo: at(12, 18, 30),
+        cause: { kind: "gateway-not-running", started }
+      }
     ])
     expect(formatSeries(power, { ...justStarted, buckets: [] }, now, { since: started }).at(-1)).toBe(
       "  no reads in this range before the gateway started at 12:18:55"
@@ -421,6 +427,82 @@ describe("history", () => {
       "  12:11:30  no reads for 3 min, until 12:14:30: energy-meter failing: connection refused",
       "  12:14:30  avg 4.5 kW  min 4  max 5  (3 reads)",
       "  12:15:30  no reads since then: energy-meter failing: no response within 3s"
+    ])
+  })
+
+  // The meter was down from 15:58:04 to 16:00:09, read every 5 s before and after: 125 s without a read.
+  const down = at(15, 58, 4)
+  const back = at(16, 0, 9)
+  const meterLog: EventLog = {
+    now: at(16, 3, 0),
+    capacity: 500,
+    dropped: 0,
+    events: [
+      { id: 1, at: at(15, 50, 0), type: "gateway-started", version: "v1", devices: 1 },
+      {
+        id: 2,
+        at: at(15, 58, 10),
+        type: "device-failing",
+        device: "energy-meter",
+        reason: "timeout",
+        error: "no response within 3s"
+      },
+      { id: 3, at: back, type: "device-recovered", device: "energy-meter", downMs: 119_000 }
+    ]
+  }
+  /** Reads every 5 s from 15:55:04 to 16:02:59 but none between `down` and `back`, in `stepMs` buckets. */
+  const meterSeries = (stepMs: number): HistorySeries => {
+    const from = at(15, 55, 0)
+    const to = at(16, 3, 0)
+    const reads: Array<number> = []
+    for (let read = from + 4_000; read < to; read += 5_000) if (read <= down || read >= back) reads.push(read)
+    const buckets = new Map<number, Array<number>>()
+    for (const read of reads) {
+      const t = from + Math.floor((read - from) / stepMs) * stepMs
+      buckets.set(t, [...(buckets.get(t) ?? []), read])
+    }
+    return {
+      device: "energy-meter",
+      point: "active-power",
+      from,
+      to,
+      stepMs,
+      resolution: "read",
+      live: true,
+      buckets: [...buckets].map(([t, times]) => ({
+        t,
+        min: 1,
+        max: 1,
+        avg: 1,
+        count: times.length,
+        first: Math.min(...times),
+        last: Math.max(...times)
+      }))
+    }
+  }
+
+  it("reports a gap's real span, from the last read before it to the first after, whatever the buckets", () => {
+    const failures = failuresOf(meterLog).get("energy-meter") ?? []
+    const context = { since: at(15, 50, 0), failures }
+    for (const stepMs of [60_000, 15_000]) {
+      const gaps = seriesJson(power, meterSeries(stepMs), context).gaps
+      expect(gaps).toHaveLength(1)
+      expect(gaps[0]).toMatchObject({
+        from: down,
+        to: back,
+        cause: { kind: "device-failing", since: at(15, 58, 10), error: "no response within 3s" }
+      })
+      expect(formatSeries(power, meterSeries(stepMs), at(16, 3, 0), context)).toContain(
+        "  15:58:04  no reads for 2 min 5 s, until 16:00:09: energy-meter failing: no response within 3s"
+      )
+    }
+  })
+
+  it("keeps a gap at the bucket edges when the gateway says nothing of when the reads came", () => {
+    const { buckets, ...rest } = meterSeries(60_000)
+    const withoutTimes = { ...rest, buckets: buckets.map(({ first: _first, last: _last, ...bucket }) => bucket) }
+    expect(seriesJson(power, withoutTimes).gaps).toEqual([
+      { from: at(15, 59, 0), to: at(16, 0, 0), emptyFrom: at(15, 59, 0), emptyTo: at(16, 0, 0) }
     ])
   })
 

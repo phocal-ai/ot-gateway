@@ -260,8 +260,10 @@ describe("events", () => {
       "12:18:00  broker        disconnected: connection closed by the peer",
       "12:18:20  energy-meter  failing: could not connect: connection refused by 127.0.0.1:5020",
       "                        check: Is the device switched on and its Modbus TCP server (or its network module) enabled?",
+      "                          then: Are the host and port in the config right? Modbus TCP is usually port 502.",
+      "                          then: Is a firewall or a VLAN between the gateway and the device blocking the port?",
       "12:19:00  energy-meter  ok again after 40 s",
-      "12:19:10  broker        connected again after 70 s, 1204 message(s) waiting in the buffer at reconnect",
+      "12:19:10  broker        connected again after 1 min 10 s, 1204 message(s) waiting in the buffer at reconnect",
       "12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since it was last empty"
     ])
     expect(formatEvents(log, Number.POSITIVE_INFINITY, "all").split("\n")[0]).toBe(
@@ -323,14 +325,18 @@ describe("events", () => {
       // In a shared outage the first check is what the devices share, not their config.
       "12:10:00  boiler  failing: no answer to Who-Is for device 1201",
       "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
+      "                    then: Is the device instance in the config the device's own (its Device object, not a point)?",
+      "                    then: Is the device in the gateway's subnet? Broadcasts do not cross routers: give the device a fixed address in the config, or use a BBMD.",
       "12:10:04  meter   failing: timed out",
       "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
       "                  2 devices (boiler, meter) stopped answering within 4 s of each other: likely a shared cause (power, a switch, the gateway's own network)",
       "12:12:00  boiler  ok again after 2 min",
-      "12:12:01  meter   ok again after 117 s",
+      "12:12:01  meter   ok again after 1 min 57 s",
       "12:15:00  pump    failing: exception 2",
       // pump is gone from the config: only the rules for any protocol, so Modbus's words, not BACnet's.
-      "                  check: Do the register addresses match the device's register map? Maps often count from 1 (40001) where the config counts from 0."
+      "                  check: Do the register addresses match the device's register map? Maps often count from 1 (40001) where the config counts from 0.",
+      "                    then: Is the table right (holding or input registers, coils or discrete inputs)?",
+      "                    then: Does the data type fit the map? A 32-bit value spans two registers."
     ])
   })
 
@@ -394,10 +400,43 @@ describe("events", () => {
     }
     expect(formatEvents(alarms, Number.POSITIVE_INFINITY, "all").split("\n")).toEqual([
       "12:00:00  ahu/filter  alarm active at its first read (value true)",
-      "12:01:00  ahu/filter  alarm cleared after 60 s (value false)",
+      "12:01:00  ahu/filter  alarm cleared after 1 min (value false)",
       "12:02:00  pump/trip   alarm raised (value 1)",
       "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping (on 30 s, off 30 s, 4 time(s) in 4 min), so its changes are counted, not listed, until it keeps still for 5 min",
       "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 change(s) were counted, not listed (it flapped on 30 s, off 90 s, 8 time(s) in 16 min)"
+    ])
+  })
+
+  it("says an alarm found active or off when its device answered again, not that it was raised or cleared", () => {
+    const answeredAgain: EventLog = {
+      now: at(12, 30, 0),
+      capacity: 500,
+      dropped: 0,
+      events: [
+        {
+          id: 1,
+          at: at(12, 0, 0),
+          type: "alarm-raised",
+          device: "meter",
+          point: "breaker",
+          value: true,
+          afterOutage: true
+        },
+        {
+          id: 2,
+          at: at(12, 5, 0),
+          type: "alarm-cleared",
+          device: "meter",
+          point: "breaker",
+          value: false,
+          activeMs: 0,
+          afterOutage: true
+        }
+      ]
+    }
+    expect(formatEvents(answeredAgain, Number.POSITIVE_INFINITY, "all").split("\n")).toEqual([
+      "12:00:00  meter/breaker  alarm active when meter answered again (value true)",
+      "12:05:00  meter/breaker  alarm off when meter answered again (value false)"
     ])
   })
 })

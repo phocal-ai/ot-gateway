@@ -32,6 +32,7 @@ import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
+import { invocation } from "./Invocation.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
 import { DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
@@ -249,7 +250,12 @@ const discoverCommand = Command.make(
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
       const decoded = yield* loadConfig(config)
-      const options = { address: Option.getOrUndefined(address), append, configPath: config }
+      const options = {
+        address: Option.getOrUndefined(address),
+        append,
+        configPath: config,
+        command: yield* invocation
+      }
       return Option.isSome(pointsList)
         ? yield* Effect.flatMap(
             discoverToPointsList(decoded, pointsList.value, undefined, options),
@@ -367,7 +373,12 @@ const init = Command.make(
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun })
       const files = { ...folder, written: [config, ...folder.written] }
-      const context = { ssh: sshSession(yield* sshEnvironment), platform: process.platform, cwd: process.cwd() }
+      const context = {
+        ssh: sshSession(yield* sshEnvironment),
+        platform: process.platform,
+        cwd: process.cwd(),
+        command: yield* invocation
+      }
       if (json) {
         const { notes, next, url, page } = initNext(config, written, files, context)
         return yield* printJson({
@@ -437,7 +448,16 @@ const importCommand = Command.make(
   },
   ({ list, config, dryRun, json }) =>
     Effect.gen(function* () {
-      const { added, decoded, config: written, against, units } = yield* importPointsList(list, config, { dryRun })
+      const {
+        added,
+        decoded,
+        config: written,
+        against,
+        units
+      } = yield* importPointsList(list, config, {
+        dryRun,
+        command: yield* invocation
+      })
       const points = added.reduce((total, device) => total + device.points.length, 0)
       const alone = `no ${defaultConfigPath} here, so the devices were checked on their own; name a config to check them against it`
       if (json) {

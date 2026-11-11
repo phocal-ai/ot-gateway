@@ -147,6 +147,93 @@ describe("alarm points", () => {
     })
   )
 
+  it.effect("leave a device's outage out of the pattern, and an alarm found active after it is no new trip", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip]))
+      const registry = makeHealthRegistry(["pump"])
+      registry.onChange(alarms.deviceChanged)
+      registry.recordSuccess("pump", 0)
+      /** Wait until `second` (since the start), then read `value`. */
+      const readAt = (second: number, value: number) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          yield* TestClock.adjust(second * 1_000 - now)
+          yield* read(alarms, "trip", value)
+        })
+      // On and off every 30 s; last seen off at 140 s, then the device fails until 220 s.
+      for (const [second, value] of [
+        [0, 0],
+        [30, 1],
+        [60, 0],
+        [90, 1],
+        [120, 0],
+        [140, 0]
+      ] as const) {
+        yield* readAt(second, value)
+      }
+      yield* TestClock.adjust("10 seconds")
+      registry.recordFailure("pump", { reason: "timeout", message: "no reply", at: 150_000 })
+      // It answers again with the alarm active: when it tripped is not known.
+      yield* readAt(220, 1)
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-raised",
+        device: "pump",
+        point: "trip",
+        value: 1,
+        afterOutage: true
+      })
+      expect(alarms.snapshot()[0]).toMatchObject({ active: true, since: 220_000, raised: 2 })
+      for (const [second, value] of [
+        [250, 0],
+        [280, 1],
+        [310, 0]
+      ] as const) {
+        yield* readAt(second, value)
+      }
+      expect(recorded.at(-2)).toEqual({ type: "alarm-raised", device: "pump", point: "trip", value: 1 })
+      // Six listed changes, the one after the outage not among them, then flapping. The 80 s the device was away
+      // count as neither on nor off: the off stretch it cut short counts the 20 s seen; raised 3 times, not 4.
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-flapping",
+        device: "pump",
+        point: "trip",
+        raised: 3,
+        pattern: { onMs: 30_000, offMs: 27_500, raised: 3, overMs: 230_000 }
+      })
+      expect(recorded).toHaveLength(8)
+    })
+  )
+
+  it.effect("say when an alarm was found off after an outage, without a clearing time it does not know", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip]))
+      const registry = makeHealthRegistry(["pump"])
+      registry.onChange(alarms.deviceChanged)
+      yield* read(alarms, "trip", 1)
+      yield* TestClock.adjust("1 minute")
+      yield* read(alarms, "trip", 1)
+      registry.recordFailure("pump", { reason: "timeout", message: "no reply", at: 60_000 })
+      yield* TestClock.adjust("2 minutes")
+      yield* read(alarms, "trip", 0)
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-cleared",
+        device: "pump",
+        point: "trip",
+        value: 0,
+        // Seen active for a minute before the device failed.
+        activeMs: 60_000,
+        afterOutage: true
+      })
+      expect(alarms.snapshot()[0]).toMatchObject({ active: false, raised: 1 })
+      // A device that fails without the state changing records nothing when it is back.
+      registry.recordSuccess("pump", 180_000)
+      registry.recordFailure("pump", { reason: "timeout", message: "no reply", at: 180_000 })
+      yield* TestClock.adjust("1 minute")
+      yield* read(alarms, "trip", 0)
+      expect(recorded).toHaveLength(2)
+    })
+  )
+
   it.effect("list at most a gateway's budget of alarm events in 15 min, however many points change", () =>
     Effect.gen(function* () {
       const many = Array.from({ length: 100 }, (_, index) => ({ ...trip, id: `trip-${index}`, name: `Trip ${index}` }))

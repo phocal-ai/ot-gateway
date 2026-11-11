@@ -417,6 +417,39 @@ describe("runDevice with pushed values", () => {
     })
   )
 
+  it.effect("publishes a reading once when a push repeats the polled value with the same timestamp", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      // Every read published (no deadband), as a change-of-value point is by default.
+      const running: AnyPoint = { id: "compressor-running", name: "Compressor running", writable: false }
+      const driver: Driver = {
+        deviceId: "chiller",
+        points: [running],
+        readAll: Effect.succeed([{ pointId: running.id, value: true, timestamp: 0 }]),
+        write: () => Effect.void,
+        changes: Stream.fromQueue(pushes)
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 millis")
+      // The subscription's first notification: the same value, read in the same millisecond as the first poll.
+      yield* Queue.offer(pushes, { pointId: running.id, value: true, timestamp: 0 })
+      yield* TestClock.adjust("1 millis")
+      // A later notification with the same value is a new reading, and is published.
+      yield* Queue.offer(pushes, { pointId: running.id, value: true, timestamp: 5_000 })
+      yield* TestClock.adjust("1 millis")
+      yield* Fiber.interrupt(fiber)
+
+      expect(messages.filter((m) => !m.topic.endsWith("$meta")).map((m) => JSON.parse(m.payload))).toEqual([
+        { value: true, ts: 0 },
+        { value: true, ts: 5_000 }
+      ])
+    })
+  )
+
   it.effect("keeps polling when a pushed value cannot be published", () =>
     Effect.gen(function* () {
       const { messages, layer: memory } = yield* makeMemoryPublisher

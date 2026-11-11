@@ -4,7 +4,9 @@
  * - `readings`: every read, keyed by device, point and time, kept for a day (`RAW_MS`). Enough for a chart of the
  *   last hours at full resolution.
  * - `minutes`: per minute, the minimum, maximum, sum and count of a point's reads, kept for `retentionDays`. The
- *   average is the plain mean of the reads in the minute; at chart resolution that is the same line.
+ *   average is the plain mean of the reads in the minute; at chart resolution that is the same line. `first` and
+ *   `last` are the times of its first and last read (null in rows written before they were added), so a gap in
+ *   the reads is known to the millisecond, not just to the minute.
  *
  * Both are `WITHOUT ROWID` tables clustered on their key, so one point's range is one contiguous read. Booleans are
  * stored as 0 and 1. Rows are decoded with Schema on the way out: SQLite is a boundary.
@@ -48,6 +50,11 @@ export const historyMigrations = Migrator.fromRecord({
         PRIMARY KEY (device, point, minute)
       ) WITHOUT ROWID
     `
+  }),
+  "0002_minutes_first_last": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient
+    yield* sql`ALTER TABLE minutes ADD COLUMN first INTEGER`
+    yield* sql`ALTER TABLE minutes ADD COLUMN last INTEGER`
   })
 })
 
@@ -57,7 +64,10 @@ const BucketRow = Schema.Struct({
   min: Schema.Finite,
   max: Schema.Finite,
   avg: Schema.Finite,
-  count: Schema.Int
+  count: Schema.Int,
+  /** The times of the bucket's first and last read; null from rollups written before they were kept. */
+  first: Schema.NullOr(Schema.Finite),
+  last: Schema.NullOr(Schema.Finite)
 })
 
 export interface BucketQuery {
@@ -71,14 +81,24 @@ export interface BucketQuery {
 /** A read where a point's value changed, as the query returns it. */
 const ChangeRow = Schema.Struct({ ts: Schema.Int, value: Schema.Finite })
 
-/** Rows per statement: 4 or 7 bound values each, well under SQLite's limit of 32,766. */
+/** Rows per statement: 4 or 9 bound values each, well under SQLite's limit of 32,766. */
 const CHUNK = 500
 
 /** The minute rollups of a batch of reads: one row per point and minute, to merge into what is stored. */
 export const rollup = (rows: ReadonlyArray<Row>) => {
   const minutes = new Map<
     string,
-    { device: string; point: string; minute: number; min: number; max: number; sum: number; count: number }
+    {
+      device: string
+      point: string
+      minute: number
+      min: number
+      max: number
+      sum: number
+      count: number
+      first: number
+      last: number
+    }
   >()
   for (const row of rows) {
     const minute = Math.floor(row.ts / MINUTE_MS) * MINUTE_MS
@@ -92,13 +112,17 @@ export const rollup = (rows: ReadonlyArray<Row>) => {
         min: row.value,
         max: row.value,
         sum: row.value,
-        count: 1
+        count: 1,
+        first: row.ts,
+        last: row.ts
       })
     } else {
       current.min = Math.min(current.min, row.value)
       current.max = Math.max(current.max, row.value)
       current.sum += row.value
       current.count += 1
+      current.first = Math.min(current.first, row.ts)
+      current.last = Math.max(current.last, row.ts)
     }
   }
   return [...minutes.values()]
@@ -121,13 +145,15 @@ export const makeStore = (sql: SqlClient.SqlClient) => {
         table === "readings"
           ? sql`
               SELECT CAST((ts - ${query.from}) / ${query.stepMs} AS INTEGER) AS b,
-                MIN(value) AS min, MAX(value) AS max, AVG(value) AS avg, COUNT(*) AS count
+                MIN(value) AS min, MAX(value) AS max, AVG(value) AS avg, COUNT(*) AS count,
+                MIN(ts) AS first, MAX(ts) AS last
               FROM readings
               WHERE device = ${query.device} AND point = ${query.point} AND ts >= ${query.from} AND ts < ${query.to}
               GROUP BY b ORDER BY b`
           : sql`
               SELECT CAST((minute - ${query.from}) / ${query.stepMs} AS INTEGER) AS b,
-                MIN(min) AS min, MAX(max) AS max, SUM(sum) / SUM(count) AS avg, SUM(count) AS count
+                MIN(min) AS min, MAX(max) AS max, SUM(sum) / SUM(count) AS avg, SUM(count) AS count,
+                MIN(first) AS first, MAX(last) AS last
               FROM minutes
               WHERE device = ${query.device} AND point = ${query.point} AND minute >= ${query.from} AND minute < ${query.to}
               GROUP BY b ORDER BY b`
@@ -164,13 +190,17 @@ export const makeStore = (sql: SqlClient.SqlClient) => {
             const minutes = rollup(rows)
             if (!Arr.isReadonlyArrayNonEmpty(minutes)) return
             for (const chunk of Arr.chunksOf(minutes, CHUNK)) {
+              // A row from before `first` and `last` were kept stays without them (SQLite's MIN and MAX of a
+              // NULL are NULL): a time known only for the later reads of a minute would be wrong.
               yield* sql`
               INSERT INTO minutes ${sql.insert(chunk)}
               ON CONFLICT (device, point, minute) DO UPDATE SET
                 min = MIN(minutes.min, excluded.min),
                 max = MAX(minutes.max, excluded.max),
                 sum = minutes.sum + excluded.sum,
-                count = minutes.count + excluded.count`
+                count = minutes.count + excluded.count,
+                first = MIN(minutes.first, excluded.first),
+                last = MAX(minutes.last, excluded.last)`
             }
           })
         )
