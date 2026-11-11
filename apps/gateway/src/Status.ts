@@ -94,6 +94,24 @@ const decodeValue = Schema.decodeUnknownOption(ValueMessage)
 /** The built web app, when the config does not name one: apps/web/out next to this app. */
 export const defaultWebRoot = fileURLToPath(new URL("../../web/out", import.meta.url))
 
+/**
+ * Whether the web app's build in `webRoot` is older than its sources in `<webRoot>/../src`: in a checkout, where
+ * `otg run` serves whatever `apps/web/out` holds and only `pnpm gateway` rebuilds it. A package or image has no
+ * sources next to the build, and any file error counts as "not stale", so this never stops the page.
+ */
+export const webBuildStale = (fs: FileSystem.FileSystem, webRoot: string) =>
+  Effect.gen(function* () {
+    const sources = `${webRoot}/../src`
+    if (!(yield* fs.exists(sources))) return false
+    const built = Option.getOrUndefined((yield* fs.stat(`${webRoot}/index.html`)).mtime)
+    if (built === undefined) return false
+    for (const file of yield* fs.readDirectory(sources, { recursive: true })) {
+      const changed = Option.getOrUndefined((yield* fs.stat(`${sources}/${file}`)).mtime)
+      if (changed !== undefined && changed.getTime() > built.getTime()) return true
+    }
+    return false
+  }).pipe(Effect.orElseSucceed(() => false))
+
 export interface StatusState {
   /**
    * Note a message the gateway is publishing: the latest per topic under the
@@ -541,6 +559,11 @@ export const serveStatus = (
         web: hasWeb ? webRoot : "not built"
       })
     )
+    if (hasWeb && (yield* webBuildStale(fs, webRoot))) {
+      yield* Effect.logWarning(
+        "the status page's build is older than its sources; run pnpm --filter @ot-gateway/web build (pnpm gateway does it)"
+      ).pipe(Effect.annotateLogs({ web: webRoot }))
+    }
     return yield* Layer.launch(server)
   }).pipe(
     Effect.catchTag("ServeError", (error) =>
