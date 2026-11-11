@@ -689,20 +689,35 @@ const secondsFlag = (description: string) =>
 
 // The report is printed before the failure that sets the exit code, and outside `jsonFailure`, so `--json` prints
 // one document: the status with `ok: false`.
-const status = Command.make("status", { config: targetConfig, url: urlFlag, json: jsonFlag }, ({ config, url, json }) =>
-  resolveTarget({ config, url }).pipe(
-    Effect.flatMap((target) => fetchStatusFor(target, { json })),
-    jsonFailure(json, { url: url ?? null, path: config ?? null }),
-    Effect.flatMap(({ status: report, recent }) => statusOutcome(json)(report, recent))
-  )
+const status = Command.make(
+  "status",
+  {
+    config: targetConfig,
+    url: urlFlag,
+    json: jsonFlag,
+    failOnAlarm: Flag.Boolean("fail-on-alarm").pipe(
+      Flag.withDescription("Also exit with 1 while an alarm point is active, for scripts that act on alarms"),
+      Flag.withDefault(false)
+    )
+  },
+  ({ config, url, json, failOnAlarm }) =>
+    resolveTarget({ config, url }).pipe(
+      Effect.flatMap((target) => fetchStatusFor(target, { json })),
+      jsonFailure(json, { url: url ?? null, path: config ?? null }),
+      Effect.flatMap(({ status: report, recent }) => statusOutcome(json, { failOnAlarm })(report, recent))
+    )
 ).pipe(
   Command.withDescription(
-    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one. Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers"
+    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one. Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
   ),
   Command.withExamples([
     { command: "ot-gateway status", description: "The gateway of ot-gateway.json in this folder" },
     { command: "ot-gateway status site-1/ot-gateway.json", description: "The gateway of another config" },
-    { command: "ot-gateway status --json", description: "Everything /api/status says, with ok and hints" },
+    {
+      command: "ot-gateway status --json",
+      description: "Everything /api/status says, with ok, alarmsActive and hints"
+    },
+    { command: "ot-gateway status --fail-on-alarm", description: "Exit with 1 while an alarm is active, for scripts" },
     { command: "ot-gateway status --url http://10.0.0.20:8080", description: "A gateway elsewhere on the LAN" }
   ])
 )

@@ -342,19 +342,38 @@ export const fetchGatewayStatus = (url: string, points: "all" | "none" = "all") 
 export const fetchGatewayEvents = (url: string, after?: number) =>
   askGateway(url, (client) => client.status.events({ query: after === undefined ? {} : { after } }))
 
+/** How many alarm points of `status` are active now. */
+export const activeAlarms = (status: Pick<GatewayStatus, "alarms">) =>
+  (status.alarms ?? []).filter((alarm) => alarm.active === true).length
+
+/** The alarm points active now, in a line: for `--fail-on-alarm`'s exit. */
+export class AlarmActive extends Schema.TaggedError<AlarmActive>()("AlarmActive", {
+  message: Schema.String
+}) {}
+
 /**
  * Prints the report for `status`, then fails with `GatewayUnhealthy` when something is failing, so the exit code
  * is 1. With `json`, the report is the status page's own `/api/status` answer with `ok` in front, values included.
+ * The exit code is about the gateway's health: an active alarm is the building's, not the gateway's, so it sets
+ * the code only with `failOnAlarm` (`AlarmActive`), for a script that wants to act on one.
  */
-export const statusOutcome = (json: boolean) =>
+export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: boolean } = {}) =>
   Effect.fnUntraced(function* (status: GatewayStatus, recent?: RecentIncidents) {
     yield* json ? printJson(statusJson(status, recent)) : Console.log(formatStatus(status, recent))
     const summary = unhealthySummary(status)
     if (summary !== undefined) return yield* new GatewayUnhealthy({ message: summary })
+    const active = activeAlarms(status)
+    if (options.failOnAlarm === true && active > 0) {
+      const which = (status.alarms ?? [])
+        .filter((alarm) => alarm.active === true)
+        .map((alarm) => `${alarm.device}/${alarm.point}`)
+      return yield* new AlarmActive({ message: `${active} alarm(s) active: ${which.join(", ")}` })
+    }
   })
 
 /**
- * What `status --json` prints: `/api/status` with `ok` in front, for each failing device `hints`, what it means
+ * What `status --json` prints: `/api/status` with `ok` and `alarmsActive` (how many alarm points are active now,
+ * which `ok` leaves out) in front, for each failing device `hints`, what it means
  * and what to check, most likely first (the status page's table), and `recent`, what failed in the last 15 minutes
  * (from the events), so `ok: true` right after an outage does not hide it.
  */
@@ -362,6 +381,7 @@ export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => {
   const shared = sharedCause(status.devices) !== undefined
   return {
     ok: isHealthy(status),
+    alarmsActive: activeAlarms(status),
     ...status,
     devices: status.devices.map((device) =>
       device.status === "failing" ? { ...device, hints: hintsFor(device, shared) } : device

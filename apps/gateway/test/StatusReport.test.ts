@@ -457,10 +457,16 @@ describe("status after an outage, and its alarms", () => {
       ])
       expect(statusJson(withAlarms, recentIncidents(recentLog))).toMatchObject({
         ok: true,
+        alarmsActive: 1,
         recent: { failedDevices: ["energy-meter", "pv"] },
         alarms: [{ device: "ahu", active: true }, {}, {}]
       })
+      // An active alarm is the building's, not the gateway's: exit 0, unless a script asks for 1.
       yield* statusOutcome(false)(withAlarms, recentIncidents(recentLog))
+      const alarmed = yield* Effect.flip(statusOutcome(false, { failOnAlarm: true })(withAlarms))
+      expect(alarmed).toMatchObject({ _tag: "AlarmActive", message: "1 alarm(s) active: ahu/filter" })
+      const quiet = { ...withAlarms, alarms: (withAlarms.alarms ?? []).map((alarm) => ({ ...alarm, active: false })) }
+      yield* statusOutcome(false, { failOnAlarm: true })(quiet)
     })
   )
 })
