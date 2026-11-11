@@ -10,6 +10,10 @@
 #
 # A terminal gets -t (colors, prompts); a pipe or an agent does not, so `ot-gateway points template > points.csv`
 # writes plain lines. Files outside the current folder are not visible to the command.
+#
+# The first run pulls the image (retried, its progress kept off stdout, which carries --json output). The long-running
+# commands get a fixed container name, so `docker stop ot-gateway-demo` (-run, -watch) stops one started in the
+# background; only one of each runs at a time. The Compose service's container is `ot-gateway`.
 set -eu
 
 image=${OT_GATEWAY_IMAGE:-ghcr.io/phocal-ai/ot-gateway}
@@ -34,7 +38,47 @@ fi
 [ -n "$tag" ] || tag=$(tag_of "${OT_GATEWAY_HOME:-$HOME/ot-gateway}/compose.yaml") || true
 [ -n "$tag" ] || tag=$release
 
-if [ -t 0 ] && [ -t 1 ]; then
-  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$image:$tag" "$@"
+# Pull before running, so a slow or flaky registry gets retries and one line each, not Docker's layer progress.
+# A wrong tag or no access to Docker is not retried; giving up shows the last line of Docker's own error.
+if ! docker image inspect "$image:$tag" >/dev/null 2>&1; then
+  echo "ot-gateway: pulling $image:$tag (about 460 MB)..." >&2
+  attempt=1
+  for backoff in 2 5 ""; do
+    err=$(docker pull -q "$image:$tag" 2>&1 >/dev/null) && break
+    reason=$(printf '%s\n' "$err" | sed '/^[[:space:]]*$/d' | tail -n 1)
+    case $reason in
+      *"manifest unknown"* | *"not found"* | *"permission denied"* | *"Cannot connect to the Docker daemon"*) backoff= ;;
+    esac
+    if [ -z "$backoff" ]; then
+      attempts="$attempt attempts"
+      [ "$attempt" -eq 1 ] && attempts="1 attempt"
+      echo "ot-gateway: could not pull $image:$tag after $attempts: ${reason:-docker pull failed}" >&2
+      exit 1
+    fi
+    echo "ot-gateway: pull failed, retrying in $backoff s" >&2
+    sleep "$backoff"
+    attempt=$((attempt + 1))
+  done
 fi
-exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$image:$tag" "$@"
+
+# Long-running commands get a name to stop them by; the others may run side by side, unnamed.
+name=
+case ${1:-} in demo | run | watch) name=ot-gateway-$1 ;; esac
+if [ -n "$name" ]; then
+  state=$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null) || state=
+  case $state in
+    true)
+      echo "ot-gateway: $name is already running; stop it with: docker stop $name" >&2
+      exit 1
+      ;;
+    false) docker rm "$name" >/dev/null 2>&1 || true ;;
+  esac
+  set -- --name "$name" "$image:$tag" "$@"
+else
+  set -- "$image:$tag" "$@"
+fi
+
+if [ -t 0 ] && [ -t 1 ]; then
+  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$@"
+fi
+exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$@"
