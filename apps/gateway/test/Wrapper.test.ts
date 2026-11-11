@@ -1,0 +1,145 @@
+/**
+ * packaging/ot-gateway, the CLI wrapper for machines with Docker and no Node, run with `sh` against a fake `docker`
+ * (and `sleep`) first on PATH. The fake logs every call and simulates a missing image, a flaky or unreachable
+ * registry and a container already running under the wrapper's name.
+ */
+import { describe, expect, it } from "@effect/vitest"
+import { spawnSync } from "node:child_process"
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { fileURLToPath } from "node:url"
+import { afterEach } from "vitest"
+
+const wrapper = fileURLToPath(new URL("../../../packaging/ot-gateway", import.meta.url))
+const image = "ghcr.io/phocal-ai/ot-gateway:v9.9.9"
+
+// FAKE_IMAGE_PRESENT=1: the image is local. FAKE_PULL_FAILURES=n: the first n pulls fail (always when "always").
+// FAKE_RUNNING=<name>: a running container of that name.
+const fakeDocker = [
+  "#!/bin/sh",
+  'echo "docker $*" >> "$FAKE_DIR/log"',
+  'case "$1" in',
+  '  image) [ "${FAKE_IMAGE_PRESENT:-}" = 1 ] ;;',
+  "  pull)",
+  '    count=$(cat "$FAKE_DIR/pulls" 2>/dev/null || echo 0)',
+  "    count=$((count + 1))",
+  '    echo "$count" > "$FAKE_DIR/pulls"',
+  '    echo "layer progress on stdout"',
+  '    echo "layer progress on stderr" >&2',
+  '    case "${FAKE_PULL_FAILURES:-0}" in',
+  "      always) exit 1 ;;",
+  '      *) [ "$count" -gt "${FAKE_PULL_FAILURES:-0}" ] ;;',
+  "    esac",
+  "    ;;",
+  "  inspect)",
+  "    for last; do :; done",
+  '    if [ -n "${FAKE_RUNNING:-}" ] && [ "$last" = "$FAKE_RUNNING" ]; then echo true; else exit 1; fi',
+  "    ;;",
+  '  run) echo "cli output" ;;',
+  "  *) exit 0 ;;",
+  "esac",
+  ""
+].join("\n")
+const fakeSleep = ["#!/bin/sh", 'echo "sleep $*" >> "$FAKE_DIR/log"', ""].join("\n")
+
+const directories: Array<string> = []
+afterEach(() => {
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true })
+})
+
+const runWrapper = (args: ReadonlyArray<string>, env: Record<string, string>) => {
+  const directory = mkdtempSync(join(tmpdir(), "ot-gateway-wrapper-"))
+  directories.push(directory)
+  for (const [name, body] of [
+    ["docker", fakeDocker],
+    ["sleep", fakeSleep]
+  ] as const) {
+    writeFileSync(join(directory, name), body)
+    chmodSync(join(directory, name), 0o755)
+  }
+  const result = spawnSync("sh", [wrapper, ...args], {
+    cwd: directory,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: {
+      PATH: `${directory}:${process.env["PATH"] ?? ""}`,
+      HOME: directory,
+      OT_GATEWAY_TAG: "v9.9.9",
+      FAKE_DIR: directory,
+      ...env
+    }
+  })
+  const log = readFileSync(join(directory, "log"), "utf8").trim().split("\n")
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr, log }
+}
+
+const runCall = (log: ReadonlyArray<string>) => log.find((line) => line.startsWith("docker run "))
+
+describe("packaging/ot-gateway", () => {
+  it("runs a present image without pulling and without a name", () => {
+    const result = runWrapper(["--version"], { FAKE_IMAGE_PRESENT: "1" })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe("cli output\n")
+    expect(result.stderr).toBe("")
+    expect(result.log.some((line) => line.startsWith("docker pull"))).toBe(false)
+    expect(runCall(result.log)).toMatch(new RegExp(`-w /work ${image} --version$`))
+    expect(runCall(result.log)).not.toContain("--name")
+  })
+
+  it("pulls a missing image quietly, retrying twice with a backoff", () => {
+    const result = runWrapper(["--version"], { FAKE_PULL_FAILURES: "2" })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe("cli output\n")
+    expect(result.log.filter((line) => !line.startsWith("docker run "))).toEqual([
+      `docker image inspect ${image}`,
+      `docker pull -q ${image}`,
+      "sleep 2",
+      `docker pull -q ${image}`,
+      "sleep 5",
+      `docker pull -q ${image}`
+    ])
+    expect(result.stderr).toBe(
+      [
+        `ot-gateway: pulling ${image} (first run, about 460 MB)...`,
+        "ot-gateway: pull failed, retrying in 2 s",
+        "ot-gateway: pull failed, retrying in 5 s",
+        ""
+      ].join("\n")
+    )
+  })
+
+  it("gives up after three pulls with one line naming the image", () => {
+    const result = runWrapper(["--version"], { FAKE_PULL_FAILURES: "always" })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.log.filter((line) => line.startsWith("docker pull"))).toHaveLength(3)
+    expect(runCall(result.log)).toBeUndefined()
+    expect(result.stderr.trim().split("\n").at(-1)).toBe(
+      `ot-gateway: could not pull ${image} after 3 attempts: the network or the registry is unreachable`
+    )
+    expect(result.stderr).not.toContain("layer progress")
+  })
+
+  it.each(["demo", "run", "watch"])("names the %s container after the command", (command) => {
+    const result = runWrapper([command, "--seconds", "5"], { FAKE_IMAGE_PRESENT: "1" })
+    expect(result.status).toBe(0)
+    expect(runCall(result.log)).toMatch(new RegExp(`--name ot-gateway-${command} ${image} ${command} --seconds 5$`))
+  })
+
+  it("refuses a second demo while one is running, saying how to stop it", () => {
+    const result = runWrapper(["demo"], { FAKE_IMAGE_PRESENT: "1", FAKE_RUNNING: "ot-gateway-demo" })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr).toBe(
+      "ot-gateway: ot-gateway-demo is already running; stop it with: docker stop ot-gateway-demo\n"
+    )
+    expect(runCall(result.log)).toBeUndefined()
+  })
+
+  it("never names a container ot-gateway, the Compose service's", () => {
+    const result = runWrapper(["status"], { FAKE_IMAGE_PRESENT: "1", FAKE_RUNNING: "ot-gateway" })
+    expect(result.status).toBe(0)
+    expect(runCall(result.log)).not.toContain("--name")
+  })
+})
