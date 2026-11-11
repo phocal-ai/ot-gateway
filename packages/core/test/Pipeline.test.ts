@@ -497,6 +497,9 @@ const slowPublisher = (
 
 const valuesOf = (attempts: ReadonlyArray<Attempt>) => attempts.filter((attempt) => !attempt.topic.endsWith("$meta"))
 
+const metaTopics = (attempts: ReadonlyArray<Attempt>) =>
+  attempts.filter((attempt) => attempt.topic.endsWith("$meta")).map((attempt) => attempt.topic)
+
 describe("runDevice publishing a cycle concurrently", () => {
   it.effect("publishes a hundred values within 400 ms of 50 ms acknowledgements", () =>
     Effect.gen(function* () {
@@ -623,6 +626,84 @@ describe("runDevice publishing a cycle concurrently", () => {
       yield* Fiber.interrupt(fiber)
 
       expect(delivered.filter((attempt) => attempt.topic.endsWith("$meta"))).toHaveLength(100)
+    })
+  )
+
+  it.effect("retries only the metadata the broker did not take", () =>
+    Effect.gen(function* () {
+      const failing = "s/b/meta-retry/p-1/$meta"
+      let failures = 0
+      const { attempts, delivered, layer } = slowPublisher({
+        // The others finish at once; the failing one fails after they did, so nothing in flight is interrupted.
+        delayMs: (topic) => (topic === failing ? 10 : 0),
+        failWith: (topic) => {
+          if (topic !== failing || failures > 0) return undefined
+          failures++
+          return "unavailable"
+        }
+      })
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 1000 },
+        constantDriver("meta-retry", manyPoints(3))
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("2500 millis")
+      yield* Fiber.interrupt(fiber)
+
+      expect(metaTopics(attempts).toSorted()).toEqual([
+        "s/b/meta-retry/p-0/$meta",
+        "s/b/meta-retry/p-1/$meta",
+        "s/b/meta-retry/p-1/$meta",
+        "s/b/meta-retry/p-2/$meta"
+      ])
+      expect(metaTopics(delivered).toSorted()).toEqual([
+        "s/b/meta-retry/p-0/$meta",
+        "s/b/meta-retry/p-1/$meta",
+        "s/b/meta-retry/p-2/$meta"
+      ])
+    })
+  )
+})
+
+describe("runDevice closing aggregate windows", () => {
+  it.effect("closes every window at a boundary the broker is down for, and asks it once", () =>
+    Effect.gen(function* () {
+      const device = "windows-outage"
+      let brokerDown = false
+      const attempts: Array<{ readonly topic: string; readonly at: number }> = []
+      const delivered: Array<{ readonly topic: string; readonly payload: string }> = []
+      const layer = Layer.succeed(Publisher, {
+        publish: (topic, payload) =>
+          Effect.gen(function* () {
+            if (topic.endsWith("$meta")) return
+            attempts.push({ topic, at: yield* Clock.currentTimeMillis })
+            if (brokerDown) return yield* new PublishError({ topic, reason: "unavailable", message: "down" })
+            delivered.push({ topic, payload })
+          })
+      })
+      const points = manyPoints(3, { publish: { mode: "aggregate", intervalMs: 5000 } })
+      // Off the window boundaries, so a read never lands on one.
+      yield* TestClock.adjust("500 millis")
+      const fiber = yield* runDevice(
+        { site: "s", building: "b", pollIntervalMs: 1000 },
+        constantDriver(device, points)
+      ).pipe(Effect.provide(layer), Effect.forkChild)
+      yield* TestClock.adjust("9 seconds")
+      brokerDown = true
+      yield* TestClock.adjust("1 second")
+      brokerDown = false
+      yield* TestClock.adjust("5 seconds")
+      yield* Fiber.interrupt(fiber)
+
+      // The boundary at 10 s asked the broker once, not once per point.
+      expect(attempts.filter((attempt) => attempt.at === 10_000)).toHaveLength(1)
+      // After the outage each point's message covers the one window [10 s, 15 s), with its five reads.
+      for (const aggregated of points) {
+        const last = delivered
+          .filter((message) => message.topic === `s/b/${device}/${aggregated.id}`)
+          .map((message) => JSON.parse(message.payload))
+          .at(-1)
+        expect(last).toMatchObject({ count: 5, from: 10_000, to: 15_000 })
+      }
     })
   )
 })
