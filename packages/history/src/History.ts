@@ -20,7 +20,7 @@
  * sooner; after it steps back, newer ones stay until the clock catches up.
  */
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
-import type { HistoryBucket, HistoryChange, HistorySeries } from "@ot-gateway/api"
+import type { HistoryChange, HistorySeries } from "@ot-gateway/api"
 import { HISTORY_CHANGES_MAX, HistoryUnavailable } from "@ot-gateway/api"
 import {
   type HistorySettings,
@@ -141,7 +141,13 @@ export const mergeBuckets = (
   }
   return [...sums.entries()]
     .toSorted(([left], [right]) => left - right)
-    .map(([b, bucket]) => ({ b, min: bucket.min, max: bucket.max, avg: bucket.sum / bucket.count, count: bucket.count }))
+    .map(([b, bucket]) => ({
+      b,
+      min: bucket.min,
+      max: bucket.max,
+      avg: bucket.sum / bucket.count,
+      count: bucket.count
+    }))
 }
 
 /**

@@ -645,13 +645,14 @@ export const refuseConfigAsPayload = Effect.fnUntraced(function* (payload: strin
  * `.json`, or `--config`; two different ones are a mistake.
  */
 export const messagesArguments = (
-  points: string | undefined,
+  pointsText: string | undefined,
   positional: string | undefined,
   flag: string | undefined
 ): { readonly points?: string; readonly config?: string } | { readonly error: string } => {
-  const pointsIsConfig = positional === undefined && points !== undefined && points.toLowerCase().endsWith(".json")
-  const config = pointsIsConfig ? points : positional
-  const selection = pointsIsConfig ? undefined : points
+  const pointsIsConfig =
+    positional === undefined && pointsText !== undefined && pointsText.toLowerCase().endsWith(".json")
+  const config = pointsIsConfig ? pointsText : positional
+  const selection = pointsIsConfig ? undefined : pointsText
   if (config !== undefined && flag !== undefined && config !== flag) {
     return { error: `two configs: ${config} and --config ${flag}; name one` }
   }

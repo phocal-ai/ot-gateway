@@ -388,7 +388,7 @@ describe("history", () => {
         { t: at(12, 14, 30), min: 4, max: 5, avg: 4.5, count: 3 }
       ]
     }
-    const log: EventLog = {
+    const outageLog: EventLog = {
       now,
       capacity: 500,
       dropped: 0,
@@ -413,7 +413,7 @@ describe("history", () => {
         }
       ]
     }
-    const failures = failuresOf(log).get("energy-meter") ?? []
+    const failures = failuresOf(outageLog).get("energy-meter") ?? []
     expect(formatSeries(power, outage, now, { since: at(12, 0, 0), failures })).toEqual([
       "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
       "  12:09:30  avg 4.5 kW  min 4  max 5  (12 reads)",

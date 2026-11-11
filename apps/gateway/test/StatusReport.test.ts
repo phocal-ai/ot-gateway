@@ -204,6 +204,24 @@ describe("status", () => {
   )
 })
 
+/** One BACnet timeout of boiler, from a device that answered before it or not. */
+const boilerTimeout = (answeredBefore: boolean): EventLog => ({
+  now,
+  capacity: 500,
+  dropped: 0,
+  events: [
+    {
+      id: 1,
+      at: at(12, 10, 0),
+      type: "device-failing",
+      device: "boiler",
+      reason: "timeout",
+      error: "no answer from 10.0.0.5:47808",
+      ...(answeredBefore ? { answeredBefore } : {})
+    }
+  ]
+})
+
 describe("events", () => {
   const log: EventLog = {
     now,
@@ -317,26 +335,10 @@ describe("events", () => {
   })
 
   it("leads with power, switch and cable for a device that answered before it failed, config for one that never did", () => {
-    const failing = (answeredBefore: boolean): EventLog => ({
-      now,
-      capacity: 500,
-      dropped: 0,
-      events: [
-        {
-          id: 1,
-          at: at(12, 10, 0),
-          type: "device-failing",
-          device: "boiler",
-          reason: "timeout",
-          error: "no answer from 10.0.0.5:47808",
-          ...(answeredBefore ? { answeredBefore } : {})
-        }
-      ]
-    })
-    expect(formatEvents(failing(false), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
+    expect(formatEvents(boilerTimeout(false), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
       "                  check: Is the device instance in the config right?"
     )
-    expect(formatEvents(failing(true), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
+    expect(formatEvents(boilerTimeout(true), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
       "                  check: It answered earlier in this run, so its config worked: did it lose power, or a switch or cable on the way? A device whose network module hangs answers again after a restart."
     )
   })
