@@ -29,6 +29,7 @@ import {
   draftDevices,
   draftPointsList,
   pointColumn,
+  withoutDeviceName,
   printable,
   slugify
 } from "../src/Discover.ts"
@@ -113,7 +114,7 @@ describe("draftDevices", () => {
           },
           { id: "supply-temp-2", name: "Supply Temp", objectType: "analog-input", instance: 2 },
           { id: "binary-output-3", name: "binary-output-3", objectType: "binary-output", instance: 3 },
-          { id: "fan-status", name: "Ventilation 2 Fan Status", objectType: "binary-input", instance: 4 }
+          { id: "fan-status", name: "Fan Status", objectType: "binary-input", instance: 4 }
         ]
       },
       {
@@ -433,6 +434,29 @@ describe("draftPointsList", () => {
         ["compressor-running-2", "Compressor running 2"]
       ])
     }).pipe(Effect.runSync))
+
+  it("drops the device's name from a point's name in the config draft too: whole words, any case", () => {
+    const [draft] = draftDevices([
+      found(2001, "10.0.0.5", {
+        name: "Heat pump",
+        listed: 4,
+        objects: [
+          { objectType: "analog-input", instance: 1, name: "Heat pump flow temperature" },
+          { objectType: "analog-input", instance: 2, name: "HEAT PUMP ★ return" },
+          { objectType: "analog-input", instance: 3, name: "Heat pumps outside" },
+          { objectType: "analog-input", instance: 4, name: "Heat pump" }
+        ]
+      })
+    ])
+    expect(draft?.points.map((point) => [point.id, point.name])).toEqual([
+      ["flow-temperature", "Flow temperature"],
+      ["return", "Return"],
+      ["heat-pumps-outside", "Heat pumps outside"],
+      // Nothing would be left: the name stays.
+      ["heat-pump", "Heat pump"]
+    ])
+    expect(withoutDeviceName("Heat_pump_flow temp", "Heat pump")).toBe("Heat_pump_flow temp")
+  })
 
   it("starts names with a letter or digit, and writes the id for one that would run as a formula", () => {
     expect(pointColumn({ id: "sum-a1", name: "=SUM(A1)" })).toBe("sum-a1")

@@ -352,7 +352,7 @@ describe("finding BACnet devices from the status page", () => {
           {
             objectType: "binary-input",
             instance: 2,
-            name: "Heat pump compressor fault",
+            name: "Compressor fault",
             id: "compressor-fault",
             value: true
           },
