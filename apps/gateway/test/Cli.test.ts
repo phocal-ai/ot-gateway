@@ -167,27 +167,56 @@ describe("demo", () => {
 describe("discover --points-list", () => {
   it.effect("prints what it wrote as JSON with --json, and nothing on stdout without", () =>
     Effect.gen(function* () {
-      const written = { path: "points.csv", devices: 2, points: 14 }
+      const written = { path: "points.csv", devices: 2, points: 14, added: 12, skipped: 2, appended: true }
       yield* pointsListOutcome(false)(written)
       expect(yield* TestConsole.logLines).toEqual([])
       yield* pointsListOutcome(true)(written)
       const [line] = yield* TestConsole.logLines
-      expect(JSON.parse(String(line))).toEqual({ ok: true, path: "points.csv", devices: 2, points: 14 })
+      expect(JSON.parse(String(line))).toEqual({
+        ok: true,
+        path: "points.csv",
+        devices: 2,
+        points: 14,
+        added: 12,
+        skipped: 2,
+        appended: true
+      })
     }).pipe(Effect.provide(TestConsole.layer))
   )
 
-  it.effect("fails with {ok: false} when the file exists, before it asks the network", () =>
+  it.effect("fails with {ok: false} when the file exists, before it asks the network, and names --append", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const directory = yield* fs.makeTempDirectoryScoped()
       const path = `${directory}/points.csv`
       yield* fs.writeFileString(path, "kept")
       const error = yield* Effect.flip(runCli(["discover", exampleConfigPath, "--points-list", path, "--json"]))
-      expect(error.message).toContain(`${path} exists`)
+      expect(error.message).toContain(`${path} exists; add --append`)
       const [line] = yield* TestConsole.logLines
       expect(JSON.parse(String(line))).toMatchObject({ ok: false, path: exampleConfigPath })
       expect(yield* fs.readFileString(path)).toBe("kept")
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("with --append, refuses a file that is not a points list before it asks the network", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      yield* fs.writeFileString(path, "kept")
+      const error = yield* Effect.flip(
+        runCli(["discover", exampleConfigPath, "--points-list", path, "--append", "--json"])
+      )
+      expect(error.message).toContain("no device and point columns")
+      expect(yield* fs.readFileString(path)).toBe("kept")
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("refuses --append without --points-list", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(runCli(["discover", exampleConfigPath, "--append"]))
+      expect(error.message).toContain("--append adds to the file --points-list names")
+    }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })
 
