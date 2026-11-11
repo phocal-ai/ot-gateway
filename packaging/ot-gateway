@@ -11,7 +11,8 @@
 # A terminal gets -t (colors, prompts); a pipe or an agent does not, so `ot-gateway points template > points.csv`
 # writes plain lines. Files outside the current folder are not visible to the command.
 #
-# The first run pulls the image (retried, its progress kept off stdout, which carries --json output). The long-running
+# The first run pulls the image (retried, its progress kept off stdout, which carries --json output); the moving tags
+# dev and latest are checked for a newer image on every run. The long-running
 # commands get a fixed container name, so `docker stop ot-gateway-demo` (-run, -watch) stops one started in the
 # background; only one of each runs at a time. The Compose service's container is `ot-gateway`.
 set -eu
@@ -38,9 +39,25 @@ fi
 [ -n "$tag" ] || tag=$(tag_of "${OT_GATEWAY_HOME:-$HOME/ot-gateway}/compose.yaml") || true
 [ -n "$tag" ] || tag=$release
 
+present=
+docker image inspect "$image:$tag" >/dev/null 2>&1 && present=1
+
+# A moving tag (dev, the preview of the next release, or latest) is checked for a newer image on every run, once and
+# without retries: offline, or with the registry down, the local image runs.
+case $tag in dev | latest)
+  if [ -n "$present" ]; then
+    echo "ot-gateway: checking for a newer $image:$tag..." >&2
+    if ! err=$(docker pull -q "$image:$tag" 2>&1 >/dev/null); then
+      reason=$(printf '%s\n' "$err" | sed '/^[[:space:]]*$/d' | tail -n 1)
+      echo "ot-gateway: could not check (${reason:-docker pull failed}), running the local image" >&2
+    fi
+  fi
+  ;;
+esac
+
 # Pull before running, so a slow or flaky registry gets retries and one line each, not Docker's layer progress.
 # A wrong tag or no access to Docker is not retried; giving up shows the last line of Docker's own error.
-if ! docker image inspect "$image:$tag" >/dev/null 2>&1; then
+if [ -z "$present" ]; then
   echo "ot-gateway: pulling $image:$tag (about 460 MB)..." >&2
   attempt=1
   for backoff in 2 5 ""; do

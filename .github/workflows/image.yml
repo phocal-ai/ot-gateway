@@ -2,13 +2,16 @@ name: Image
 
 # The gateway's container image (Dockerfile), for amd64 and arm64. Pull
 # requests build both and smoke-test them against the bench, with a build cache
-# per architecture that only pull requests write. A pushed release tag (v*) on
-# main publishes ghcr.io/phocal-ai/ot-gateway, built from the tagged source
-# without the cache; only a plain vX.Y.Z also moves :latest.
+# per architecture that pull requests and pushes to dev write. A pushed release
+# tag (v*) on main publishes ghcr.io/phocal-ai/ot-gateway, built from the tagged
+# source without the cache; only a plain vX.Y.Z also moves :latest. A push to
+# dev that changes the image publishes the preview, :dev and :dev-<short sha>,
+# from the cache the same run's builds just wrote (docs/raspberry-pi-testing.md,
+# "Test an unreleased build"); it never moves :latest or a v* tag.
 on:
   pull_request:
     branches: [main, dev]
-    paths:
+    paths: &image-paths
       - "Dockerfile"
       - ".dockerignore"
       - "packages/**"
@@ -28,19 +31,45 @@ on:
       - "packaging/ot-gateway"
       - ".github/workflows/image.yml"
   push:
+    # GitHub does not apply path filters to tag pushes, so every v* tag still runs.
+    branches: [dev]
     tags: ["v*"]
+    paths: *image-paths
   workflow_dispatch:
 
-# Read-only by default: only the publish job, which runs for release tags on main alone, may write packages.
+# Read-only by default: only the publish job (release tags on main) and the preview job (pushes to dev) may write
+# packages.
 permissions:
   contents: read
+
+# On dev a newer push cancels the run before it, so an older build never moves :dev back. Every other run gets a
+# group of its own, as before.
+concurrency:
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'image-dev' || format('image-{0}', github.run_id) }}
+  cancel-in-progress: true
 
 jobs:
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
+
+      # A push to dev builds the preview's version (dev-<short sha>) into the image, so the preview job finds every
+      # layer in the cache; any other run keeps the Dockerfile's default.
+      - name: Version
+        id: version
+        env:
+          PREVIEW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+        run: |
+          set -euo pipefail
+          if [ "$PREVIEW" = true ]; then
+            version="dev-${GITHUB_SHA::7}"
+            echo "version=$version" >> "$GITHUB_OUTPUT"
+            echo "build-args=OT_GATEWAY_VERSION=$version" >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
 
@@ -51,11 +80,14 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: ot-gateway:smoke
+          build-args: ${{ steps.version.outputs.build-args }}
           cache-from: type=gha,scope=image-amd64
-          # Empty outside pull requests, which exports no cache.
-          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,scope=image-amd64,mode=max' || '' }}
+          # Empty outside pull requests and pushes to dev: a release tag or a manual run exports no cache.
+          cache-to: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) && 'type=gha,scope=image-amd64,mode=max' || '' }}
 
       - name: Smoke test against the bench
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           work=$(mktemp -d)
@@ -64,6 +96,8 @@ jobs:
           # The files the CLI finds next to the bundle: the device profiles and the version.
           docker run --rm ot-gateway:smoke profiles list --json | grep -q '"id": "eastron-sdm630"'
           docker run --rm ot-gateway:smoke --version
+          # A preview build names itself (the status page, health and telemetry read the same VERSION file).
+          if [ -n "$VERSION" ]; then docker run --rm ot-gateway:smoke --version | grep -qF "$VERSION"; fi
           # The installed command (packaging/ot-gateway): this image, the folder mounted, no terminal.
           (cd "$work" && OT_GATEWAY_IMAGE=ot-gateway OT_GATEWAY_TAG=smoke "$GITHUB_WORKSPACE/packaging/ot-gateway" check gateway.json | grep -q "config ok")
           # The bench (broker and simulated devices) from the image, the gateway in a second container.
@@ -110,8 +144,9 @@ jobs:
           platforms: linux/arm64
           load: true
           tags: ot-gateway:arm64
+          build-args: ${{ steps.version.outputs.build-args }}
           cache-from: type=gha,scope=image-arm64
-          cache-to: ${{ github.event_name == 'pull_request' && 'type=gha,scope=image-arm64,mode=max' || '' }}
+          cache-to: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) && 'type=gha,scope=image-arm64,mode=max' || '' }}
 
       # The arm64 image under QEMU, bench and gateway in one container on Docker's default network,
       # as the arm64 soak runs them: values must reach the broker within four minutes of emulation.
@@ -199,3 +234,40 @@ jobs:
           tags: ${{ steps.tags.outputs.list }}
           # A release image is built from the tagged source alone, not from a shared build cache.
           no-cache: true
+
+  # The preview: every push to dev that changes the image, once both architectures passed their smoke tests.
+  # Tags :dev (it moves) and :dev-<short sha> (to pin one build); never :latest or a v* tag.
+  preview:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The image job's build arguments and caches, so this assembles the two images it smoke-tested.
+      - name: Publish both architectures
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: OT_GATEWAY_VERSION=${{ needs.image.outputs.version }}
+          tags: |
+            ghcr.io/phocal-ai/ot-gateway:dev
+            ghcr.io/phocal-ai/ot-gateway:${{ needs.image.outputs.version }}
+          cache-from: |
+            type=gha,scope=image-amd64
+            type=gha,scope=image-arm64

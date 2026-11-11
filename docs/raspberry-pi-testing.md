@@ -36,7 +36,7 @@ A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What run
 
 4. **Remote access** for a Pi that is not on your desk: Tailscale (or any VPN you already use) gives SSH and the status page through `ssh -L 8080:127.0.0.1:8080 pi@<name>`. Do not open the status page to the network.
 5. **Telemetry** (recommended for the long runs): put the `OTEL_*` variables from `observability/README.md` in `/etc/ot-gateway/gateway.env`, with `OTEL_RESOURCE_ATTRIBUTES=service.namespace=ot-gateway,deployment.environment=pi-test` (the dashboard shows only `service.namespace=ot-gateway`), and filter the dashboard's Environment to it. A test gateway with a few devices adds about 100 series to the free plan's 10,000.
-6. **The image to test.** A release (`ghcr.io/phocal-ai/ot-gateway:<tag>`), or a build of the branch under test. Build on your laptop and copy it over, which is faster than building on the Pi:
+6. **The image to test.** A release (`ghcr.io/phocal-ai/ot-gateway:<tag>`), the preview of the next release (`:dev`, see [Test an unreleased build](#test-an-unreleased-build)), or a build of a branch that is not on `dev` yet. Build that on your laptop and copy it over, which is faster than building on the Pi:
 
    ```bash
    docker buildx build --platform linux/arm64 --build-arg OT_GATEWAY_VERSION="$(git describe --tags --always --dirty)" -t ot-gateway:test --load .
@@ -44,6 +44,32 @@ A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What run
 
    ```bash
    docker save ot-gateway:test | ssh pi@<name> docker load
+   ```
+
+## Test an unreleased build
+
+Every push to `dev` that changes the image publishes a preview for amd64 and arm64: `ghcr.io/phocal-ai/ot-gateway:dev`, which moves with each push, and `:dev-<short sha>`, which names one build. It reports that name as its version (`ot-gateway --version`, the status page, health and telemetry). **`dev` is a preview, not for buildings**: it has passed CI and the smoke tests, not a soak or a release. Use it on a test Pi to try a fix before it is released.
+
+On the Pi, in the gateway's folder (`~/ot-gateway`):
+
+1. The `ot-gateway` command from the `dev` branch, so it knows what the preview's CLI expects:
+
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/dev/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway
+   ```
+
+2. The gateway on the preview: set the default tag in `compose.yaml` to `dev`, then pull and restart. The command follows the running container's tag, so it runs `:dev` too (or set `OT_GATEWAY_TAG=dev` for a single command).
+
+   ```bash
+   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-dev/' compose.yaml && docker compose pull && docker compose up -d
+   ```
+
+   `dev` moves, so run `docker compose pull && docker compose up -d` again to get the newest build. The command checks for a newer `:dev` image on every run, and runs the one it has when the registry is out of reach. To stay on one build, use `dev-<short sha>` instead of `dev`.
+
+3. Back to a release: the command from `main` (the install line in [raspberry-pi-install.md](raspberry-pi-install.md)), the release's tag in `compose.yaml`, then pull and restart. Remove the preview image to free the space.
+
+   ```bash
+   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.12.0/' compose.yaml && docker compose pull && docker compose up -d && docker image rm ghcr.io/phocal-ai/ot-gateway:dev
    ```
 
 ## The tests, in order
