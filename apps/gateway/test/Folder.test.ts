@@ -82,7 +82,7 @@ describe("nextSteps with a folder", () => {
       })
       expect(steps).toContain("wrote compose.yaml")
       expect(steps).toContain("put the broker password after MQTT_PASSWORD= in ot-gateway.env")
-      expect(steps.indexOf("docker compose up -d")).toBeLessThan(steps.indexOf("ot-gateway check"))
+      expect(steps.indexOf("ot-gateway check")).toBeLessThan(steps.indexOf("docker compose up -d"))
       expect(steps).not.toContain("ot-gateway run")
     })
   )

@@ -32,7 +32,7 @@ import {
   pointKey,
   pointTitle
 } from "@/lib/points"
-import { alarmWhen, pointFreshness } from "@/lib/glance"
+import { alarmWhen, pointFreshness, readsOnChange } from "@/lib/glance"
 import { failureLabel, type Freshness, freshness, protocolName } from "@/lib/status"
 import { canMorph, withTransition } from "@/lib/transition"
 import { useWindowRows } from "@/lib/virtual"
@@ -332,6 +332,7 @@ const PointsList = () => {
                           alarm={alarmWhen(point)}
                           now={now}
                           stale={read._tag === "stale"}
+                          onChange={readsOnChange(point)}
                           unit={point.unit}
                           value={current.value}
                         />

@@ -37,6 +37,7 @@ import {
   alarmWhen,
   pointFreshness,
   pointsByDevice,
+  readsOnChange,
   type ShownAlarm,
   shownAlarms
 } from "@/lib/glance"
@@ -171,6 +172,7 @@ const DeviceValues = ({
               className="shrink-0 font-mono whitespace-nowrap tabular-nums"
               now={now}
               stale={read._tag === "stale"}
+              onChange={readsOnChange(point)}
               unit={point.unit}
               value={value}
             />

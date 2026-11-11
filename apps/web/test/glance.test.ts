@@ -128,6 +128,8 @@ describe("readLabel", () => {
   it("says a stale value is the last one read, with its time to the second", () => {
     expect(readLabel(ts, sameDay, true)).toBe("last read 15:58:04")
     expect(readLabel(ts, sameDay, false)).toBe("read 15:58:04")
+    expect(readLabel(ts, sameDay, true, true)).toBe("last change 15:58:04")
+    expect(readLabel(ts, sameDay, false, true)).toBe("read 15:58:04")
   })
 
   it("says when nothing was read", () => {

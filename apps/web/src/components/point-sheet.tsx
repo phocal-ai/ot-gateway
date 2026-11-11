@@ -12,7 +12,7 @@ import { HistoryChart } from "@/components/history-chart"
 import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
 import { counterNote, pointCounterEvents } from "@/lib/events"
-import { alarmWhen, pointFreshness, readLabel } from "@/lib/glance"
+import { alarmWhen, pointFreshness, readLabel, readsOnChange } from "@/lib/glance"
 import {
   failuresOf,
   fetchHistory,
@@ -235,6 +235,7 @@ export const PointSheet = ({
               key={`${point.device}/${point.id}`}
               now={now}
               stale={read._tag === "stale"}
+              onChange={readsOnChange(point)}
               unit={point.unit}
               value={value}
             />
@@ -249,7 +250,7 @@ export const PointSheet = ({
             {read._tag === "unchanged" ? (
               <span title={ON_CHANGE_HINT}>unchanged since {clockTime(read.ts, now)} (sent on change of value)</span>
             ) : (
-              <span>{readLabel(value?.ts, now, read._tag === "stale")}</span>
+              <span>{readLabel(value?.ts, now, read._tag === "stale", readsOnChange(point))}</span>
             )}
           </div>
           {counters.length === 0 ? null : (

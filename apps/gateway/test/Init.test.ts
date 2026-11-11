@@ -101,17 +101,23 @@ describe("lanInterfaces", () => {
 })
 
 describe("nextSteps", () => {
-  it.effect("names the password variable, then starts the gateway and sends a manual user to the status page", () =>
+  it.effect("orders the steps as the work goes: broker, points list, import, check, run, then the status page", () =>
     Effect.gen(function* () {
       const config = yield* decode(initConfig({ ...answers, login: { username: "u", passwordEnv: "BROKER_PW" } }, []))
       const steps = nextSteps("site.json", config)
       expect(steps).toContain("set BROKER_PW")
-      expect(steps).toContain("ot-gateway run site.json")
-      const page = "then open http://127.0.0.1:8080 and add devices there (or upload a points list)"
-      expect(steps.indexOf("ot-gateway run site.json")).toBeLessThan(steps.indexOf(page))
-      expect(steps.indexOf(page)).toBeLessThan(steps.indexOf("ot-gateway points template > points.csv"))
-      expect(steps.indexOf("ot-gateway points template")).toBeLessThan(steps.indexOf("ot-gateway import points.csv"))
-      expect(steps).toContain("ot-gateway watch site.json --seconds 10")
+      const page = "then open http://127.0.0.1:8080 for the status page, where devices can be added too"
+      const order = [
+        "ot-gateway broker site.json",
+        "ot-gateway points template > points.csv",
+        "ot-gateway import points.csv site.json",
+        "ot-gateway check site.json",
+        "ot-gateway run site.json",
+        page,
+        "ot-gateway watch site.json --seconds 10"
+      ].map((text) => steps.indexOf(text))
+      expect(order).not.toContain(-1)
+      expect(order).toEqual(order.toSorted((a, b) => a - b))
     })
   )
 
@@ -218,11 +224,11 @@ describe("initNext", () => {
       const commands = next.map((step) => step.command)
       expect(commands).toEqual([
         "ot-gateway broker site-1/ot-gateway.json",
-        "docker compose -f site-1/compose.yaml up -d",
-        "ot-gateway status",
         "ot-gateway points template > site-1/points.csv",
         "ot-gateway import site-1/points.csv site-1/ot-gateway.json",
         "ot-gateway check site-1/ot-gateway.json",
+        "docker compose -f site-1/compose.yaml up -d",
+        "ot-gateway status",
         "ot-gateway watch site-1/ot-gateway.json --seconds 10"
       ])
       const spaced = initNext("/srv/site 1/ot-gateway.json", config, compose, { cwd: "/repo" })
@@ -234,7 +240,11 @@ describe("initNext", () => {
     Effect.gen(function* () {
       const config = yield* decode(initConfig(answers, [simulatedDevice]))
       const { next } = initNext("site-1/ot-gateway.json", config, compose, { cwd: "site-1", platform: "linux" })
-      expect(next.map((step) => step.command).slice(0, 2)).toEqual(["ot-gateway broker", "docker compose up -d"])
+      expect(next.map((step) => step.command).slice(0, 3)).toEqual([
+        "ot-gateway broker",
+        "ot-gateway check",
+        "docker compose up -d"
+      ])
     })
   )
 

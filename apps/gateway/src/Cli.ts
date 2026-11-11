@@ -33,7 +33,12 @@ import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { invocation } from "./Invocation.ts"
-import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
+import {
+  briefPointsListSchemaJson,
+  describePointsListSchema,
+  pointsListSchema,
+  pointsListTemplate
+} from "./PointsSchema.ts"
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
 import { DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
@@ -60,7 +65,7 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { failureLine, printJson } from "./Output.ts"
+import { failureLine, printJson, printResult } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -494,9 +499,29 @@ const importCommand = Command.make(
   ])
 )
 
-const schemaCommand = Command.make("schema", { json: jsonFlag }, ({ json }) =>
-  json ? printJson(pointsListSchema()) : Console.log(describePointsListSchema())
-).pipe(Command.withDescription("The points list's columns, rules and allowed values"))
+const schemaCommand = Command.make(
+  "schema",
+  {
+    json: jsonFlag,
+    brief: Flag.Boolean("brief").pipe(
+      Flag.withDescription("Each column's name, scope, required, first sentence and values, one line each; no aliases"),
+      Flag.withDefault(false)
+    )
+  },
+  ({ json, brief }) =>
+    json
+      ? brief
+        ? printResult(briefPointsListSchemaJson())
+        : printJson(pointsListSchema())
+      : Console.log(describePointsListSchema({ brief }))
+).pipe(
+  Command.withDescription("The points list's columns, rules and allowed values"),
+  Command.withExamples([
+    { command: "ot-gateway points schema", description: "Every column, for people" },
+    { command: "ot-gateway points schema --brief --json", description: "The columns in short, for agents" },
+    { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" }
+  ])
+)
 
 const templateCommand = Command.make("template", {}, () =>
   Effect.sync(() => process.stdout.write(pointsListTemplate()))
