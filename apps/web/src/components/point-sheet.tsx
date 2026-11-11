@@ -12,7 +12,7 @@ import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
 import { alarmWhen, pointFreshness } from "@/lib/glance"
 import { fetchHistory, type GatewayClock, gatewayTime, type PointHistory, type Range, ranges } from "@/lib/history"
-import type { LivePoint } from "@/lib/points"
+import { type LivePoint, pointTitle, titledById } from "@/lib/points"
 import { clockTime, failureLabel, freshness, settle, unitLabel } from "@/lib/status"
 
 /** How often an open panel asks for history again: often for short ranges, rarely for a week of minutes. */
@@ -163,8 +163,14 @@ export const PointSheet = ({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="font-mono text-sm text-muted-foreground">{point.device}</p>
-            <h2 className="w-fit font-mono text-lg font-semibold break-all">{point.id}</h2>
-            <p className="text-sm text-muted-foreground">{point.name}</p>
+            {titledById(point) ? (
+              <h2 className="w-fit font-mono text-lg font-semibold break-all">{point.id}</h2>
+            ) : (
+              <>
+                <h2 className="w-fit text-lg font-semibold break-words">{pointTitle(point)}</h2>
+                <p className="font-mono text-sm break-all text-muted-foreground">{point.id}</p>
+              </>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {position === undefined ? null : (
@@ -255,7 +261,7 @@ export const PointSheet = ({
             ) : (
               <HistoryChart
                 boolean={typeof value?.value === "boolean"}
-                label={point.id}
+                label={pointTitle(point)}
                 series={history.series.series}
                 unit={point.unit}
               />
