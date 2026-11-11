@@ -13,6 +13,12 @@
  *   ot-gateway status [config]      the running gateway's status, one line per device (exit 1 when failing)
  *   ot-gateway events [config]      what changed lately: devices failing and recovering, the broker lost and back
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
+ *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started
+ *
+ * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
+ * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
+ * that is the path of a JSON file, which is a config meant for `--config` (with `--retain` it would otherwise stay
+ * on the broker). `messages` takes `--config` too, as it did first.
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
@@ -33,6 +39,7 @@ import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { messagesReport } from "./MessagesReport.ts"
 import { watch } from "./Watch.ts"
 import {
+  BrokerCommandError,
   type BrokerReport,
   checkBroker,
   formatBrokerReport,
@@ -615,6 +622,46 @@ const brokerCommand = Command.make("broker", { config: configPath, json: jsonFla
   ])
 )
 
+/**
+ * `publish <topic> config.json` reads the path as the payload, the config being a flag here: a payload that names
+ * an existing `.json` file is refused, naming `--config`, before anything is sent.
+ */
+export const refuseConfigAsPayload = Effect.fnUntraced(function* (payload: string) {
+  const trimmed = payload.trim()
+  if (!trimmed.toLowerCase().endsWith(".json") || /[\s{}"]/.test(trimmed)) return
+  const fs = yield* FileSystem.FileSystem
+  const isFile = yield* fs.stat(trimmed).pipe(
+    Effect.map((info) => info.type === "File"),
+    Effect.catchTag("PlatformError", () => Effect.succeed(false))
+  )
+  if (!isFile) return
+  return yield* new BrokerCommandError({
+    message: `${trimmed} is a file, not a message: publish takes the config as --config ${trimmed} (ot-gateway publish <topic> [payload] --config ${trimmed}). Nothing was sent.`
+  })
+})
+
+/**
+ * `messages [points] [config]`: the config positional after the points, or the only positional when it ends in
+ * `.json`, or `--config`; two different ones are a mistake.
+ */
+export const messagesArguments = (
+  points: string | undefined,
+  positional: string | undefined,
+  flag: string | undefined
+): { readonly points?: string; readonly config?: string } | { readonly error: string } => {
+  const pointsIsConfig = positional === undefined && points !== undefined && points.toLowerCase().endsWith(".json")
+  const config = pointsIsConfig ? points : positional
+  const selection = pointsIsConfig ? undefined : points
+  if (config !== undefined && flag !== undefined && config !== flag) {
+    return { error: `two configs: ${config} and --config ${flag}; name one` }
+  }
+  const chosen = config ?? flag
+  return {
+    ...(selection === undefined ? {} : { points: selection }),
+    ...(chosen === undefined ? {} : { config: chosen })
+  }
+}
+
 const publishCommand = Command.make(
   "publish",
   {
@@ -643,7 +690,8 @@ const publishCommand = Command.make(
     json: jsonFlag
   },
   ({ topic, payload, config, retain, qos, json }) =>
-    loadConfig(config).pipe(
+    refuseConfigAsPayload(payload).pipe(
+      Effect.andThen(loadConfig(config)),
       Effect.flatMap((decoded) => publishOnce(decoded, topic, payload, { retain, qos })),
       Effect.flatMap((result) => (json ? printJson(result) : Console.log(formatPublished(result)))),
       jsonFailure(json, { topic })
@@ -834,9 +882,10 @@ const messagesCommand = Command.make(
       Argument.optional,
       Argument.map(Option.getOrUndefined)
     ),
+    positionalConfig: targetConfig,
     config: Flag.String("config").pipe(
       Flag.withDescription(
-        `Path of the gateway's JSON config (default ${defaultConfigPath} when it is in this folder): which gateway to ask, and where`
+        `Path of the gateway's JSON config, the same as naming it after the points (default ${defaultConfigPath} when it is in this folder)`
       ),
       Flag.optional,
       Flag.map(Option.getOrUndefined)
@@ -844,13 +893,16 @@ const messagesCommand = Command.make(
     url: urlFlag,
     json: jsonFlag
   },
-  ({ points: selection, config, url, json }) =>
-    resolveTarget({ config, url }).pipe(
-      Effect.flatMap((target) =>
-        messagesReport(target, selection === undefined ? [] : (parseSelection(selection) ?? []), { json })
-      ),
-      jsonFailure(json, { url: url ?? null, path: config ?? null })
-    )
+  ({ points: pointsArgument, positionalConfig, config: configFlag, url, json }) => {
+    const chosen = messagesArguments(pointsArgument, positionalConfig, configFlag)
+    const config = "error" in chosen ? undefined : chosen.config
+    return Effect.gen(function* () {
+      if ("error" in chosen) return yield* new BrokerCommandError({ message: chosen.error })
+      const target = yield* resolveTarget({ config, url })
+      const selection = chosen.points === undefined ? [] : (parseSelection(chosen.points) ?? [])
+      return yield* messagesReport(target, selection, { json })
+    }).pipe(jsonFailure(json, { url: url ?? null, path: config ?? null }))
+  }
 ).pipe(
   Command.withDescription(
     "How many messages the running gateway published per topic since it started, how many reached the broker, and the last one"
@@ -858,7 +910,8 @@ const messagesCommand = Command.make(
   Command.withExamples([
     { command: "ot-gateway messages", description: "Every topic under the gateway's site and building" },
     { command: "ot-gateway messages energy-meter/active-power", description: "One point's value and $meta topics" },
-    { command: "ot-gateway messages energy-meter --json", description: "A device's topics as JSON" }
+    { command: "ot-gateway messages energy-meter --json", description: "A device's topics as JSON" },
+    { command: "ot-gateway messages energy-meter site-1/ot-gateway.json", description: "The gateway of another config" }
   ])
 )
 

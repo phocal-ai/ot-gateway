@@ -13,7 +13,9 @@ import {
   brokerOutcome,
   configSummary,
   describeConfig,
+  messagesArguments,
   pointsListOutcome,
+  refuseConfigAsPayload,
   runCli,
   toCliArgs,
   versionLine
@@ -331,5 +333,37 @@ describe("broker", () => {
       const [line] = yield* TestConsole.logLines
       expect(JSON.parse(String(line))).toMatchObject({ ok: true, roundTripMs: 3 })
     }).pipe(Effect.provide(TestConsole.layer))
+  )
+})
+
+describe("the config argument", () => {
+  it("takes the config of messages after the points, alone when it ends in .json, or as --config", () => {
+    expect(messagesArguments("meter/power", "site.json", undefined)).toEqual({
+      points: "meter/power",
+      config: "site.json"
+    })
+    expect(messagesArguments("site.json", undefined, undefined)).toEqual({ config: "site.json" })
+    expect(messagesArguments("meter", undefined, "site.json")).toEqual({ points: "meter", config: "site.json" })
+    expect(messagesArguments(undefined, undefined, undefined)).toEqual({})
+    expect(messagesArguments("meter", "a.json", "b.json")).toEqual({
+      error: "two configs: a.json and --config b.json; name one"
+    })
+  })
+
+  it.effect("refuses a publish payload that is a JSON file, naming --config, and sends nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const config = `${dir}/ot-gateway.json`
+      yield* fs.writeFileString(config, "{}")
+      const error = yield* Effect.flip(refuseConfigAsPayload(config))
+      expect(error.message).toContain(`--config ${config}`)
+      // Through the command line: refused before the config is read or the broker dialled.
+      const viaCli = yield* Effect.flip(runCli(["publish", "site/b/x", config, "--retain", "--config", config]))
+      expect(viaCli.message).toContain("is a file, not a message")
+      // A JSON payload, or a .json name that is no file, goes through.
+      yield* refuseConfigAsPayload(`{"value": 1}`)
+      yield* refuseConfigAsPayload(`${dir}/missing.json`)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })

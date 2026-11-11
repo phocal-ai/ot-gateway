@@ -566,9 +566,16 @@ describe("against a running status page", () => {
         /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting or lost\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
       )
       expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
+      // Its publish mode, from the point catalog, instead of the JSON cut short; and why the counts run since start.
+      expect(report[2]).toMatch(/retained {2}publish: every read$/)
+      expect(report.at(-1)).toContain("counts per topic since it started, not per time window")
       yield* messagesReport(target, [], { json: true })
       const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
-      expect(json).toMatchObject({ ok: true, since: expect.any(Number), messages: [{}, {}, { count: 1 }] })
+      expect(json).toMatchObject({
+        ok: true,
+        since: expect.any(Number),
+        messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
+      })
       yield* Fiber.interrupt(server)
     }).pipe(Effect.provide(TestConsole.layer))
   )
