@@ -17,7 +17,7 @@ import {
   withMetricAttributes
 } from "@ot-gateway/core"
 import { openHistory } from "@ot-gateway/history"
-import { Effect, FileSystem, Fiber, Metric } from "effect"
+import { Clock, Effect, FileSystem, Fiber, Layer, Metric } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
@@ -25,6 +25,7 @@ import { createServer } from "node:net"
 import type { HostSnapshot } from "../src/Host.ts"
 import { configView } from "../src/ConfigView.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
+import { GatewayEvents, gatewayEventsLayer, makeGatewayEvents } from "../src/Events.ts"
 
 const config = parseConfig(
   JSON.stringify({
@@ -139,6 +140,62 @@ describe("status", () => {
         published: 15,
         publishFailures: 4
       })
+    })
+  )
+
+  it.effect("says since when the broker is away and why, from the first failure of an outage until it is back", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseConfig(
+        JSON.stringify({ site: "away-site", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const state = makeStatusState(parsed, makeHealthRegistry([]), 100)
+      // Never connected: away since the gateway started.
+      state.recordBrokerFailure(150, "could not connect: connection refused by 10.0.0.5:1883")
+      expect((yield* state.snapshot("none")).broker).toMatchObject({
+        connected: false,
+        disconnectedSince: 100,
+        lastError: "could not connect: connection refused by 10.0.0.5:1883"
+      })
+      const connection = {
+        protocolVersion: "5",
+        maximumQoS: 1,
+        retainAvailable: true,
+        keepAliveSeconds: 30,
+        receiveMaximum: 100
+      } as const
+      state.recordBrokerConnection(200, connection)
+      expect((yield* state.snapshot("none")).broker).not.toHaveProperty("disconnectedSince")
+      // Lost later: away since then, whatever the redials say after.
+      state.recordBrokerFailure(300, "connection closed by the peer")
+      state.recordBrokerFailure(315, "could not connect: connection refused by 10.0.0.5:1883")
+      expect((yield* state.snapshot("none")).broker).toMatchObject({
+        disconnectedSince: 300,
+        lastError: "could not connect: connection refused by 10.0.0.5:1883"
+      })
+    })
+  )
+
+  it.effect("shows since when a device fails, why in the driver's words, and how many cycles in a row", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      const health = makeHealthRegistry(["meter"])
+      const state = makeStatusState(parsed, health, 0)
+      health.recordSuccess("meter", 1_000)
+      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 item(s) within 3s", at: 2_000 })
+      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 item(s) within 3s", at: 7_000 })
+      const [device] = (yield* state.snapshot("none")).devices
+      expect(device).toMatchObject({
+        status: "failing",
+        reason: "timeout",
+        failingSince: 2_000,
+        lastError: "no response to 2 item(s) within 3s",
+        failures: 2,
+        lastSuccess: 1_000
+      })
+      health.recordSuccess("meter", 8_000)
+      const [recovered] = (yield* state.snapshot("none")).devices
+      expect(recovered).not.toHaveProperty("failingSince")
+      expect(recovered).not.toHaveProperty("lastError")
     })
   )
 
@@ -405,12 +462,30 @@ describe("status", () => {
       const port = yield* freePort
       const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
       state.recordPublish("s/b/meter/power", '{"value":3,"ts":700}', { retained: false, at: 1 })
+      const ring = yield* Effect.map(Clock.clockWith(Effect.succeed), (clock) => makeGatewayEvents(clock, 3))
+      ring.started("v1", 1)
+      ring.brokerDisconnected("connection closed by the peer")
+      ring.brokerConnected(12)
+      ring.bufferDrained()
       const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
-        Effect.provide(NodeServices.layer),
+        Effect.provide([NodeServices.layer, Layer.succeed(GatewayEvents, ring)]),
         Effect.forkChild
       )
       yield* Effect.sleep("300 millis")
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
+      // The ring holds 3: the start was let go, and `after` gives what is newer than an id.
+      const log = yield* client.status.events({ query: {} })
+      expect(log.events.map((event) => event.type)).toEqual([
+        "broker-disconnected",
+        "broker-connected",
+        "buffer-drained"
+      ])
+      expect(log).toMatchObject({ capacity: 3, dropped: 1 })
+      expect(log.events[1]).toMatchObject({ id: 3, buffered: 12 })
+      const newer = yield* client.status.events({ query: { after: 3 } })
+      expect(newer.events.map((event) => event.id)).toEqual([4])
+      const future = yield* client.status.events({ query: { since: Date.now() + 60_000 } })
+      expect(future.events).toEqual([])
       const status = yield* client.status.status({ query: {} })
       expect(status.devices[0]?.points[0]?.value).toBe(3)
       expect((yield* client.status.status({ query: { points: "none" } })).devices[0]?.points).toEqual([])
@@ -441,7 +516,7 @@ describe("status", () => {
       const port = yield* freePort
       const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
       const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
-        Effect.provide(NodeServices.layer),
+        Effect.provide([NodeServices.layer, gatewayEventsLayer()]),
         Effect.forkChild
       )
       yield* Effect.sleep("300 millis")
@@ -511,6 +586,6 @@ describe("status", () => {
       const none = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "power" } }))
       expect(none._tag).toBe("HistoryUnavailable")
       yield* Fiber.interrupt(bare)
-    }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer]))
+    }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer, gatewayEventsLayer()]))
   )
 })

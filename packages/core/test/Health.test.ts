@@ -13,6 +13,10 @@ import {
   runHealthReporter,
   withMetricAttributes
 } from "../src/index.ts"
+import type { DeviceFailure, HealthChange, HealthReason } from "../src/index.ts"
+
+/** A failure of `reason`, at `at` ms. */
+const fail = (reason: HealthReason, at = 0, message = `${reason} failure`): DeviceFailure => ({ reason, message, at })
 
 describe("HealthRegistry", () => {
   it("starts every device as starting, then tracks the last cycle", () => {
@@ -23,13 +27,48 @@ describe("HealthRegistry", () => {
     })
 
     registry.recordSuccess("meter", 1000)
-    registry.recordFailure("meter", "timeout")
-    registry.recordFailure("ventilation-1", "connection")
-    expect(registry.devices.get("meter")).toEqual({ status: "failing", reason: "timeout", lastSuccess: 1000 })
-    expect(registry.devices.get("ventilation-1")).toEqual({ status: "failing", reason: "connection" })
+    registry.recordFailure("meter", fail("timeout", 1500, "no response to 2 item(s) within 3s"))
+    registry.recordFailure("ventilation-1", fail("connection", 1600))
+    expect(registry.devices.get("meter")).toEqual({
+      status: "failing",
+      reason: "timeout",
+      lastSuccess: 1000,
+      failingSince: 1500,
+      lastError: "no response to 2 item(s) within 3s",
+      failures: 1
+    })
+    expect(registry.devices.get("ventilation-1")).toMatchObject({ status: "failing", reason: "connection" })
 
     registry.recordSuccess("meter", 2000)
     expect(registry.devices.get("meter")).toEqual({ status: "ok", lastSuccess: 2000 })
+  })
+
+  it("keeps when a run of failures started and counts it, whatever the reason, until a read works", () => {
+    const registry = makeHealthRegistry(["meter"])
+    registry.recordFailure("meter", fail("timeout", 100))
+    registry.recordFailure("meter", fail("timeout", 200))
+    registry.recordFailure("meter", fail("connection", 300, "could not connect: connection refused by 10.0.0.9:502"))
+    expect(registry.devices.get("meter")).toMatchObject({
+      failingSince: 100,
+      failures: 3,
+      reason: "connection",
+      lastError: "could not connect: connection refused by 10.0.0.9:502"
+    })
+    registry.recordSuccess("meter", 400)
+    registry.recordFailure("meter", fail("timeout", 500))
+    expect(registry.devices.get("meter")).toMatchObject({ failingSince: 500, failures: 1, lastSuccess: 400 })
+  })
+
+  it("hands listeners the device's health before and after the change", () => {
+    const registry = makeHealthRegistry(["meter"])
+    const changes: Array<HealthChange> = []
+    registry.onChange((change) => changes.push(change))
+    registry.recordSuccess("meter", 1)
+    registry.recordFailure("meter", fail("timeout", 2))
+    expect(changes.map((change) => [change.device, change.previous.status, change.next.status])).toEqual([
+      ["meter", "starting", "ok"],
+      ["meter", "ok", "failing"]
+    ])
   })
 
   it("tells listeners about status and reason changes only, until they unsubscribe", () => {
@@ -39,9 +78,9 @@ describe("HealthRegistry", () => {
 
     registry.recordSuccess("meter", 1) // starting -> ok
     registry.recordSuccess("meter", 2) // still ok
-    registry.recordFailure("meter", "timeout") // ok -> failing
-    registry.recordFailure("meter", "timeout") // same reason
-    registry.recordFailure("meter", "connection") // another reason
+    registry.recordFailure("meter", fail("timeout")) // ok -> failing
+    registry.recordFailure("meter", fail("timeout")) // same reason
+    registry.recordFailure("meter", fail("connection")) // another reason
     expect(changes).toBe(3)
 
     unsubscribe()
@@ -58,7 +97,7 @@ describe("runHealthReporter on change", () => {
       let listeners = 0
       const counting = {
         ...registry,
-        onChange: (listener: () => void) => {
+        onChange: (listener: (change: HealthChange) => void) => {
           listeners++
           const unsubscribe = registry.onChange(listener)
           return () => {
@@ -96,6 +135,15 @@ describe("health messages", () => {
       devices: { meter: { status: "ok", lastSuccess: 5 } }
     })
     expect(JSON.parse(offlinePayload("shutdown"))).toEqual({ status: "offline", reason: "shutdown" })
+  })
+
+  it("says since when a device fails, but keeps the error text and count on the gateway", () => {
+    const registry = makeHealthRegistry(["meter"])
+    registry.recordSuccess("meter", 5)
+    registry.recordFailure("meter", fail("connection", 7, "could not connect: connection refused by 10.0.0.9:502"))
+    expect(JSON.parse(onlinePayload(registry, 1, 10)).devices).toEqual({
+      meter: { status: "failing", reason: "connection", lastSuccess: 5, failingSince: 7 }
+    })
   })
 
   it("carries the host's sample once there is one", () => {
@@ -181,7 +229,7 @@ describe("runHealthReporter", () => {
       // Ten seconds of a status change every 10 ms: 1000 changes.
       for (let tick = 0; tick < 1_000; tick++) {
         if (tick % 2 === 0) registry.recordSuccess("meter", tick)
-        else registry.recordFailure("meter", "timeout")
+        else registry.recordFailure("meter", fail("timeout"))
         yield* TestClock.adjust("10 millis")
       }
       // At most one change-driven publish per second.

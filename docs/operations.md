@@ -300,9 +300,37 @@ ssh -L 8080:127.0.0.1:8080 pi@gateway
 
 and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The Buffer card says how many messages wait and, from the last minute of polls, when the buffer will be full while the broker is away or how long the backlog takes once it is back. The Status tab's Broker, Devices, Buffer and Machine cards open their details: when the broker connection came up and what the broker allowed (MQTT version, keep-alive, retained messages, largest message), reconnects, failed attempts, values published and publishes that failed; devices by state and protocol with the ones that need a look; and what the buffer stored, sent on and dropped, by reason; the machine's last sample (processor, memory, heap, event-loop lag, disk, temperature and power where the machine has them). A point is an alarm when its Brick class has `Alarm` in it or its Haystack tags include `alarm`: one that is on (true, or a number other than 0) is shown in red and named above the cards. A value is dimmed when it is stale: the device fails or is late, or a polled point was not read for three poll intervals (at least 15 s). A point read by change of value is not stale while its device answers, as the device sends it only when it changes: it shows "COV" and when it last changed. A gateway without devices says how to add them. The Settings tab (`/settings`) shows the running config from `GET /api/config`: every block with its defaults filled in and each device without its points (no secrets: the broker password is only named by `passwordEnv`). The page cannot change it. The Messages tab (`/messages`) shows the latest message the gateway published on each topic (`GET /api/messages`, at most 2,000 topics and 2,000 characters of each payload), fetched only while the tab is open, with a search over topics and payloads and a filter by kind. The Points page (`/points`) lists every configured point from `GET /api/points` (topic, source, publish mode, scaling, limits, Brick and Haystack), fetched once. It draws only the rows on screen and polls only their values with `GET /api/values?points=device/point,...` (at most 500 per request), while the page's status poll uses `GET /api/status?points=none`: at 10,000 points, the full `/api/status` is about 1.3 MB, without points about 27 KB.
 
+## What changed and when
+
+`ot-gateway status` asks the running gateway (`--url`, default `http://127.0.0.1:8080`) and prints one line for the gateway, its broker and buffer, and one per device. A failing device says since when and why, the broker since when it is connected or away, with the last error and the failed connects since start:
+
+```
+s/b gateway main, up 2 h (since 10:19:30)
+  broker mqtt://localhost:1883: connected since 10:19:31, 2 failed connect(s) since start
+  2 device(s), 1 failing
+    ventilation-1  ok       simulator, 0 point(s), read 2 s ago
+    energy-meter   failing  modbus-tcp, 4 point(s), failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020
+```
+
+It exits with 1 while a device is `failing` or `late` (`ok`, but no read for three poll intervals and at least 15 s: a stuck polling cycle, as on the status page), or while the broker is not connected after a connection was lost or a connect failed or was refused. A gateway that has just started is fine: devices `starting`, and the broker line says `connecting (started 2 s ago)` until the first connect succeeds or fails. So a script or an agent can tell from the exit code alone. `--json` prints `/api/status` with `ok: true` or `false` in front. In `/api/status`, a failing device has `failingSince`, `lastError` and `failures` (failed polling cycles in a row); the broker has `disconnectedSince` and `lastError` while it is away, `connects` (successful connects) and `failedConnects` (dials that failed or were refused) since start.
+
+`ot-gateway events` prints what changed, oldest first, in this machine's clock time:
+
+```
+12:18:00  broker        disconnected: connection closed by the peer
+12:18:20  energy-meter  failing: could not connect: connection refused by 127.0.0.1:5020
+12:19:00  energy-meter  ok again after 40 s
+12:19:10  broker        connected again after 70 s, 1204 message(s) waiting in the buffer
+12:19:20  buffer        drained: every waiting message delivered
+```
+
+`--since 10m|2h|1d|all` sets how far back (default `1h`), `--json` gives `{ok, now, capacity, dropped, events}`. The events are the gateway started, a device failing (with its reason and error) and ok again (with how long it was down), the broker lost (once per outage, with the error) and connected (with how long it was away and how many messages wait in the buffer), and the buffer drained. The gateway keeps the latest 500 in memory, so they start over on a restart, and serves them as `GET /api/events` (`?after=<id>` for the ones after an event already seen, `?since=<ms epoch>` for those at or after a time). Durations are measured on the monotonic clock, so a clock step does not bend them. For more, read the log: `docker compose logs gateway --since 10m` in the gateway's folder.
+
+`ot-gateway watch` says when it loses the broker and when it is back; with `--seconds` it exits with 1 when the broker was lost and did not come back.
+
 ## Health on MQTT
 
-The gateway keeps a retained message on `site/building/$gateway/<id>/health`: `online` with every device's status and last successful read, refreshed every `healthIntervalMs` and within a second of a device changing status (at most one such refresh a second), and `offline` (its MQTT last will) when it stops or loses the broker. Alert on that topic from whatever reads the broker.
+The gateway keeps a retained message on `site/building/$gateway/<id>/health`: `online` with every device's status, last successful read and, for a failing device, `failingSince`, refreshed every `healthIntervalMs` and within a second of a device changing status (at most one such refresh a second), and `offline` (its MQTT last will) when it stops or loses the broker. Alert on that topic from whatever reads the broker.
 
 The `online` message also carries `host`, the machine's last sample (below): `memoryBytes`, `eventLoopLagMs`, `clockSteps`, and where the machine can tell, `temperatureC`, `throttled` with `throttledWatched` (the conditions the Pi lets the gateway see, below) and `diskFreeBytes`. So a fleet can be watched from the broker alone, without Grafana.
 

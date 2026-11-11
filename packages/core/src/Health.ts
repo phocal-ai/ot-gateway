@@ -24,34 +24,68 @@ export interface DeviceHealth {
   readonly lastSuccess?: number
   /** Why the device is failing, while `failing`. */
   readonly reason?: HealthReason
+  /** Unix ms of the first failure in the current run of failures, while `failing`. */
+  readonly failingSince?: number
+  /** The latest failure in one line, from the typed error (`could not connect: connection refused by …`), while `failing`. */
+  readonly lastError?: string
+  /** Failed polling cycles in a row (the retries inside a cycle count once), while `failing`; a read resets it. */
+  readonly failures?: number
+}
+
+/** One failed read, crash or hung cycle, as the registry records it. */
+export interface DeviceFailure {
+  readonly reason: HealthReason
+  /** One line saying what went wrong, from the typed error's message. Never a secret. */
+  readonly message: string
+  /** Unix ms when it happened, from the gateway's wall clock. */
+  readonly at: number
+}
+
+/** A device's status or failure reason changed: its health before and after. */
+export interface HealthChange {
+  readonly device: Slug
+  readonly previous: DeviceHealth
+  readonly next: DeviceHealth
 }
 
 /** Per-device status, written by the polling pipeline and read by the health publisher. */
 export interface HealthRegistry {
   readonly devices: ReadonlyMap<Slug, DeviceHealth>
   readonly recordSuccess: (device: Slug, timestamp: number) => void
-  readonly recordFailure: (device: Slug, reason: HealthReason) => void
+  readonly recordFailure: (device: Slug, failure: DeviceFailure) => void
   /**
    * Call `listener` whenever a device's `status` or `reason` changes (`starting` to `ok`, `ok` to `failing`,
    * one failure reason to another), not on every successful read. Returns the function that removes it.
    */
-  readonly onChange: (listener: () => void) => () => void
+  readonly onChange: (listener: (change: HealthChange) => void) => () => void
 }
 
+const starting: DeviceHealth = { status: "starting" }
+
 export const makeHealthRegistry = (deviceIds: ReadonlyArray<Slug>): HealthRegistry => {
-  const devices = new Map<Slug, DeviceHealth>(deviceIds.map((id) => [id, { status: "starting" }]))
-  const listeners = new Set<() => void>()
-  const record = (device: Slug, next: DeviceHealth) => {
-    const previous = devices.get(device)
+  const devices = new Map<Slug, DeviceHealth>(deviceIds.map((id) => [id, starting]))
+  const listeners = new Set<(change: HealthChange) => void>()
+  const record = (device: Slug, previous: DeviceHealth, next: DeviceHealth) => {
     devices.set(device, next)
-    if (previous?.status !== next.status || previous.reason !== next.reason) listeners.forEach((listener) => listener())
+    if (previous.status === next.status && previous.reason === next.reason) return
+    const change: HealthChange = { device, previous, next }
+    listeners.forEach((listener) => listener(change))
   }
   return {
     devices,
-    recordSuccess: (device, timestamp) => record(device, { status: "ok", lastSuccess: timestamp }),
-    recordFailure: (device, reason) => {
-      const lastSuccess = devices.get(device)?.lastSuccess
-      record(device, { status: "failing", reason, ...(lastSuccess === undefined ? {} : { lastSuccess }) })
+    recordSuccess: (device, timestamp) =>
+      record(device, devices.get(device) ?? starting, { status: "ok", lastSuccess: timestamp }),
+    recordFailure: (device, failure) => {
+      const previous = devices.get(device) ?? starting
+      const continuing = previous.status === "failing"
+      record(device, previous, {
+        status: "failing",
+        reason: failure.reason,
+        ...(previous.lastSuccess === undefined ? {} : { lastSuccess: previous.lastSuccess }),
+        failingSince: continuing ? (previous.failingSince ?? failure.at) : failure.at,
+        lastError: failure.message,
+        failures: continuing ? (previous.failures ?? 0) + 1 : 1
+      })
     },
     onChange: (listener) => {
       listeners.add(listener)
@@ -91,7 +125,7 @@ export interface OnlineMessage {
   readonly since: number
   /** Unix ms when this message was written. */
   readonly ts: number
-  readonly devices: Readonly<Record<string, DeviceHealth>>
+  readonly devices: Readonly<Record<string, DeviceHealthMessage>>
   /** Absent until the host monitor's first sample, and where the gateway runs without one. */
   readonly host?: HostHealth
 }
@@ -104,12 +138,26 @@ export interface OfflineMessage {
 
 export type HealthMessage = OnlineMessage | OfflineMessage
 
+/**
+ * A device as the health message carries it: its status, last read, and while failing why and since when. The
+ * error text and the failure count stay on the gateway (`/api/status`): the retained message reaches every
+ * subscriber of the broker, and an error names addresses on the building's network.
+ */
+export type DeviceHealthMessage = Pick<DeviceHealth, "status" | "lastSuccess" | "reason" | "failingSince">
+
+const healthMessageOf = (health: DeviceHealth): DeviceHealthMessage => ({
+  status: health.status,
+  ...(health.lastSuccess === undefined ? {} : { lastSuccess: health.lastSuccess }),
+  ...(health.reason === undefined ? {} : { reason: health.reason }),
+  ...(health.failingSince === undefined ? {} : { failingSince: health.failingSince })
+})
+
 export const onlinePayload = (registry: HealthRegistry, since: number, now: number, host?: HostHealth): string =>
   JSON.stringify({
     status: "online",
     since,
     ts: now,
-    devices: Object.fromEntries(registry.devices),
+    devices: Object.fromEntries(Array.from(registry.devices, ([id, health]) => [id, healthMessageOf(health)])),
     ...(host === undefined ? {} : { host })
   } satisfies OnlineMessage)
 

@@ -22,6 +22,7 @@ import {
 } from "@ot-gateway/api"
 import type { History } from "@ot-gateway/history"
 import { configView } from "./ConfigView.ts"
+import { GatewayEvents } from "./Events.ts"
 import type { HostSnapshot } from "./Host.ts"
 import { pointCatalog } from "./PointCatalog.ts"
 import {
@@ -92,6 +93,8 @@ export interface StatusState {
   readonly reads: HistorySink
   /** Note a connect to the broker: when, and what the broker allowed. */
   readonly recordBrokerConnection: (at: number, connection: BrokerConnection) => void
+  /** Note a lost connection or a failed dial: since when the broker is away (the first of an outage), and why. */
+  readonly recordBrokerFailure: (at: number, error: string) => void
   readonly recordCommand: (
     at: number,
     command: { readonly device: string; readonly point: string },
@@ -129,6 +132,7 @@ export const makeStatusState = (
   const droppedTopics = new Set<string>()
   const commands: Array<CommandStatus> = []
   let broker: { readonly at: number; readonly connection: BrokerConnection } | undefined
+  let brokerDown: { readonly since: number; readonly error: string } | undefined
   const catalog = pointCatalog(config)
   const settings = configView(config)
   const configured = new Set(catalog.points.map((point) => `${point.device}/${point.id}`))
@@ -160,8 +164,13 @@ export const makeStatusState = (
         reads.set(`${device}/${point}`, { value, ts })
       }
     },
+    recordBrokerFailure: (at, error) => {
+      // Before the first connect the gateway has been without a broker since it started.
+      brokerDown = { since: brokerDown?.since ?? (broker === undefined ? since : at), error }
+    },
     recordBrokerConnection: (at, connection) => {
       broker = { at, connection }
+      brokerDown = undefined
     },
     recordCommand: (at, command, outcome) => {
       commands.unshift({
@@ -193,6 +202,9 @@ export const makeStatusState = (
             status: state.status,
             pollIntervalMs: device.pollIntervalMs,
             ...(state.reason === undefined ? {} : { reason: state.reason }),
+            ...(state.failingSince === undefined ? {} : { failingSince: state.failingSince }),
+            ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
+            ...(state.failures === undefined ? {} : { failures: state.failures }),
             ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
             pointCount: device.points.length,
             points:
@@ -221,6 +233,9 @@ export const makeStatusState = (
             url: config.mqtt.url,
             connected,
             ...(broker === undefined ? {} : { connectedAt: broker.at, connection: broker.connection }),
+            ...(connected || brokerDown === undefined
+              ? {}
+              : { disconnectedSince: brokerDown.since, lastError: brokerDown.error }),
             connects: total(mqttConnects.id, { outcome: "ok" }),
             failedConnects:
               total(mqttConnects.id, { outcome: "failed" }) + total(mqttConnects.id, { outcome: "rejected" }),
@@ -356,6 +371,7 @@ export const serveStatus = (
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
+    const events = yield* GatewayEvents
     const webRoot = settings.webRoot ?? defaultWebRoot
     const hasWeb = yield* fs.exists(`${webRoot}/index.html`).pipe(Effect.orElseSucceed(() => false))
     const api = HttpApiBuilder.layer(OtGatewayApi).pipe(
@@ -364,6 +380,7 @@ export const serveStatus = (
           handlers
             .handle("status", ({ query }) => state.snapshot(query.points))
             .handle("values", ({ query }) => state.values(query.points))
+            .handle("events", ({ query }) => events.log(query))
             .handle("messages", () => state.messages)
             .handle("points", () => state.points)
             .handle("config", () => state.config)

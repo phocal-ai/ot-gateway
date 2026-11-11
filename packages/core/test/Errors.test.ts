@@ -7,6 +7,13 @@ import { describeDatagramSocketError, describeSocketError } from "../src/index.t
 const refusedAt = (address: string) =>
   Object.assign(new Error(`connect ECONNREFUSED ${address}:1883`), { code: "ECONNREFUSED" })
 
+/** A failed open, as the socket reports it. */
+const open = (cause: Error) =>
+  describeSocketError(new SocketError({ reason: new SocketOpenError({ kind: "Unknown", cause }) }))
+
+/** A Node system error with the fields Node sets on it. */
+const system = (message: string, fields: Record<string, string | number>) => Object.assign(new Error(message), fields)
+
 describe("describeSocketError", () => {
   it("names a normal close instead of printing the bare code", () => {
     expect(describeSocketError(new SocketError({ reason: new SocketCloseError({ code: 1000 }) }))).toBe(
@@ -25,6 +32,24 @@ describe("describeSocketError", () => {
     expect(
       describeSocketError(new SocketError({ reason: new SocketOpenError({ kind: "Timeout", cause: undefined }) }))
     ).toBe("timed out opening the connection")
+  })
+
+  it("says in words who refused or did not answer, when Node names the address", () => {
+    expect(
+      open(system("connect ECONNREFUSED 127.0.0.1:5020", { code: "ECONNREFUSED", address: "127.0.0.1", port: 5020 }))
+    ).toBe("could not connect: connection refused by 127.0.0.1:5020")
+    expect(open(system("connect ECONNREFUSED ::1:502", { code: "ECONNREFUSED", address: "::1", port: 502 }))).toBe(
+      "could not connect: connection refused by [::1]:502"
+    )
+    expect(open(system("connect ETIMEDOUT 10.0.0.9:502", { code: "ETIMEDOUT", address: "10.0.0.9", port: 502 }))).toBe(
+      "could not connect: no answer from 10.0.0.9:502"
+    )
+    expect(open(system("connect EHOSTUNREACH 10.0.0.9:502", { code: "EHOSTUNREACH", address: "10.0.0.9" }))).toBe(
+      "could not connect: host 10.0.0.9 unreachable"
+    )
+    expect(open(system("getaddrinfo ENOTFOUND plc.local", { code: "ENOTFOUND", hostname: "plc.local" }))).toBe(
+      "could not connect: host name plc.local not found"
+    )
   })
 
   it("spells out an AggregateError, which Node uses when every address of a name refused", () => {

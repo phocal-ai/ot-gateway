@@ -27,13 +27,15 @@ import {
   runDevice,
   runHealthReporter,
   superviseDevice,
-  withMetricAttributes
+  withMetricAttributes,
+  bufferRows
 } from "@ot-gateway/core"
 import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@ot-gateway/modbus"
 import { MqttPublisher } from "@ot-gateway/mqtt"
 import { makeSimulatorDriver } from "@ot-gateway/simulator"
-import { Clock, Deferred, Effect, Exit, Layer, Schedule, Scope } from "effect"
+import { Clock, Deferred, Effect, Exit, Layer, Metric, Schedule, Scope } from "effect"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
+import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
@@ -92,7 +94,15 @@ const openBacnet = Effect.fn("openBacnet")(function* (
   const client = yield* attempt.pipe(
     Effect.tapError((error) =>
       Effect.all([
-        Effect.sync(() => bacnetDevices.forEach((device) => health.recordFailure(device.id, "connection"))),
+        Effect.map(Clock.currentTimeMillis, (at) =>
+          bacnetDevices.forEach((device) =>
+            health.recordFailure(device.id, {
+              reason: "connection",
+              message: `the gateway's BACnet/IP port ${config.bacnet.port} cannot be opened: ${error.message}`,
+              at
+            })
+          )
+        ),
         Effect.logError("could not open the BACnet/IP endpoint, trying again").pipe(
           Effect.annotateLogs({ port: config.bacnet.port, error: error.message })
         )
@@ -145,12 +155,15 @@ const runOne = (
         ),
         Effect.flatMap(run),
         Effect.scoped,
-        Effect.catchTag("DriverError", (error) => {
-          health.recordFailure(device.id, error.reason)
-          return Effect.logError("BACnet device not started").pipe(
-            Effect.annotateLogs({ device: device.id, error: error.message })
-          )
-        })
+        Effect.catchTag("DriverError", (error) =>
+          Effect.gen(function* () {
+            const at = yield* Clock.currentTimeMillis
+            health.recordFailure(device.id, { reason: error.reason, message: error.message, at })
+            yield* Effect.logError("BACnet device not started").pipe(
+              Effect.annotateLogs({ device: device.id, error: error.message })
+            )
+          })
+        )
       )
     }
   }
@@ -233,8 +246,14 @@ const northbound = (
   options: GatewayOptions,
   routing: CommandRouting | undefined,
   status: StatusState | undefined,
-  staleMeta: StaleMetaCleaner
+  staleMeta: StaleMetaCleaner,
+  events: GatewayEventsShape
 ) => {
+  // What waits in the buffer when the broker comes back, for the event.
+  const bufferedRows = Effect.map(
+    Metric.value(Metric.withAttributes(bufferRows, { site: config.site, building: config.building })),
+    (gauge) => Math.max(0, gauge.value)
+  )
   // Retain As Published, so a command published retained is seen as such even live, and refused.
   // No Local, so nothing the gateway publishes itself is ever taken for a command.
   const commandSubscriptions =
@@ -252,12 +271,17 @@ const northbound = (
     health: { topic: health.topic, online: health.online },
     // With a buffer, a value that cannot go out now is stored, so waiting for the broker would only stall reads.
     waitForConnection: config.buffer === undefined,
-    ...(status === undefined
-      ? {}
-      : {
-          onConnected: (connection) =>
-            Effect.map(Clock.currentTimeMillis, (at) => status.recordBrokerConnection(at, connection))
-        }),
+    onConnected: (connection) =>
+      Effect.gen(function* () {
+        const at = yield* Clock.currentTimeMillis
+        status?.recordBrokerConnection(at, connection)
+        events.brokerConnected(config.buffer === undefined ? undefined : yield* bufferedRows)
+      }),
+    onDisconnected: (failure) =>
+      Effect.map(Clock.currentTimeMillis, (at) => {
+        status?.recordBrokerFailure(at, failure.error)
+        events.brokerDisconnected(failure.error)
+      }),
     ...(options.network === undefined ? {} : { network: options.network }),
     subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions],
     // A `$meta` topic is never a command topic (`.../$set`), so each message has one taker.
@@ -269,7 +293,12 @@ const northbound = (
           : routing.onMessage(message)
   })
   const publisher =
-    config.buffer === undefined ? mqtt : BufferedPublisher(config.buffer, options.buffer).pipe(Layer.provide(mqtt))
+    config.buffer === undefined
+      ? mqtt
+      : BufferedPublisher(config.buffer, {
+          ...options.buffer,
+          onDrained: Effect.sync(() => events.bufferDrained())
+        }).pipe(Layer.provide(mqtt))
   const onAccepted = options.onAccepted
   if (onAccepted === undefined && status === undefined) return publisher
   return Layer.effect(
@@ -294,6 +323,10 @@ const northbound = (
 export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig, options: GatewayOptions = {}) {
   const registry = makeHealthRegistry(config.devices.map((device) => device.id))
   const startedAt = yield* Clock.currentTimeMillis
+  const events = yield* GatewayEvents
+  events.started(options.version ?? "unknown", config.devices.length)
+  // The registry lives as long as this run, so the listener needs no removal.
+  registry.onChange(events.deviceChanged)
   const host =
     options.host === undefined
       ? undefined
@@ -335,7 +368,7 @@ export const runGateway = Effect.fn("Gateway")(function* (config: GatewayConfig,
     // The BACnet/IP socket closes before the broker connection does.
     Effect.scoped,
     // Inside the metric attributes, so the broker connection's metrics carry site and building too.
-    Effect.provide(northbound(config, health, options, commands.routing, status, staleMeta)),
+    Effect.provide(northbound(config, health, options, commands.routing, status, staleMeta, events)),
     withMetricAttributes({ site: config.site, building: config.building })
   )
-})
+}, Effect.provide(gatewayEventsLayer()))

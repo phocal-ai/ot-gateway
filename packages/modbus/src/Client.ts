@@ -65,6 +65,14 @@ export interface ModbusLinkOptions {
    * Slow gateways and serial bridges drop requests sent back to back.
    */
   readonly requestGap?: Duration.Input
+  /** Where the link dials, `host:port`, so a timeout says who did not answer. */
+  readonly endpoint?: string
+}
+
+/** `3 s`, `2.5 s` or `500 ms`: a request timeout as a person reads it. */
+const timeoutText = (timeout: Duration.Input) => {
+  const millis = Duration.toMillis(Duration.fromInputUnsafe(timeout))
+  return millis < 1000 ? `${millis} ms` : `${Number((millis / 1000).toFixed(1))} s`
 }
 
 export interface ModbusClientOptions extends ModbusLinkOptions {
@@ -287,7 +295,7 @@ export const makeModbusLink = Effect.fn("makeModbusLink")(function* (
           orElse: () =>
             Effect.fail(
               new ModbusTimeout({
-                message: `no response to ${quantity} item(s) within ${Duration.format(Duration.fromInputUnsafe(requestTimeout))}`
+                message: `no reply from ${options.endpoint === undefined ? "" : `${options.endpoint} `}unit ${unitId} within ${timeoutText(requestTimeout)} (${quantity} item(s) asked)`
               })
             )
         }),

@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operations.md)) or the retained health topic `site/building/$gateway/<id>/health`: each device is `ok`, `starting` or `failing` with a reason. Then the log (`journalctl -u ot-gateway -f`): it records a problem once when it starts and once when it ends, so search for the device id. Quoted messages below are what the log says.
+Start with the status page (`http://127.0.0.1:8080`, see [operations.md](operations.md)) or the retained health topic `site/building/$gateway/<id>/health`: each device is `ok`, `starting` or `failing` with a reason. In a terminal on the gateway, `ot-gateway status` says the same, with since when and why a device fails and since when the broker is away (exit code 1 while something fails), and `ot-gateway events --since 1h` what broke, when, why and when it came back, without polling (see [What changed and when](operations.md#what-changed-and-when)). Then the log (`docker compose logs gateway --since 10m` in the gateway's folder, or `journalctl -u ot-gateway -f` under systemd): it records a problem once when it starts and once when it ends, so search for the device id. Quoted messages below are what the log says.
 
 ## The gateway does not start
 

@@ -29,6 +29,20 @@ export const printResult = (text: string) =>
 
 export const printJson = (value: unknown) => printResult(JSON.stringify(value, null, 2))
 
+const twoDigits = (value: number) => String(value).padStart(2, "0")
+
+/**
+ * A moment as the CLI prints it, in this machine's time zone: `12:18:20` on the same day as `now`, with the date
+ * before it (`2026-11-09 12:18:20`) otherwise. Never epoch milliseconds: people read these.
+ */
+export const localTime = (at: number | Date, now: number | Date = at) => {
+  const moment = new Date(at)
+  const today = new Date(now)
+  const time = `${twoDigits(moment.getHours())}:${twoDigits(moment.getMinutes())}:${twoDigits(moment.getSeconds())}`
+  if (moment.toDateString() === today.toDateString()) return time
+  return `${moment.getFullYear()}-${twoDigits(moment.getMonth() + 1)}-${twoDigits(moment.getDate())} ${time}`
+}
+
 /** The `Console` of `--json` mode: what it is asked to print goes to stderr; the rest is `base`'s own. */
 export const stderrConsole = (base: Console.Console): Console.Console => ({
   assert: (condition, ...args) => base.assert(condition, ...args),

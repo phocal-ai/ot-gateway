@@ -75,6 +75,8 @@ export interface BufferedPublisherOptions {
    * real one to make the disk fill up or lock under a running gateway.
    */
   readonly openDatabase?: typeof openDatabase
+  /** Told when the drainer has delivered every waiting row: after an outage, once the backlog is out. */
+  readonly onDrained?: Effect.Effect<void>
 }
 
 /** Messages delivered concurrently while draining; bounded by the broker's Receive Maximum anyway. */
@@ -484,6 +486,7 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
       if (!reachable) yield* Effect.sleep(retryDelay)
       else if (target !== undefined && target.pending === 0) {
         yield* Effect.logInfo("buffer drained")
+        if (options.onDrained !== undefined) yield* options.onDrained
         // Give the space back to the SD card: the file can be large after a long outage.
         yield* target.database.outbox.vacuum.pipe(
           Effect.catchTag("SqlError", (error) =>

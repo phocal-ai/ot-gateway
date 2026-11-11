@@ -206,6 +206,11 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       deviceProblem = problem
       return Effect.logWarning(message).pipe(Effect.annotateLogs(annotations))
     })
+  /** A failed cycle in the health registry: why, in the error's own words, and when. */
+  const recordFailure = (reason: HealthReason, message: string) =>
+    ctx.health === undefined
+      ? Effect.void
+      : Effect.map(Clock.currentTimeMillis, (at) => ctx.health?.recordFailure(driver.deviceId, { reason, message, at }))
   const deviceRecovered = Effect.suspend(() => {
     const was = deviceProblem
     if (was === undefined) return Effect.void
@@ -513,7 +518,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     Effect.catchTags({
       DriverError: (error) =>
         Effect.all([
-          Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, error.reason)),
+          recordFailure(error.reason, error.message),
           handling.withPermit(interruptWindows),
           deviceFailed(error.reason, "device read failed", { reason: error.reason, error: error.message }),
           Effect.annotateCurrentSpan({ "ot_gateway.outcome": "read_failed", "ot_gateway.reason": error.reason }),
@@ -529,7 +534,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         ]),
       PipelineTimeout: (error) =>
         Effect.all([
-          Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, "cycle-timeout")),
+          recordFailure("cycle-timeout", error.message),
           handling.withPermit(interruptWindows),
           deviceFailed("cycle-timeout", "polling cycle hung, abandoned it", {
             timeoutMs: error.timeoutMs,
