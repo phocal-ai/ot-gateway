@@ -733,6 +733,10 @@ describe("webBuildStale", () => {
       yield* fs.writeFileString(`${root}/src/app/page.tsx`, "export default 1")
       const hourAgo = new Date(Date.now() - 3_600_000)
       yield* fs.utimes(`${root}/src/app/page.tsx`, hourAgo, hourAgo)
+      // Writing page.tsx also moved its folder's mtime, a millisecond after index.html at times: the build is
+      // stamped explicitly after every source, so the first answer does not depend on that timing.
+      const built = new Date(Date.now() + 10_000)
+      yield* fs.utimes(`${out}/index.html`, built, built)
       expect(yield* webBuildStale(fs, out)).toBe(false)
 
       const later = new Date(Date.now() + 60_000)
