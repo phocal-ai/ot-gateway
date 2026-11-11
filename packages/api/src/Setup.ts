@@ -9,6 +9,10 @@
  * device or broker is not asked again within a moment, so a page cannot hammer a device. The broker password comes
  * from the variable the config names, as for the gateway, never from the request.
  *
+ * BACnet discovery (`/api/discover/devices`, then `/api/discover/objects` for the device picked) sends Who-Is and
+ * reads a device's object list, names, units and present values, as `ot-gateway discover` does, from a UDP socket of
+ * its own, under the same one-at-a-time rule and a deadline, and bounded in devices and objects.
+ *
  * Every one of these is a POST, so it passes the edit guard (same origin, `X-OT-Gateway: 1`, loopback or the token).
  */
 import { Schema } from "effect"
@@ -125,6 +129,82 @@ export const ImportApplied = Schema.Struct({
 })
 export type ImportApplied = typeof ImportApplied.Type
 
+/** The most devices a discovery lists for the page. */
+export const MAX_DISCOVERED_DEVICES = 200
+/** The most objects a discovery reads from one device for the page: a draft beyond that is a points list's job. */
+export const MAX_DISCOVERED_OBJECTS = 300
+/** How long a discovery listens for answers to Who-Is, in seconds: 3 by default, at most 10. */
+export const DISCOVER_SECONDS = { default: 3, max: 10 } as const
+
+/** A BACnet device that answered Who-Is. */
+export const FoundBacnetDevice = Schema.Struct({
+  instance: Schema.Number,
+  /**
+   * Where it answered from, as the config's `address` takes it (`ip` or `ip:port`). Left out for a device behind a
+   * router, and for one that more than one address answered for: then the instance does not say which host it is.
+   */
+  address: Schema.optionalKey(Schema.String),
+  /** Its object-name, when it gave one in time; printable characters only, at most 120. */
+  name: Schema.optionalKey(Schema.String),
+  /** Every other address that answered for the same instance: two devices may share it. */
+  conflicts: Schema.Array(Schema.String),
+  /** The id of the device in the running config with this instance, if there is one. */
+  configured: Schema.optionalKey(Schema.String)
+})
+export type FoundBacnetDevice = typeof FoundBacnetDevice.Type
+
+/** What a Who-Is found: the devices, whether more answered than are listed, and what to know. */
+export const DiscoveredDevices = Schema.Struct({
+  /** Where Who-Is went: the broadcast address, or the one address asked. */
+  asked: Schema.String,
+  devices: Schema.Array(FoundBacnetDevice),
+  /** More devices answered than `MAX_DISCOVERED_DEVICES`. */
+  more: Schema.Boolean,
+  /** Why none answered, or why a broadcast may not have been heard (another program holds the BACnet port). */
+  note: Schema.optionalKey(Schema.String),
+  durationMs: Schema.Number
+})
+export type DiscoveredDevices = typeof DiscoveredDevices.Type
+
+/** One object of a device, as a point to add: the id and name the config would get, its unit and its value now. */
+export const DiscoveredObject = Schema.Struct({
+  objectType: Schema.String,
+  instance: Schema.Number,
+  /** Its object-name, printable characters only; `<type> <instance>` when the device gave none. */
+  name: Schema.String,
+  /** A point id from the name, unique within the device. */
+  id: Schema.String,
+  /** QUDT, for an analog object whose units the gateway knows. */
+  unit: Schema.optionalKey(Schema.String),
+  /** Its present value, when it was read. */
+  value: Schema.optionalKey(Schema.Union([Schema.Number, Schema.Boolean])),
+  /** The running config's device for this instance has a point for it already. */
+  configured: Schema.Boolean
+})
+export type DiscoveredObject = typeof DiscoveredObject.Type
+
+/** One device's objects, read for the page to pick points from. */
+export const DiscoveredObjects = Schema.Struct({
+  instance: Schema.Number,
+  /** As the config's `address` takes it. */
+  address: Schema.String,
+  name: Schema.String,
+  /** A device id from its name, not taken in the running config. */
+  id: Schema.String,
+  /** How many objects the device lists; only the first `MAX_DISCOVERED_OBJECTS` are read. */
+  listed: Schema.Number,
+  objects: Schema.Array(DiscoveredObject),
+  durationMs: Schema.Number
+})
+export type DiscoveredObjects = typeof DiscoveredObjects.Type
+
+/** Discovery could not run, or the device did not answer: no UDP port, no answer within the deadline. */
+export class DiscoveryFailed extends Schema.TaggedError<DiscoveryFailed>()(
+  "DiscoveryFailed",
+  { message: Schema.String },
+  { httpApiStatus: 502 }
+) {}
+
 /** Another test is running, or this one asked the same device or broker a moment ago. */
 export class TestBusy extends Schema.TaggedError<TestBusy>()(
   "TestBusy",
@@ -174,6 +254,30 @@ export class SetupGroup extends HttpApiGroup.make("setup")
       }),
       success: ReadTest,
       error: [EditingDisabled, TestBusy, TestInvalid]
+    })
+  )
+  .add(
+    HttpApiEndpoint.post("discoverDevices", "/api/discover/devices", {
+      payload: Schema.Struct({
+        /** Ask this `ip` or `ip:port` only, instead of broadcasting: a device on another subnet or port. */
+        address: Schema.optionalKey(Schema.String.pipe(Schema.check(Schema.isMaxLength(64)))),
+        seconds: Schema.optionalKey(
+          Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 1, maximum: DISCOVER_SECONDS.max })))
+        )
+      }),
+      success: DiscoveredDevices,
+      error: [EditingDisabled, TestBusy, TestInvalid, DiscoveryFailed]
+    })
+  )
+  .add(
+    HttpApiEndpoint.post("discoverObjects", "/api/discover/objects", {
+      payload: Schema.Struct({
+        instance: Schema.Int.pipe(Schema.check(Schema.isBetween({ minimum: 0, maximum: 4_194_302 }))),
+        /** Where it answered: `ip` or `ip:port`, as the device list gave it. */
+        address: Schema.String.pipe(Schema.check(Schema.isMaxLength(64)))
+      }),
+      success: DiscoveredObjects,
+      error: [EditingDisabled, TestBusy, TestInvalid, DiscoveryFailed]
     })
   )
   .add(
