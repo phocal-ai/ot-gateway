@@ -186,7 +186,8 @@ export interface SeriesContext {
   readonly failures?: ReadonlyArray<Failure>
   /**
    * The point comes on change of value (BACnet COV, `PointInfo.cov`): a stretch without a read while its device
-   * answers is one without a change (cause `no-change`), not an outage.
+   * answers is one without a change (cause `no-change`), not an outage. A gap that a failure overlaps is split: the
+   * failure's part runs from the device's last good read to its recovery, the rest is no change.
    */
   readonly cov?: boolean
 }
@@ -203,13 +204,20 @@ export interface SeriesContext {
 export const explainGaps = (series: HistorySeries, context: SeriesContext = {}): ReadonlyArray<ExplainedGap> => {
   const since = context.since
   const byStart = new Map(series.buckets.map((bucket) => [bucket.t, bucket]))
-  const failed = (gap: Omit<ExplainedGap, "cause">): ExplainedGap => {
+  const failed = (gap: Omit<ExplainedGap, "cause">): ReadonlyArray<ExplainedGap> => {
     const failure = context.failures?.find(
       (each) => (each.lastReadAt ?? each.from) < gap.to && (each.to === undefined || each.to > gap.from)
     )
-    if (failure !== undefined)
-      return { ...gap, cause: { kind: "device-failing", since: failure.from, error: failure.error } }
-    return context.cov === true ? { ...gap, cause: { kind: "no-change" } } : gap
+    if (failure === undefined) return [context.cov === true ? { ...gap, cause: { kind: "no-change" } } : gap]
+    const cause: GapCause = { kind: "device-failing", since: failure.from, error: failure.error }
+    if (context.cov !== true) return [{ ...gap, cause }]
+    // On change of value, only the failure's own stretch is the failure: from the device's last good read to its
+    // recovery. Before it and after it the device answered, and the point had nothing new to say.
+    const down = Math.max(gap.from, failure.lastReadAt ?? failure.from)
+    const back = Math.min(gap.to, failure.to ?? gap.to)
+    const quiet = (from: number, to: number): ReadonlyArray<ExplainedGap> =>
+      from < to ? [{ ...gap, from, to, cause: { kind: "no-change" } }] : []
+    return [...quiet(gap.from, down), { ...gap, from: down, to: back, cause }, ...quiet(back, gap.to)]
   }
   return gapsOf(series).flatMap((empty): ReadonlyArray<ExplainedGap> => {
     const from = byStart.get(empty.from - series.stepMs)?.last ?? empty.from
@@ -217,10 +225,10 @@ export const explainGaps = (series: HistorySeries, context: SeriesContext = {}):
     const startsNext = since !== undefined && since >= empty.to && since < empty.to + series.stepMs
     const to = byStart.get(empty.to)?.first ?? (startsNext ? since : empty.to)
     const buckets = { emptyFrom: empty.from, emptyTo: empty.to }
-    if (since === undefined || since <= from || since > to) return [failed({ from, to, ...buckets })]
+    if (since === undefined || since <= from || since > to) return failed({ from, to, ...buckets })
     return [
       { from, to: since, ...buckets, cause: { kind: "gateway-start", started: since } },
-      ...(since < empty.to && since < to ? [failed({ from: since, to, ...buckets })] : [])
+      ...(since < empty.to && since < to ? failed({ from: since, to, ...buckets }) : [])
     ]
   })
 }

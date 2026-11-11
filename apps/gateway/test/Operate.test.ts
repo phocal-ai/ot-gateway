@@ -261,6 +261,9 @@ describe("events --follow", () => {
   )
 })
 
+/** A bucket of one read, at `read`. */
+const oneRead = (t: number, read: number) => ({ t, min: 1, max: 1, avg: 1, count: 1, first: read, last: read })
+
 describe("history", () => {
   const power: PointInfo = {
     device: "energy-meter",
@@ -554,11 +557,66 @@ describe("history", () => {
     expect(formatSeries(heatPump, { ...quiet, buckets: [] }, now, { cov: true }).at(-1)).toBe(
       "  no reads in this range: it comes on change of value, so no change while its device answered"
     )
-    // While its device failed, a gap is the failure's, on change of value or not.
+    // While its device failed, that stretch is the failure's; before it, the point only had nothing new.
     const failures = [{ from: at(12, 11, 30), to: at(12, 13, 0), error: "timed out" }]
-    expect(formatSeries(heatPump, quiet, now, { cov: true, failures })[2]).toBe(
-      "  12:11:00  no reads for 2 min, until 12:13:00: heat-pump failing: timed out"
+    expect(formatSeries(heatPump, quiet, now, { cov: true, failures }).slice(2, 4)).toEqual([
+      "  12:11:00  no reads for 30 s, until 12:11:30: it comes on change of value, so no change while its device answered",
+      "  12:11:30  no reads for 1 min 30 s, until 12:13:00: heat-pump failing: timed out"
+    ])
+  })
+
+  it("splits a gap of a point on change of value at the failure: no change before and after, the outage between", () => {
+    // The walk's heat pump: its compressor last changed at 18:31:43, the device's data stopped at 18:33:07 (called
+    // failing at 18:33:15), it answered again at 18:35:20, and the point came again with its first read then.
+    const { unit: _unit, ...unitless } = power
+    const compressor: PointInfo = {
+      ...unitless,
+      device: "heat-pump",
+      id: "compressor-running",
+      name: "Compressor running",
+      cov: true
+    }
+    const bucket = oneRead
+    const quiet: HistorySeries = {
+      device: "heat-pump",
+      point: "compressor-running",
+      from: at(18, 30, 0),
+      to: at(18, 37, 0),
+      stepMs: 60_000,
+      resolution: "read",
+      live: true,
+      buckets: [bucket(at(18, 31, 0), at(18, 31, 43)), bucket(at(18, 35, 0), at(18, 35, 20))]
+    }
+    const failures = [{ from: at(18, 33, 15), to: at(18, 35, 20), error: "timed out", lastReadAt: at(18, 33, 7) }]
+    const context = { cov: true, failures }
+    const gaps = seriesJson(compressor, quiet, context).gaps
+    expect(gaps.filter((gap) => gap.emptyFrom === at(18, 32, 0))).toEqual([
+      {
+        from: at(18, 31, 43),
+        to: at(18, 33, 7),
+        emptyFrom: at(18, 32, 0),
+        emptyTo: at(18, 35, 0),
+        cause: { kind: "no-change" }
+      },
+      {
+        from: at(18, 33, 7),
+        to: at(18, 35, 20),
+        emptyFrom: at(18, 32, 0),
+        emptyTo: at(18, 35, 0),
+        cause: { kind: "device-failing", since: at(18, 33, 15), error: "timed out" }
+      }
+    ])
+    const lines = formatSeries(compressor, quiet, at(18, 37, 0), context)
+    expect(lines).toContain("  18:33:07  no reads for 2 min 13 s, until 18:35:20: heat-pump failing: timed out")
+    expect(lines).toContain(
+      "  18:31:43  no reads for 1 min 24 s, until 18:33:07: it comes on change of value, so no change while its device answered"
     )
+    // A polled point keeps the whole gap as the failure's.
+    expect(seriesJson(power, quiet, { failures }).gaps.find((gap) => gap.emptyFrom === at(18, 32, 0))).toMatchObject({
+      from: at(18, 31, 43),
+      to: at(18, 35, 20),
+      cause: { kind: "device-failing" }
+    })
   })
 
   it("does not call a gap at the end of a live series unwritten: it has every read", () => {
