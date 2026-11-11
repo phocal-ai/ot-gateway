@@ -4,7 +4,8 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetPoint, Reading } from "@ot-gateway/core"
-import { Clock, Effect, Result, Stream } from "effect"
+import { makeMemoryPublisher, runDevice } from "@ot-gateway/core"
+import { Clock, Effect, Fiber, Result, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { TestClock } from "effect/testing"
 import {
@@ -57,6 +58,8 @@ const scriptedClient = () => {
   const state = {
     at: here,
     offline: false,
+    /** ReadPropertyMultiple requests sent. */
+    reads: 0,
     /** Subscriptions time out although reads are answered. */
     subscriptionsTimeOut: false,
     subscribes: [] as Array<{ readonly at: string; readonly instance: number; readonly cancel: boolean }>,
@@ -70,8 +73,9 @@ const scriptedClient = () => {
     writeProperty: () => Effect.die("not scripted"),
     readProperty: () => Effect.die("not scripted"),
     readPropertyMultiple: (_target, specifications) =>
-      Effect.suspend(() =>
-        state.offline
+      Effect.suspend(() => {
+        state.reads++
+        return state.offline
           ? Effect.fail(timeout)
           : Effect.succeed(
               specifications.map((specification) => ({
@@ -88,7 +92,7 @@ const scriptedClient = () => {
                 )
               }))
             )
-      ),
+      }),
     discover: () => Effect.succeed([]),
     locate: (instance) =>
       Effect.suspend(() =>
@@ -286,6 +290,49 @@ describe("change of value, over time", () => {
         .filter((subscribe) => subscribe.at === "10.0.0.6:47808")
       // One attempt, then the 5 s retry: not one per 1 s check.
       expect(atNewAddress).toHaveLength(1)
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("publishes a pushed point once per notification, not again from the cycle that checks the device", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const scripted = scriptedClient()
+      const driver = yield* makeBacnetDriverFromClient(deviceConfig([supplyTemp], "10.0.0.5"), scripted.client, {
+        cov: timing
+      })
+      // Polled every 5 s, every read sent, while the device notifies a change every second (as the test bench does).
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 5000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("2 seconds")
+      const readsBefore = scripted.state.reads
+      for (let second = 0; second < 10; second++) {
+        scripted.notify(20 + second)
+        yield* TestClock.adjust("1 second")
+      }
+      yield* Fiber.interrupt(fiber)
+      const values = messages
+        .filter((message) => !message.topic.endsWith("$meta"))
+        .map((message) => {
+          const payload: unknown = JSON.parse(message.payload)
+          return typeof payload === "object" && payload !== null && "value" in payload ? payload.value : undefined
+        })
+      // The first cycle's read, then each notification once: no polled copy every 5 s.
+      expect(values).toEqual([1, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29])
+      // The cycles still ask the device, so one that stopped answering is noticed within a cycle.
+      expect(scripted.state.reads - readsBefore).toBe(2)
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("fails the cycle when every point is pushed and the device stops answering", () =>
+    Effect.gen(function* () {
+      const { state, notify, poll, driver } = yield* start([supplyTemp], "10.0.0.5")
+      notify(21)
+      yield* settle
+      expect(yield* poll).toEqual([])
+      state.offline = true
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({ reason: "timeout" })
     }).pipe(Effect.scoped)
   )
 
