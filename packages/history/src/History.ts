@@ -68,7 +68,7 @@ export interface SeriesQuery {
 
 export interface History {
   readonly sink: HistorySink
-  /** A point's reads between `from` and `to` in about `buckets` buckets: from every read for buckets under a minute, else per minute. */
+  /** A point's reads between `from` and `to` in about `buckets` buckets: from every read for buckets under a minute on a range that starts within the last day, else per minute. */
   readonly series: (query: SeriesQuery) => Effect.Effect<HistorySeries, HistoryUnavailable>
 }
 
@@ -326,16 +326,17 @@ export const openHistory = (
       },
       series: (query) =>
         Effect.gen(function* () {
-          // The table follows the bucket size, not the range's age: buckets of a minute or more come from the
-          // rollups, finer ones from every read. Comparing `from` with this clock would let a browser's clock a few
-          // milliseconds off the gateway's pick the table for a 24 h chart, and on the raw side aggregate up to a
-          // day of reads per point for buckets the rollups draw the same. Rollups are merged in the same
-          // transaction as the reads, so they hold everything flushed (every 30 s); the newest bucket can lag by
-          // one flush, as the raw one does. Fine steps on a range older than a day find nothing: reads are kept
-          // for a day.
+          // Buckets of a minute or more always come from the rollups, whatever the range's age: a 24 h chart
+          // (360 s buckets) must not let a browser's clock a few milliseconds off the gateway's pick the table, nor
+          // aggregate up to a day of reads per point for buckets the rollups draw the same. Only finer buckets
+          // consult this clock: from every read while the range starts within the last day (reads are kept that
+          // long), else from the rollups at a minute step. The status page's fine ranges (15 min, 1 h) are far from
+          // that boundary. Rollups are merged in the same transaction as the reads, so they hold everything flushed
+          // (every 30 s); the newest bucket can lag by one flush, as the raw one does.
           const buckets = query.buckets ?? DEFAULT_BUCKETS
           const fineMs = stepFor(query.from, query.to, buckets, 1_000)
-          const raw = fineMs < MINUTE_MS
+          const now = yield* Clock.currentTimeMillis
+          const raw = fineMs < MINUTE_MS && query.from >= now - RAW_MS
           const stepMs = raw ? fineMs : stepFor(query.from, query.to, buckets, MINUTE_MS)
           const from = raw ? query.from : Math.floor(query.from / MINUTE_MS) * MINUTE_MS
           // A corrupt file only fails this request; the flusher or the pruner replaces it, never a reader.

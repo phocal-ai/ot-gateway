@@ -310,6 +310,28 @@ describe("which table a range is read from", () => {
       expect(tables).toEqual(["readings"])
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+
+  it.effect("reads a range from more than a day back from the rollups, even in buckets finer than a minute", () =>
+    Effect.gen(function* () {
+      const { tables, wrapStore } = tablesAsked()
+      // A write a minute, as in the retention test, so a day of virtual time stays quick.
+      const history = yield* openHistory(
+        { path: yield* tempPath, retentionDays: 7 },
+        { wrapStore, flushEveryMs: 60_000 }
+      )
+      for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
+      yield* TestClock.adjust("1 minute")
+      yield* TestClock.adjust(DAY + 3_600_000)
+      tables.length = 0
+      const series = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 240 })
+      expect(series).toMatchObject({ resolution: "minute", stepMs: 60_000 })
+      expect(series.buckets).toEqual([
+        { t: 0, min: 0, max: 59, avg: 29.5, count: 60 },
+        { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60 }
+      ])
+      expect(tables).toEqual(["minutes"])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
 })
 
 describe("a file that goes corrupt while the gateway runs", () => {

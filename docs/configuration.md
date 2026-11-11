@@ -65,7 +65,7 @@ Every read, whatever the point's publish mode, kept on the gateway for the statu
 
 Reads are written in batches every 30 s (sooner on a busy gateway), so a chart can be up to 30 s behind. Size it at about 40 bytes per read for the last day plus 50 bytes per point and minute: 200 points read every 5 s take about 150 MB for the day of reads and 15 MB per week of minutes. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
 
-`GET /api/history?device=heat-pump&point=flow-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count }`; `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Buckets shorter than a minute come from every read (kept for the last day), longer ones from the minutes.
+`GET /api/history?device=heat-pump&point=flow-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count }`; `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Buckets shorter than a minute come from every read while the range starts within the last day; otherwise the buckets come from the minutes.
 
 ## status
 
