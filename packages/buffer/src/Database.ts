@@ -24,7 +24,7 @@ import { Clock, Context, Effect, Exit, FileSystem, Layer, Option, Path, Schema, 
 import { SqlClient } from "effect/sql"
 import type { MigrationError } from "effect/sql/Migrator"
 import type { SqlError } from "effect/sql/SqlError"
-import { makeOutbox, outboxMigrations } from "./Outbox.ts"
+import { makeOutbox, outboxMigrations, withoutSpans } from "./Outbox.ts"
 import type { Outbox } from "./Outbox.ts"
 
 /** Another process (a second gateway on the same config, say) holds the outbox file. */
@@ -126,12 +126,13 @@ const openOnce = (
         MigrationError: (error: MigrationError) =>
           Effect.fail(new BufferUnusable({ path, message: `migrations failed (${error.kind}): ${error.message}` }))
       }),
+      withoutSpans,
       Effect.onExit((exit) => (Exit.isFailure(exit) ? Scope.close(scope, exit) : Effect.void))
     )
     const sql = yield* opened
     return {
       outbox: makeOutbox(sql),
-      backup: (destination: string) => Effect.asVoid(sql.backup(destination)),
+      backup: (destination: string) => Effect.asVoid(sql.backup(destination)).pipe(withoutSpans),
       identity: yield* fileIdentity(path),
       close: Scope.close(scope, Exit.void)
     }
