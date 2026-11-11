@@ -2,7 +2,7 @@
 # The ot-gateway command on a machine with Docker and no Node.js (a Raspberry Pi): it runs the CLI from the
 # gateway's image, with the current folder mounted as the working directory. Install it once, no sudo:
 #
-#   mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
+#   mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
 #
 # The image tag follows the gateway: OT_GATEWAY_TAG when set, else the tag of the running `ot-gateway` container,
 # else the default in the compose.yaml of the current folder or of ~/ot-gateway (OT_GATEWAY_HOME), else the

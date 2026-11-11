@@ -117,7 +117,7 @@ sudo apt update && sudo apt full-upgrade -y
 ```
 
 ```bash
-curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
+curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
 ```
 
 Raspberry Pi OS starts the kernel with memory limits for containers turned off, so Docker would ignore the gateway's memory cap (a leak would then fill the Pi rather than restart the gateway). Turn them on, which takes a restart:
@@ -139,7 +139,7 @@ cat /sys/fs/cgroup/cgroup.controllers      # the list must include memory
 The Pi has no Node.js, and needs none: the gateway's image is the `ot-gateway` command too. On the Pi, install the command (a short script in `~/.local/bin` that runs the image, no `sudo`) and make a folder for the gateway:
 
 ```bash
-mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
+mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 

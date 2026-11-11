@@ -140,7 +140,7 @@ Once values flow, the gateway belongs on a machine that stays on in the building
 The recommended way is the container, with Docker Compose: one image (`ghcr.io/phocal-ai/ot-gateway`, amd64 and arm64, published for releases) for an industrial PC as much as for a Raspberry Pi on the 64-bit OS.
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
 docker compose up -d
 ```
 

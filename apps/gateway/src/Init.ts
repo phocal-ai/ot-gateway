@@ -394,6 +394,8 @@ export interface NextStep {
   readonly description: string
 }
 
+const step = (command: string, description: string): NextStep => ({ command, description })
+
 /** What `init` prints after the config: the files, notes, and the next commands, as text and in `--json`. */
 export interface InitNext {
   readonly notes: ReadonlyArray<string>
@@ -422,7 +424,6 @@ export const initNext = (
   const folderPath = dirname(path)
   const name = basename(path)
   const argument = name === folderConfigName ? "" : ` ${name}`
-  const step = (command: string, description: string): NextStep => ({ command, description })
   // Without devices there is nothing to start yet: the points list comes first.
   const devices =
     config.devices.length > 0

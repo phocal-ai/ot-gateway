@@ -17,16 +17,16 @@ mkdir -p ~/ot-gateway && cd ~/ot-gateway
 `ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login and the telemetry variables commented out. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
 
 ```bash
-mkdir -p ~/.local/bin && curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
+mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
 ot-gateway init .
 ```
 
-The first line installs the command, without `sudo` ([`packaging/ot-gateway`](../packaging/ot-gateway), a short shell script). It runs the CLI from the image with the current folder mounted, on the host network so that `discover`, `watch` and `status` reach the building network and the gateway's status page, and as you, so the files it writes are yours. It takes the image tag of the running gateway, or else the one the folder's `compose.yaml` pins (or `~/ot-gateway/compose.yaml`), so the command is always the same version as the gateway, and `OT_GATEWAY_TAG=<tag> ot-gateway …` runs another. A terminal gets colors and prompts; a pipe, a script or an AI agent gets plain lines. Over `ssh pi@host 'command'` the login profile is not read, so call it as `~/.local/bin/ot-gateway`. Give `watch` a `--seconds` there: stopping the `docker` command does not stop the container. `demo`, `run` and `watch` run in containers named after them (`ot-gateway-demo`, `ot-gateway-run`, `ot-gateway-watch`), so `docker stop ot-gateway-demo` stops one left in the background, and a second one is refused while the first runs. The first run (and the first after an upgrade) pulls the image, about 460 MB, and retries a failed pull twice; a wrong tag or no access to Docker fails at once, and either way the last line names the image and Docker's reason.
+The first line installs the command, without `sudo` ([`packaging/ot-gateway`](../packaging/ot-gateway), a short shell script). `--retry-all-errors` makes curl retry a failed name lookup too, which `--retry` alone does not: a router's DNS that drops out for a few seconds would otherwise fail the install. It runs the CLI from the image with the current folder mounted, on the host network so that `discover`, `watch` and `status` reach the building network and the gateway's status page, and as you, so the files it writes are yours. It takes the image tag of the running gateway, or else the one the folder's `compose.yaml` pins (or `~/ot-gateway/compose.yaml`), so the command is always the same version as the gateway, and `OT_GATEWAY_TAG=<tag> ot-gateway …` runs another. A terminal gets colors and prompts; a pipe, a script or an AI agent gets plain lines. Over `ssh pi@host 'command'` the login profile is not read, so call it as `~/.local/bin/ot-gateway`. Give `watch` a `--seconds` there: stopping the `docker` command does not stop the container. `demo`, `run` and `watch` run in containers named after them (`ot-gateway-demo`, `ot-gateway-run`, `ot-gateway-watch`), so `docker stop ot-gateway-demo` stops one left in the background, and a second one is refused while the first runs. The first run (and the first after an upgrade) pulls the image, about 460 MB, and retries a failed pull twice; a wrong tag or no access to Docker fails at once, and either way the last line names the image and Docker's reason.
 
 Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.12.0/packaging/compose.yaml
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.12.0/packaging/compose.yaml
 ```
 
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
@@ -170,7 +170,7 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.12.0/packaging/compose.yaml && docker compose create
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.12.0/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
