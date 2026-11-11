@@ -57,7 +57,8 @@ export const HistoryChart = ({
   startedAt,
   device,
   failures,
-  cov = false
+  cov = false,
+  readGapMs
 }: {
   readonly series: HistorySeries
   readonly unit: string | undefined
@@ -71,6 +72,8 @@ export const HistoryChart = ({
   readonly failures: ReadonlyArray<Failure>
   /** The point comes on change of value (`PointInfo.cov`): a stretch without reads while its device answers is no gap. */
   readonly cov?: boolean
+  /** How far apart two reads may be before the stretch is a gap (`readGapMs` of the device's poll interval). */
+  readonly readGapMs?: number | undefined
 }) => {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | undefined>(undefined)
@@ -86,7 +89,7 @@ export const HistoryChart = ({
   const y = (value: number) =>
     margin.top + ((yMax - value) / (yMax - yMin || 1)) * (HEIGHT - margin.top - margin.bottom)
   const time = timeTicks(from, to)
-  const gaps = chartGaps(series, from, { startedAt, failures, cov })
+  const gaps = chartGaps(series, from, { startedAt, failures, cov, readGapMs })
   // On change of value the line holds across a stretch without reads (only a gap breaks it), as steps; the band of
   // each bucket's range stays where reads are.
   const runs = segments(buckets, stepMs, cov ? gaps : undefined)

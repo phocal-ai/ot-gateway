@@ -222,13 +222,14 @@ describe("alarm events", () => {
       point: "main-breaker-tripped",
       value: false,
       activeMs: 300_000,
-      afterOutage: true
+      afterOutage: true,
+      unknownMs: 93_000
     }
     expect(eventSentence(foundOn, names)).toBe(
-      "Alarm active when energy-meter answered again: Main breaker tripped on energy-meter"
+      "Alarm active when energy-meter answered again (unknown while its device had no data): Main breaker tripped on energy-meter"
     )
     expect(eventSentence(foundOff, names)).toBe(
-      "Alarm off when energy-meter answered again: Main breaker tripped on energy-meter"
+      "Alarm off when energy-meter answered again (unknown during the 1 min 33 s without data): Main breaker tripped on energy-meter"
     )
     expect(eventTone(foundOn)).toBe("neutral")
     expect(eventTone(foundOff)).toBe("neutral")

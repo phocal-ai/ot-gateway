@@ -250,6 +250,35 @@ describe("chartGaps", () => {
     ])
   })
 
+  it("finds a stretch between buckets that both have reads, as ot-gateway history does", () => {
+    // 6-minute buckets over a day: the meter down from 19:41:20 to 19:42:53 leaves both buckets with reads.
+    const wide = 360_000
+    const down = 2 * wide - 160_000
+    const back = 2 * wide + 13_000
+    const day = {
+      device: "energy-meter",
+      point: "power",
+      from: 0,
+      to: 5 * wide,
+      stepMs: wide,
+      resolution: "minute" as const,
+      buckets: [0, wide, 2 * wide, 3 * wide, 4 * wide].map((t) => ({
+        ...bucket(t),
+        first: t === 2 * wide ? back : t,
+        last: t === wide ? down : t + wide - 5_000
+      }))
+    }
+    expect(chartGaps(day, 0)).toEqual([])
+    expect(
+      chartGaps(day, 0, { readGapMs: 30_000, failures: [{ from: down + 15_000, to: back, lastReadAt: down }] })
+    ).toEqual([{ from: down, to: back, cause: { kind: "device-failing" } }])
+    expect(chartGaps(day, 0, { readGapMs: 30_000 })).toEqual([{ from: down, to: back }])
+    // A point on change of value kept still between two changes, unless its device failed then.
+    expect(chartGaps(day, 0, { readGapMs: 30_000, cov: true })).toEqual([])
+    // Reads closer than the threshold are no gap.
+    expect(chartGaps(day, 0, { readGapMs: 200_000 })).toEqual([])
+  })
+
   it("has no gaps without buckets (the chart says there are no reads)", () => {
     expect(chartGaps(series([]), 0)).toEqual([])
   })

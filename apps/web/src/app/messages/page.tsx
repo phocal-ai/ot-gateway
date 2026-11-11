@@ -23,6 +23,7 @@ import {
   type MessageRange,
   matchesMessage,
   messageRanges,
+  totalsNote,
   windowSince
 } from "@/lib/messages"
 import { clockTime, fetchMessages, fetchMessagesWindow, settle, type TopicKind, topicKind } from "@/lib/status"
@@ -254,6 +255,7 @@ const MessagesPage = () => {
           )}
         </CardContent>
       </Card>
+      {found.length === 0 ? null : <p className="text-sm text-muted-foreground">{totalsNote(found)}</p>}
       <p className="text-sm text-muted-foreground">{countsNote(list, status?.since)}</p>
       {list.droppedTopics > 0 ? (
         <p className="text-sm text-muted-foreground">

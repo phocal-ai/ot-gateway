@@ -24,11 +24,18 @@ export const durationLabel = (ms: number) => {
   return `${Number((ms / 3_600_000).toFixed(1))} h`
 }
 
-/** A publish mode in a few words, as the page shows it. */
-export const publishLabel = (publish: Publish): string => {
+/**
+ * A publish mode in a few words, as the page and `ot-gateway messages` show it. A point read on change of value
+ * (`cov`, BACnet COV) that sends every read sends each change: "every read" would read as every poll.
+ */
+export const publishLabel = (publish: Publish, cov = false): string => {
   switch (publish.mode) {
     case "sample":
-      return publish.intervalMs === undefined ? "every read" : `latest, every ${durationLabel(publish.intervalMs)}`
+      return publish.intervalMs === undefined
+        ? cov
+          ? "on change of value (COV)"
+          : "every read"
+        : `latest, every ${durationLabel(publish.intervalMs)}`
     case "aggregate":
       return `aggregate every ${durationLabel(publish.intervalMs)}`
     case "change": {
@@ -89,7 +96,7 @@ export const pointCatalog = (config: GatewayConfig): PointCatalog => ({
         source,
         read: readLabel(device, cov, point),
         cov: cov.has(point.id),
-        publish: publishLabel(publishOf(device.publish, point)),
+        publish: publishLabel(publishOf(device.publish, point), cov.has(point.id)),
         ...(point.limits === undefined ? {} : { limits: point.limits }),
         ...(point.scaling === undefined ? {} : { scaling: point.scaling }),
         ...(semantics?.brick === undefined ? {} : { brick: semantics.brick }),

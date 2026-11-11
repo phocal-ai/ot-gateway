@@ -1,6 +1,34 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { MessageStatus } from "@ot-gateway/api"
-import { countKinds, countsNote, matchesMessage, messageRanges, windowSince } from "../src/lib/messages.ts"
+import { countKinds, countsNote, matchesMessage, messageRanges, totalsNote, windowSince } from "../src/lib/messages.ts"
+
+const counted = (topic: string, count: number, delivered: number): MessageStatus => ({
+  topic,
+  payload: "{}",
+  truncated: false,
+  at: 0,
+  retained: false,
+  count,
+  delivered
+})
+
+describe("message totals", () => {
+  it("add up the topics shown by kind, and say how many reached the broker", () => {
+    expect(
+      totalsNote([
+        counted("s/b/meter/power", 1_200, 1_190),
+        counted("s/b/meter/power/$meta", 1, 1),
+        counted("s/b/$gateway/main/health", 12, 12)
+      ])
+    ).toBe(
+      "1,213 messages on 3 topics: 1,200 values, 1 metadata, 12 health; 1,203 reached the broker, 10 waiting or lost."
+    )
+    expect(totalsNote([counted("s/b/meter/valve/$set/result", 1, 1)])).toBe(
+      "1 message on 1 topic: 0 values, 0 metadata, 0 health, 1 other; 1 reached the broker."
+    )
+    expect(totalsNote([])).toBeUndefined()
+  })
+})
 
 describe("message counts over a window", () => {
   it("offers since start, 15 and 60 minutes, and starts a window on the gateway's clock", () => {

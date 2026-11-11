@@ -3,7 +3,10 @@
  * working out epoch milliseconds by hand. The range ends at the gateway's own `now`, so a laptop's clock does not
  * shift it. Text is a table per point in local clock times: each bucket's average with the unit, its minimum,
  * maximum and number of reads, and a gap where no read came: before the gateway started, while the device failed
- * (from the events, with the device's error) or without a known cause. The gateway's answer holds every read up to
+ * (from the events, with the device's error) or without a known cause. A gap is also two reads further apart than a
+ * few poll intervals in buckets that both have reads (`readGaps`): a 93 s outage across a minute boundary leaves both
+ * minutes with reads. Buckets are labelled with their start, a whole multiple of their width; the gateway's start
+ * has a line of its own. The gateway's answer holds every read up to
  * its `now`, the ones not written to its file yet too. A switch or an alarm (a point whose value is true or
  * false) reads as on or off per bucket, followed by when it changed, from every read. `--json` is the API's
  * series, with each point's name and unit and the gaps named.
@@ -15,6 +18,8 @@ import {
   MAX_VALUES_PER_REQUEST,
   type PointInfo,
   preciseDuration,
+  readGapMs,
+  readGaps,
   unitLabel
 } from "@ot-gateway/api"
 import { Effect, Result, Schema } from "effect"
@@ -168,7 +173,7 @@ export type GapCause =
  * A stretch without a read, with its cause when known. `from` and `to` are the real span: from the last read before
  * it to the first read after it (from the buckets' `first` and `last`), or the range's edge when there is no read
  * on that side, or the bucket's edge from a gateway or rollup without read times. `emptyFrom` and `emptyTo` are the
- * empty buckets it covers.
+ * empty buckets it covers; both are the start of the bucket after it for a gap between two buckets with reads.
  */
 export interface ExplainedGap extends Gap {
   readonly emptyFrom: number
@@ -190,6 +195,11 @@ export interface SeriesContext {
    * failure's part runs from the device's last good read to its recovery, the rest is no change.
    */
   readonly cov?: boolean
+  /**
+   * How far apart two reads may be before the stretch between them is a gap, also when the buckets on both sides
+   * have reads (`readGapMs` of the device's poll interval). Without it, only empty buckets make gaps.
+   */
+  readonly readGapMs?: number
 }
 
 /**
@@ -200,6 +210,10 @@ export interface SeriesContext {
  * poll). The rest of a gap names the first failure of the device that overlaps it, when there is one: a failure starts
  * at its last good read when the events say so, which is where the data stopped. A gap of a point that comes on
  * change of value, with neither cause, is one without a change.
+ *
+ * With `readGapMs`, two neighbouring buckets with reads more than that apart (from the one's `last` to the other's
+ * `first`) are a gap too, explained the same way, except that a point on change of value lists only the part a
+ * failure explains: between two of its changes it simply kept still. Gaps come oldest first.
  */
 export const explainGaps = (series: HistorySeries, context: SeriesContext = {}): ReadonlyArray<ExplainedGap> => {
   const since = context.since
@@ -219,7 +233,7 @@ export const explainGaps = (series: HistorySeries, context: SeriesContext = {}):
       from < to ? [{ ...gap, from, to, cause: { kind: "no-change" } }] : []
     return [...quiet(gap.from, down), { ...gap, from: down, to: back, cause }, ...quiet(back, gap.to)]
   }
-  return gapsOf(series).flatMap((empty): ReadonlyArray<ExplainedGap> => {
+  const emptyGaps = gapsOf(series).flatMap((empty): ReadonlyArray<ExplainedGap> => {
     const from = byStart.get(empty.from - series.stepMs)?.last ?? empty.from
     // Without read times, a gap that the gateway's start ends reaches at least to the start.
     const startsNext = since !== undefined && since >= empty.to && since < empty.to + series.stepMs
@@ -231,6 +245,23 @@ export const explainGaps = (series: HistorySeries, context: SeriesContext = {}):
       ...(since < empty.to && since < to ? failed({ from: since, to, ...buckets }) : [])
     ]
   })
+  const minGapMs = context.readGapMs
+  if (minGapMs === undefined) return emptyGaps
+  // Between two of its changes a point on change of value kept still: only a failure makes that stretch a gap.
+  const explained = (gap: Omit<ExplainedGap, "cause">) =>
+    failed(gap).filter((each) => context.cov !== true || each.cause?.kind !== "no-change")
+  const between = readGaps(series.buckets, { apartMs: series.stepMs, minGapMs }).flatMap(
+    (gap): ReadonlyArray<ExplainedGap> => {
+      const buckets = { emptyFrom: gap.before, emptyTo: gap.before }
+      if (since === undefined || since <= gap.from || since > gap.to)
+        return explained({ from: gap.from, to: gap.to, ...buckets })
+      return [
+        { from: gap.from, to: since, ...buckets, cause: { kind: "gateway-start", started: since } },
+        ...(gap.to - since > minGapMs ? explained({ from: since, to: gap.to, ...buckets }) : [])
+      ]
+    }
+  )
+  return [...emptyGaps, ...between].toSorted((left, right) => left.from - right.from)
 }
 
 /** A number as the table shows it: up to three decimals, no trailing zeros. */
@@ -266,18 +297,6 @@ const changeLines = (series: HistorySeries, now: number) => {
   ]
 }
 
-/**
- * When a bucket's line says it starts: its start, or the gateway's start for the bucket the gateway started in
- * when all of its reads came after that, so no line claims a time before the gateway ran.
- */
-export const labelOf = (bucket: HistoryBucket, stepMs: number, since: number | undefined) =>
-  since !== undefined &&
-  since > bucket.t &&
-  since < bucket.t + stepMs &&
-  (bucket.first === undefined || bucket.first >= since)
-    ? since
-    : bucket.t
-
 /** The lines of one point's series: a heading, then a bucket or a gap per line, oldest first. */
 export const formatSeries = (point: PointInfo, series: HistorySeries, now: number, context: SeriesContext = {}) => {
   const unit = unitLabel(point.unit)
@@ -292,7 +311,8 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
         : bucket.count === 1
           ? `${withUnit(bucket.avg)}  (1 read)`
           : `avg ${withUnit(bucket.avg)}  min ${number(bucket.min)}  max ${number(bucket.max)}  (${bucket.count} reads)`
-    return { t: bucket.t, line: `${localTime(labelOf(bucket, series.stepMs, context.since), now)}  ${values}${soFar}` }
+    // Labelled with its start, as the heading's width says; the gateway's start, when inside one, has its own line.
+    return { t: bucket.t, line: `${localTime(bucket.t, now)}  ${values}${soFar}` }
   })
   const heading = `${point.device}/${point.id} (${point.name}${unit === "" ? "" : `, ${unit}`}): ${width(series.stepMs)} buckets ${source}`
   const live = series.live === true
@@ -344,6 +364,17 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
                 ? `no reads since then (${notYet})${failing(cause)}`
                 : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
     rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}` })
+  }
+  // A start inside the range that no gap ends (the range began in the bucket it fell in): a line of its own after that
+  // bucket.s, in time order, so the bucket.s label is its start and still no line hides when the gateway began.
+  const since = context.since
+  if (
+    since !== undefined &&
+    since >= series.from &&
+    since < series.to &&
+    !gaps.some((gap) => gap.cause?.kind === "gateway-start")
+  ) {
+    rows.push({ t: since, line: `${localTime(since, now)}  the gateway started, inside the bucket above` })
   }
   return [
     heading,
@@ -439,11 +470,13 @@ export const historyReport = Effect.fn("historyReport")(function* (
     points,
     (point) => {
       const boolean = switches.has(`${point.device}/${point.id}`)
+      const device = status.devices.find((each) => each.id === point.device)
       const context: SeriesContext = {
         boolean,
         since: status.since,
         failures: failures.get(point.device) ?? [],
-        ...(point.cov ? { cov: true } : {})
+        ...(point.cov ? { cov: true } : {}),
+        ...(device === undefined ? {} : { readGapMs: readGapMs(device.pollIntervalMs) })
       }
       return Effect.map(fetchSeries(target.url, point, range, buckets, boolean), (series) => ({
         point,
