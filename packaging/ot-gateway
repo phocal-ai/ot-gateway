@@ -39,15 +39,20 @@ fi
 [ -n "$tag" ] || tag=$release
 
 # Pull before running, so a slow or flaky registry gets retries and one line each, not Docker's layer progress.
+# A wrong tag or no access to Docker is not retried; giving up shows the last line of Docker's own error.
 if ! docker image inspect "$image:$tag" >/dev/null 2>&1; then
+  echo "ot-gateway: pulling $image:$tag (about 460 MB)..." >&2
   attempt=1
   for backoff in 2 5 ""; do
-    if [ "$attempt" -eq 1 ]; then
-      echo "ot-gateway: pulling $image:$tag (first run, about 460 MB)..." >&2
-    fi
-    docker pull -q "$image:$tag" >/dev/null 2>&1 && break
+    err=$(docker pull -q "$image:$tag" 2>&1 >/dev/null) && break
+    reason=$(printf '%s\n' "$err" | sed '/^[[:space:]]*$/d' | tail -n 1)
+    case $reason in
+      *"manifest unknown"* | *"not found"* | *"permission denied"* | *"Cannot connect to the Docker daemon"*) backoff= ;;
+    esac
     if [ -z "$backoff" ]; then
-      echo "ot-gateway: could not pull $image:$tag after $attempt attempts: the network or the registry is unreachable" >&2
+      attempts="$attempt attempts"
+      [ "$attempt" -eq 1 ] && attempts="1 attempt"
+      echo "ot-gateway: could not pull $image:$tag after $attempts: ${reason:-docker pull failed}" >&2
       exit 1
     fi
     echo "ot-gateway: pull failed, retrying in $backoff s" >&2

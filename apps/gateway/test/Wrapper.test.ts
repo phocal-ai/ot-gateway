@@ -14,7 +14,8 @@ import { afterEach } from "vitest"
 const wrapper = fileURLToPath(new URL("../../../packaging/ot-gateway", import.meta.url))
 const image = "ghcr.io/phocal-ai/ot-gateway:v9.9.9"
 
-// FAKE_IMAGE_PRESENT=1: the image is local. FAKE_PULL_FAILURES=n: the first n pulls fail (always when "always").
+// FAKE_IMAGE_PRESENT=1: the image is local. FAKE_PULL_FAILURES=n: the first n pulls fail (always when "always"),
+// ending their stderr with FAKE_PULL_ERROR.
 // FAKE_RUNNING=<name>: a running container of that name.
 const fakeDocker = [
   "#!/bin/sh",
@@ -28,8 +29,8 @@ const fakeDocker = [
   '    echo "layer progress on stdout"',
   '    echo "layer progress on stderr" >&2',
   '    case "${FAKE_PULL_FAILURES:-0}" in',
-  "      always) exit 1 ;;",
-  '      *) [ "$count" -gt "${FAKE_PULL_FAILURES:-0}" ] ;;',
+  '      always) echo "${FAKE_PULL_ERROR:-net/http: timeout awaiting response headers}" >&2; echo >&2; exit 1 ;;',
+  '      *) [ "$count" -gt "${FAKE_PULL_FAILURES:-0}" ] || { echo "${FAKE_PULL_ERROR:-net/http: timeout awaiting response headers}" >&2; echo >&2; exit 1; } ;;',
   "    esac",
   "    ;;",
   "  inspect)",
@@ -101,7 +102,7 @@ describe("packaging/ot-gateway", () => {
     ])
     expect(result.stderr).toBe(
       [
-        `ot-gateway: pulling ${image} (first run, about 460 MB)...`,
+        `ot-gateway: pulling ${image} (about 460 MB)...`,
         "ot-gateway: pull failed, retrying in 2 s",
         "ot-gateway: pull failed, retrying in 5 s",
         ""
@@ -116,9 +117,27 @@ describe("packaging/ot-gateway", () => {
     expect(result.log.filter((line) => line.startsWith("docker pull"))).toHaveLength(3)
     expect(runCall(result.log)).toBeUndefined()
     expect(result.stderr.trim().split("\n").at(-1)).toBe(
-      `ot-gateway: could not pull ${image} after 3 attempts: the network or the registry is unreachable`
+      `ot-gateway: could not pull ${image} after 3 attempts: net/http: timeout awaiting response headers`
     )
     expect(result.stderr).not.toContain("layer progress")
+  })
+
+  it.each([
+    ["a wrong tag", "Error response from daemon: manifest unknown: manifest unknown"],
+    ["no access to Docker", "permission denied while trying to connect to the Docker daemon socket"],
+    [
+      "no Docker daemon",
+      "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?"
+    ]
+  ])("fails after one pull on %s, showing Docker's line", (_, error) => {
+    const result = runWrapper(["--version"], { FAKE_PULL_FAILURES: "always", FAKE_PULL_ERROR: error })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.log.filter((line) => line.startsWith("docker pull"))).toHaveLength(1)
+    expect(result.log.some((line) => line.startsWith("sleep"))).toBe(false)
+    expect(result.stderr).toBe(
+      `ot-gateway: pulling ${image} (about 460 MB)...\not-gateway: could not pull ${image} after 1 attempt: ${error}\n`
+    )
   })
 
   it.each(["demo", "run", "watch"])("names the %s container after the command", (command) => {
