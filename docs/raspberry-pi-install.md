@@ -117,7 +117,7 @@ sudo apt update && sudo apt full-upgrade -y
 ```
 
 ```bash
-curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
+curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh && sudo usermod -aG docker "$USER"
 ```
 
 Raspberry Pi OS starts the kernel with memory limits for containers turned off, so Docker would ignore the gateway's memory cap (a leak would then fill the Pi rather than restart the gateway). Turn them on, which takes a restart:

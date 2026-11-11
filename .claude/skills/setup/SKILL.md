@@ -29,7 +29,7 @@ The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to ru
 ## 1. Preflight (no questions)
 
 - `docker compose version` says whether Docker Compose (2.24 or newer) is there. That decides step 8's default.
-- `node --version` must be 22.18 or later for `npx`. Without it, and with Docker there, use the image as `otg` (above) rather than install Node. With neither, stop and give the one install command for their OS: `fnm install 24` or `nvm install 24` if one is present; on a Raspberry Pi or Debian, Docker (`curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com | sudo sh`, docs/raspberry-pi-install.md part 5).
+- `node --version` must be 22.18 or later for `npx`. Without it, and with Docker there, use the image as `otg` (above) rather than install Node. With neither, stop and give the one install command for their OS: `fnm install 24` or `nvm install 24` if one is present; on a Raspberry Pi or Debian, Docker (`curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh`, docs/raspberry-pi-install.md part 5).
 - `otg --version` prints the version.
 
 ## 2. Demo, about 2 minutes
