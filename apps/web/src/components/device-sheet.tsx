@@ -1,7 +1,7 @@
 "use client"
 /**
  * One device, in a panel from the right edge over the Status tab: where it is, whether it answers and since when,
- * why not and what to check (lib/hints.ts), its first points with their values, and what happened to it lately
+ * why not and what to check (Hints.ts in @ot-gateway/api, shared with ot-gateway status), its first points with their values, and what happened to it lately
  * (`/api/events`). ↑/↓ (or j/k) step through the listed devices without closing it; Esc or a click beside it closes
  * it. It shares the point panel's look and its slide (`point-sheet`).
  */
@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge"
 import { formatNumber } from "@/lib/format"
 import { eventSentence, eventTone } from "@/lib/events"
 import { isAlarm, pointFreshness } from "@/lib/glance"
-import { whatToCheck } from "@/lib/hints"
+import { whatToCheck } from "@ot-gateway/api"
 import { filterToSearch, pointKey } from "@/lib/points"
 import { clockTime, every, failureLabel, freshness, protocolName, sinceClock } from "@/lib/status"
 

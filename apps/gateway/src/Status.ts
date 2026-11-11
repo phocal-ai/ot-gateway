@@ -94,6 +94,11 @@ export interface StatusState {
     message: { readonly retained: boolean; readonly at: number }
   ) => void
   /**
+   * Note that a message on `topic` reached the broker (acknowledged, or written to the connection at QoS 0), from
+   * the buffer or straight: the messages view's `delivered`. A map lookup and an increment, nothing per read more.
+   */
+  readonly recordDelivered: (topic: string) => void
+  /**
    * Every read, as the pipeline hands it to the history: the page shows a point's last read, which is never
    * older than what was published and is there before the first message of an aggregate or a change.
    */
@@ -137,7 +142,7 @@ export const makeStatusState = (
   const payloads = new Map<string, string>()
   // The last read per device/point: one entry per configured point, so bounded by the config.
   const reads = new Map<string, { readonly value: number | boolean; readonly ts: number }>()
-  const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number }>()
+  const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number; delivered: number }>()
   const droppedTopics = new Set<string>()
   const commands: Array<CommandStatus> = []
   let broker: { readonly at: number; readonly connection: BrokerConnection } | undefined
@@ -160,13 +165,22 @@ export const makeStatusState = (
         return
       }
       const previous = latest.get(topic)
-      if (previous !== undefined || latest.size < MAX_TOPICS) {
-        latest.set(topic, { payload, retained: message.retained, at: message.at, count: (previous?.count ?? 0) + 1 })
+      if (previous !== undefined) {
+        previous.payload = payload
+        previous.retained = message.retained
+        previous.at = message.at
+        previous.count++
+      } else if (latest.size < MAX_TOPICS) {
+        latest.set(topic, { payload, retained: message.retained, at: message.at, count: 1, delivered: 0 })
       } else if (droppedTopics.size < MAX_TOPICS) droppedTopics.add(topic)
       const rest = topic.slice(prefix.length)
       const slash = rest.indexOf("/")
       if (slash <= 0 || rest.indexOf("/", slash + 1) !== -1) return
       payloads.set(rest, payload)
+    },
+    recordDelivered: (topic) => {
+      const entry = latest.get(topic)
+      if (entry !== undefined) entry.delivered++
     },
     reads: {
       record: (device, point, value, ts) => {
@@ -305,7 +319,8 @@ export const makeStatusState = (
           truncated: message.payload.length > MAX_PAYLOAD,
           retained: message.retained,
           at: message.at,
-          count: message.count
+          count: message.count,
+          delivered: message.delivered
         })),
       droppedTopics: droppedTopics.size
     })),
@@ -323,6 +338,7 @@ export const switchableStatus = (initial: StatusState) => {
   let current = initial
   const state: StatusState = {
     recordPublish: (topic, payload, message) => current.recordPublish(topic, payload, message),
+    recordDelivered: (topic) => current.recordDelivered(topic),
     reads: { record: (device, point, value, ts) => current.reads.record(device, point, value, ts) },
     recordBrokerConnection: (at, connection) => current.recordBrokerConnection(at, connection),
     recordBrokerFailure: (at, error) => current.recordBrokerFailure(at, error),

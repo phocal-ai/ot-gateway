@@ -14,14 +14,14 @@ describe("GatewayEvents", () => {
       yield* TestClock.setTime(1_000)
       events.started("v1.2.3", 2)
       events.brokerConnected(undefined)
-      events.bufferDrained()
+      events.bufferDrained(66)
       const log = yield* events.log()
       expect(log).toEqual({
         now: 1_000,
         events: [
           { id: 1, at: 1_000, type: "gateway-started", version: "v1.2.3", devices: 2 },
           { id: 2, at: 1_000, type: "broker-connected" },
-          { id: 3, at: 1_000, type: "buffer-drained" }
+          { id: 3, at: 1_000, type: "buffer-drained", delivered: 66 }
         ],
         capacity: 500,
         dropped: 0
@@ -96,6 +96,8 @@ describe("GatewayEvents", () => {
       expect((yield* events.log({ since: 10_000 })).events.map((event) => event.id)).toEqual([11, 12])
       expect((yield* events.log({ after: 10 })).events.map((event) => event.id)).toEqual([11, 12])
       expect((yield* events.log({ after: 12 })).events).toEqual([])
+      // An id this run never gave: the asker followed an earlier run of the gateway, so everything kept is new to it.
+      expect((yield* events.log({ after: 40 })).events.map((event) => event.id)).toEqual([8, 9, 10, 11, 12])
     }).pipe(Effect.provide(gatewayEventsLayer(5)))
   )
 })

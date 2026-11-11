@@ -23,7 +23,7 @@ type EventInput = GatewayEvent extends infer Event
 export interface EventQuery {
   /** Unix ms: only events at or after it. */
   readonly since?: number | undefined
-  /** An event id: only the events after it. */
+  /** An event id: only the events after it. One this run never gave (the asker saw an earlier run): every event. */
   readonly after?: number | undefined
 }
 
@@ -36,8 +36,8 @@ export interface GatewayEventsShape {
   readonly brokerConnected: (buffered: number | undefined) => void
   /** The broker connection was lost or a dial failed. Only the first of an outage is an event. */
   readonly brokerDisconnected: (error: string) => void
-  /** The buffer delivered its backlog. */
-  readonly bufferDrained: () => void
+  /** The buffer delivered its backlog: `delivered` messages since the broker came back, when known. */
+  readonly bufferDrained: (delivered?: number) => void
   /** A config saved from the status page runs now; `summary` says what changed. */
   readonly configApplied: (summary: string) => void
   /** A config saved from the status page did not start, and the previous one runs again. */
@@ -95,18 +95,19 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
       brokerDownSince = monotonicMs()
       record({ type: "broker-disconnected", error })
     },
-    bufferDrained: () => record({ type: "buffer-drained" }),
+    bufferDrained: (delivered) => record({ type: "buffer-drained", ...(delivered === undefined ? {} : { delivered }) }),
     configApplied: (summary) => record({ type: "config-applied", summary }),
     configApplyFailed: (error) => record({ type: "config-apply-failed", error }),
     log: (query = {}) =>
       Effect.sync(() => {
         const kept = Math.min(total, capacity)
         const events: Array<GatewayEvent> = []
+        const after = query.after !== undefined && query.after <= total ? query.after : undefined
         for (let index = total - kept; index < total; index++) {
           const event = slots[index % capacity]
           if (event === undefined) continue
           if (query.since !== undefined && event.at < query.since) continue
-          if (query.after !== undefined && event.id <= query.after) continue
+          if (after !== undefined && event.id <= after) continue
           events.push(event)
         }
         return { now: clock.currentTimeMillisUnsafe(), events, capacity, dropped: total - kept }

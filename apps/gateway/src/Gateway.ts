@@ -28,6 +28,7 @@ import {
   runHealthReporter,
   superviseDevice,
   withMetricAttributes,
+  bufferDrained,
   bufferRows,
   configApplies
 } from "@ot-gateway/core"
@@ -261,11 +262,19 @@ const northbound = (
   events: GatewayEventsShape,
   start: StartWatch
 ) => {
+  const attributes = { site: config.site, building: config.building }
   // What waits in the buffer when the broker comes back, for the event.
-  const bufferedRows = Effect.map(
-    Metric.value(Metric.withAttributes(bufferRows, { site: config.site, building: config.building })),
-    (gauge) => Math.max(0, gauge.value)
+  const bufferedRows = Effect.map(Metric.value(Metric.withAttributes(bufferRows, attributes)), (gauge) =>
+    Math.max(0, gauge.value)
   )
+  // Messages the buffer has delivered since start; the drained event says how many since it was last empty.
+  const bufferDelivered = Effect.map(
+    Metric.value(Metric.withAttributes(bufferDrained, attributes)),
+    (counter) => counter.count
+  )
+  // The counter outlives this layer (a config applied from the page builds a new one), so the baseline is taken
+  // at this layer's first connect, before its buffer can deliver anything.
+  let deliveredWhenLastEmpty: number | undefined
   // Retain As Published, so a command published retained is seen as such even live, and refused.
   // No Local, so nothing the gateway publishes itself is ever taken for a command.
   const commandSubscriptions =
@@ -279,7 +288,7 @@ const northbound = (
             noLocal: true
           }
         ]
-  const mqtt = MqttPublisher(config.mqtt, {
+  const broker = MqttPublisher(config.mqtt, {
     health: { topic: health.topic, online: health.online },
     // With a buffer, a value that cannot go out now is stored, so waiting for the broker would only stall reads.
     waitForConnection: config.buffer === undefined,
@@ -287,6 +296,9 @@ const northbound = (
       Effect.gen(function* () {
         const at = yield* Clock.currentTimeMillis
         status?.recordBrokerConnection(at, connection)
+        if (config.buffer !== undefined && deliveredWhenLastEmpty === undefined) {
+          deliveredWhenLastEmpty = yield* bufferDelivered
+        }
         events.brokerConnected(config.buffer === undefined ? undefined : yield* bufferedRows)
         yield* Deferred.succeed(start.brokerConnected, undefined)
       }),
@@ -306,6 +318,22 @@ const northbound = (
           ? Effect.void
           : routing.onMessage(message)
   })
+  // What reached the broker, per topic, for the messages view: straight or from the buffer, the broker's own answer.
+  const mqtt =
+    status === undefined
+      ? broker
+      : Layer.effect(
+          Publisher,
+          Effect.gen(function* () {
+            const inner = yield* Publisher
+            return Publisher.of({
+              publish: (topic, payload, publishOptions) =>
+                Effect.tap(inner.publish(topic, payload, publishOptions), () =>
+                  Effect.sync(() => status.recordDelivered(topic))
+                )
+            })
+          })
+        ).pipe(Layer.provide(broker))
   const publisher =
     config.buffer === undefined
       ? mqtt
@@ -313,7 +341,10 @@ const northbound = (
           ...options.buffer,
           // A config applied from the page must open its buffer; at start the gateway runs unbuffered instead.
           requireOpen: start.requireBuffer,
-          onDrained: Effect.sync(() => events.bufferDrained())
+          onDrained: Effect.map(bufferDelivered, (total) => {
+            events.bufferDrained(deliveredWhenLastEmpty === undefined ? undefined : total - deliveredWhenLastEmpty)
+            deliveredWhenLastEmpty = total
+          })
         }).pipe(Layer.provide(mqtt))
   const onAccepted = options.onAccepted
   if (onAccepted === undefined && status === undefined) return publisher

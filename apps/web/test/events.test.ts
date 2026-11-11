@@ -66,6 +66,7 @@ describe("eventSentence", () => {
   it("leaves out what it does not know: the first connect, an empty buffer, a missing error", () => {
     expect(eventSentence({ id: 2, at: now, type: "broker-connected" })).toBe("Connected to the broker")
     expect(eventSentence({ ...brokerBack, buffered: 0 })).toBe("Broker back after 20 s")
+    expect(eventSentence({ ...drained, delivered: 66 })).toBe("Buffer emptied: 66 values from it reached the broker")
     expect(eventSentence({ ...brokerBack, buffered: 1 })).toBe(
       "Broker back after 20 s, 1 value from the buffer on its way"
     )
