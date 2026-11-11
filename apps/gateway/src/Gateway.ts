@@ -8,6 +8,7 @@ import { type BacnetClient, covTimingFor, makeBacnetDriverFromClient, makeBacnet
 import { BufferedPublisher, type BufferedPublisherOptions } from "@ot-gateway/buffer"
 import {
   commandFilter,
+  covPointIds,
   cycleTimeoutMs,
   type DriverRegistry,
   makeCommandGuard,
@@ -123,7 +124,8 @@ const runOne = (
     ...(device.publish === undefined ? {} : { publish: device.publish }),
     traceSampleRatio: sampleRatio,
     health,
-    ...(reads === undefined ? {} : { history: reads })
+    ...(reads === undefined ? {} : { history: reads }),
+    covPoints: covPointIds(device)
   }
   switch (device.protocol) {
     case "simulator":

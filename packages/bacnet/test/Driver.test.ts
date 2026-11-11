@@ -410,14 +410,15 @@ describe("BACnet change of value", () => {
     })
   )
 
-  it.live("still reads one point per cycle when every point is pushed", () =>
+  it.live("returns no polled copy of a point that is pushed, when every point is", () =>
     Effect.gen(function* () {
       const { client, config } = yield* setUp([supplyTemp])
       const driver = yield* makeBacnetDriverFromClient({ ...config, cov: true }, client, { cov: quickCov })
       yield* driver.readAll
       const { pushed } = yield* collectPushes(driver.changes)
       yield* eventually(() => pushed.length === 1)
-      expect((yield* driver.readAll).map((reading) => reading.pointId)).toEqual(["supply-temp"])
+      // The point comes by COV; a polled copy of it would go out a second time each cycle.
+      expect(yield* driver.readAll).toEqual([])
     })
   )
 

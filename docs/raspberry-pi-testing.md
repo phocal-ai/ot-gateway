@@ -55,7 +55,7 @@ On the Pi, in the gateway's folder (`~/ot-gateway`):
 1. The `ot-gateway` command from the `dev` branch, so it knows what the preview's CLI expects:
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/phocal-ai/ot-gateway/dev/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway
+   curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/dev/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway
    ```
 
 2. The gateway on the preview: set the default tag in `compose.yaml` to `dev`, then pull and restart. The command follows the running container's tag, so it runs `:dev` too (or set `OT_GATEWAY_TAG=dev` for a single command).

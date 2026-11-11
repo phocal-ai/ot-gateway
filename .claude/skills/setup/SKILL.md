@@ -48,7 +48,7 @@ Ask these together:
 1. **Devices:** "Modbus TCP", "BACnet/IP", "Both", or "None yet (simulated)".
 2. **What they have:** a points list (CSV or Excel), an EDE file from the BACnet engineering tool, device datasheets (PDF), or nothing yet.
 3. **Broker:** the URL (`mqtts://host:port`, or `mqtt://` without TLS; never with credentials in it) and the username if it needs one. The demo's broker is not for production: without a broker of their own, say so and pause here until they have one.
-4. **What to send:** "Every read (Recommended)", "15-minute aggregates" (energy reports), or "Only changes" (states, setpoints).
+4. **What to send:** "Every read (Recommended)", "15-minute aggregates" (energy reports), or "Only changes" (states, setpoints). For BACnet, tell the user that present values come by change of value (COV) where the device supports it, so they arrive when the device notifies a change, possibly more often than the interval; "Only changes" with a deadband, or `cov: false`, limits that.
 5. **Site and building names**, e.g. "Site 1, Building A". You make the slugs: `site-1`, `building-a`.
 
 ## 4. Write the folder

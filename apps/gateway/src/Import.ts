@@ -3,7 +3,7 @@
  * key it had; the result is checked with the gateway's schema before it is written, so a list that would break
  * the config changes nothing.
  */
-import { type GatewayConfig, parseConfig } from "@ot-gateway/core"
+import { type Device, type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Schema } from "effect"
 import { loadConfig } from "./LoadConfig.ts"
 import {
@@ -61,6 +61,8 @@ export const readPointsList = Effect.fn("readPointsList")(function* (path: strin
 
 export interface ImportResult {
   readonly added: ReadonlyArray<PointsListDevice>
+  /** The same devices as the gateway reads them, with every default filled in. */
+  readonly decoded: ReadonlyArray<Device>
   /** The config as written, or `undefined` for a dry run. */
   readonly config: GatewayConfig | undefined
 }
@@ -105,7 +107,8 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
       )
     )
   )
-  if (options.dryRun) return { added, config: undefined } satisfies ImportResult
+  const decoded = config.devices.slice(devices.length)
+  if (options.dryRun) return { added, decoded, config: undefined } satisfies ImportResult
   yield* fs.writeFileString(configPath, text)
-  return { added, config } satisfies ImportResult
+  return { added, decoded, config } satisfies ImportResult
 })

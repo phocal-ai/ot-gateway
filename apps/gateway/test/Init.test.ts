@@ -320,7 +320,17 @@ describe("configSummary", () => {
         broker: "mqtt://broker.lan:1883",
         buffer: "./ot-gateway-buffer.sqlite",
         warnings: [],
-        devices: [{ id: "sim-1", protocol: "simulator", points: 2, writable: 0, pollIntervalMs: 2000 }]
+        devices: [
+          {
+            id: "sim-1",
+            protocol: "simulator",
+            points: 2,
+            writable: 0,
+            pollIntervalMs: 2000,
+            covPoints: [],
+            reading: "every 2000 ms"
+          }
+        ]
       })
     })
   )

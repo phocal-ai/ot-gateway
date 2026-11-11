@@ -268,6 +268,7 @@ export const PointSheet = ({
               <Topic topic={point.topic} />
             </Fact>
             <Fact label="Source">{point.source}</Fact>
+            <Fact label="Read">{point.read}</Fact>
             <Fact label="Publishes">{point.publish}</Fact>
             {point.unit === undefined ? null : (
               <Fact label="Unit">
