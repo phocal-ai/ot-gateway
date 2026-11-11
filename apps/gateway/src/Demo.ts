@@ -12,7 +12,9 @@
 import type { GatewayConfig } from "@ot-gateway/core"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Console, Deferred, Effect, Fiber, FileSystem, Random, Schema } from "effect"
+import { networkInterfaces } from "node:os"
 import { fileURLToPath } from "node:url"
+import { lanInterfaces } from "./Init.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import { runBench } from "./TestBench.ts"
 
@@ -96,12 +98,45 @@ export const randomDemoSite = Effect.map(
 /** What the demo prints before the first message. */
 const protocolNames = { "modbus-tcp": "Modbus TCP", "bacnet-ip": "BACnet/IP", simulator: "built in" } as const
 
+const isLoopback = (address: string) => address === "localhost" || address === "::1" || address.startsWith("127.")
+
+/**
+ * Where another computer reaches a status page that listens on `listen`: nowhere on loopback, at most two of
+ * this machine's LAN addresses (`lanAddresses`) on every interface, else the one address it listens on.
+ */
+export const remoteStatusHosts = (listen: string, lanAddresses: ReadonlyArray<string>): ReadonlyArray<string> => {
+  if (isLoopback(listen)) return []
+  if (listen === "0.0.0.0" || listen === "::") return [...new Set(lanAddresses)].slice(0, 2)
+  return [listen]
+}
+
+/** Interfaces of container and VM networks: the host side of Docker's bridges, their veth pairs, libvirt's. */
+const virtualInterface = /^(docker|br-|veth|virbr|cni|flannel|cali)/
+
+/**
+ * The IPv4 LAN addresses among `interfaces` (`os.networkInterfaces()`) that another computer can reach: loopback,
+ * container bridges and Docker's default bridge network (172.17.0.0/16, which is also what a container without
+ * host networking sees as its own address) left out.
+ */
+export const reachableLanAddresses = (interfaces: Parameters<typeof lanInterfaces>[0]): ReadonlyArray<string> =>
+  lanInterfaces(interfaces)
+    .filter((lan) => !virtualInterface.test(lan.name) && !lan.address.startsWith("172.17."))
+    .map((lan) => lan.address)
+
+/** This machine's reachable LAN addresses: what `runDemo` gives the banner unless told otherwise. */
+export const lanAddresses = (): ReadonlyArray<string> => reachableLanAddresses(networkInterfaces())
+
 /**
  * What the demo prints first: what is running, then where to look, in the order a newcomer needs it, and the
- * next step towards their own building.
+ * next step towards their own building. `addresses` are this machine's LAN addresses, named next to localhost
+ * when the status page listens beyond loopback (in the container image, so on a Pi reached over SSH too).
  */
-export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
+export const demoBanner = (config: GatewayConfig, options: DemoOptions, addresses: ReadonlyArray<string> = []) => {
   const port = config.status?.port ?? 8080
+  const remoteUrls = remoteStatusHosts(options.listen, addresses).map(
+    (host) => `http://${host.includes(":") ? `[${host}]` : host}:${port}`
+  )
+  const fromElsewhere = remoteUrls.length === 0 ? "" : ` (from another computer: ${remoteUrls.join(" or ")})`
   const topics = `${config.site}/${config.building}/#`
   const devices = config.devices.map((device) => `${device.id} (${protocolNames[device.protocol]})`).join(", ")
   const remote = options.public
@@ -134,7 +169,7 @@ export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
     "",
     ...intro,
     "",
-    `  1. Look     http://localhost:${port}: every device, its latest values and the messages sent`,
+    `  1. Look     http://localhost:${port}${fromElsewhere}: every device, its latest values and the messages sent`,
     ...watchHere,
     "              topics are site/building/device/point; .../$meta describes a point, .../$gateway/<id>/health the gateway",
     `  3. Next     ${remote === undefined ? "demo --public to watch the same data from any MQTT app, or " : ""}init to describe your own building`,
@@ -144,15 +179,19 @@ export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
   ].join("\n")
 }
 
-/** Runs the demo until interrupted. `runGateway` runs the gateway for a config, as `ot-gateway run` does. */
+/**
+ * Runs the demo until interrupted. `runGateway` runs the gateway for a config, as `ot-gateway run` does;
+ * `addresses` lists this machine's LAN addresses for the banner.
+ */
 export const runDemo = Effect.fn("runDemo")(function* <E, R>(
   options: DemoOptions,
-  runGateway: (config: GatewayConfig) => Effect.Effect<void, E, R>
+  runGateway: (config: GatewayConfig) => Effect.Effect<void, E, R>,
+  addresses: () => ReadonlyArray<string> = lanAddresses
 ) {
   const fs = yield* FileSystem.FileSystem
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-demo-" })
   const config = demoConfig(yield* loadConfig(exampleConfigPath), directory, options)
-  yield* Console.log(demoBanner(config, options))
+  yield* Console.log(demoBanner(config, options, addresses()))
   if (options.public !== undefined) {
     const devices = yield* runBench(config, { only: "devices" }).pipe(Effect.forkScoped)
     return yield* Effect.raceFirst(runGateway(config), Fiber.join(devices))

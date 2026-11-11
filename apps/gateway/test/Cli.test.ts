@@ -7,6 +7,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { parseConfig, publicTestBrokers } from "@ot-gateway/core"
 import { Effect, FileSystem } from "effect"
 import { TestConsole } from "effect/testing"
+import type { NetworkInterfaceInfo } from "node:os"
 import type { BrokerReport } from "../src/Broker.ts"
 import { brokerOutcome, cliVersion, describeConfig, pointsListOutcome, runCli, toCliArgs } from "../src/Cli.ts"
 import {
@@ -16,7 +17,9 @@ import {
   pickPublicBroker,
   type PublicBroker,
   publicBrokers,
-  randomDemoSite
+  randomDemoSite,
+  reachableLanAddresses,
+  remoteStatusHosts
 } from "../src/Demo.ts"
 import { loadConfig } from "../src/LoadConfig.ts"
 
@@ -55,6 +58,25 @@ describe("toCliArgs", () => {
   })
 })
 
+/** One IPv4 address of a /24 as `os.networkInterfaces()` lists it. */
+const info = (address: string, internal = false): NetworkInterfaceInfo => ({
+  address,
+  family: "IPv4",
+  internal,
+  netmask: "255.255.255.0",
+  mac: "00:00:00:00:00:00",
+  cidr: `${address}/24`
+})
+const linkLocal: NetworkInterfaceInfo = {
+  address: "fe80::1",
+  family: "IPv6",
+  internal: false,
+  netmask: "ffff:ffff:ffff:ffff::",
+  mac: "00:00:00:00:00:00",
+  cidr: "fe80::1/64",
+  scopeid: 2
+}
+
 describe("demo", () => {
   it.effect("runs the example with the outbox in its own directory and the status page where it is asked", () =>
     Effect.gen(function* () {
@@ -71,6 +93,38 @@ describe("demo", () => {
       expect(describeConfig(config)).toContain("config ok: demo-site/building-a")
     }).pipe(Effect.provide(NodeServices.layer))
   )
+
+  it.effect("names the LAN addresses next to localhost when the status page listens beyond loopback", () =>
+    Effect.gen(function* () {
+      const example = yield* loadConfig(exampleConfigPath)
+      const everywhere = { listen: "0.0.0.0" }
+      const lans = ["192.168.0.171", "10.0.0.5", "172.17.0.1"]
+      expect(demoBanner(demoConfig(example, "/tmp/demo-x", everywhere), everywhere, lans)).toContain(
+        "http://localhost:8080 (from another computer: http://192.168.0.171:8080 or http://10.0.0.5:8080):"
+      )
+      const loopback = { listen: "127.0.0.1" }
+      const local = demoBanner(demoConfig(example, "/tmp/demo-x", loopback), loopback, lans)
+      expect(local).toContain("http://localhost:8080: every device")
+      expect(local).not.toContain("from another computer")
+      expect(remoteStatusHosts("0.0.0.0", [])).toEqual([])
+      expect(remoteStatusHosts("::", ["192.168.0.171", "192.168.0.171"])).toEqual(["192.168.0.171"])
+      expect(remoteStatusHosts("10.1.2.3", lans)).toEqual(["10.1.2.3"])
+      expect(remoteStatusHosts("localhost", lans)).toEqual([])
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it("leaves loopback, IPv6 and Docker's own networks out of the addresses another computer can reach", () => {
+    const pi = {
+      lo: [info("127.0.0.1", true)],
+      eth0: [info("192.168.0.171"), linkLocal],
+      docker0: [info("172.18.0.1")],
+      "br-1a2b": [info("172.19.0.1")],
+      wlan0: [info("10.0.0.5")]
+    }
+    expect(reachableLanAddresses(pi)).toEqual(["192.168.0.171", "10.0.0.5"])
+    // A container without host networking sees only its bridge address, which no other computer reaches.
+    expect(reachableLanAddresses({ lo: pi.lo, eth0: [info("172.17.0.2")] })).toEqual([])
+  })
 
   it.effect("publishes to a public test broker under a site and client id of its own, which the config accepts", () =>
     Effect.gen(function* () {
