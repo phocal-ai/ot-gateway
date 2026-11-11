@@ -89,7 +89,7 @@ The `ot-gateway` command (`pnpm ot-gateway …` in a checkout, which also loads 
 | `ot-gateway status [--url]`          | the running gateway's broker, buffer and devices, one line each (`--json` for agents)                                                                                                                     |
 | `ot-gateway --help`                  | every command and flag; `--log-level debug` works with all of them                                                                                                                                        |
 
-For scripts and AI agents: nothing asks without a terminal, and `--json` on `init`, `check`, `discover`, `import`, `points schema`, `broker`, `publish` and `status` prints the result as JSON on stdout, a failure too (`{"ok": false, "error": …}`, exit code 1); logs go to stderr. A mistyped command gets the one you probably meant.
+For scripts and AI agents: nothing asks without a terminal, and `--json` on `init`, `check`, `discover`, `import`, `points schema`, `broker`, `publish` and `status` prints the result as JSON on stdout, a failure too (`{"ok": false, "error": …}`, exit code 1); logs go to stderr. Without `--json`, a command that fails says why in one line on stderr, `error: …`, and exits with 1 (2 for a usage mistake). A mistyped command gets the one you probably meant.
 
 ### Working on the gateway
 

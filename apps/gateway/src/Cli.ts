@@ -643,3 +643,6 @@ export const runCli = (argv: ReadonlyArray<string>) => {
 
 /** The commands that run until stopped and log what they do, as the gateway does. */
 const longRunning = new Set(["run", "demo"])
+
+/** Whether `argv` (without node and the script) runs until stopped, the forms from before the subcommands too. */
+export const isLongRunning = (argv: ReadonlyArray<string>) => longRunning.has(toCliArgs(argv)[0] ?? "")

@@ -48,6 +48,23 @@ export const traceSampleRatio = Effect.gen(function* () {
 })
 
 /**
+ * Whether traces leave the gateway, as Effect's `OtlpTracer.layerFromConfig`
+ * decides it: `OTEL_TRACES_EXPORTER` lists `otlp`, an endpoint is set
+ * (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` or `OTEL_EXPORTER_OTLP_ENDPOINT`), and
+ * `OTEL_SDK_DISABLED` is not true. Without that, a sample ratio means nothing.
+ */
+export const tracesExported = Effect.gen(function* () {
+  const disabled = yield* Config.Boolean("OTEL_SDK_DISABLED").pipe(Config.withDefault(false))
+  const exporters = yield* Config.String("OTEL_TRACES_EXPORTER").pipe(Config.withDefault(""))
+  const endpoint = yield* Config.String("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").pipe(
+    Config.orElse(() => Config.String("OTEL_EXPORTER_OTLP_ENDPOINT")),
+    Config.withDefault("")
+  )
+  const otlp = exporters.split(",").some((exporter) => exporter.trim().toLowerCase() === "otlp")
+  return !disabled && otlp && endpoint.trim() !== ""
+})
+
+/**
  * The HTTP client the OTLP exporters send with, with a deadline on every
  * request: `OTEL_EXPORTER_OTLP_TIMEOUT` ms (default 10 s, as in the
  * OpenTelemetry spec). Effect's exporter only uses that variable for the
