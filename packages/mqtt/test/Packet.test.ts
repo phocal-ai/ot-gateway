@@ -171,6 +171,18 @@ describe("CONNECT", () => {
     const decoded = decodeConnect(v31)
     expect(Result.isFailure(decoded) && decoded.failure.message.startsWith("unsupported protocol")).toBe(true)
   })
+
+  // Found by the codec fuzz: these were decoded outside the reader's UTF-8 check and threw a TypeError.
+  it("fails, not throws, on a will payload or password that is not UTF-8", () => {
+    // 3.1.1 CONNECT: "MQTT", level 4, flags, keep alive 60, client id "g".
+    const head = [0x00, 0x04, 0x4d, 0x51, 0x54, 0x54, 0x04]
+    const willPayload = bytes(...head, 0x04, 0x00, 0x3c, 0x00, 0x01, 0x67, 0x00, 0x01, 0x74, 0x00, 0x01, 0xff)
+    const password = bytes(...head, 0xc0, 0x00, 0x3c, 0x00, 0x01, 0x67, 0x00, 0x01, 0x75, 0x00, 0x01, 0xff)
+    for (const body of [willPayload, password]) {
+      const decoded = decodeConnect(body)
+      expect(Result.isFailure(decoded) && decoded.failure.message).toBe("malformed UTF-8 string")
+    }
+  })
 })
 
 describe("MQTT 3.1.1", () => {
