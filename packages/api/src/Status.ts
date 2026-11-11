@@ -8,6 +8,7 @@ import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api"
 import { ConfigEditGroup } from "./Editor.ts"
 import { SetupGroup } from "./Setup.ts"
+import { preciseDuration } from "./SharedCause.ts"
 
 /** A point as the page shows it: its last published value, if any since the gateway started. */
 export const PointStatus = Schema.Struct({
@@ -308,6 +309,48 @@ export const Messages = Schema.Struct({
 })
 export type Messages = typeof Messages.Type
 
+/** What a topic carries: a point's value, its `$meta`, the gateway's health, a command's result, or something else. */
+export type TopicKind = "value" | "metadata" | "health" | "command result" | "other"
+
+/** The kind of a full topic (`site/building/device/point`, `…/$meta`, `…/$gateway/<id>/health`, `…/$set/result`). */
+export const topicKind = (topic: string): TopicKind => {
+  const parts = topic.split("/")
+  if (parts[2] === "$gateway" && parts[4] === "health") return "health"
+  if (parts.length === 4) return "value"
+  if (parts.length === 5 && parts[4] === "$meta") return "metadata"
+  if (parts.length === 6 && parts[4] === "$set" && parts[5] === "result") return "command result"
+  return "other"
+}
+
+/** Messages of a list of topics added up: by kind, all of them, and how many of those reached the broker. */
+export interface MessageTotals {
+  readonly values: number
+  readonly meta: number
+  readonly health: number
+  /** Command results and any other topic. */
+  readonly other: number
+  readonly all: number
+  readonly delivered: number
+}
+
+/** The totals of `messages` (`count` and `delivered` per topic), for `ot-gateway messages` and the Messages tab. */
+export const messageTotals = (messages: ReadonlyArray<MessageStatus>): MessageTotals => {
+  let values = 0
+  let meta = 0
+  let health = 0
+  let other = 0
+  let delivered = 0
+  for (const message of messages) {
+    const kind = topicKind(message.topic)
+    if (kind === "value") values += message.count
+    else if (kind === "metadata") meta += message.count
+    else if (kind === "health") health += message.count
+    else other += message.count
+    delivered += message.delivered
+  }
+  return { values, meta, health, other, all: values + meta + health + other, delivered }
+}
+
 /**
  * How far back `/api/messages/window` can count: the gateway keeps a count per topic per minute for the last hour,
  * one small ring (about a third of a kilobyte) per topic it already keeps.
@@ -398,6 +441,48 @@ export const HistorySeries = Schema.Struct({
   changes: Schema.optionalKey(Schema.Struct({ list: Schema.Array(HistoryChange), truncated: Schema.Boolean }))
 })
 export type HistorySeries = typeof HistorySeries.Type
+
+/** A stretch between two reads shorter than this is never a gap, whatever the poll interval. */
+export const READ_GAP_MIN_MS = 30_000
+
+/** How many poll intervals two reads may be apart before the stretch between them is a gap. */
+export const READ_GAP_INTERVALS = 3
+
+/**
+ * How long a point read every `pollIntervalMs` may go between two reads before the stretch is a gap: a few missed
+ * polls, and never under `READ_GAP_MIN_MS`, so a slow read or one retry is no gap.
+ */
+export const readGapMs = (pollIntervalMs: number) => Math.max(READ_GAP_INTERVALS * pollIntervalMs, READ_GAP_MIN_MS)
+
+/** A stretch between the reads of two buckets: `[from, to)`, and `before`, the `t` of the bucket after it. */
+export interface ReadGap {
+  readonly from: number
+  readonly to: number
+  readonly before: number
+}
+
+/**
+ * The gaps between buckets that both have reads, which a count of empty buckets cannot see: a 93 s outage across a
+ * minute boundary leaves both minutes with reads. Two buckets at most `apartMs` apart (from `t` to `t`; wider pairs
+ * are the caller's empty-bucket gaps) whose reads are more than `minGapMs` apart, from the `last` of the one to the
+ * `first` of the other, give `[last, first)`. Buckets without read times (older gateways and rollups) give none. A
+ * gap inside one bucket stays unseen: a bucket keeps only its first and last read.
+ */
+export const readGaps = (
+  buckets: ReadonlyArray<HistoryBucket>,
+  options: { readonly apartMs: number; readonly minGapMs: number }
+): ReadonlyArray<ReadGap> => {
+  const gaps: Array<ReadGap> = []
+  for (let index = 1; index < buckets.length; index++) {
+    const previous = buckets[index - 1]
+    const next = buckets[index]
+    if (previous === undefined || next === undefined || next.t - previous.t > options.apartMs) continue
+    if (previous.last === undefined || next.first === undefined) continue
+    if (next.first - previous.last > options.minGapMs)
+      gaps.push({ from: previous.last, to: next.first, before: next.t })
+  }
+  return gaps
+}
 
 /** The gateway keeps no history: none configured, or its file could not be opened. */
 export class HistoryUnavailable extends Schema.TaggedError<HistoryUnavailable>()(
@@ -552,7 +637,9 @@ export const AlarmRaisedEvent = Schema.Struct({
   point: Schema.String,
   value: Schema.Union([Schema.Number, Schema.Boolean]),
   first: Schema.optionalKey(Schema.Boolean),
-  afterOutage: Schema.optionalKey(Schema.Boolean)
+  afterOutage: Schema.optionalKey(Schema.Boolean),
+  /** With `afterOutage`: how long its state was unknown, from its last read before the outage to this one. */
+  unknownMs: Schema.optionalKey(Schema.Number)
 })
 
 /**
@@ -566,7 +653,9 @@ export const AlarmClearedEvent = Schema.Struct({
   point: Schema.String,
   value: Schema.Union([Schema.Number, Schema.Boolean]),
   activeMs: Schema.Number,
-  afterOutage: Schema.optionalKey(Schema.Boolean)
+  afterOutage: Schema.optionalKey(Schema.Boolean),
+  /** With `afterOutage`: how long its state was unknown, from its last read before the outage to this one. */
+  unknownMs: Schema.optionalKey(Schema.Number)
 })
 
 /**
@@ -639,7 +728,9 @@ export const CounterWentBackEvent = Schema.Struct({
 /**
  * An energy counter rose from `from` to `to` in `elapsedMs`, more than `COUNTER_RATE_FACTOR` times faster than the
  * fastest it rose over the last hour (`usualPerHour`, in its unit per hour), and by more than a minimum step: a meter
- * reset or replaced, or another device answering at its address. The value is still published.
+ * reset or replaced, or another device answering at its address. The value is still published. Without
+ * `usualPerHour`, the gateway did not know the counter's pace yet (it had just started): the rise was more than
+ * `COUNTER_EARLY_SHARE` of the reading itself within the hour, which no meter's reading does after its first day.
  */
 export const CounterJumpedEvent = Schema.Struct({
   ...eventFields,
@@ -650,11 +741,33 @@ export const CounterJumpedEvent = Schema.Struct({
   from: Schema.Number,
   to: Schema.Number,
   elapsedMs: Schema.Number,
-  usualPerHour: Schema.Number
+  usualPerHour: Schema.optionalKey(Schema.Number)
 })
 
 /** How many times faster than its fastest rise of the last hour an energy counter may rise before it is a jump. */
 export const COUNTER_RATE_FACTOR = 10
+
+/** Before its pace is known, the share of its own reading an energy counter may rise by before it is a jump. */
+export const COUNTER_EARLY_SHARE = 0.1
+
+/**
+ * How much a jump without a known pace rose, against the reading before it: "half its reading", "1.1× its reading",
+ * "12 % of its reading". The CLI and the status page say it alike.
+ */
+export const counterShareText = (from: number, to: number) => {
+  const share = (to - from) / Math.abs(from)
+  if (!Number.isFinite(share)) return "more than its whole reading"
+  return share >= 1 ? `${Number(share.toFixed(1))}× its reading` : `${Math.round(share * 100)} % of its reading`
+}
+
+/**
+ * What an alarm found changed after an outage was in between: "unknown during the 1 min
+ * 33 s without data", or "unknown while its device had no data" from a gateway that does not say how long.
+ */
+export const unknownStateText = (unknownMs: number | undefined) =>
+  unknownMs === undefined
+    ? "unknown while its device had no data"
+    : `unknown during the ${preciseDuration(unknownMs)} without data`
 
 /**
  * An event about a point's values rather than the gateway: an energy counter that went back or jumped. Kept apart

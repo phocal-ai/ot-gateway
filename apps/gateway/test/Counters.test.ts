@@ -135,12 +135,72 @@ describe("energy counters", () => {
     })
   )
 
-  it.effect("judges no rise before it knows the counter's pace", () =>
+  it.effect("judges no rise by its pace before it knows the counter's pace", () =>
     Effect.gen(function* () {
       const { counters, recorded } = yield* tracker(yield* configWith([total]))
       const last = yield* steady(counters, "energy-total", 1_000, 1)
-      yield* read(counters, "energy-total", last + 500)
+      // Far faster than 3.6 kWh/h, but under a tenth of the reading: only the pace could tell.
+      yield* read(counters, "energy-total", last + 90)
       expect(recorded).toEqual([])
+    })
+  )
+
+  it.effect("reports a rise of a large share of the reading before the pace is known", () =>
+    Effect.gen(function* () {
+      const { counters, recorded } = yield* tracker(yield* configWith([total]))
+      // 1 min 40 s after the start the meter stops answering for 93 s, and comes back with more than twice its reading.
+      yield* steady(counters, "energy-total", 12_055, 1)
+      yield* TestClock.adjust("30 seconds")
+      yield* read(counters, "energy-total", 12_055.06)
+      yield* TestClock.adjust("93 seconds")
+      yield* read(counters, "energy-total", 24_936)
+      expect(recorded).toEqual([
+        {
+          type: "counter-jumped",
+          device: "meter",
+          point: "energy-total",
+          unit: "unit:KiloW-HR",
+          from: 12_055.06,
+          to: 24_936,
+          elapsedMs: 93_000
+        }
+      ])
+    })
+  )
+
+  it.effect("lets a new meter near 0 and a rise across a long outage go before the pace is known", () =>
+    Effect.gen(function* () {
+      const { counters, recorded } = yield* tracker(
+        yield* configWith([total, counter("sub-meter", "Sub meter"), counter("wh", "In Wh", "unit:W-HR")])
+      )
+      // A meter installed today: 40 to 60 kWh is half its reading, but its reading is under 100 kWh.
+      yield* read(counters, "sub-meter", 40)
+      // 50 kWh in Wh: under the floor in its own unit too.
+      yield* read(counters, "wh", 50_000)
+      yield* read(counters, "energy-total", 1_000)
+      yield* TestClock.adjust("10 seconds")
+      yield* read(counters, "sub-meter", 60)
+      yield* read(counters, "wh", 70_000)
+      // Two hours without a read: a young meter may have counted a fifth of its reading in that time.
+      yield* TestClock.adjust("2 hours")
+      yield* read(counters, "energy-total", 1_200)
+      expect(recorded).toEqual([])
+      // 200 kWh in Wh, a third more in a minute: a jump.
+      yield* TestClock.adjust("1 minute")
+      yield* read(counters, "wh", 200_000)
+      yield* TestClock.adjust("1 minute")
+      yield* read(counters, "wh", 270_000)
+      expect(recorded).toEqual([
+        {
+          type: "counter-jumped",
+          device: "meter",
+          point: "wh",
+          unit: "unit:W-HR",
+          from: 200_000,
+          to: 270_000,
+          elapsedMs: 60_000
+        }
+      ])
     })
   )
 

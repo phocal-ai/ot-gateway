@@ -89,6 +89,13 @@ describe("counter events", () => {
     )
   })
 
+  it("say how much a counter rose against its reading when the gateway did not know its pace yet", () => {
+    const { usualPerHour: _usual, ...early } = jumped
+    expect(eventSentence({ ...early, from: 12_055, to: 24_936, elapsedMs: 93_000 }, names)).toBe(
+      "Energy counter on energy-meter jumped from 12,055 to 24,936 kWh: rose by 12,881 kWh in 1 min 33 s, 1.1× its reading: meter reset or replaced, or another device answering at its address?"
+    )
+  })
+
   it("are a warning, not an alarm, and something that happened", () => {
     expect(eventTone(wentBack)).toBe("warning")
     expect(eventTone(jumped)).toBe("warning")

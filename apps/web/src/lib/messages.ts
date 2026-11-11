@@ -1,7 +1,8 @@
 /**
  * Filtering the Messages tab: the latest message on each topic, narrowed by what a topic carries and by text.
  */
-import { MESSAGE_WINDOW_MINUTES, type Messages, type MessageStatus } from "@ot-gateway/api"
+import { MESSAGE_WINDOW_MINUTES, type Messages, type MessageStatus, messageTotals } from "@ot-gateway/api"
+import { formatNumber } from "./format"
 import { type TopicKind, topicKind } from "./status"
 
 export interface MessageFilter {
@@ -64,4 +65,23 @@ export const countKinds = (messages: ReadonlyArray<MessageStatus>): ReadonlyMap<
     counts.set(kind, (counts.get(kind) ?? 0) + 1)
   }
   return counts
+}
+
+const plural = (count: number, one: string, many: string) => `${formatNumber(count)} ${count === 1 ? one : many}`
+
+/**
+ * The topics shown added up, under the table, as `ot-gateway messages` ends: "1,204 messages on 12 topics: 1,180
+ * values, 12 metadata, 12 health; 1,204 reached the broker." Undefined without a topic.
+ */
+export const totalsNote = (messages: ReadonlyArray<MessageStatus>) => {
+  if (messages.length === 0) return undefined
+  const totals = messageTotals(messages)
+  const kinds = [
+    plural(totals.values, "value", "values"),
+    `${formatNumber(totals.meta)} metadata`,
+    `${formatNumber(totals.health)} health`,
+    ...(totals.other > 0 ? [`${formatNumber(totals.other)} other`] : [])
+  ].join(", ")
+  const lost = totals.all - totals.delivered
+  return `${plural(totals.all, "message", "messages")} on ${plural(messages.length, "topic", "topics")}: ${kinds}; ${formatNumber(totals.delivered)} reached the broker${lost > 0 ? `, ${formatNumber(lost)} waiting or lost` : ""}.`
 }

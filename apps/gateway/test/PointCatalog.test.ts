@@ -131,4 +131,10 @@ describe("point catalog", () => {
     expect(publishLabel({ mode: "sample", intervalMs: 3_600_000 })).toBe("latest, every 1 h")
     expect(publishLabel({ mode: "sample", intervalMs: 5_000 })).toBe("latest, every 5 s")
   })
+
+  it("says a point read on change of value sends each change, not every poll", () => {
+    expect(publishLabel({ mode: "sample" }, true)).toBe("on change of value (COV)")
+    expect(publishLabel({ mode: "sample", intervalMs: 60_000 }, true)).toBe("latest, every 1 min")
+    expect(publishLabel({ mode: "change", deadband: 0.5 }, true)).toBe("on change ≥ 0.5")
+  })
 })

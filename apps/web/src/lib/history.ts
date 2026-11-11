@@ -2,7 +2,7 @@
  * A point's history for the point panel: fetched from `/api/history`, and the pure parts of drawing it (ranges,
  * ticks, gaps), kept here so they are tested without a browser.
  */
-import { type HistoryBucket, type HistorySeries, OtGatewayApi } from "@ot-gateway/api"
+import { type HistoryBucket, type HistorySeries, OtGatewayApi, readGaps } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -224,6 +224,11 @@ export interface ChartGap {
  * A stretch that ends earlier, inside an older run: no cause, as the page has no events from it. Nothing before
  * `from`: an axis that starts where the gateway started (`axisFrom`) already says so in its note, so that gets no
  * band.
+ *
+ * With `readGapMs` (`readGapMs` of the device's poll interval), two buckets close enough to keep the line whole whose
+ * reads are more than that apart (the one's `last` to the other's `first`) are a stretch too, as `ot-gateway history`
+ * finds them: a 93 s outage in 6-minute buckets leaves both with reads. The line goes on across it; the band shows
+ * it. A point on change of value gets one only where a failure overlaps it, as above.
  */
 export const chartGaps = (
   series: HistorySeries,
@@ -232,11 +237,13 @@ export const chartGaps = (
     readonly startedAt?: number | undefined
     readonly failures?: ReadonlyArray<Failure>
     readonly cov?: boolean | undefined
+    readonly readGapMs?: number | undefined
   } = {}
 ): ReadonlyArray<ChartGap> => {
   const { buckets, stepMs, to } = series
   if (buckets.length === 0) return []
-  const holes: Array<{ readonly from: number; readonly to: number }> = []
+  /** `between`: a stretch between two buckets with reads that the line does not break at (`readGaps`). */
+  const holes: Array<{ readonly from: number; readonly to: number; readonly between?: true }> = []
   // Where the line breaks: two buckets (or a bucket and an edge of the axis) more than two steps apart. The hole runs
   // from the last read before it to the first read after it, when the buckets say when those came (`last`, `first`);
   // otherwise from the end of the bucket before it to the start of the bucket after it, up to a step too wide.
@@ -255,13 +262,28 @@ export const chartGaps = (
     if (previous === undefined || next === undefined || next.t - previous.t <= 2 * stepMs) continue
     holes.push({ from: Math.max(from, previous.last), to: Math.min(to, next.first) })
   }
+  const minGapMs = context.readGapMs
+  if (minGapMs !== undefined) {
+    for (const gap of readGaps(buckets, { apartMs: 2 * stepMs, minGapMs })) {
+      if (gap.to > from) holes.push({ from: Math.max(from, gap.from), to: Math.min(to, gap.to), between: true })
+    }
+    holes.sort((left, right) => left.from - right.from)
+  }
+  /** Whether what is left of a stretch after the gateway's start is long enough to be one of its own. */
+  const long = (hole: { readonly between?: true }, length: number) =>
+    length > (hole.between === true && minGapMs !== undefined ? minGapMs : 2 * stepMs)
   const startedAt = context.startedAt
-  const failed = (hole: { readonly from: number; readonly to: number }): ReadonlyArray<ChartGap> => {
+  const failed = (hole: {
+    readonly from: number
+    readonly to: number
+    readonly between?: true
+  }): ReadonlyArray<ChartGap> => {
+    const plain = { from: hole.from, to: hole.to }
     const failure = context.failures?.find(
       (each) => (each.lastReadAt ?? each.from) < hole.to && (each.to === undefined || each.to > hole.from)
     )
-    if (failure === undefined) return context.cov === true ? [] : [hole]
-    if (context.cov !== true) return [{ ...hole, cause: { kind: "device-failing" } }]
+    if (failure === undefined) return context.cov === true ? [] : [plain]
+    if (context.cov !== true) return [{ ...plain, cause: { kind: "device-failing" } }]
     const down = Math.max(hole.from, failure.lastReadAt ?? failure.from)
     const back = Math.min(hole.to, failure.to ?? hole.to)
     return down < back ? [{ from: down, to: back, cause: { kind: "device-failing" } }] : []
@@ -269,16 +291,17 @@ export const chartGaps = (
   // An axis moved up to the gateway's start has a note that says there is nothing before it: no band repeats that.
   if (startedAt !== undefined && from > series.from) {
     return holes.flatMap((hole) => {
-      const after = { from: Math.max(hole.from, startedAt), to: hole.to }
-      return after.to - after.from > 2 * stepMs ? failed(after) : []
+      const after = { ...hole, from: Math.max(hole.from, startedAt) }
+      return long(hole, after.to - after.from) ? failed(after) : []
     })
   }
   return holes.flatMap((hole): ReadonlyArray<ChartGap> => {
     if (startedAt === undefined || startedAt <= hole.from) return failed(hole)
     const restart: GapCause = { kind: "gateway-restart", at: startedAt }
-    if (hole.to <= startedAt) return [hole.to >= startedAt - stepMs ? { ...hole, cause: restart } : hole]
-    if (hole.to - startedAt <= 2 * stepMs) return [{ ...hole, cause: restart }]
-    return [{ from: hole.from, to: startedAt, cause: restart }, ...failed({ from: startedAt, to: hole.to })]
+    const plain = { from: hole.from, to: hole.to }
+    if (hole.to <= startedAt) return [hole.to >= startedAt - stepMs ? { ...plain, cause: restart } : plain]
+    if (!long(hole, hole.to - startedAt)) return [{ ...plain, cause: restart }]
+    return [{ from: hole.from, to: startedAt, cause: restart }, ...failed({ ...hole, from: startedAt })]
   })
 }
 

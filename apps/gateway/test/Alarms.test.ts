@@ -180,7 +180,9 @@ describe("alarm points", () => {
         device: "pump",
         point: "trip",
         value: 1,
-        afterOutage: true
+        afterOutage: true,
+        // From the last read at 140 s to this one.
+        unknownMs: 80_000
       })
       expect(alarms.snapshot()[0]).toMatchObject({ active: true, since: 220_000, raised: 2 })
       for (const [second, value] of [
@@ -222,7 +224,9 @@ describe("alarm points", () => {
         value: 0,
         // Seen active for a minute before the device failed.
         activeMs: 60_000,
-        afterOutage: true
+        afterOutage: true,
+        // Not seen from its last read before the failure to this one.
+        unknownMs: 120_000
       })
       expect(alarms.snapshot()[0]).toMatchObject({ active: false, raised: 1 })
       // A device that fails without the state changing records nothing when it is back.
