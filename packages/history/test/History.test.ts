@@ -5,7 +5,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { historyDisabled, historyDropped } from "@ot-gateway/core"
-import { Effect, FileSystem, Metric } from "effect"
+import { Effect, FileSystem, Metric, Tracer } from "effect"
 import { SqlError, UnknownError } from "effect/sql/SqlError"
 import { TestClock } from "effect/testing"
 import { type History, MAX_PENDING, openHistory, rollup, type Store, stepFor } from "../src/index.ts"
@@ -349,4 +349,28 @@ describe("a file that goes corrupt while the gateway runs", () => {
       expect((yield* history.series({ device: "d", point: "p", from: 0, to: 1_000 })).buckets).toHaveLength(1)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+})
+
+describe("tracing", () => {
+  it.effect("exports no span for its SQL statements, so the trace sampler is not bypassed", () => {
+    const names: Array<string> = []
+    const tracer = Tracer.make({
+      span: (options) => {
+        names.push(options.name)
+        return new Tracer.NativeSpan(options)
+      }
+    })
+    return Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      for (let second = 0; second < 3; second++) history.sink.record("d", "p", second, second * 1000)
+      yield* TestClock.adjust("5 seconds")
+      const series = yield* history
+        .series({ device: "d", point: "p", from: 0, to: 3_000 })
+        .pipe(Effect.withSpan("caller"))
+      expect(series.buckets.length).toBeGreaterThan(0)
+      // The caller's own span stays; only the SQL statements under it are gone.
+      expect(names).toContain("caller")
+      expect(names.filter((name) => name.startsWith("sql"))).toEqual([])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.withTracer(tracer))
+  })
 })

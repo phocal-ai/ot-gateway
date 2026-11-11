@@ -101,6 +101,14 @@ export const rollup = (rows: ReadonlyArray<Row>) => {
   return [...minutes.values()]
 }
 
+/**
+ * Runs `effect` without trace spans. Effect's SQL client opens a span for every statement and transaction, and the
+ * history's run every few seconds on every gateway, from fibers that no poll cycle samples, so they would reach the
+ * trace exporter whatever the sampler says. Their failures are counted in `ot_gateway_history_failures` instead. A
+ * span the caller opened around them is kept. Every statement on the history's file goes through this.
+ */
+export const withoutSpans = Effect.withTracerEnabled(false)
+
 export const makeStore = (sql: SqlClient.SqlClient) => {
   const bucketsOf = (table: "readings" | "minutes", query: BucketQuery) =>
     SqlSchema.findAll({
@@ -120,30 +128,32 @@ export const makeStore = (sql: SqlClient.SqlClient) => {
               FROM minutes
               WHERE device = ${query.device} AND point = ${query.point} AND minute >= ${query.from} AND minute < ${query.to}
               GROUP BY b ORDER BY b`
-    })(undefined)
+    })(undefined).pipe(withoutSpans)
 
   return {
     /** Store a batch of reads and merge them into the minute rollups, in one transaction. */
     write: (rows: ReadonlyArray<Row>) =>
-      sql.withTransaction(
-        Effect.gen(function* () {
-          if (!Arr.isReadonlyArrayNonEmpty(rows)) return
-          for (const chunk of Arr.chunksOf(rows, CHUNK)) {
-            yield* sql`INSERT OR REPLACE INTO readings ${sql.insert(chunk)}`
-          }
-          const minutes = rollup(rows)
-          if (!Arr.isReadonlyArrayNonEmpty(minutes)) return
-          for (const chunk of Arr.chunksOf(minutes, CHUNK)) {
-            yield* sql`
+      sql
+        .withTransaction(
+          Effect.gen(function* () {
+            if (!Arr.isReadonlyArrayNonEmpty(rows)) return
+            for (const chunk of Arr.chunksOf(rows, CHUNK)) {
+              yield* sql`INSERT OR REPLACE INTO readings ${sql.insert(chunk)}`
+            }
+            const minutes = rollup(rows)
+            if (!Arr.isReadonlyArrayNonEmpty(minutes)) return
+            for (const chunk of Arr.chunksOf(minutes, CHUNK)) {
+              yield* sql`
               INSERT INTO minutes ${sql.insert(chunk)}
               ON CONFLICT (device, point, minute) DO UPDATE SET
                 min = MIN(minutes.min, excluded.min),
                 max = MAX(minutes.max, excluded.max),
                 sum = minutes.sum + excluded.sum,
                 count = minutes.count + excluded.count`
-          }
-        })
-      ),
+            }
+          })
+        )
+        .pipe(withoutSpans),
     /** One point's buckets from every read (`readings`) or from the rollups (`minutes`). */
     buckets: bucketsOf,
     /** Delete reads older than `rawBefore` and rollups older than `minutesBefore` (Unix ms). */
@@ -152,7 +162,7 @@ export const makeStore = (sql: SqlClient.SqlClient) => {
         yield* sql`DELETE FROM readings WHERE ts < ${rawBefore}`
         yield* sql`DELETE FROM minutes WHERE minute < ${minutesBefore}`
         yield* sql`PRAGMA incremental_vacuum`
-      })
+      }).pipe(withoutSpans)
   }
 }
 

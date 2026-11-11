@@ -46,7 +46,7 @@ import {
 } from "effect"
 import { SqlClient } from "effect/sql"
 import type { SqlError } from "effect/sql/SqlError"
-import { MINUTE_MS, RAW_MS, type Row, historyMigrations, makeStore, type Store } from "./Store.ts"
+import { MINUTE_MS, RAW_MS, type Row, historyMigrations, makeStore, type Store, withoutSpans } from "./Store.ts"
 
 /** Reads waiting for the next write, at most; about 200 points read every second for a minute and a half. */
 export const MAX_PENDING = 20_000
@@ -117,7 +117,8 @@ const openStore = (path: string, scope: Scope.Scope) =>
     Effect.catchTags({
       SqlError: (error) => Effect.fail({ corrupt: isCorrupt(error), message: error.message }),
       MigrationError: (error) => Effect.fail({ corrupt: true, message: `migrations failed: ${error.message}` })
-    })
+    }),
+    withoutSpans
   )
 
 /** A store and what closes it, so that it can be replaced before the history's own scope ends. */
