@@ -15,12 +15,15 @@
  * - all alarm points together list at most `ALARM_EVENTS_PER_GATEWAY` events in 15 minutes, so many points flapping
  *   at once cannot push the devices' failures out of the ring either. A point over that budget counts its changes
  *   as unlisted and settles like a flapping one.
- * `raised` in the status counts every raise in the window, listed or not, and so do the metrics.
+ * `raised` in the status counts every raise in the window, listed or not, and so do the metrics. The flapping and
+ *   settled events, and the status while a point flaps, carry its `pattern` from its last 16 changes: how long it
+ *   stays on and off on average, raised how often over how long ("on 30 s, off 30 s, 6 times in 6 min"), so the
+ *   changes that are not listed are still described.
  *
  * Windows and durations run on the monotonic clock (NTP steps the wall clock of a Pi); `since` is the read's own
  * wall-clock time, as every timestamp the gateway shows.
  */
-import { ALARM_SETTLE_MS, ALARM_WINDOW_MS, type AlarmStatus } from "@ot-gateway/api"
+import { ALARM_SETTLE_MS, ALARM_WINDOW_MS, type AlarmPattern, type AlarmStatus } from "@ot-gateway/api"
 import {
   alarmChanges,
   alarmsActive,
@@ -75,6 +78,57 @@ const makeWindowCount = () => {
 }
 type WindowCount = ReturnType<typeof makeWindowCount>
 
+/** Changes each alarm point remembers for its pattern: eight on and off cycles. */
+export const PATTERN_CHANGES = 16
+
+/** The last `PATTERN_CHANGES` changes of a point, in fixed memory: when (monotonic ms) and to which state. */
+const makeChangeRing = () => {
+  const times = new Float64Array(PATTERN_CHANGES)
+  const states = new Uint8Array(PATTERN_CHANGES)
+  let total = 0
+  return {
+    add: (atMs: number, active: boolean) => {
+      times[total % PATTERN_CHANGES] = atMs
+      states[total % PATTERN_CHANGES] = active ? 1 : 0
+      total++
+    },
+    /**
+     * The pattern of the changes kept, up to `nowMs`: the average of each closed stretch on and off (from one
+     * change to the next), and the raises since the oldest change kept. Undefined with fewer than two changes.
+     */
+    pattern: (nowMs: number): AlarmPattern | undefined => {
+      const kept = Math.min(total, PATTERN_CHANGES)
+      if (kept < 2) return undefined
+      const first = total - kept
+      let onMs = 0
+      let onCount = 0
+      let offMs = 0
+      let offCount = 0
+      let raised = 0
+      for (let index = first; index < total; index++) {
+        const active = states[index % PATTERN_CHANGES] === 1
+        if (active) raised++
+        if (index + 1 >= total) continue
+        const span = (times[(index + 1) % PATTERN_CHANGES] ?? 0) - (times[index % PATTERN_CHANGES] ?? 0)
+        if (active) {
+          onMs += span
+          onCount++
+        } else {
+          offMs += span
+          offCount++
+        }
+      }
+      return {
+        ...(onCount === 0 ? {} : { onMs: Math.round(onMs / onCount) }),
+        ...(offCount === 0 ? {} : { offMs: Math.round(offMs / offCount) }),
+        raised,
+        overMs: nowMs - (times[first % PATTERN_CHANGES] ?? nowMs)
+      }
+    }
+  }
+}
+type ChangeRing = ReturnType<typeof makeChangeRing>
+
 /** What the tracker keeps of one alarm point. */
 interface AlarmPoint {
   readonly device: string
@@ -88,6 +142,8 @@ interface AlarmPoint {
   changedAt: number
   readonly raises: WindowCount
   readonly listed: WindowCount
+  /** The last changes, for the pattern a flapping point reports. */
+  readonly changes: ChangeRing
   /** Changes are counted, not listed, until it keeps still for `ALARM_SETTLE_MS`. */
   flapping: boolean
   unlisted: number
@@ -137,6 +193,8 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
   }
 
   const settle = (state: AlarmPoint, now: number) => {
+    // Up to its last change: the stillness since then is not part of how it flapped.
+    const pattern = state.changes.pattern(state.changedAt)
     const listed = list(
       state,
       {
@@ -145,7 +203,8 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
         point: state.point,
         active: state.active === true,
         since: state.since ?? 0,
-        unlisted: state.unlisted
+        unlisted: state.unlisted,
+        ...(pattern === undefined ? {} : { pattern })
       },
       now
     )
@@ -160,6 +219,7 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     state.active = active
     state.since = ts
     state.changedAt = now
+    state.changes.add(now, active)
     activeCount += active ? 1 : -1
     if (context !== undefined) (active ? raisedMetric : clearedMetric).updateUnsafe(1, context)
     updateGauge()
@@ -171,9 +231,16 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     if (state.listed.total(now) >= ALARM_EVENTS_PER_POINT) {
       state.flapping = true
       state.unlisted = 1
+      const pattern = state.changes.pattern(now)
       list(
         state,
-        { type: "alarm-flapping", device: state.device, point: state.point, raised: state.raises.total(now) },
+        {
+          type: "alarm-flapping",
+          device: state.device,
+          point: state.point,
+          raised: state.raises.total(now),
+          ...(pattern === undefined ? {} : { pattern })
+        },
         now
       )
       return
@@ -191,6 +258,7 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     state.active = active
     state.since = ts
     state.changedAt = now
+    state.changes.add(now, active)
     if (!active) return
     activeCount++
     updateGauge()
@@ -242,6 +310,7 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
                     changedAt: 0,
                     raises: makeWindowCount(),
                     listed: makeWindowCount(),
+                    changes: makeChangeRing(),
                     flapping: false,
                     unlisted: 0
                   }
@@ -259,15 +328,19 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     hasPoints: () => ordered.length > 0,
     snapshot: () => {
       const now = monotonicMs()
-      return ordered.map((state): AlarmStatus => ({
-        device: state.device,
-        point: state.point,
-        alarmWhen: state.alarmWhen,
-        ...(state.active === undefined ? {} : { active: state.active }),
-        ...(state.since === undefined ? {} : { since: state.since }),
-        raised: state.raises.total(now),
-        flapping: state.flapping
-      }))
+      return ordered.map((state): AlarmStatus => {
+        const pattern = state.flapping ? state.changes.pattern(state.changedAt) : undefined
+        return {
+          device: state.device,
+          point: state.point,
+          alarmWhen: state.alarmWhen,
+          ...(state.active === undefined ? {} : { active: state.active }),
+          ...(state.since === undefined ? {} : { since: state.since }),
+          raised: state.raises.total(now),
+          flapping: state.flapping,
+          ...(pattern === undefined ? {} : { pattern })
+        }
+      })
     }
   }
 }

@@ -10,6 +10,7 @@
 import {
   ALARM_SETTLE_MS,
   ALARM_WINDOW_MS,
+  type AlarmPattern,
   type AlarmStatus,
   type DeviceStatus,
   type EventLog,
@@ -193,6 +194,14 @@ const recentLines = (recent: RecentIncidents, now: number) => {
   return [...devices, ...broker]
 }
 
+/** `on 30 s, off 30 s, 6 times in 6 min`: how a flapping alarm switched. */
+export const patternText = (pattern: AlarmPattern) =>
+  [
+    ...(pattern.onMs === undefined ? [] : [`on ${ago(pattern.onMs)}`]),
+    ...(pattern.offMs === undefined ? [] : [`off ${ago(pattern.offMs)}`]),
+    `${pattern.raised} time(s) in ${ago(pattern.overMs)}`
+  ].join(", ")
+
 /**
  * The alarm lines: how many alarm points there are and how many are active, then one line for each that is active
  * or was raised in the last 15 minutes. Nothing for a config without alarm points.
@@ -213,7 +222,7 @@ const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number) => {
       const raised =
         alarm.raised === 0
           ? ""
-          : `, raised ${alarm.raised} time(s) in the last ${minutes}${alarm.flapping ? ` (flapping: its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)})` : ""}`
+          : `, raised ${alarm.raised} time(s) in the last ${minutes}${alarm.flapping ? ` (flapping${alarm.pattern === undefined ? "" : `, ${patternText(alarm.pattern)}`}: its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)})` : ""}`
       return `    ${`${alarm.device}/${alarm.point}`.padEnd(width)}  ${state}${raised}`
     })
   ]
@@ -479,9 +488,9 @@ const describeEvent = (event: GatewayEvent, now: number) => {
     case "alarm-cleared":
       return `alarm cleared after ${ago(event.activeMs)} (value ${valueText(event.value)})`
     case "alarm-flapping":
-      return `alarm raised ${event.raised} times in the last ${ago(ALARM_WINDOW_MS)}: flapping, so its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)}`
+      return `alarm raised ${event.raised} times in the last ${ago(ALARM_WINDOW_MS)}: flapping${event.pattern === undefined ? "" : ` (${patternText(event.pattern)})`}, so its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)}`
     case "alarm-settled":
-      return `alarm keeps still, ${event.active ? "ACTIVE" : "off"} since ${localTime(event.since, now)}; ${event.unlisted} change(s) were counted, not listed`
+      return `alarm keeps still, ${event.active ? "ACTIVE" : "off"} since ${localTime(event.since, now)}; ${event.unlisted} change(s) were counted, not listed${event.pattern === undefined ? "" : ` (it flapped ${patternText(event.pattern)})`}`
   }
 }
 

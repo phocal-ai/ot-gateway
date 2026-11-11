@@ -368,7 +368,15 @@ describe("events", () => {
           activeMs: 60_000
         },
         { id: 3, at: at(12, 2, 0), type: "alarm-raised", device: "pump", point: "trip", value: 1 },
-        { id: 4, at: at(12, 3, 0), type: "alarm-flapping", device: "pump", point: "trip", raised: 4 },
+        {
+          id: 4,
+          at: at(12, 3, 0),
+          type: "alarm-flapping",
+          device: "pump",
+          point: "trip",
+          raised: 4,
+          pattern: { onMs: 30_000, offMs: 30_000, raised: 4, overMs: 210_000 }
+        },
         {
           id: 5,
           at: at(12, 12, 0),
@@ -377,7 +385,8 @@ describe("events", () => {
           point: "trip",
           active: false,
           since: at(12, 7, 0),
-          unlisted: 23
+          unlisted: 23,
+          pattern: { onMs: 30_000, offMs: 90_000, raised: 8, overMs: 960_000 }
         }
       ]
     }
@@ -385,8 +394,8 @@ describe("events", () => {
       "12:00:00  ahu/filter  alarm active at its first read (value true)",
       "12:01:00  ahu/filter  alarm cleared after 60 s (value false)",
       "12:02:00  pump/trip   alarm raised (value 1)",
-      "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping, so its changes are counted, not listed, until it keeps still for 5 min",
-      "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 change(s) were counted, not listed"
+      "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping (on 30 s, off 30 s, 4 time(s) in 4 min), so its changes are counted, not listed, until it keeps still for 5 min",
+      "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 change(s) were counted, not listed (it flapped on 30 s, off 90 s, 8 time(s) in 16 min)"
     ])
   })
 })
@@ -442,7 +451,8 @@ describe("status after an outage, and its alarms", () => {
             active: false,
             since: at(12, 19, 0),
             raised: 7,
-            flapping: true
+            flapping: true,
+            pattern: { onMs: 30_000, offMs: 30_000, raised: 6, overMs: 360_000 }
           },
           { device: "pump", point: "door", alarmWhen: "on", active: false, raised: 0, flapping: false }
         ]
@@ -451,7 +461,7 @@ describe("status after an outage, and its alarms", () => {
       expect(lines.slice(-5)).toEqual([
         "  3 alarm point(s), 1 active",
         "    ahu/filter  ACTIVE since 12:17:00 (3 min), raised 1 time(s) in the last 15 min",
-        "    pump/trip   off since 12:19:00, raised 7 time(s) in the last 15 min (flapping: its changes are counted, not listed, until it keeps still for 5 min)",
+        "    pump/trip   off since 12:19:00, raised 7 time(s) in the last 15 min (flapping, on 30 s, off 30 s, 6 time(s) in 6 min: its changes are counted, not listed, until it keeps still for 5 min)",
         "  2 device(s) failed in the last 15 min (12:10:00–12:13:00: energy-meter, pv), see ot-gateway events",
         "  broker connection lost 1 time(s) in the last 15 min, see ot-gateway events"
       ])
