@@ -294,6 +294,16 @@ export const commands = Metric.counter("ot_gateway_commands", {
   incremental: true
 })
 
+/**
+ * Configs saved from the status page and applied without a restart, by `outcome`: `applied`, or `rolled-back` when
+ * the new config did not start and the previous one runs again. Each apply is also a span
+ * (`Gateway.applyConfig`), an event and a log line.
+ */
+export const configApplies = Metric.counter("ot_gateway_config_applies", {
+  description: "Configs applied without a restart, by outcome",
+  incremental: true
+})
+
 /*
  * The gateway process and the machine it runs on: one series each per gateway
  * (no `device`), sampled every 15 seconds by the gateway's host monitor. What

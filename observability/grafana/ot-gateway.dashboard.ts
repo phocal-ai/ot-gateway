@@ -445,10 +445,27 @@ timeseries(
   {
     unit: "short",
     x: 0,
-    w: 24,
+    w: 12,
     stack: true,
     description:
       "The gateway subscribes to $set topics on every connect. granted is healthy; refused means the broker denied the filter (check its ACL); missing means no SUBACK came within 10 s. The connection is kept, but no command arrives on it until the next reconnect."
+  }
+)
+timeseries(
+  "Config applies by outcome",
+  [
+    {
+      expr: `sum by (outcome) (increase(ot_gateway_config_applies_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    stack: true,
+    description:
+      "Configs saved from the status page and applied without a restart. rolled-back means the new config did not start (its buffer file did not open, the broker did not answer) and the previous one runs again; the event log and the span Gateway.applyConfig say why."
   }
 )
 y += 8

@@ -318,6 +318,24 @@ describe("chaos: buffer", () => {
     }).pipe(withMetricAttributes({ test: "unopenable" }))
   )
 
+  it.live("fails instead of running unbuffered when it must open (a config applied from the status page)", () =>
+    Effect.gen(function* () {
+      const directory = yield* tempDirectory
+      writeFileSync(`${directory}/sub`, "")
+      const scope = yield* Effect.scope
+      const error = yield* BufferedPublisher(
+        { path: `${directory}/sub/buffer.sqlite`, maxRows: 1_000 },
+        { requireOpen: true }
+      ).pipe(
+        Layer.provide(Layer.succeed(Publisher, makeInner().publisher)),
+        Layer.provide(NodeServices.layer),
+        (layer) => Layer.buildWithScope(layer, scope),
+        Effect.flip
+      )
+      expect(error._tag).toBe("BufferOpenFailed")
+    })
+  )
+
   it.live("refuses to share its file with a second gateway, quickly", () =>
     Effect.gen(function* () {
       const path = `${yield* tempDirectory}/buffer.sqlite`

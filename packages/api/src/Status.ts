@@ -6,6 +6,7 @@
  */
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api"
+import { ConfigEditGroup } from "./Editor.ts"
 
 /** A point as the page shows it: its last published value, if any since the gateway started. */
 export const PointStatus = Schema.Struct({
@@ -385,6 +386,23 @@ export const BufferDrainedEvent = Schema.Struct({
   type: Schema.Literal("buffer-drained")
 })
 
+/**
+ * A config saved from the status page was applied without a restart: `summary` says what changed in a line
+ * ("broker changed; device boiler added").
+ */
+export const ConfigAppliedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("config-applied"),
+  summary: Schema.String
+})
+
+/** A config saved from the status page did not start: `error` says why; the previous config runs again. */
+export const ConfigApplyFailedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("config-apply-failed"),
+  error: Schema.String
+})
+
 /** A transition worth knowing about later: what broke, since when, and when it came back. Never one per read. */
 export const GatewayEvent = Schema.Union([
   GatewayStartedEvent,
@@ -392,7 +410,9 @@ export const GatewayEvent = Schema.Union([
   DeviceRecoveredEvent,
   BrokerDisconnectedEvent,
   BrokerConnectedEvent,
-  BufferDrainedEvent
+  BufferDrainedEvent,
+  ConfigAppliedEvent,
+  ConfigApplyFailedEvent
 ])
 export type GatewayEvent = typeof GatewayEvent.Type
 
@@ -459,4 +479,4 @@ export class StatusGroup extends HttpApiGroup.make("status")
     })
   ) {}
 
-export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup) {}
+export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup).add(ConfigEditGroup) {}
