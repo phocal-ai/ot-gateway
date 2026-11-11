@@ -5,8 +5,15 @@ import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { type BrokerControl, makeBrokerControl, Property, serveMqtt } from "@ot-gateway/mqtt"
-import { Effect } from "effect"
-import { brokerWarnings, checkBroker, formatBrokerReport, formatPublished, publishOnce } from "../src/Broker.ts"
+import { ConfigProvider, Effect } from "effect"
+import {
+  brokerClient,
+  brokerWarnings,
+  checkBroker,
+  formatBrokerReport,
+  formatPublished,
+  publishOnce
+} from "../src/Broker.ts"
 
 /** A broker on a free port for the current scope, and a config pointing at it. */
 const brokerAndConfig = (control: BrokerControl, version: "auto" | "5" | "3.1.1" = "auto") =>
@@ -66,6 +73,31 @@ describe("ot-gateway broker", () => {
     })
   )
 
+  it.live(
+    "fails, with ok false, when its message does not come back",
+    () =>
+      Effect.gen(function* () {
+        const control = makeBrokerControl()
+        control.routeMessages = false
+        const report = yield* checkBroker(yield* brokerAndConfig(control))
+        expect(report.ok).toBe(false)
+        expect(report.roundTripMs).toBeUndefined()
+        expect(report.warnings).toEqual([expect.stringContaining("did not come back")])
+        expect(formatBrokerReport(report)).toContain("round trip: NO ANSWER")
+      }),
+    15_000
+  )
+
+  it.live("names the unset password variable and where to put it", () =>
+    Effect.gen(function* () {
+      const settings = { version: "auto", url: "mqtt://127.0.0.1:1", passwordEnv: "MQTT_PASSWORD" } as const
+      const error = yield* Effect.flip(brokerClient(settings, "check"))
+      expect(error._tag).toBe("MqttSettingsError")
+      expect(error.message).toContain("MQTT_PASSWORD is not set")
+      expect(error.message).toContain("ot-gateway.env (MQTT_PASSWORD=...)")
+    }).pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))))
+  )
+
   it("warns about what a broker withholds", () => {
     const info = {
       protocolVersion: "5",
@@ -105,6 +137,16 @@ describe("ot-gateway publish", () => {
       // QoS 0 has no PUBACK to wait for: give the broker a moment to read it.
       for (let tries = 0; control.messages.length === 0 && tries < 100; tries++) yield* Effect.sleep("10 millis")
       expect(control.messages).toMatchObject([{ topic: "s/b/test", payload: "x", qos: 0 }])
+    })
+  )
+
+  it.live("reports the QoS the broker allowed, not the one asked for", () =>
+    Effect.gen(function* () {
+      const control = makeBrokerControl()
+      control.connackProperties.set(Property.MaximumQoS, 0)
+      const sent = yield* publishOnce(yield* brokerAndConfig(control), "s/b/test", "x", { retain: false, qos: 1 })
+      expect(sent).toMatchObject({ qos: 0, requestedQos: 1 })
+      expect(formatPublished(sent)).toBe("published 1 byte(s) to s/b/test (QoS 0: the broker allows QoS 0 only)")
     })
   )
 
