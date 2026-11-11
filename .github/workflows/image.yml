@@ -16,6 +16,16 @@ on:
       # The project site is not in the image; a site-only change skips the build.
       - "!apps/site/**"
       - "pnpm-lock.yaml"
+      # Everything else the Dockerfile copies, and the wrapper its smoke test runs.
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "tsconfig.base.json"
+      - "scripts/bundle.sh"
+      - "scripts/soak.sh"
+      - "examples/**"
+      - "profiles/**"
+      - "packaging/compose.yaml"
+      - "packaging/ot-gateway"
       - ".github/workflows/image.yml"
   push:
     tags: ["v*"]
