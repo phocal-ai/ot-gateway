@@ -453,7 +453,8 @@ describe("discover --points-list", () => {
         yield* TestClock.adjust("200 millis")
       }
       const written = yield* Fiber.join(running)
-      expect(written).toEqual({ path, devices: 1, points: 2 })
+      expect(written).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: false })
+      expect(yield* fs.readDirectory(directory)).toEqual(["points.csv"])
       const list = yield* fs.readFileString(path)
       const devices = yield* devicesFromPointsList(list, ["ahu"])
       expect(devices.map((device) => device.id)).toEqual(["ventilation-2"])
@@ -464,8 +465,55 @@ describe("discover --points-list", () => {
 
       const exists = yield* Effect.flip(discoverToPointsList(config, path, network.host("10.0.0.1")))
       expect(exists._tag).toBe("DiscoverError")
-      expect(exists.message).toBe(`${path} exists; give another file name, or move it away first. Nothing was written.`)
+      expect(exists.message).toBe(
+        `${path} exists; add --append to add the devices found to it, give another file name, or move it away first. Nothing was written.`
+      )
       expect(yield* fs.readFileString(path)).toBe(list)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("with append, adds to a hand-written list and skips what it has on a second run", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      const modbus = "device;point;unit;host;register;type\nboiler;Supply temperature;°C;10.0.1.5;100;int16\n"
+      yield* fs.writeFileString(path, modbus)
+      const network = makeMemoryNetwork()
+      yield* Effect.flatMap(network.host("10.0.2.1").udp({ address: "10.0.2.1", port: 47_808 }), (socket) =>
+        serveSimulatedDevice(socket, ahu(2001))
+      )
+      const config = yield* parseConfig(
+        JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const appendOnce = Effect.gen(function* () {
+        const running = yield* discoverToPointsList(config, path, network.host("10.0.0.1"), { append: true }).pipe(
+          Effect.forkChild
+        )
+        for (let step = 0; step < 30; step++) {
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
+          yield* TestClock.adjust("200 millis")
+        }
+        return yield* Fiber.join(running)
+      })
+      expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: true })
+      const list = yield* fs.readFileString(path)
+      expect(list.split("\n")).toEqual([
+        "device;point;unit;host;register;type;device_instance;address;object_type;object_instance",
+        "boiler;Supply temperature;°C;10.0.1.5;100;int16",
+        "ventilation-2;Supply Temp;unit:DEG_C;;;;2001;10.0.2.1;analog-input;1",
+        "ventilation-2;Fan;;;;;2001;10.0.2.1;binary-output;2",
+        ""
+      ])
+      const devices = yield* devicesFromPointsList(list)
+      expect(devices.map((device) => device.id)).toEqual(["boiler", "ventilation-2"])
+      expect(yield* fs.readDirectory(directory)).toEqual(["points.csv"])
+
+      expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 0, skipped: 2, appended: true })
+      expect(yield* fs.readFileString(path)).toBe(list)
+      const errors = (yield* TestConsole.errorLines).map(String)
+      expect(errors.some((line) => line.includes("added 2 point(s), skipped 0 already in the list"))).toBe(true)
+      expect(errors.some((line) => line.includes("added 0 point(s), skipped 2 already in the list"))).toBe(true)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 

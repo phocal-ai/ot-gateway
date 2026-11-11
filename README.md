@@ -128,6 +128,7 @@ To draft BACnet points yourself, `discover` finds the devices through the config
 ```bash
 pnpm ot-gateway discover path/to/gateway.json
 pnpm ot-gateway discover --points-list points.csv   # the same as a points list: delete the rows you don't need, then import it (fails when the file exists or nothing answered)
+pnpm ot-gateway discover --points-list points.csv --append   # add them to a list you have (Modbus rows, say): its rows and separator kept, rows it has skipped
 pnpm ot-gateway discover --address 10.20.3.40:47809  # only the device at that address: another subnet without a BBMD, or another port
 ```
 

@@ -19,7 +19,7 @@ import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
+import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -177,6 +177,12 @@ const discoverCommand = Command.make(
       Flag.withDescription("Write the devices found as a points list (CSV) to this file, to trim and import"),
       Flag.optional
     ),
+    append: Flag.Boolean("append").pipe(
+      Flag.withDescription(
+        "Add to the --points-list file when it exists (its columns, separator and rows kept; rows it has are skipped)"
+      ),
+      Flag.withDefault(false)
+    ),
     address: Flag.String("address").pipe(
       Flag.withDescription(
         "Ask only the device at this ip or ip:port, instead of a broadcast: one on another subnet or another port"
@@ -186,12 +192,19 @@ const discoverCommand = Command.make(
     json: jsonFlag
   },
   // The draft is JSON already; --json makes a failure JSON too, and what --points-list wrote.
-  ({ config, pointsList, address, json }) =>
-    Effect.flatMap(loadConfig(config), (decoded) => {
-      const options = { address: Option.getOrUndefined(address) }
+  ({ config, pointsList, append, address, json }) =>
+    Effect.gen(function* () {
+      if (append && Option.isNone(pointsList)) {
+        return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
+      }
+      const decoded = yield* loadConfig(config)
+      const options = { address: Option.getOrUndefined(address), append }
       return Option.isSome(pointsList)
-        ? Effect.flatMap(discoverToPointsList(decoded, pointsList.value, undefined, options), pointsListOutcome(json))
-        : discover(decoded, undefined, options)
+        ? yield* Effect.flatMap(
+            discoverToPointsList(decoded, pointsList.value, undefined, options),
+            pointsListOutcome(json)
+          )
+        : yield* discover(decoded, undefined, options)
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
@@ -200,6 +213,10 @@ const discoverCommand = Command.make(
   Command.withExamples([
     { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
     { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
+    {
+      command: "ot-gateway discover --points-list points.csv --append",
+      description: "Add it to a points list you have, rows it has already skipped"
+    },
     {
       command: "ot-gateway discover --address 10.20.3.40:47809",
       description: "Ask one device whose address a device list gives"

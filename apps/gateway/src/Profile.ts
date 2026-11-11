@@ -11,7 +11,7 @@
 import { ByteOrder, DataType, registerWidth, Slug } from "@ot-gateway/core"
 import { Effect, FileSystem, Path, Schema } from "effect"
 import { fileURLToPath } from "node:url"
-import { slugify } from "./Discover.ts"
+import { slugify } from "./Slug.ts"
 import { closestMatch } from "./Suggest.ts"
 
 export const profileVersion = 1
