@@ -2,7 +2,7 @@
  * What to check for a failing device: the hint follows the failure class, the driver's words and the protocol.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { fallbackHint, hintRules, whatToCheck } from "../src/lib/hints.ts"
+import { fallbackHint, hintRules, whatToCheck } from "../src/Hints.ts"
 
 const mentions = (checks: ReadonlyArray<string>, word: RegExp) => checks.some((check) => word.test(check))
 
