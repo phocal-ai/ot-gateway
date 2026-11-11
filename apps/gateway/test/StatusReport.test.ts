@@ -245,6 +245,20 @@ describe("events", () => {
     expect(formatEvents(log, 5_000, "5s")).toBe("no events in the last 5s")
   })
 
+  it("prints a config applied from the status page, and one that was rolled back", () => {
+    const edits: EventLog = {
+      ...log,
+      events: [
+        { id: 8, at: at(12, 19, 25), type: "config-applied", summary: "gateway: site; broker: clientId" },
+        { id: 9, at: at(12, 19, 28), type: "config-apply-failed", error: "the broker did not answer" }
+      ]
+    }
+    expect(formatEvents(edits, Number.POSITIVE_INFINITY, "all").split("\n")).toEqual([
+      "12:19:25  config  applied from the status page: gateway: site; broker: clientId",
+      "12:19:28  config  not applied, the previous config runs again: the broker did not answer"
+    ])
+  })
+
   it("says when the ring let older events go", () => {
     const trimmed: EventLog = { ...log, dropped: 12, events: log.events.slice(5) }
     expect(formatEvents(trimmed, Number.POSITIVE_INFINITY, "all").split("\n")[0]).toBe(

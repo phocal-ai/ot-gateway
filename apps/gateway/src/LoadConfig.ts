@@ -63,6 +63,15 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
   // The gateway's folder holds ot-gateway.env too: started from elsewhere (a checkout's root), the CLI finds the
   // broker password there as well. main.ts has read the working directory's already, and set variables win.
   if (folder !== process.cwd()) yield* Effect.sync(() => loadEnvFile(join(folder, envFileName)))
-  const base = Option.getOrElse(yield* dataDirectory, () => folder)
-  return resolveConfigPaths(config, base)
+  return (yield* configFileSource(path)).resolve(config)
+})
+
+/**
+ * The config file at `path` as the status page's editor needs it: its absolute path, and how a config saved there
+ * gets its relative paths resolved, the same way as at start.
+ */
+export const configFileSource = Effect.fn("configFileSource")(function* (path: string) {
+  const absolute = resolve(path)
+  const base = Option.getOrElse(yield* dataDirectory, () => dirname(absolute))
+  return { path: absolute, resolve: (config: GatewayConfig) => resolveConfigPaths(config, base) }
 })
