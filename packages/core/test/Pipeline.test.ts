@@ -74,7 +74,8 @@ describe("runDevice", () => {
         recordFailure: (device, reason) => {
           recorded.push(`failing:${reason}`)
           registry.recordFailure(device, reason)
-        }
+        },
+        onChange: registry.onChange
       }
       const driver = scriptedDriver(["fail", "fail", "fail", "fail", "fail", 300])
       const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, health }, driver).pipe(
