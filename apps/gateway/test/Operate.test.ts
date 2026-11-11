@@ -594,71 +594,75 @@ const freePort = Effect.promise(
 )
 
 describe("against a running status page", () => {
-  it.live("names the gateway, refuses the wrong one, and says how to turn the history on", () =>
-    Effect.gen(function* () {
-      const port = yield* freePort
-      const config = yield* parseConfig(gatewayJson({ status: { port, webRoot: "/nonexistent" } }))
-      const state = makeStatusState(config, makeHealthRegistry(["energy-meter"]), Date.now())
-      const ring = makeGatewayEvents(yield* Effect.clockWith(Effect.succeed))
-      ring.started("v1", 1)
-      const server = yield* serveStatus(
-        config.status ?? { bindAddress: "127.0.0.1", port },
-        state,
-        historyHandler(config, undefined)
-      ).pipe(Effect.provide([NodeServices.layer, Layer.succeed(GatewayEvents, ring)]), Effect.forkChild)
-      yield* Effect.sleep("300 millis")
-      const target = yield* targetOf("ot-gateway.json", config, undefined)
-      yield* eventsReport(target, { since: "1h", sinceMs: 3_600_000 })
-      const lines = (yield* TestConsole.logLines).map(String)
-      expect(lines.find((line) => line.startsWith("plant-1"))).toBe(
-        `plant-1/hall-a gateway main at http://127.0.0.1:${port}`
-      )
+  it.live(
+    "names the gateway, refuses the wrong one, and says how to turn the history on",
+    () =>
+      Effect.gen(function* () {
+        const port = yield* freePort
+        const config = yield* parseConfig(gatewayJson({ status: { port, webRoot: "/nonexistent" } }))
+        const state = makeStatusState(config, makeHealthRegistry(["energy-meter"]), Date.now())
+        const ring = makeGatewayEvents(yield* Effect.clockWith(Effect.succeed))
+        ring.started("v1", 1)
+        const server = yield* serveStatus(
+          config.status ?? { bindAddress: "127.0.0.1", port },
+          state,
+          historyHandler(config, undefined)
+        ).pipe(Effect.provide([NodeServices.layer, Layer.succeed(GatewayEvents, ring)]), Effect.forkChild)
+        yield* Effect.sleep("300 millis")
+        const target = yield* targetOf("ot-gateway.json", config, undefined)
+        yield* eventsReport(target, { since: "1h", sinceMs: 3_600_000 })
+        const lines = (yield* TestConsole.logLines).map(String)
+        expect(lines.find((line) => line.startsWith("plant-1"))).toBe(
+          `plant-1/hall-a gateway main at http://127.0.0.1:${port}`
+        )
 
-      const other = yield* targetOf("other.json", { ...config, id: "second" }, undefined)
-      expect((yield* Effect.flip(eventsReport(other, { since: "1h", sinceMs: 3_600_000 })))._tag).toBe(
-        "GatewayMismatch"
-      )
+        const other = yield* targetOf("other.json", { ...config, id: "second" }, undefined)
+        expect((yield* Effect.flip(eventsReport(other, { since: "1h", sinceMs: 3_600_000 })))._tag).toBe(
+          "GatewayMismatch"
+        )
 
-      const off = yield* Effect.flip(
-        historyReport(target, [{ device: "energy-meter" }], { since: "10m", sinceMs: 600_000 })
-      )
-      expect(off._tag).toBe("HistoryError")
-      expect(off.message).toContain('Add "history"')
-      const unknown = yield* Effect.flip(
-        historyReport(target, [{ device: "meter" }], { since: "10m", sinceMs: 600_000 })
-      )
-      expect(unknown.message).toContain("no device meter")
+        const off = yield* Effect.flip(
+          historyReport(target, [{ device: "energy-meter" }], { since: "10m", sinceMs: 600_000 })
+        )
+        expect(off._tag).toBe("HistoryError")
+        expect(off.message).toContain('Add "history"')
+        const unknown = yield* Effect.flip(
+          historyReport(target, [{ device: "meter" }], { since: "10m", sinceMs: 600_000 })
+        )
+        expect(unknown.message).toContain("no device meter")
 
-      // What went out per topic, since start, and how much reached the broker.
-      const power = "plant-1/hall-a/energy-meter/active-power"
-      for (let sent = 0; sent < 3; sent++) {
-        state.recordPublish(power, `{"value":${sent},"ts":1}`, { retained: false, at: Date.now() })
-      }
-      state.recordDelivered(power)
-      state.recordDelivered(power)
-      state.recordPublish(`${power}/$meta`, `{"name":"Active power"}`, { retained: true, at: Date.now() })
-      state.recordPublish("plant-1/hall-a/energy-meter/voltage", `{"value":230,"ts":1}`, {
-        retained: false,
-        at: Date.now()
-      })
-      yield* messagesReport(target, [{ device: "energy-meter", point: "active-power" }])
-      const report = String((yield* TestConsole.logLines).at(-1)).split("\n")
-      expect(report[0]).toMatch(/^plant-1\/hall-a gateway main at .*: messages per topic since it started at /)
-      expect(report[1]).toMatch(
-        /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting or lost\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
-      )
-      expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
-      // Its publish mode, from the point catalog, instead of the JSON cut short; and why the counts run since start.
-      expect(report[2]).toMatch(/retained {2}publish: every read$/)
-      expect(report.at(-1)).toContain("counts per topic since it started, not per time window")
-      yield* messagesReport(target, [], { json: true })
-      const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
-      expect(json).toMatchObject({
-        ok: true,
-        since: expect.any(Number),
-        messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
-      })
-      yield* Fiber.interrupt(server)
-    }).pipe(Effect.provide(TestConsole.layer))
+        // What went out per topic, since start, and how much reached the broker.
+        const power = "plant-1/hall-a/energy-meter/active-power"
+        for (let sent = 0; sent < 3; sent++) {
+          state.recordPublish(power, `{"value":${sent},"ts":1}`, { retained: false, at: Date.now() })
+        }
+        state.recordDelivered(power)
+        state.recordDelivered(power)
+        state.recordPublish(`${power}/$meta`, `{"name":"Active power"}`, { retained: true, at: Date.now() })
+        state.recordPublish("plant-1/hall-a/energy-meter/voltage", `{"value":230,"ts":1}`, {
+          retained: false,
+          at: Date.now()
+        })
+        yield* messagesReport(target, [{ device: "energy-meter", point: "active-power" }])
+        const report = String((yield* TestConsole.logLines).at(-1)).split("\n")
+        expect(report[0]).toMatch(/^plant-1\/hall-a gateway main at .*: messages per topic since it started at /)
+        expect(report[1]).toMatch(
+          /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting or lost\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
+        )
+        expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
+        // Its publish mode, from the point catalog, instead of the JSON cut short; and why the counts run since start.
+        expect(report[2]).toMatch(/retained {2}publish: every read$/)
+        expect(report.at(-1)).toContain("counts per topic since it started, not per time window")
+        yield* messagesReport(target, [], { json: true })
+        const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
+        expect(json).toMatchObject({
+          ok: true,
+          since: expect.any(Number),
+          messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
+        })
+        yield* Fiber.interrupt(server)
+      }).pipe(Effect.provide(TestConsole.layer)),
+    // A real server and several HTTP round trips: a slow CI runner took over 5 s once.
+    20_000
   )
 })
