@@ -3,6 +3,10 @@ import { describe, expect, it } from "@effect/vitest"
 import {
   axisFrom,
   bucketTime,
+  chartGaps,
+  failuresOf,
+  gapAt,
+  gapSentence,
   gatewayTime,
   nearest,
   segments,
@@ -118,5 +122,110 @@ describe("gatewayTime", () => {
     // The browser's own clock (a day off here) plays no part.
     expect(gatewayTime({ now: 1_000_000, at: 500 }, 500)).toBe(1_000_000)
     expect(gatewayTime({ now: 1_000_000, at: 500 }, 2_500)).toBe(1_002_000)
+  })
+})
+
+const event = (id: number, at: number, type: "device-failing" | "device-recovered", device = "energy-meter") =>
+  type === "device-failing"
+    ? ({ id, at, type, device, reason: "timeout", error: "" } as const)
+    : ({ id, at, type, device, downMs: 0 } as const)
+
+const clock = (hours: number, minutes: number) => new Date(2026, 10, 11, hours, minutes).getTime()
+
+describe("failuresOf", () => {
+  it("pairs each failure with the next recovery of the same device, the last one open while it fails", () => {
+    const events = [
+      event(1, 100, "device-failing"),
+      event(2, 150, "device-failing", "heat-pump"),
+      event(3, 200, "device-recovered"),
+      event(4, 300, "device-failing")
+    ]
+    expect(failuresOf(events, "energy-meter")).toEqual([{ from: 100, to: 200 }, { from: 300 }])
+    expect(failuresOf(events, "heat-pump")).toEqual([{ from: 150 }])
+    expect(failuresOf(events, "boiler")).toEqual([])
+  })
+})
+
+describe("chartGaps", () => {
+  const step = 10_000
+  const series = (buckets: ReadonlyArray<number>, from = 0, to = 300_000) => ({
+    device: "energy-meter",
+    point: "power",
+    from,
+    to,
+    stepMs: step,
+    resolution: "read" as const,
+    buckets: buckets.map((t) => bucket(t))
+  })
+  const every = (from: number, to: number) =>
+    Array.from({ length: (to - from) / step }, (_, index) => from + index * step)
+
+  it("finds where the line breaks and names a device failure that overlaps it", () => {
+    const gaps = chartGaps(series([...every(0, 100_000), ...every(220_000, 300_000)]), 0, {
+      failures: [{ from: 105_000, to: 215_000 }]
+    })
+    expect(gaps).toEqual([{ from: 100_000, to: 220_000, cause: { kind: "device-failing" } }])
+  })
+
+  it("leaves a gap without a known cause unexplained, and ignores a single missing bucket, as the line does", () => {
+    const gaps = chartGaps(series([...every(0, 100_000), ...every(110_000, 200_000), ...every(250_000, 300_000)]), 0)
+    expect(gaps).toEqual([{ from: 200_000, to: 250_000 }])
+  })
+
+  it("runs a gap to the end of the range while the device still fails", () => {
+    const gaps = chartGaps(series(every(0, 200_000)), 0, { failures: [{ from: 205_000 }] })
+    expect(gaps).toEqual([{ from: 200_000, to: 300_000, cause: { kind: "device-failing" } }])
+  })
+
+  it("splits a gap at the gateway's start when older history is on the axis", () => {
+    const gaps = chartGaps(series([...every(0, 50_000), ...every(200_000, 300_000)]), 0, {
+      startedAt: 120_000,
+      failures: [{ from: 125_000, to: 195_000 }]
+    })
+    expect(gaps).toEqual([
+      { from: 50_000, to: 120_000, cause: { kind: "gateway-not-running" } },
+      { from: 120_000, to: 200_000, cause: { kind: "device-failing" } }
+    ])
+  })
+
+  it("adds no gateway-not-running band when the axis starts at the gateway's start (its note says so)", () => {
+    const answer = series(every(200_000, 300_000), 0, 300_000)
+    // A gateway that started at 150 s, its device answering from 200 s: the axis starts at the start.
+    const from = 150_000
+    expect(chartGaps(answer, from, { startedAt: 150_000 })).toEqual([{ from: 150_000, to: 200_000 }])
+    const soon = series(every(160_000, 300_000), 0, 300_000)
+    expect(chartGaps(soon, from, { startedAt: 150_000 })).toEqual([])
+  })
+
+  it("has no gaps without buckets (the chart says there are no reads)", () => {
+    expect(chartGaps(series([]), 0)).toEqual([])
+  })
+
+  it("finds the gap under the pointer", () => {
+    const gaps = [{ from: 100, to: 200 }]
+    expect(gapAt(gaps, 150)).toEqual({ from: 100, to: 200 })
+    expect(gapAt(gaps, 200)).toBeUndefined()
+  })
+})
+
+describe("gapSentence", () => {
+  it("says when there were no reads and why", () => {
+    const gap = { from: clock(15, 58), to: clock(16, 0), cause: { kind: "device-failing" } as const }
+    expect(gapSentence(gap, "energy-meter", clock(16, 10))).toBe("No reads 15:58–16:00: energy-meter not answering")
+    expect(
+      gapSentence({ from: clock(9, 0), to: clock(9, 30), cause: { kind: "gateway-not-running" } }, "m", clock(16, 0))
+    ).toBe("No reads 09:00–09:30: the gateway was not running")
+    expect(gapSentence({ from: clock(15, 0), to: clock(15, 5) }, "m", clock(16, 0))).toBe("No reads 15:00–15:05")
+  })
+
+  it("gives seconds for a gap under two minutes", () => {
+    const from = new Date(2026, 10, 11, 16, 8, 20).getTime()
+    expect(gapSentence({ from, to: from + 40_000 }, "m", clock(16, 10))).toBe("No reads 16:08:20–16:09:00")
+  })
+
+  it("says since when for a gap that lasts, and the weekday for another day", () => {
+    expect(gapSentence({ from: clock(15, 58), to: clock(16, 10) }, "m", clock(16, 10))).toBe("No reads since 15:58")
+    const yesterday = new Date(2026, 10, 10, 23, 0).getTime()
+    expect(gapSentence({ from: yesterday, to: clock(1, 0) }, "m", clock(16, 0))).toBe("No reads Tue 23:00–01:00")
   })
 })

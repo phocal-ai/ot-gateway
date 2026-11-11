@@ -327,10 +327,14 @@ const PointsList = () => {
                       <TableCell className="hidden max-w-48 truncate font-mono text-muted-foreground md:table-cell">
                         <span title={point.device}>{point.device}</span>
                       </TableCell>
-                      <TableCell
-                        className={`text-right font-mono tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}
-                      >
-                        <PointValue alarm={alarmWhen(point)} now={now} unit={point.unit} value={current.value} />
+                      <TableCell className="text-right font-mono tabular-nums">
+                        <PointValue
+                          alarm={alarmWhen(point)}
+                          now={now}
+                          stale={read._tag === "stale"}
+                          unit={point.unit}
+                          value={current.value}
+                        />
                       </TableCell>
                       <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
                         <PointRead now={now} short state={read} />

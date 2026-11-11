@@ -32,6 +32,9 @@ import { formatNumber } from "@/lib/format"
 import { deviceAddress, deviceColumns, duration, formatSetting, sectionTitle, settingLabel } from "@/lib/settings"
 import { fetchConfig, protocolName, settle } from "@/lib/status"
 
+/** The file's name without its folder: the backup sits next to the file, so its whole path says nothing new. */
+const fileName = (path: string) => path.split(/[/\\]/).at(-1) ?? path
+
 /** Try again after this long when the config did not come. */
 const RETRY_MS = 5000
 
@@ -65,19 +68,25 @@ const useConfig = (reload: number) => {
   return load
 }
 
-/** Whether this page may edit, asked for once and after each save; undefined until it comes (or if it never does). */
+/**
+ * Whether this page may edit, asked for once and after each save: `edit` is undefined until it comes (or if it never
+ * does); `asked` says the first answer, or its failure, is in, so the intro does not guess before then.
+ */
 const useEditStatus = (reload: number) => {
   const [edit, setEdit] = useState<EditStatus | undefined>(undefined)
+  const [asked, setAsked] = useState(false)
   useEffect(() => {
     let cancelled = false
     void settle(fetchEditStatus).then((result) => {
-      if (!cancelled && result._tag === "Success") setEdit(result.success)
+      if (cancelled) return
+      if (result._tag === "Success") setEdit(result.success)
+      setAsked(true)
     })
     return () => {
       cancelled = true
     }
   }, [reload])
-  return edit
+  return { edit, asked }
 }
 
 /** Blocks a config can leave out, and what that means. */
@@ -200,7 +209,7 @@ const BACNET_UNUSED =
 const SettingsPage = () => {
   const [reload, setReload] = useState(0)
   const load = useConfig(reload)
-  const edit = useEditStatus(reload)
+  const { edit, asked } = useEditStatus(reload)
   const [editing, setEditing] = useState<EditCard | undefined>(undefined)
   const [panel, setPanel] = useState<DevicePanel | undefined>(undefined)
   const [saved, setSaved] = useState<Saved | undefined>(undefined)
@@ -262,13 +271,22 @@ const SettingsPage = () => {
   return (
     <>
       <div className="grid max-w-3xl gap-2 text-sm">
-        {canEdit ? (
+        {!asked ? (
+          // Until the gateway says whether the page may edit and where the file is: a placeholder, so the intro
+          // neither reads "Saved to ," nor says the settings are read-only for a moment.
+          <div aria-hidden="true" className="grid gap-2">
+            <div className="h-5 w-64 max-w-full animate-pulse rounded bg-muted" />
+            <div className="h-4 w-96 max-w-full animate-pulse rounded bg-muted" />
+          </div>
+        ) : canEdit ? (
           <>
             <p>Change the settings here; they apply at once.</p>
-            <p className="text-xs break-words text-muted-foreground">
-              Saved to <code className="font-mono">{edit.path}</code>, the previous version kept as{" "}
-              <code className="font-mono">.bak</code>.
-            </p>
+            {edit.path.trim() === "" ? null : (
+              <p className="text-xs break-words text-muted-foreground">
+                Saved to <code className="font-mono">{edit.path}</code>, the previous version kept as{" "}
+                <code className="font-mono">{fileName(edit.path)}.bak</code> next to it.
+              </p>
+            )}
           </>
         ) : (
           <p className="text-muted-foreground">

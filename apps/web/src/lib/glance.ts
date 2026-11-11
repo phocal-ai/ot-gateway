@@ -5,7 +5,7 @@
  */
 import type { PointInfo, PointReading } from "@ot-gateway/api"
 import { type LivePoint, pointKey } from "./points"
-import { freshness, lateAfterMs } from "./status"
+import { clockTime, freshness, lateAfterMs } from "./status"
 
 /** What makes a point an alarm: its config's `alarmWhen`, or its semantics. */
 type AlarmFields = Pick<PointInfo, "brick" | "haystack" | "alarmWhen">
@@ -77,6 +77,13 @@ export const pointFreshness = (
   if (state._tag === "starting" || now - ts <= lateAfterMs(device.pollIntervalMs)) return { _tag: "fresh", ts }
   return readsOnChange(point) ? { _tag: "unchanged", ts } : { _tag: "stale", ts }
 }
+
+/**
+ * When a value was read, for its hover and the panels: "read 14:05:09", or "last read 14:05:09" for a stale one (the
+ * last value known while its device fails), "nothing read yet" without a read.
+ */
+export const readLabel = (ts: number | undefined, now: number, stale: boolean) =>
+  ts === undefined ? "nothing read yet" : `${stale ? "last read" : "read"} ${clockTime(ts, now)}`
 
 /** Points a device row on the Status tab shows before "+n more". */
 export const GLANCE_POINTS = 4

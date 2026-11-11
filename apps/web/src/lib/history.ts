@@ -2,7 +2,7 @@
  * A point's history for the point panel: fetched from `/api/history`, and the pure parts of drawing it (ranges,
  * ticks, gaps), kept here so they are tested without a browser.
  */
-import { type HistoryBucket, type HistorySeries, OtGatewayApi } from "@ot-gateway/api"
+import { type GatewayEvent, type HistoryBucket, type HistorySeries, OtGatewayApi } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -149,3 +149,125 @@ export const nearest = (buckets: ReadonlyArray<HistoryBucket>, at: number) => {
   for (const bucket of buckets) if (best === undefined || Math.abs(bucket.t - at) < Math.abs(best.t - at)) best = bucket
   return best
 }
+
+/** A device failing for a while, from the gateway's events: `[from, to)`, `to` absent while it still fails. */
+export interface Failure {
+  readonly from: number
+  readonly to?: number
+}
+
+/**
+ * A device's failures in `events` (oldest first): each `device-failing` up to its next `device-recovered`, the last
+ * one open while it still fails. The same pairing as `ot-gateway history` (apps/gateway/src/HistoryReport.ts).
+ */
+export const failuresOf = (events: ReadonlyArray<GatewayEvent>, device: string): ReadonlyArray<Failure> => {
+  const failures: Array<Failure> = []
+  let open: number | undefined
+  for (const event of events) {
+    if (event.type === "device-failing" && event.device === device) open ??= event.at
+    else if (event.type === "device-recovered" && event.device === device && open !== undefined) {
+      failures.push({ from: open, to: event.at })
+      open = undefined
+    }
+  }
+  if (open !== undefined) failures.push({ from: open })
+  return failures
+}
+
+/** Why a stretch of the chart has no reads, when the page knows: the gateway was not running, or the device failed. */
+export type GapCause = { readonly kind: "gateway-not-running" } | { readonly kind: "device-failing" }
+
+/**
+ * A stretch of the time axis without reads, `[from, to)` in Unix ms: from the end of the last bucket before it to
+ * the start of the next (or the end of the range), with its cause when known.
+ */
+export interface ChartGap {
+  readonly from: number
+  readonly to: number
+  readonly cause?: GapCause
+}
+
+/**
+ * The stretches of `[from, series.to)` without reads that break the line (more than two steps, as `segments`), each
+ * with its cause: before `startedAt` the gateway was not running; after it, a failure of the device that overlaps
+ * the stretch. Nothing before `from`: an axis that starts where the gateway started (`axisFrom`) already says so in
+ * its note, so that gets no band.
+ */
+export const chartGaps = (
+  series: HistorySeries,
+  from: number,
+  context: { readonly startedAt?: number | undefined; readonly failures?: ReadonlyArray<Failure> } = {}
+): ReadonlyArray<ChartGap> => {
+  const { buckets, stepMs, to } = series
+  if (buckets.length === 0) return []
+  const holes: Array<{ readonly from: number; readonly to: number }> = []
+  // Where the line breaks: two reads (or a read and an edge of the axis) more than two steps apart.
+  const edges = [from - stepMs, ...buckets.map((bucket) => bucket.t), to]
+  for (let index = 1; index < edges.length; index++) {
+    const previous = edges[index - 1] ?? from
+    const next = edges[index] ?? to
+    if (next - previous > 2 * stepMs) holes.push({ from: Math.max(from, previous + stepMs), to: Math.min(to, next) })
+  }
+  const startedAt = context.startedAt
+  const failed = (hole: { readonly from: number; readonly to: number }): ChartGap => {
+    const failure = context.failures?.find(
+      (each) => each.from < hole.to && (each.to === undefined || each.to > hole.from)
+    )
+    return failure === undefined ? hole : { ...hole, cause: { kind: "device-failing" } }
+  }
+  // An axis moved up to the gateway's start has a note that says there is nothing before it: no band repeats that.
+  if (startedAt !== undefined && from > series.from) {
+    return holes.flatMap((hole) => {
+      const after = { from: Math.max(hole.from, startedAt), to: hole.to }
+      return after.to - after.from > 2 * stepMs ? [failed(after)] : []
+    })
+  }
+  return holes.flatMap((hole): ReadonlyArray<ChartGap> => {
+    if (startedAt === undefined || startedAt <= hole.from) return [failed(hole)]
+    if (startedAt >= hole.to) return [{ ...hole, cause: { kind: "gateway-not-running" } }]
+    return [
+      { from: hole.from, to: startedAt, cause: { kind: "gateway-not-running" } },
+      ...(hole.to - startedAt > 2 * stepMs ? [failed({ from: startedAt, to: hole.to })] : [])
+    ]
+  })
+}
+
+/**
+ * A gap's time: 15:58 on the 24-hour clock, to the second for a gap under two minutes (15:58:20), with the weekday
+ * when it is not the day of `now`.
+ */
+const gapTime = (at: number, now: number, seconds: boolean) => {
+  const moment = new Date(at)
+  const time = moment.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    ...(seconds ? { second: "2-digit" as const } : {})
+  })
+  return moment.toDateString() === new Date(now).toDateString()
+    ? time
+    : `${moment.toLocaleDateString("en-US", { weekday: "short" })} ${time}`
+}
+
+/**
+ * A gap in words, for the line under the chart and the hover: "No reads 15:58–16:00: energy-meter not answering";
+ * "No reads since 15:58" while it lasts (it reaches the end of the range); "the gateway was not running" before it
+ * started.
+ */
+export const gapSentence = (gap: ChartGap, device: string, to: number) => {
+  const seconds = gap.to - gap.from < 120_000
+  const when =
+    gap.to >= to
+      ? `since ${gapTime(gap.from, to, seconds)}`
+      : `${gapTime(gap.from, to, seconds)}–${gapTime(gap.to, to, seconds)}`
+  const why =
+    gap.cause?.kind === "device-failing"
+      ? `: ${device} not answering`
+      : gap.cause?.kind === "gateway-not-running"
+        ? ": the gateway was not running"
+        : ""
+  return `No reads ${when}${why}`
+}
+
+/** The gap that `at` falls in, for the hover. */
+export const gapAt = (gaps: ReadonlyArray<ChartGap>, at: number) => gaps.find((gap) => gap.from <= at && at < gap.to)
