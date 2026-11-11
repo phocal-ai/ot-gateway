@@ -500,7 +500,7 @@ describe("discover --points-list", () => {
       const list = yield* fs.readFileString(path)
       expect(list.split("\n")).toEqual([
         "device;point;unit;host;register;type;device_instance;address;object_type;object_instance",
-        "boiler;Supply temperature;°C;10.0.1.5;100;int16",
+        "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;",
         "ventilation-2;Supply Temp;unit:DEG_C;;;;2001;10.0.2.1;analog-input;1",
         "ventilation-2;Fan;;;;;2001;10.0.2.1;binary-output;2",
         ""

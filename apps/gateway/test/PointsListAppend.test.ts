@@ -9,7 +9,7 @@ import { parseDeviceAddress } from "@ot-gateway/bacnet"
 import { Effect, Result } from "effect"
 import { draftColumns, draftDevices, draftRows } from "../src/Discover.ts"
 import { devicesFromPointsList } from "../src/PointsList.ts"
-import { appendToPointsList } from "../src/PointsListAppend.ts"
+import { appendToPointsList, padRows } from "../src/PointsListAppend.ts"
 
 const heatPump = (name = "heat-pump", objects: DescribedDevice["objects"] = []) =>
   draftRows(
@@ -48,8 +48,8 @@ describe("appendToPointsList", () => {
       expect(result).toMatchObject({ added: 2, devices: 1, skipped: 0 })
       expect(result.text.split("\n")).toEqual([
         "device,point,unit,host,register,type,device_instance,address,object_type,object_instance",
-        "boiler,Supply temperature,°C,10.0.1.5,100,int16",
-        "boiler,Return temperature,°C,10.0.1.5,101,int16",
+        "boiler,Supply temperature,°C,10.0.1.5,100,int16,,,,",
+        "boiler,Return temperature,°C,10.0.1.5,101,int16,,,,",
         "heat-pump,Flow temperature,unit:DEG_C,,,,2001,127.0.0.1:47809,analog-input,1",
         "heat-pump,Compressor running,,,,,2001,127.0.0.1:47809,binary-input,1",
         ""
@@ -70,7 +70,7 @@ describe("appendToPointsList", () => {
       )
       expect(result.text).toBe(
         "﻿Device Name;Name;Unit;IP;Register;Data Type;device_instance;address;object_type;object_instance\r\n" +
-          "boiler;Supply temperature;°C;10.0.1.5;100;int16\r\n" +
+          "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;\r\n" +
           'heat-pump;"Supply, temp";;;;;2001;127.0.0.1:47809;analog-input;1\r\n'
       )
       const devices = yield* devicesFromPointsList(result.text)
@@ -125,5 +125,26 @@ describe("appendToPointsList", () => {
     expect(appendToPointsList('device,point\n"open,x\n', draftColumns, [])).toEqual(
       Result.fail("line 2: a quote opened here is never closed")
     )
+  })
+
+  it("pads every earlier row to the new header's column count, a short one and one with a quoted line break too", () =>
+    Effect.gen(function* () {
+      const list = 'device,point,host,register,type\nboiler,"Supply,\ntemp",10.0.1.5,0,int16\nboiler,Return\n\n'
+      const result = append(list, heatPump())
+      const width = result.text.split("\n")[0]?.split(",").length ?? 0
+      expect(result.text).toContain('boiler,"Supply,\ntemp",10.0.1.5,0,int16,,,,,\n')
+      expect(result.text).toContain("\nboiler,Return,,,,,,,,\n")
+      expect(width).toBe(10)
+      const devices = yield* devicesFromPointsList(
+        result.text.replace("boiler,Return,,,", "boiler,Return,10.0.1.5,1,int16")
+      )
+      expect(devices.map((device) => device.id)).toEqual(["boiler", "heat-pump"])
+    }).pipe(Effect.runSync))
+})
+
+describe("padRows", () => {
+  it("adds empty fields at the end of short rows only, before the line break, and leaves empty lines alone", () => {
+    expect(padRows("\na;b\r\n\r\na;b;c;d\r\na", ";", 3)).toBe("\na;b;\r\n\r\na;b;c;d\r\na;;")
+    expect(padRows('\n"x;\n";y', ";", 3)).toBe('\n"x;\n";y;')
   })
 })
