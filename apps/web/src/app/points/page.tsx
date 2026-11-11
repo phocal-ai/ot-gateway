@@ -91,7 +91,7 @@ const pointCount = (count: number) => `${formatNumber(count)} ${count === 1 ? "p
 
 const PointsList = () => {
   const load = useGateway()
-  const catalogLoad = useCatalog(statusOf(load)?.since)
+  const catalogLoad = useCatalog(statusOf(load)?.configSince)
   const [{ filter: asked, open }, setUrlState] = useUrlState()
   const [morph, setMorph] = useState(false)
   const status = statusOf(load)

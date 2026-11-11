@@ -6,6 +6,7 @@
  */
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api"
+import { ConfigEditGroup } from "./Editor.ts"
 
 /** A point as the page shows it: its last published value, if any since the gateway started. */
 export const PointStatus = Schema.Struct({
@@ -41,6 +42,11 @@ export const DeviceStatus = Schema.Struct({
   lastError: Schema.optionalKey(Schema.String),
   /** Failed polling cycles in a row, while `failing` (the retries inside one cycle count once). */
   failures: Schema.optionalKey(Schema.Number),
+  /**
+   * Unix ms when the reads of the device's last successful polling cycle came back (recorded once their values were
+   * handled). A point's `ts` can be newer: a change-of-value notification or a pushed value arrives between cycles.
+   * It stays while the device fails, so it says when the device last answered in full.
+   */
   lastSuccess: Schema.optionalKey(Schema.Number),
   /** How many points the config gives it, also when `points` is left out (`/api/status?points=none`). */
   pointCount: Schema.Number,
@@ -114,8 +120,16 @@ export const MessageStatus = Schema.Struct({
   retained: Schema.Boolean,
   /** Unix ms of the latest message on this topic, from the gateway's wall clock. */
   at: Schema.Number,
-  /** Messages on this topic since the gateway started. */
-  count: Schema.Number
+  /**
+   * Messages the gateway published on this topic since it started: every one it handed on, also while the broker was
+   * down (then into the buffer, or lost without one).
+   */
+  count: Schema.Number,
+  /**
+   * Of those, and of ones the buffer kept from before a restart, how many reached the broker: QoS 1 acknowledged by
+   * it, QoS 0 written to its connection. `count - delivered` is roughly what waits in the buffer or was lost.
+   */
+  delivered: Schema.Number
 })
 export type MessageStatus = typeof MessageStatus.Type
 
@@ -187,6 +201,11 @@ export const GatewayStatus = Schema.Struct({
   /** Unix ms when the gateway started, and when this snapshot was taken. */
   since: Schema.Number,
   now: Schema.Number,
+  /**
+   * Unix ms when the running config started: the gateway's start, or a later save on the Settings tab. What the page
+   * keeps of the config (`/api/config`, `/api/points`) is current while this stays the same.
+   */
+  configSince: Schema.Number,
   broker: BrokerStatus,
   /** Absent without a `buffer` in the config. */
   buffer: Schema.optionalKey(BufferStatus),
@@ -377,7 +396,9 @@ export const BrokerDisconnectedEvent = Schema.Struct({
 
 /**
  * The gateway connected to its broker. After an outage, `downMs` says how long it lasted and `buffered` how many
- * messages waited in the store-and-forward buffer at that moment (absent without a buffer).
+ * messages waited in the store-and-forward buffer at the moment of the reconnect (absent without a buffer). Values
+ * read while the backlog goes out queue behind it, so more can reach the broker from the buffer than `buffered`
+ * says: `buffer-drained` has that number.
  */
 export const BrokerConnectedEvent = Schema.Struct({
   ...eventFields,
@@ -386,10 +407,31 @@ export const BrokerConnectedEvent = Schema.Struct({
   buffered: Schema.optionalKey(Schema.Number)
 })
 
-/** Every message the buffer kept during an outage reached the broker. */
+/**
+ * Every message the buffer kept during an outage reached the broker. `delivered` counts the messages that went from
+ * the buffer to the broker since the broker came back: the backlog and what queued behind it.
+ */
 export const BufferDrainedEvent = Schema.Struct({
   ...eventFields,
-  type: Schema.Literal("buffer-drained")
+  type: Schema.Literal("buffer-drained"),
+  delivered: Schema.optionalKey(Schema.Number)
+})
+
+/**
+ * A config saved from the status page was applied without a restart: `summary` says what changed in a line
+ * ("broker changed; device boiler added").
+ */
+export const ConfigAppliedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("config-applied"),
+  summary: Schema.String
+})
+
+/** A config saved from the status page did not start: `error` says why; the previous config runs again. */
+export const ConfigApplyFailedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("config-apply-failed"),
+  error: Schema.String
 })
 
 /**
@@ -412,6 +454,8 @@ export const GatewayEvent = Schema.Union([
   BrokerDisconnectedEvent,
   BrokerConnectedEvent,
   BufferDrainedEvent,
+  ConfigAppliedEvent,
+  ConfigApplyFailedEvent,
   GatewayConflictEvent
 ])
 export type GatewayEvent = typeof GatewayEvent.Type
@@ -454,7 +498,10 @@ export class StatusGroup extends HttpApiGroup.make("status")
       query: {
         /** Unix ms: only events at or after it. */
         since: Schema.optional(Schema.FiniteFromString),
-        /** An event id: only the events after it, for a page that polls for what is new. */
+        /**
+         * An event id: only the events after it, for a page that polls for what is new. An id the gateway has not
+         * given yet means it restarted (its ids start over at 1): then every event it keeps.
+         */
         after: Schema.optional(Schema.FiniteFromString)
       },
       success: EventLog
@@ -479,4 +526,4 @@ export class StatusGroup extends HttpApiGroup.make("status")
     })
   ) {}
 
-export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup) {}
+export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup).add(ConfigEditGroup) {}

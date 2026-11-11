@@ -12,7 +12,9 @@ Ids (`site`, `building`, gateway, device and point ids) are slugs: lowercase let
 
 Durations are milliseconds unless the key says seconds.
 
-File paths (`buffer.path`, `history.path`) may be relative. They resolve against the folder the config file is in, not the folder the command runs from, so `ot-gateway run /home/pi/site-1/ot-gateway.json` keeps `./ot-gateway-buffer.sqlite` in `/home/pi/site-1` wherever it is started. When the environment variable `OT_GATEWAY_DATA_DIR` is set, they resolve against it instead: the container image sets it to `/var/lib/ot-gateway`, the data volume, since Docker Compose mounts the config read-only at `/etc/ot-gateway/gateway.json`. `check` and the status page's Settings show the resolved paths. Absolute paths stay as they are.
+File paths (`buffer.path`, `history.path`) may be relative. They resolve against the folder the config file is in, not the folder the command runs from, so `ot-gateway run /home/pi/site-1/ot-gateway.json` keeps `./ot-gateway-buffer.sqlite` in `/home/pi/site-1` wherever it is started. When the environment variable `OT_GATEWAY_DATA_DIR` is set, they resolve against it instead: the container image sets it to `/var/lib/ot-gateway`, the data volume, so the outbox and the history outlive the container and stay out of the folder Docker Compose mounts at `/etc/ot-gateway`. `check` and the status page's Settings show the resolved paths. Absolute paths stay as they are.
+
+The status page's Settings tab edits the gateway's keys and the `mqtt` block in the file itself, with the same check, keeps the previous file as `ot-gateway.json.bak` and applies the change without a restart; a change by hand is read at the next start ([operations.md](operations.md#editing-in-the-status-page)).
 
 ## Gateway
 
@@ -71,11 +73,11 @@ Reads are written in batches every 30 s (sooner on a busy gateway), so a chart c
 
 ## status
 
-| Key           | Type    | Default        | Meaning                                                                                                                                                 |
-| ------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bindAddress` | IPv4    | `127.0.0.1`    | Where the page listens. On a loopback address it answers only loopback host names. `0.0.0.0` opens it to the network: it is read-only but has no login. |
-| `port`        | 1–65535 | 8080           | The page and `GET /api/status`.                                                                                                                         |
-| `webRoot`     | path    | `apps/web/out` | The built page. Without one, only the API is served.                                                                                                    |
+| Key           | Type    | Default        | Meaning                                                                                                                                                                                                       |
+| ------------- | ------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bindAddress` | IPv4    | `127.0.0.1`    | Where the page listens. On a loopback address it answers only loopback host names. `0.0.0.0` opens it to the network without a login, and the Settings tab cannot save unless `OT_GATEWAY_EDIT_TOKEN` is set. |
+| `port`        | 1–65535 | 8080           | The page and `GET /api/status`.                                                                                                                                                                               |
+| `webRoot`     | path    | `apps/web/out` | The built page. Without one, only the API is served.                                                                                                                                                          |
 
 ## bacnet
 

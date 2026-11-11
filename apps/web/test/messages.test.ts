@@ -8,7 +8,8 @@ const message = (topic: string, payload = "{}"): MessageStatus => ({
   truncated: false,
   retained: false,
   at: 0,
-  count: 1
+  count: 1,
+  delivered: 1
 })
 
 const value = message("site/hq/ahu-1/supply-temp", '{"value":21.5}')

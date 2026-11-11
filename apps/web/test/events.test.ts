@@ -78,6 +78,7 @@ describe("eventSentence", () => {
   it("leaves out what it does not know: the first connect, an empty buffer, a missing error", () => {
     expect(eventSentence({ id: 2, at: now, type: "broker-connected" })).toBe("Connected to the broker")
     expect(eventSentence({ ...brokerBack, buffered: 0 })).toBe("Broker back after 20 s")
+    expect(eventSentence({ ...drained, delivered: 66 })).toBe("Buffer emptied: 66 values from it reached the broker")
     expect(eventSentence({ ...brokerBack, buffered: 1 })).toBe(
       "Broker back after 20 s, 1 value from the buffer on its way"
     )
@@ -117,6 +118,18 @@ describe("eventTone", () => {
     expect(eventTone(recovered)).toBe("good")
     expect(eventTone(brokerBack)).toBe("good")
     expect(eventTone(started)).toBe("neutral")
+  })
+
+  it("says what a save on the Settings tab did, a rollback in red", () => {
+    const applied: GatewayEvent = { id: 7, at: now, type: "config-applied", summary: "gateway: site" }
+    const rolledBack: GatewayEvent = { id: 8, at: now, type: "config-apply-failed", error: "the broker did not answer" }
+    expect(eventSentence(applied)).toBe("Settings saved and applied: gateway: site")
+    expect(eventSentence(rolledBack)).toBe(
+      "Saved settings did not start, the previous ones run again: the broker did not answer"
+    )
+    expect(eventTone(applied)).toBe("neutral")
+    expect(eventTone(rolledBack)).toBe("bad")
+    expect(isIncident(applied)).toBe(true)
   })
 })
 

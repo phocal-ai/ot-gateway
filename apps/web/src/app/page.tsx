@@ -758,7 +758,7 @@ const useGlance = (
   unreachable: boolean,
   opened: string | undefined
 ) => {
-  const catalogLoad = useCatalog(status?.since)
+  const catalogLoad = useCatalog(status?.configSince)
   const catalog = catalogLoad._tag === "ok" ? catalogLoad.catalog : undefined
   const listedIds =
     status === undefined
@@ -919,8 +919,8 @@ const StatusView = () => {
   const [morph, setMorph] = useState(false)
   const unreachable = load._tag === "unreachable"
   const glance = useGlance(status, all, unreachable, opened)
-  const config = useRunningConfig(status?.since)
-  const catalogLoad = useCatalog(status?.since)
+  const config = useRunningConfig(status?.configSince)
+  const catalogLoad = useCatalog(status?.configSince)
   const byDevice = useMemo(
     () => pointsByDevice(catalogLoad._tag === "ok" ? catalogLoad.catalog.points : []),
     [catalogLoad]

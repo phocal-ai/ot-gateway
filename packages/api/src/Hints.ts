@@ -1,9 +1,9 @@
 /**
  * What to check when a device fails, by why it fails: the failure class the gateway reports (`DeviceStatus.reason`),
  * narrowed by the driver's words (`lastError`) and the protocol. One table, first match wins, so a new case is one
- * row. Pure, so it is tested without a browser.
+ * row. Shared by the status page's device sheet and `ot-gateway status`; pure, so it is tested on its own.
  */
-import type { DeviceStatus } from "@ot-gateway/api"
+import type { DeviceStatus } from "./Status.ts"
 
 export type Protocol = DeviceStatus["protocol"]
 

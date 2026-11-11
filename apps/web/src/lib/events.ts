@@ -61,7 +61,13 @@ export const eventSentence = (event: GatewayEvent): string => {
         : `${connected}, ${values(event.buffered)} from the buffer on ${event.buffered === 1 ? "its" : "their"} way`
     }
     case "buffer-drained":
-      return "Buffer emptied: every value kept while the broker was away reached it"
+      return event.delivered === undefined || event.delivered === 0
+        ? "Buffer emptied: every value kept while the broker was away reached it"
+        : `Buffer emptied: ${values(event.delivered)} from it reached the broker`
+    case "config-applied":
+      return `Settings saved and applied: ${event.summary}`
+    case "config-apply-failed":
+      return `Saved settings did not start, the previous ones run again: ${event.error}`
     case "gateway-conflict":
       return event.sameId
         ? `Another gateway with this gateway's id (${event.gateway}) is online: both publish into the same topics`
@@ -78,7 +84,10 @@ export const isIncident = (event: GatewayEvent) =>
 
 /** Whether an event is bad news (shown in red), good news or neither. */
 export const eventTone = (event: GatewayEvent): "bad" | "good" | "neutral" =>
-  event.type === "device-failing" || event.type === "broker-disconnected" || event.type === "gateway-conflict"
+  event.type === "device-failing" ||
+  event.type === "broker-disconnected" ||
+  event.type === "config-apply-failed" ||
+  event.type === "gateway-conflict"
     ? "bad"
     : event.type === "device-recovered" || event.type === "broker-connected" || event.type === "buffer-drained"
       ? "good"

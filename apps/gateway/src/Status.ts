@@ -1,15 +1,20 @@
 /**
  * The local status page: `GET /api/status` (the `OtGatewayApi` contract from
  * `@ot-gateway/api`) and the built web app (`apps/web/out`), served by the
- * gateway itself on `status.bindAddress:status.port`. Read-only: commands
- * reach devices only through MQTT and the command guard.
+ * gateway itself on `status.bindAddress:status.port`. Commands reach devices
+ * only through MQTT and the command guard; the one thing the page can change
+ * is the config file (ConfigEditor.ts), and every write passes the edit guard.
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
 import {
   type BrokerConnection,
   type CommandStatus,
+  ConfigUnreadable,
   type ConfigView,
+  EDIT_HEADER,
   type DeviceStatus,
+  EditingDisabled,
+  type EditStatus,
   type GatewayStatus,
   HistoryQueryInvalid,
   HistoryUnavailable,
@@ -21,7 +26,9 @@ import {
   ValuesQueryInvalid
 } from "@ot-gateway/api"
 import type { History } from "@ot-gateway/history"
+import type { ConfigEditor } from "./ConfigEditor.ts"
 import { configView } from "./ConfigView.ts"
+import { isLoopbackAddress, isReadOnlyMethod, writeRefusal } from "./EditGuard.ts"
 import { GatewayEvents } from "./Events.ts"
 import type { HostSnapshot } from "./Host.ts"
 import { pointCatalog } from "./PointCatalog.ts"
@@ -87,6 +94,11 @@ export interface StatusState {
     message: { readonly retained: boolean; readonly at: number }
   ) => void
   /**
+   * Note that a message on `topic` reached the broker (acknowledged, or written to the connection at QoS 0), from
+   * the buffer or straight: the messages view's `delivered`. A map lookup and an increment, nothing per read more.
+   */
+  readonly recordDelivered: (topic: string) => void
+  /**
    * Every read, as the pipeline hands it to the history: the page shows a point's last read, which is never
    * older than what was published and is there before the first message of an aggregate or a change.
    */
@@ -121,14 +133,16 @@ export const makeStatusState = (
   config: GatewayConfig,
   health: HealthRegistry,
   since: number,
-  host?: StatusHost
+  host?: StatusHost,
+  /** When this config started: `since`, or the moment a config saved on the page was applied. */
+  configSince = since
 ): StatusState => {
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
   const payloads = new Map<string, string>()
   // The last read per device/point: one entry per configured point, so bounded by the config.
   const reads = new Map<string, { readonly value: number | boolean; readonly ts: number }>()
-  const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number }>()
+  const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number; delivered: number }>()
   const droppedTopics = new Set<string>()
   const commands: Array<CommandStatus> = []
   let broker: { readonly at: number; readonly connection: BrokerConnection } | undefined
@@ -151,13 +165,22 @@ export const makeStatusState = (
         return
       }
       const previous = latest.get(topic)
-      if (previous !== undefined || latest.size < MAX_TOPICS) {
-        latest.set(topic, { payload, retained: message.retained, at: message.at, count: (previous?.count ?? 0) + 1 })
+      if (previous !== undefined) {
+        previous.payload = payload
+        previous.retained = message.retained
+        previous.at = message.at
+        previous.count++
+      } else if (latest.size < MAX_TOPICS) {
+        latest.set(topic, { payload, retained: message.retained, at: message.at, count: 1, delivered: 0 })
       } else if (droppedTopics.size < MAX_TOPICS) droppedTopics.add(topic)
       const rest = topic.slice(prefix.length)
       const slash = rest.indexOf("/")
       if (slash <= 0 || rest.indexOf("/", slash + 1) !== -1) return
       payloads.set(rest, payload)
+    },
+    recordDelivered: (topic) => {
+      const entry = latest.get(topic)
+      if (entry !== undefined) entry.delivered++
     },
     reads: {
       record: (device, point, value, ts) => {
@@ -229,6 +252,7 @@ export const makeStatusState = (
           id: config.id,
           since,
           now,
+          configSince,
           broker: {
             url: config.mqtt.url,
             connected,
@@ -295,12 +319,41 @@ export const makeStatusState = (
           truncated: message.payload.length > MAX_PAYLOAD,
           retained: message.retained,
           at: message.at,
-          count: message.count
+          count: message.count,
+          delivered: message.delivered
         })),
       droppedTopics: droppedTopics.size
     })),
     points: Effect.succeed(catalog),
     config: Effect.succeed(settings)
+  }
+}
+
+/**
+ * The status the server answers with, switched to a new config's state when one is applied from the page: the
+ * server keeps running, and every request reads the state of the config running now. Only the server reads
+ * through it; each config writes to its own state.
+ */
+export const switchableStatus = (initial: StatusState) => {
+  let current = initial
+  const state: StatusState = {
+    recordPublish: (topic, payload, message) => current.recordPublish(topic, payload, message),
+    recordDelivered: (topic) => current.recordDelivered(topic),
+    reads: { record: (device, point, value, ts) => current.reads.record(device, point, value, ts) },
+    recordBrokerConnection: (at, connection) => current.recordBrokerConnection(at, connection),
+    recordBrokerFailure: (at, error) => current.recordBrokerFailure(at, error),
+    recordCommand: (at, command, outcome) => current.recordCommand(at, command, outcome),
+    snapshot: (points) => Effect.suspend(() => current.snapshot(points)),
+    values: (keys) => Effect.suspend(() => current.values(keys)),
+    messages: Effect.suspend(() => current.messages),
+    points: Effect.suspend(() => current.points),
+    config: Effect.suspend(() => current.config)
+  }
+  return {
+    state,
+    switchTo: (next: StatusState) => {
+      current = next
+    }
   }
 }
 
@@ -334,12 +387,14 @@ export interface HistoryRequest {
 
 /** `/api/history`: a configured point's history, the last hour unless the request names a range. */
 export const historyHandler =
-  (config: GatewayConfig, history: History | undefined) =>
+  (running: GatewayConfig | (() => GatewayConfig), history: History | undefined) =>
   (request: HistoryRequest): Effect.Effect<HistorySeriesOf, HistoryUnavailable | HistoryQueryInvalid> =>
     Effect.gen(function* () {
       if (history === undefined) {
         return yield* new HistoryUnavailable({ message: "the config has no history block, so no reads are kept" })
       }
+      // The config running now: a config applied from the page may have added or removed the point.
+      const config = typeof running === "function" ? running() : running
       const device = config.devices.find((candidate) => candidate.id === request.device)
       if (device === undefined || !device.points.some((point) => point.id === request.point)) {
         return yield* new HistoryQueryInvalid({ message: `no point ${request.device}/${request.point} in the config` })
@@ -367,7 +422,8 @@ export const serveStatus = (
   settings: StatusSettings,
   state: StatusState,
   history: (request: HistoryRequest) => Effect.Effect<HistorySeriesOf, HistoryUnavailable | HistoryQueryInvalid> = () =>
-    Effect.fail(new HistoryUnavailable({ message: "this server keeps no history" }))
+    Effect.fail(new HistoryUnavailable({ message: "this server keeps no history" })),
+  editor?: ConfigEditor
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
@@ -386,6 +442,21 @@ export const serveStatus = (
             .handle("config", () => state.config)
             .handle("history", ({ query }) => history(query))
         )
+      ),
+      Layer.provide(
+        HttpApiBuilder.group(OtGatewayApi, "editor", (handlers) =>
+          editor === undefined
+            ? handlers
+                .handle("editStatus", () => Effect.succeed(noEditorStatus))
+                .handle("file", () => Effect.fail(new ConfigUnreadable({ message: noEditor.reason })))
+                .handle("check", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
+                .handle("save", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
+            : handlers
+                .handle("editStatus", () => editor.status)
+                .handle("file", () => editor.file)
+                .handle("check", ({ payload }) => editor.check(payload.text))
+                .handle("save", ({ payload }) => editor.save(payload.text, payload.etag))
+        )
       )
     )
     const web = hasWeb
@@ -398,7 +469,7 @@ export const serveStatus = (
           )
         )
     // An open page asks every two seconds: neither a log line nor a trace per request (the edge log budget).
-    const server = HttpRouter.serve(Layer.mergeAll(api, web, hostCheck(settings)), {
+    const server = HttpRouter.serve(Layer.mergeAll(api, web, hostCheck(settings), writeGuard(editor)), {
       disableLogger: true,
       disableListenLog: true
     }).pipe(
@@ -430,8 +501,42 @@ export const serveStatus = (
     )
   )
 
-/** Loopback addresses a page served on this machine is reached at. */
-const isLoopback = (address: string) => address === "localhost" || address === "::1" || address.startsWith("127.")
+/** Without a config file (the demo, a test) there is nothing to edit: why, and how to get a gateway that can. */
+const noEditor = {
+  reason: "This gateway runs without a config file (the demo), so there is nothing to edit here.",
+  fix: "Run a gateway from its folder (ot-gateway init, then ot-gateway run or docker compose up -d) to edit its config in this page."
+}
+const noEditorStatus: EditStatus = { enabled: false, auth: "none", path: "", ...noEditor }
+
+/**
+ * Every request that is not a GET or HEAD goes through the edit guard (EditGuard.ts): same origin, the
+ * `X-OT-Gateway` header, a loopback bind or the token. Refused with 403 and the reason, as `EditingDisabled`, so
+ * the page's typed client reads it like any other answer. CORS preflights (OPTIONS) are refused too: never granted.
+ */
+const writeGuard = (editor: ConfigEditor | undefined) =>
+  HttpRouter.middleware(
+    (httpEffect) =>
+      Effect.gen(function* () {
+        const request = yield* HttpServerRequest.HttpServerRequest
+        if (isReadOnlyMethod(request.method)) return yield* httpEffect
+        const refusal =
+          editor === undefined
+            ? `${noEditor.reason} ${noEditor.fix}`
+            : writeRefusal(
+                {
+                  host: request.headers["host"],
+                  origin: request.headers["origin"],
+                  [EDIT_HEADER]: request.headers[EDIT_HEADER],
+                  authorization: request.headers["authorization"]
+                },
+                editor.access,
+                editor.token
+              )
+        if (refusal === undefined) return yield* httpEffect
+        return HttpServerResponse.jsonUnsafe({ _tag: "EditingDisabled", message: refusal }, { status: 403 })
+      }),
+    { global: true }
+  )
 
 /** An IPv4 address in 127.0.0.0/8, written as four decimal octets. */
 const isLoopbackIpv4 = (name: string) => {
@@ -471,7 +576,7 @@ export const isLoopbackHost = (host: string, bindAddress: string): boolean => {
  * another address, the page is meant for the network, and any host goes.
  */
 const hostCheck = (settings: StatusSettings) => {
-  if (!isLoopback(settings.bindAddress)) return Layer.empty
+  if (!isLoopbackAddress(settings.bindAddress)) return Layer.empty
   // A fixed message: the Host header is not echoed back.
   const misdirected =
     `Misdirected request: open the status page as http://127.0.0.1:${settings.port} or ` +

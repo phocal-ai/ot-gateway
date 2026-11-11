@@ -1,7 +1,7 @@
 "use client"
 /**
- * The running config (`/api/config`) for the device panel's addresses. Like the catalog, it changes only when the
- * gateway restarts, so it is asked for once per run of the gateway (its start time) and kept across tab switches.
+ * The running config (`/api/config`) for the device panel's addresses. Like the catalog, it changes only with the
+ * config (a restart, a save on the Settings tab), so it is asked for once per config (`configSince`) and kept.
  */
 import type { ConfigView } from "@ot-gateway/api"
 import { useEffect, useState } from "react"
@@ -12,7 +12,7 @@ const RETRY_MS = 5000
 
 let cachedConfig: { readonly since: number; readonly config: ConfigView } | undefined
 
-/** The config of the gateway that started at `since`; undefined until it came, or before the status says. */
+/** The config that started at `since` (`configSince`); undefined until it came, or before the status says. */
 export const useRunningConfig = (since: number | undefined) => {
   const [config, setConfig] = useState<ConfigView | undefined>(() =>
     since !== undefined && cachedConfig?.since === since ? cachedConfig.config : undefined
