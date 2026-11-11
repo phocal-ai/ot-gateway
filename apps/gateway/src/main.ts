@@ -20,7 +20,7 @@ import { identity } from "effect/Function"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { isLongRunning, runCli } from "./Cli.ts"
 import { loadEnvFile } from "./EnvFile.ts"
-import { isJsonMode, reportFailure, ResultConsole, stderrConsole } from "./Output.ts"
+import { isJsonMode, reportFailure, ResultConsole, stderrConsole, stdoutClosed } from "./Output.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 
 // A broker or device named by host name may have several addresses (localhost: 127.0.0.1 and ::1). Node tries
@@ -40,6 +40,8 @@ const argv = process.argv.slice(2)
 const json = isJsonMode(argv)
 
 runCli(argv).pipe(
+  // A reader that closes stdout (`watch | head`) ends a command as done, exit code 0: every streaming command.
+  Effect.raceFirst(stdoutClosed(process.stdout)),
   Effect.tapCause(reportFailure({ json, longRunning: isLongRunning(argv) })),
   // --json: stdout is the JSON result alone (Output.ts), so help, banners and progress go to stderr.
   json

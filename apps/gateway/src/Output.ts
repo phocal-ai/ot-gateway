@@ -5,6 +5,7 @@
  */
 import { describeFailure } from "@ot-gateway/core"
 import { Cause, Console, Context, Effect, Result } from "effect"
+import type { EventEmitter } from "node:events"
 import { CliError } from "effect/cli"
 
 /** `--json` anywhere on the command line, as the CLI's flags take it. */
@@ -119,3 +120,27 @@ export const failureLine = (message: string) => `error: ${message}`
 /** A path or word as one argument of a printed command line: as it is when that is safe, else in single quotes. */
 export const shellArgument = (value: string) =>
   /^[\w./:@%+=,-]+$/.test(value) && !value.startsWith("-") ? value : `'${value.replaceAll("'", `'\\''`)}'`
+
+/** What later write errors on a pipe already found closed go to: nowhere, and no uncaught error. */
+const ignore = () => {}
+
+/**
+ * Succeeds when `stream` (stdout) is closed by its reader: `ot-gateway watch | head` closes the pipe after a few
+ * lines, and the next write fails with EPIPE. Raced against a command, that ends it as finished, exit code 0, with
+ * its scopes closed (the broker connection too), instead of an uncaught error and exit code 1. Any other error on
+ * the stream is a defect, as it would have been without this listener.
+ */
+export const stdoutClosed = (stream: Pick<EventEmitter, "on" | "off">) =>
+  Effect.callback<void>((resume) => {
+    const onError = (error: unknown) => {
+      // Later writes to the closed pipe fail too; nobody reads them, and the race is decided by this first one.
+      stream.off("error", onError)
+      stream.on("error", ignore)
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      resume(code === "EPIPE" ? Effect.void : Effect.die(error))
+    }
+    stream.on("error", onError)
+    return Effect.sync(() => {
+      stream.off("error", onError)
+    })
+  })

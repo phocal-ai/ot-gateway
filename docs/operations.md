@@ -477,6 +477,8 @@ plant-1/hall-a gateway main at http://127.0.0.1:8080: messages per topic since i
   energy-meter/active-power/$meta     1 sent, 1 reached the broker,  last 08:02:12 retained  {"name":"Active power","unit":"unit:KiloW",…}
 ```
 
+A command whose output is cut short by its reader (`ot-gateway watch | head`, `events --follow | head -5`) ends there with exit code 0, as a finished command, and closes its connections.
+
 `ot-gateway watch` says when it loses the broker and when it is back; with `--seconds` it exits with 1 when the broker was lost and did not come back. A retained message the broker keeps from another gateway, or for a device or point the config does not have (an older config's), is marked, `retained (from gateway old-pi)` or `retained (point not in this config)` (`"stale"` in `--json`), and the first one prints, once, how to clear it: `ot-gateway publish <topic> --retain`. The gateway clears the `$meta` of its own points that are gone by itself; the rest it leaves, as nothing says whose they are now.
 
 ## Health on MQTT

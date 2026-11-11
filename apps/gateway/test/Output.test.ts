@@ -4,14 +4,23 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { spawnSync } from "node:child_process"
+import { EventEmitter } from "node:events"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Console, Effect, Exit, Result } from "effect"
+import { Cause, Console, Effect, Exit, Fiber, Result } from "effect"
 import { CliError } from "effect/cli"
 import { DatagramSocketError, DatagramSocketOpenError } from "effect/socket/DatagramSocket"
 import { TestConsole } from "effect/testing"
 import { isLongRunning, runCli, toCliArgs } from "../src/Cli.ts"
-import { isUsageError, printJson, reportFailure, ResultConsole, stderrConsole, usageFailure } from "../src/Output.ts"
+import {
+  isUsageError,
+  printJson,
+  reportFailure,
+  ResultConsole,
+  stderrConsole,
+  stdoutClosed,
+  usageFailure
+} from "../src/Output.ts"
 import { gatewayTeardown } from "../src/Shutdown.ts"
 import { messageRecord } from "../src/Watch.ts"
 
@@ -165,4 +174,30 @@ describe("watch --json", () => {
     })
     expect(JSON.parse(messageRecord({ topic: "x", payload: "on", retain: true }, at)).payload).toBe("on")
   })
+})
+
+describe("a reader that closes stdout", () => {
+  it.effect("ends a streaming command as done, exit code 0, and later failed writes throw nothing", () =>
+    Effect.gen(function* () {
+      const stdout = new EventEmitter()
+      const fiber = yield* Effect.never.pipe(Effect.raceFirst(stdoutClosed(stdout)), Effect.forkChild)
+      yield* Effect.yieldNow
+      stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(exitCodeOf(exit)).toEqual([0])
+      expect(() => stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))).not.toThrow()
+    })
+  )
+
+  it.effect("leaves any other error on stdout a defect", () =>
+    Effect.gen(function* () {
+      const stdout = new EventEmitter()
+      const fiber = yield* Effect.forkChild(stdoutClosed(stdout))
+      yield* Effect.yieldNow
+      stdout.emit("error", Object.assign(new Error("disk"), { code: "EIO" }))
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
+    })
+  )
 })
