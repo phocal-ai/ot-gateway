@@ -116,7 +116,11 @@ const useReveal = () => {
         scrolled = true
       }
       const field = element === null ? null : firstField(element)
-      if (field !== null) return field.focus({ preventScroll: true })
+      if (element !== null && field !== null) {
+        // Again once the form shows: while it read the file, the page may have been too short to scroll that far.
+        element.scrollIntoView({ block: "start" })
+        return field.focus({ preventScroll: true })
+      }
       if (Date.now() - started < REVEAL_WAIT_MS) timer = setTimeout(attempt, 50)
     }
     timer = setTimeout(attempt, 0)
@@ -191,7 +195,7 @@ const SavedNote = ({
 
 /** What the BACnet/IP card says while no device uses BACnet, so the gateway opens no BACnet port yet. */
 const BACNET_UNUSED =
-  "No BACnet device yet: the gateway opens its BACnet/IP port with the first one. Find BACnet devices uses these settings: port 47808 and a broadcast to 255.255.255.255 unless changed here."
+  "No BACnet device yet: the gateway opens its BACnet/IP port with the first one. Find BACnet devices already uses these settings; Edit shows them."
 
 const SettingsPage = () => {
   const [reload, setReload] = useState(0)

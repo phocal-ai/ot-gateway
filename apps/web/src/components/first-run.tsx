@@ -50,7 +50,7 @@ const Step = ({
     >
       {done ? "✓" : number}
     </span>
-    <div className="grid min-w-0 gap-2 pt-0.5">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-2 pt-0.5">
       <h3 className={`font-medium ${current || done ? "text-foreground" : "text-muted-foreground"}`}>
         {title}
         <span className="sr-only">{done ? " (done)" : current ? " (next)" : ""}</span>
@@ -137,12 +137,12 @@ const ValuesStep = ({
           {shown.map((point) => {
             const reading = readings.get(pointKey(point))
             return (
-              <li key={pointKey(point)} className="flex items-baseline justify-between gap-3">
+              <li key={pointKey(point)} className="flex min-w-0 items-baseline justify-between gap-3">
                 <span className="min-w-0 truncate">
                   {point.name}
                   <span className="text-muted-foreground"> · {point.device}</span>
                 </span>
-                <span className={`tabular-nums ${reading?.value === undefined ? "text-muted-foreground" : ""}`}>
+                <span className={`shrink-0 tabular-nums ${reading?.value === undefined ? "text-muted-foreground" : ""}`}>
                   {reading?.value === undefined
                     ? "waiting…"
                     : `${formatValue(reading.value)}${point.unit === undefined ? "" : ` ${unitLabel(point.unit)}`}`}
