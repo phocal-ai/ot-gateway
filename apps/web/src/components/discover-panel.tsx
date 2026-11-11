@@ -112,11 +112,14 @@ const ObjectList = ({
 
 export const DiscoverPanel = ({
   onPicked,
-  onCancel
+  onCancel,
+  onBacnetSettings
 }: {
   /** The device to add, with the objects ticked as its points: opened in the device form. */
   readonly onPicked: (draft: DeviceDraft) => void
   readonly onCancel: () => void
+  /** Open the BACnet/IP card's form: when no device answered, its port or broadcast address may be what to change. */
+  readonly onBacnetSettings: () => void
 }) => {
   const [address, setAddress] = useState("")
   const [step, setStep] = useState<Step>({ _tag: "ask" })
@@ -245,7 +248,14 @@ export const DiscoverPanel = ({
         <div className="grid gap-2" role="status">
           {/* Without devices the gateway's note starts with "No device answered" and says what to check. */}
           {found.value.devices.length === 0 && found.value.note !== undefined ? (
-            <p className="text-sm">{found.value.note}</p>
+            <>
+              <p className="text-sm break-words">{found.value.note}</p>
+              <div>
+                <Button size="sm" variant="outline" onClick={onBacnetSettings}>
+                  Change the BACnet/IP settings
+                </Button>
+              </div>
+            </>
           ) : (
             <>
               <p className="text-sm">
