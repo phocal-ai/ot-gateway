@@ -360,6 +360,7 @@ const PointsList = () => {
           onClose={closePoint}
           onStep={step}
           point={opened}
+          since={status?.since}
           unreachable={unreachable}
           position={openedIndex < 0 ? undefined : { index: openedIndex + 1, total: found.length }}
         />

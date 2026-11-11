@@ -7,11 +7,12 @@
 import type { HistorySeries } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"
 import { formatNumber } from "@/lib/format"
-import { nearest, segments, timeLabel, timeTicks, valueTicks } from "@/lib/history"
-import { formatValue, unitLabel } from "@/lib/status"
+import { axisFrom, bucketTime, nearest, segments, timeLabel, timeTicks, valueTicks } from "@/lib/history"
+import { clockTime, formatValue, unitLabel } from "@/lib/status"
 
 const HEIGHT = 150
-const margin = { top: 8, right: 12, bottom: 22, left: 48 }
+// Room at the top for the unit over the value axis.
+const margin = { top: 20, right: 12, bottom: 22, left: 48 }
 
 /** The element's width, following resizes. */
 const useWidth = () => {
@@ -34,16 +35,20 @@ export const HistoryChart = ({
   series,
   unit,
   boolean,
-  label
+  label,
+  startedAt
 }: {
   readonly series: HistorySeries
   readonly unit: string | undefined
   readonly boolean: boolean
   readonly label: string
+  /** When the gateway started (its `since`): a history that begins there starts the axis there (`axisFrom`). */
+  readonly startedAt: number | undefined
 }) => {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | undefined>(undefined)
-  const { buckets, stepMs, from, to } = series
+  const { buckets, stepMs, to } = series
+  const from = axisFrom(series, startedAt)
   const lows = buckets.map((bucket) => bucket.min)
   const highs = buckets.map((bucket) => bucket.max)
   const ticks = boolean ? [0, 1] : valueTicks(Math.min(...lows), Math.max(...highs))
@@ -80,6 +85,11 @@ export const HistoryChart = ({
           role="img"
           width={width}
         >
+          {boolean || units === "" ? null : (
+            <text className="fill-muted-foreground text-[11px]" textAnchor="end" x={margin.left - 6} y={11}>
+              {units}
+            </text>
+          )}
           {ticks.map((tick) => (
             <g key={tick}>
               <line stroke="var(--border)" x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} />
@@ -156,6 +166,11 @@ export const HistoryChart = ({
           )}
         </svg>
       )}
+      {from > series.from && startedAt !== undefined ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          The gateway started at {clockTime(startedAt, to)}: there is no history before that.
+        </p>
+      ) : null}
       {hovered === undefined ? null : (
         <div
           className="pointer-events-none absolute top-0 z-10 rounded-md border bg-card text-card-foreground px-2.5 py-1.5 text-xs shadow-md"
@@ -165,12 +180,7 @@ export const HistoryChart = ({
           }}
         >
           <div className="text-muted-foreground tabular-nums">
-            {new Date(hovered.t).toLocaleString([], {
-              weekday: "short",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: stepMs < 60_000 ? "2-digit" : undefined
-            })}
+            {bucketTime(hovered.t, stepMs)}
           </div>
           <div className="font-mono tabular-nums">
             {format(hovered.avg, boolean)} {boolean ? "" : units}

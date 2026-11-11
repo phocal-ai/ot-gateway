@@ -100,6 +100,7 @@ export const PointSheet = ({
   point,
   live,
   now,
+  since,
   position,
   morph,
   unreachable,
@@ -109,6 +110,8 @@ export const PointSheet = ({
   readonly point: PointInfo
   readonly live: LivePoint | undefined
   readonly now: number
+  /** When the gateway started, for the history's time axis. */
+  readonly since: number | undefined
   /** Where the point is in the listed points (1-based), when it is listed. */
   readonly position: { readonly index: number; readonly total: number } | undefined
   /** Opened by a view transition, which animates it; otherwise it slides in by itself. */
@@ -262,6 +265,7 @@ export const PointSheet = ({
               <HistoryChart
                 boolean={typeof value?.value === "boolean"}
                 label={pointTitle(point)}
+                startedAt={since}
                 series={history.series.series}
                 unit={point.unit}
               />

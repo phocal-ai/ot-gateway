@@ -1,6 +1,15 @@
 /** Drawing a history: where lines break, and the ticks on both axes. */
 import { describe, expect, it } from "@effect/vitest"
-import { gatewayTime, nearest, segments, timeTicks, valueTicks } from "../src/lib/history"
+import {
+  axisFrom,
+  bucketTime,
+  gatewayTime,
+  nearest,
+  segments,
+  timeLabel,
+  timeTicks,
+  valueTicks
+} from "../src/lib/history"
 
 const bucket = (t: number, avg = 1) => ({ t, min: avg, max: avg, avg, count: 1 })
 
@@ -56,6 +65,44 @@ describe("timeTicks", () => {
       expect(tick).toBeGreaterThanOrEqual(from)
       expect(tick).toBeLessThanOrEqual(to)
     }
+  })
+})
+
+describe("timeLabel and bucketTime", () => {
+  it("use the 24-hour clock like the rest of the page", () => {
+    const afternoon = new Date(2026, 10, 5, 14, 5, 24).getTime()
+    expect(timeLabel(afternoon, 900_000)).toBe("14:05")
+    expect(bucketTime(afternoon, 15_000)).toMatch(/14:05:24$/)
+    expect(bucketTime(afternoon, 60_000)).toMatch(/14:05$/)
+    expect(timeLabel(new Date(2026, 10, 5, 0, 30).getTime(), 900_000)).toBe("00:30")
+  })
+})
+
+describe("axisFrom", () => {
+  const to = 10_000_000
+  const from = to - 3_600_000
+  const step = 15_000
+  const series = (times: ReadonlyArray<number>) => ({ from, to, stepMs: step, buckets: times.map((t) => bucket(t)) })
+
+  it("starts where the gateway started when its history begins there", () => {
+    const startedAt = to - 600_000
+    expect(axisFrom(series([startedAt, startedAt + step]), startedAt)).toBe(startedAt)
+  })
+
+  it("keeps a few minutes of room for a line that just began", () => {
+    const startedAt = to - 30_000
+    expect(axisFrom(series([startedAt]), startedAt)).toBe(to - 300_000)
+  })
+
+  it("keeps the whole range when older history leaves a gap where the gateway was off", () => {
+    const startedAt = to - 600_000
+    expect(axisFrom(series([from, startedAt]), startedAt)).toBe(from)
+  })
+
+  it("keeps the whole range for a gateway that started before it, or without reads", () => {
+    expect(axisFrom(series([to - 600_000]), from - 1)).toBe(from)
+    expect(axisFrom(series([]), to - 600_000)).toBe(from)
+    expect(axisFrom(series([to - 600_000]), undefined)).toBe(from)
   })
 })
 
