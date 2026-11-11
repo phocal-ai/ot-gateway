@@ -9,6 +9,7 @@
  */
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { matchesWords } from "@/lib/points"
+import { formatNumber } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 /** Line icons drawn like the rest of shadcn/ui's (24-unit box, 2-unit round strokes), inline: no icon package. */
@@ -233,7 +234,7 @@ export const Combobox = ({
             )}
             {matching.length > shown.length ? (
               <li className="px-2 py-2 text-center text-xs text-muted-foreground" role="presentation">
-                {(matching.length - shown.length).toLocaleString()} more: type to narrow
+                {formatNumber(matching.length - shown.length)} more: type to narrow
               </li>
             ) : null}
           </ul>

@@ -5,7 +5,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { historyDisabled, historyDropped } from "@ot-gateway/core"
-import { Effect, FileSystem, Metric, Tracer } from "effect"
+import { Clock, Effect, FileSystem, Metric, Tracer } from "effect"
 import { SqlError, UnknownError } from "effect/sql/SqlError"
 import { TestClock } from "effect/testing"
 import { type History, MAX_PENDING, openHistory, rollup, type Store, stepFor } from "../src/index.ts"
@@ -261,6 +261,75 @@ describe("when the history writes", () => {
       yield* settle(history)
       expect(counter.writes).toBe(2)
       expect((yield* history.series({ device: "d", point: "p", from: 0, to: 1_000 })).buckets).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
+/** Records which table each read asks the store for. */
+const tablesAsked = () => {
+  const tables: Array<string> = []
+  const wrapStore = (store: Store): Store => ({
+    ...store,
+    buckets: (table, query) =>
+      Effect.suspend(() => {
+        tables.push(table)
+        return store.buckets(table, query)
+      })
+  })
+  return { tables, wrapStore }
+}
+
+describe("which table a range is read from", () => {
+  it.effect("reads a day in 240 buckets from the rollups, whatever the caller's clock says about its age", () =>
+    Effect.gen(function* () {
+      const { tables, wrapStore } = tablesAsked()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      const now = yield* Clock.currentTimeMillis
+      // A browser clock a second behind, in step with, or a second ahead of the gateway's.
+      for (const skew of [-1_000, 0, 1_000]) {
+        const series = yield* history.series({
+          device: "d",
+          point: "p",
+          from: now - DAY + skew,
+          to: now + skew,
+          buckets: 240
+        })
+        expect(series).toMatchObject({ resolution: "minute", stepMs: 360_000 })
+      }
+      expect(tables).toEqual(["minutes", "minutes", "minutes"])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("reads 15 minutes in 240 buckets from every read", () =>
+    Effect.gen(function* () {
+      const { tables, wrapStore } = tablesAsked()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      const now = yield* Clock.currentTimeMillis
+      const series = yield* history.series({ device: "d", point: "p", from: now - 900_000, to: now, buckets: 240 })
+      expect(series).toMatchObject({ resolution: "read", stepMs: 4_000 })
+      expect(tables).toEqual(["readings"])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("reads a range from more than a day back from the rollups, even in buckets finer than a minute", () =>
+    Effect.gen(function* () {
+      const { tables, wrapStore } = tablesAsked()
+      // A write a minute, as in the retention test, so a day of virtual time stays quick.
+      const history = yield* openHistory(
+        { path: yield* tempPath, retentionDays: 7 },
+        { wrapStore, flushEveryMs: 60_000 }
+      )
+      for (let second = 0; second < 120; second++) history.sink.record("m", "power", second, second * 1000)
+      yield* TestClock.adjust("1 minute")
+      yield* TestClock.adjust(DAY + 3_600_000)
+      tables.length = 0
+      const series = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 240 })
+      expect(series).toMatchObject({ resolution: "minute", stepMs: 60_000 })
+      expect(series.buckets).toEqual([
+        { t: 0, min: 0, max: 59, avg: 29.5, count: 60 },
+        { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60 }
+      ])
+      expect(tables).toEqual(["minutes"])
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })
