@@ -80,10 +80,14 @@ export const pointFreshness = (
 
 /**
  * When a value was read, for its hover and the panels: "read 14:05:09", or "last read 14:05:09" for a stale one (the
- * last value known while its device fails), "nothing read yet" without a read.
+ * last value known while its device fails), "nothing read yet" without a read. A point sent on change of value
+ * (`onChange`) carries the time it last changed, which can be long before the device stopped answering, so a stale
+ * one says "last change".
  */
-export const readLabel = (ts: number | undefined, now: number, stale: boolean) =>
-  ts === undefined ? "nothing read yet" : `${stale ? "last read" : "read"} ${clockTime(ts, now)}`
+export const readLabel = (ts: number | undefined, now: number, stale: boolean, onChange = false) =>
+  ts === undefined
+    ? "nothing read yet"
+    : `${stale ? (onChange ? "last change" : "last read") : "read"} ${clockTime(ts, now)}`
 
 /** Points a device row on the Status tab shows before "+n more". */
 export const GLANCE_POINTS = 4

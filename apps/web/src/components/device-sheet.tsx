@@ -20,7 +20,7 @@ import {
   type PageEvent,
   type SharedFailure
 } from "@/lib/events"
-import { alarmWhen, pointFreshness } from "@/lib/glance"
+import { alarmWhen, pointFreshness, readsOnChange } from "@/lib/glance"
 import { whatToCheck } from "@ot-gateway/api"
 import { filterToSearch, pointKey } from "@/lib/points"
 import { clockTime, every, failingSinceText, failureLabel, freshness, protocolName, sinceClock } from "@/lib/status"
@@ -297,6 +297,7 @@ export const DeviceSheet = ({
                           alarm={alarmWhen(point)}
                           now={now}
                           stale={read._tag === "stale"}
+                          onChange={readsOnChange(point)}
                           unit={point.unit}
                           value={value}
                         />
@@ -311,7 +312,8 @@ export const DeviceSheet = ({
                           "nothing read yet"
                         ) : (
                           <>
-                            {read._tag === "stale" ? "last read" : "read"} <PointRead now={now} state={read} />
+                            {read._tag === "stale" ? (readsOnChange(point) ? "last change" : "last read") : "read"}{" "}
+                            <PointRead now={now} state={read} />
                           </>
                         )}
                       </span>

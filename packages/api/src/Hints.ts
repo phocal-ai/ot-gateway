@@ -27,7 +27,7 @@ const firewall = "Is a firewall or a VLAN between the gateway and the device blo
 /** The BACnet/IP checks a device that stops answering gets, as a Modbus device gets its unit id and port. */
 const bacnetInstance = "Is the device instance in the config the device's own (its Device object, not a point)?"
 const bacnetPort =
-  "Is BACnet/IP enabled on the device, on UDP 47808 or the port in the config's address (192.168.1.20:47809)?"
+  "Is BACnet/IP enabled on the device, on UDP 47808 or the port after the colon in its address in the config (as in 192.168.1.20:47809)?"
 const bacnetSubnets =
   "Across subnets, broadcasts (Who-Is) do not cross routers: give the device a fixed address in the config, or set up a BBMD (bacnet.bbmdAddress)."
 const bacnetRouted =
