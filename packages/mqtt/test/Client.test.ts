@@ -401,7 +401,7 @@ describe("MqttPublisher", () => {
     })
   )
 
-  it.effect("fails to build without the password variable", () =>
+  it.effect("fails to build without the password variable, and says which one and where it goes", () =>
     Effect.gen(function* () {
       const layer = MqttPublisher({
         version: "auto",
@@ -409,7 +409,9 @@ describe("MqttPublisher", () => {
         passwordEnv: "TEST_MISSING_PASSWORD"
       }).pipe(Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))))
       const error = yield* Effect.flip(Layer.build(layer))
-      expect(error._tag).toBe("ConfigError")
+      expect(error._tag).toBe("MqttSettingsError")
+      expect(error.message).toContain("TEST_MISSING_PASSWORD is not set")
+      expect(error.message).toContain("ot-gateway.env (TEST_MISSING_PASSWORD=...)")
     })
   )
 })

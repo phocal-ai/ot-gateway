@@ -72,6 +72,11 @@ export interface BrokerControl {
   answerPings: boolean
   /** Answer SUBSCRIBE with a SUBACK. */
   ackSubscribes: boolean
+  /**
+   * Route accepted messages to subscribers (default true). Off, the broker takes messages and delivers none,
+   * as one whose access rules let a user publish but not read.
+   */
+  routeMessages: boolean
   /** Topic filters refused with 0x87 (not authorized) in the SUBACK. */
   readonly refusedFilters: Set<string>
   /** Answer SUBSCRIBE with this packet id instead of its own: a SUBACK for no pending SUBSCRIBE. */
@@ -107,6 +112,7 @@ export const makeBrokerControl = (): BrokerControl => ({
   refusedTopics: new Set(),
   answerPings: true,
   ackSubscribes: true,
+  routeMessages: true,
   refusedFilters: new Set(),
   connects: [],
   messages: [],
@@ -166,6 +172,7 @@ const accept = (control: BrokerControl, message: ReceivedMessage) => {
     control.retained.set(message.topic, message.payload)
     control.retainedMessages.set(message.topic, message)
   }
+  if (!control.routeMessages) return
   for (const subscriber of control.subscribers) deliver(subscriber, message, false)
 }
 
