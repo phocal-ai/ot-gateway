@@ -7,6 +7,7 @@ import type { PointCatalog, PointInfo } from "@ot-gateway/api"
 import {
   type AnyPoint,
   type BacnetPoint,
+  covPointIds,
   type Device,
   type GatewayConfig,
   type ModbusPoint,
@@ -67,9 +68,16 @@ const sourcedPoints = (device: Device): ReadonlyArray<readonly [AnyPoint, string
   }
 }
 
+/** How a point's values are read, as configured; whether a device sends change-of-value notifications shows at run time. */
+export const readLabel = (device: Device, cov: ReadonlySet<string>, point: AnyPoint) => {
+  const polled = `polled every ${durationLabel(device.pollIntervalMs)}`
+  return cov.has(point.id) ? `on change of value where the device supports it, ${polled} otherwise` : polled
+}
+
 export const pointCatalog = (config: GatewayConfig): PointCatalog => ({
-  points: config.devices.flatMap((device) =>
-    sourcedPoints(device).map(([point, source]): PointInfo => {
+  points: config.devices.flatMap((device) => {
+    const cov = new Set(covPointIds(device))
+    return sourcedPoints(device).map(([point, source]): PointInfo => {
       const semantics = point.semantics
       return {
         device: device.id,
@@ -79,6 +87,7 @@ export const pointCatalog = (config: GatewayConfig): PointCatalog => ({
         writable: point.writable,
         topic: pointTopic({ site: config.site, building: config.building, device: device.id, point: point.id }),
         source,
+        read: readLabel(device, cov, point),
         publish: publishLabel(publishOf(device.publish, point)),
         ...(point.limits === undefined ? {} : { limits: point.limits }),
         ...(point.scaling === undefined ? {} : { scaling: point.scaling }),
@@ -86,5 +95,5 @@ export const pointCatalog = (config: GatewayConfig): PointCatalog => ({
         ...(semantics?.haystack === undefined ? {} : { haystack: semantics.haystack })
       }
     })
-  )
+  })
 })

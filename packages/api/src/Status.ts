@@ -209,6 +209,11 @@ export const PointInfo = Schema.Struct({
   topic: Schema.String,
   /** Where the gateway reads it, in the config's words: `holding 40 · float32 CDAB`, `analog-input 3 · present-value`. */
   source: Schema.String,
+  /**
+   * How the gateway gets its values, as configured: `polled every 5 s`, or for a BACnet present value with `cov` on,
+   * `on change of value where the device supports it, polled every 5 s otherwise`.
+   */
+  read: Schema.String,
   /** How its values go out: `every read`, `on change ≥ 0.5`, `aggregate every 15 min`. */
   publish: Schema.String,
   limits: Schema.optionalKey(Schema.Struct({ min: Schema.Number, max: Schema.Number })),

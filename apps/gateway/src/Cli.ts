@@ -15,7 +15,7 @@
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
-import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
+import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
@@ -50,6 +50,19 @@ import { telemetryLayer } from "./Telemetry.ts"
 import { printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
+/**
+ * How a device's points are read, as configured: polled every `pollIntervalMs`, or for a BACnet device with `cov`,
+ * by change of value with polling as the fallback. Configuration intent: whether the device sends change-of-value
+ * notifications only the running gateway finds out, and they may come more often than the poll interval.
+ */
+export const readingLabel = (device: Device) => {
+  const cov = covPointIds(device).length
+  const polled = `every ${device.pollIntervalMs} ms`
+  if (cov === 0) return polled
+  const which = cov === device.points.length ? "COV" : `${cov} by COV`
+  return `${which} where the device supports it, polled ${polled} otherwise`
+}
+
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
 export const describeConfig = (config: GatewayConfig) => {
   const passwordWarning = mqttPasswordWarning(config.mqtt)
@@ -67,7 +80,8 @@ export const describeConfig = (config: GatewayConfig) => {
             ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
             : "simulated"
       const writable = device.points.filter((point) => point.writable).length
-      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}, every ${device.pollIntervalMs} ms`
+      const reading = readingLabel(device)
+      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
     })
   ].join("\n")
 }
@@ -86,15 +100,23 @@ export const configSummary = (config: GatewayConfig) => {
       ...(passwordWarning === undefined ? [] : [passwordWarning]),
       ...(config.buffer === undefined ? ["no buffer: values read while the broker is down are lost"] : [])
     ],
-    devices: config.devices.map((device) => ({
-      id: device.id,
-      protocol: device.protocol,
-      points: device.points.length,
-      writable: device.points.filter((point) => point.writable).length,
-      pollIntervalMs: device.pollIntervalMs
-    }))
+    devices: config.devices.map(deviceSummary)
   }
 }
+
+/**
+ * One device in `check --json` and `import --json`: `covPoints` are the points asked for by change of value (BACnet
+ * present values with `cov` on), polled every `pollIntervalMs` while the device does not notify; the rest are polled.
+ */
+export const deviceSummary = (device: Device) => ({
+  id: device.id,
+  protocol: device.protocol,
+  points: device.points.length,
+  writable: device.points.filter((point) => point.writable).length,
+  pollIntervalMs: device.pollIntervalMs,
+  covPoints: covPointIds(device),
+  reading: readingLabel(device)
+})
 
 const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Print the result as JSON, for scripts and agents; a failure too, as {ok: false, error}"),
@@ -332,9 +354,18 @@ const importCommand = Command.make(
   },
   ({ list, config, dryRun, json }) =>
     Effect.gen(function* () {
-      const { added, config: written } = yield* importPointsList(list, config, { dryRun })
+      const { added, decoded, config: written } = yield* importPointsList(list, config, { dryRun })
       const points = added.reduce((total, device) => total + device.points.length, 0)
-      if (json) return yield* printJson({ ok: true, dryRun, path: config, points, devices: added })
+      if (json) {
+        return yield* printJson({
+          ok: true,
+          dryRun,
+          path: config,
+          points,
+          devices: added,
+          summary: decoded.map(deviceSummary)
+        })
+      }
       if (written === undefined) return yield* printJson({ devices: added })
       yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${config}, none writable`)
       yield* Console.log(describeConfig(written))

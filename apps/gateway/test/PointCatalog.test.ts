@@ -79,6 +79,7 @@ describe("point catalog", () => {
         writable: false,
         topic: "s/b/meter/power",
         source: "holding 40 · float32 CDAB",
+        read: "polled every 5 s",
         publish: "aggregate every 15 min",
         scaling: { factor: 0.1, offset: 0 },
         brick: "Electric_Power_Sensor",
@@ -90,6 +91,14 @@ describe("point catalog", () => {
         "coil 1 · bool",
         "analog-value 3 · present-value · priority 8",
         "sine 18 to 24 · 2 min"
+      ])
+      // A BACnet present value is asked for by change of value (`cov` is on by default); the poll is its fallback.
+      expect(points.map((point) => point.read)).toEqual([
+        "polled every 5 s",
+        "polled every 5 s",
+        "polled every 5 s",
+        "on change of value where the device supports it, polled every 5 s otherwise",
+        "polled every 5 s"
       ])
       // A point's own deadband or publish wins over its device's.
       expect(points.map((point) => point.publish)).toEqual([

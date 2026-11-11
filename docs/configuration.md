@@ -122,11 +122,13 @@ One UDP socket serves every BACnet device. Present with defaults even when the b
 | `id`             | slug              | required   | Third topic level.                                                                                                                                   |
 | `deviceInstance` | 0–4194302         | required   | The device object's instance.                                                                                                                        |
 | `address`        | `ip` or `ip:port` | none       | Fixed address. Without it the device is found by broadcasting Who-Is. Required when any point is writable, so a spoofed I-Am cannot redirect writes. |
-| `cov`            | boolean           | `true`     | Subscribe to change-of-value notifications where the device supports them, and poll only what they do not cover.                                     |
+| `cov`            | boolean           | `true`     | Subscribe to change-of-value notifications for present values where the device supports them, and poll only what they do not cover. See below.       |
 | `pollIntervalMs` | 100–86400000      | 5000       |                                                                                                                                                      |
 | `cycleTimeoutMs` | 1000–86400000     | see above  |                                                                                                                                                      |
 | `publish`        | object            | every read |                                                                                                                                                      |
 | `points`         | array             | required   | [BACnet points](#bacnet-points).                                                                                                                     |
+
+**Change of value.** With `cov` on, every point that reads `present-value` is subscribed to: its values come when the device notifies a change, not on the poll. `pollIntervalMs` is the fallback, for points on other properties and for objects whose device refuses the subscription or stops notifying. So a COV point can arrive more often than `pollIntervalMs` (a device that notifies every second sends a value every second) or less often (a value that holds still sends nothing until it changes or the subscription is renewed, at half of `bacnet.covLifetimeSeconds`). How much change a notification takes is the device's own `COV_Increment` property on analog objects (any change of state on binary and multi-state ones); the gateway does not set it, and `bacnet.covLifetimeSeconds` only sets how long a subscription lasts, not how often it notifies. To send fewer messages, use `publish` `change` with a `deadband`, or `sample` with an `intervalMs` (the latest value once per interval), or set `cov` to `false` to poll every point. `ot-gateway check` and `import` say which points are asked for by COV (`covPoints` with `--json`), the status page shows it as each point's "Read", and its retained `$meta` has `"cov": true`. Whether the device actually notifies shows only once the gateway runs.
 
 `node apps/gateway/src/main.ts --discover ot-gateway.json` finds the devices on the network and prints their entries, read-only. An entry's `address` is where the device's answer came from: before any point of the device becomes writable, confirm it against a source you trust (commissioning sheet, device display, DHCP reservation). When more than one address answers for the same instance (two devices may share the instance, or one device answers on several addresses), `--discover` names them all on stderr and drafts that device without `address` or points: take its address from that source, using the list only to see which hosts to check. A device already in the config with an `address` is read at that address, and its entry in the draft, under its config id, holds only the objects it has no point for yet, to merge into its `points`.
 
@@ -200,6 +202,8 @@ How a point's values go out. Reading (`pollIntervalMs`) and sending are separate
 | `deadband`     | ≥ 0                             | any change            | `change` only: minimum change, after scaling, before a value is sent again.                                                   |
 | `maxSilenceMs` | 1000–86400000                   | none                  | `change` only: send the value again after this long without a change, so a consumer can tell a quiet point from a gone one.   |
 
+With BACnet change of value (`cov`, on by default), every notification is a read: in `sample` mode without `intervalMs` each one is sent, as often as the device notifies, and the polling cycle does not send the point again. `change` with a `deadband` or `sample` with an `intervalMs` limits the rate; nothing drops a notification in `sample` mode.
+
 Windows line up with the clock in UTC: a 15-minute window (`900000`) closes at :00, :15, :30 and :45 on every gateway, so its values line up with meter intervals and with each other. That is why `intervalMs` must divide a day (60000, 300000, 900000, 3600000, …).
 
 An aggregate message replaces the plain `{ value, unit, ts }`:
@@ -224,7 +228,7 @@ An aggregate message replaces the plain `{ value, unit, ts }`:
 - `count` is the number of reads. A window with no read is sent with `count: 0` when the value held through it (a change-of-value point that stayed put) and the device answers; while the device does not, nothing is sent, and the outage does not count towards the next average.
 - The first window after a start is `"partial": true`, with `from` at the first read.
 
-**What it costs.** Every read is the most traffic: points × 3600 / interval in seconds is the messages per hour, and the [buffer](#buffer) holds `maxRows` of them through a broker outage. 200 points read every 5 s fill a million rows in about 7 hours; as 15-minute aggregates, in about 7 weeks.
+**What it costs.** Every read is the most traffic: points × 3600 / interval in seconds is the messages per hour (for a BACnet point with change of value, use how often the device notifies instead of the interval), and the [buffer](#buffer) holds `maxRows` of them through a broker outage. 200 points read every 5 s fill a million rows in about 7 hours; as 15-minute aggregates, in about 7 weeks.
 
 ## limits
 
