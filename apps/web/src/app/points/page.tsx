@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { formatNumber } from "@/lib/format"
 import {
   devicesById,
   devicesOf,
@@ -127,7 +128,7 @@ const HealthDot = ({ device, now }: { readonly device: DeviceStatus | undefined;
   )
 }
 
-const pointCount = (count: number) => `${count.toLocaleString()} ${count === 1 ? "point" : "points"}`
+const pointCount = (count: number) => `${formatNumber(count)} ${count === 1 ? "point" : "points"}`
 
 const PointsList = () => {
   const load = useGateway()
