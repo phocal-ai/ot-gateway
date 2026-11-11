@@ -150,7 +150,22 @@ const startGateway = (devices: ReadonlyArray<unknown>, options: { readonly meter
     const simulated = makeSimulatedDevice({
       instance: 2001,
       name: "Heat pump",
-      objects: [{ objectType: "analog-input", instance: 1, name: "Flow", presentValue: { type: "real", value: 41.5 } }]
+      objects: [
+        {
+          objectType: "analog-input",
+          instance: 1,
+          name: "Flow",
+          presentValue: { type: "real", value: 41.5 },
+          units: 62
+        },
+        {
+          objectType: "binary-input",
+          instance: 2,
+          name: "Heat pump compressor fault",
+          presentValue: { type: "enumerated", value: 1 }
+        },
+        { objectType: "analog-output", instance: 3, name: "Setpoint", presentValue: { type: "real", value: 45 } }
+      ]
     })
     yield* serveSimulatedDevice(
       yield* network.host(HEAT_PUMP).udp({ address: HEAT_PUMP, port: 47_808 }),
@@ -274,12 +289,106 @@ describe("testing a device from the status page", () => {
       const { port, running, meterControl } = yield* startGateway([])
       const body = { text: configText(port, [meter]), device: 0 }
       for (const headers of [{}, { origin: "http://evil.example", [EDIT_HEADER]: EDIT_HEADER_VALUE }]) {
-        for (const path of ["/api/test/read", "/api/test/broker", "/api/import/check", "/api/import/apply"]) {
+        for (const path of [
+          "/api/test/read",
+          "/api/test/broker",
+          "/api/import/check",
+          "/api/import/apply",
+          "/api/discover/devices",
+          "/api/discover/objects"
+        ]) {
           const reply = yield* whileTimePasses(() => request(port, "POST", path, body, headers))
           expect(reply.status).toBe(403)
         }
       }
       expect(meterControl.accepted).toBe(0)
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
+describe("finding BACnet devices from the status page", () => {
+  it.effect("finds a device by broadcast and at its address, with its name", () =>
+    Effect.gen(function* () {
+      const { port, running } = yield* startGateway([])
+      const broadcast = yield* post(port, "/api/discover/devices", { seconds: 1 })
+      expect(broadcast.status).toBe(200)
+      expect(broadcast.body).toMatchObject({
+        devices: [{ instance: 2001, address: HEAT_PUMP, name: "Heat pump", conflicts: [] }],
+        more: false
+      })
+      yield* settle(4)
+      const asked = yield* post(port, "/api/discover/devices", { address: `${HEAT_PUMP}:47808`, seconds: 1 })
+      expect(asked.body).toMatchObject({ asked: HEAT_PUMP, devices: [{ instance: 2001, name: "Heat pump" }] })
+      yield* settle(4)
+      const nobody = yield* post(port, "/api/discover/devices", { address: "10.0.0.99", seconds: 1 })
+      expect(nobody.body).toMatchObject({ devices: [] })
+      expect(String(nobody.body["note"])).toContain("No device answered at 10.0.0.99")
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("reads a device's objects as points to pick: ids, names, units and the values now", () =>
+    Effect.gen(function* () {
+      const { port, running } = yield* startGateway([])
+      const reply = yield* post(port, "/api/discover/objects", { instance: 2001, address: HEAT_PUMP })
+      expect(reply.status).toBe(200)
+      expect(reply.body).toMatchObject({
+        instance: 2001,
+        address: HEAT_PUMP,
+        name: "Heat pump",
+        id: "heat-pump",
+        listed: 4,
+        objects: [
+          {
+            objectType: "analog-input",
+            instance: 1,
+            name: "Flow",
+            id: "flow",
+            unit: "unit:DEG_C",
+            value: 41.5,
+            configured: false
+          },
+          {
+            objectType: "binary-input",
+            instance: 2,
+            name: "Heat pump compressor fault",
+            id: "compressor-fault",
+            value: true
+          },
+          { objectType: "analog-output", instance: 3, id: "setpoint", value: 45 }
+        ]
+      })
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("marks objects the running config reads already, and refuses an address that is not one", () =>
+    Effect.gen(function* () {
+      const { port, running } = yield* startGateway([heatPump])
+      const reply = yield* post(port, "/api/discover/objects", { instance: 2001, address: `${HEAT_PUMP}:47808` })
+      expect(reply.status).toBe(200)
+      const objects = reply.body["objects"]
+      expect(objects).toMatchObject([{ id: "flow", configured: true }, { configured: false }, { configured: false }])
+      // The running config has a device called heat-pump: the new one's id does not take it.
+      expect(reply.body["id"]).not.toBe("heat-pump")
+      yield* settle(4)
+      const devices = yield* post(port, "/api/discover/devices", { address: HEAT_PUMP, seconds: 1 })
+      expect(devices.body).toMatchObject({ devices: [{ instance: 2001, configured: "heat-pump" }] })
+      const bad = yield* post(port, "/api/discover/objects", { instance: 2001, address: "not an address" })
+      expect(bad.status).toBe(400)
+      expect(bad.body).toMatchObject({ _tag: "TestInvalid" })
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("says when the device does not answer, within its deadline", () =>
+    Effect.gen(function* () {
+      const { port, running } = yield* startGateway([])
+      const reply = yield* post(port, "/api/discover/objects", { instance: 2001, address: "10.0.0.99" })
+      expect(reply.status).toBe(502)
+      expect(reply.body).toMatchObject({ _tag: "DiscoveryFailed" })
+      expect(String(reply.body["message"])).toContain("did not answer at 10.0.0.99")
       yield* Fiber.interrupt(running)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )

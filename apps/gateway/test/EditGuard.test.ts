@@ -109,6 +109,34 @@ describe("describeConfigChange", () => {
     )
   })
 
+  /** A meter with a setpoint and a relay, each with `points`' extra fields. */
+  const meter = (points: ReadonlyArray<Record<string, unknown>>) => ({
+    ...base,
+    devices: [
+      {
+        protocol: "modbus-tcp",
+        id: "meter",
+        host: "10.0.0.3",
+        points: [
+          { id: "setpoint", name: "Setpoint", table: "holding", address: 1, dataType: "float32", ...points[0] },
+          { id: "relay", name: "Relay", table: "coil", address: 2, dataType: "bool", ...points[1] }
+        ]
+      }
+    ]
+  })
+
+  it("names every point that takes commands now, with its limits, and every one that no longer does", () => {
+    const before = parseConfigSync(meter([{}, { writable: true }]))
+    const after = parseConfigSync(meter([{ writable: true, limits: { min: 10, max: 30 } }, {}]))
+    expect(describeConfigChange(before, after).changes).toEqual([
+      "device meter changed",
+      "writes allowed: meter/setpoint (10 to 30)",
+      "writes turned off: meter/relay"
+    ])
+    const narrower = parseConfigSync(meter([{ writable: true, limits: { min: 15, max: 25 } }, {}]))
+    expect(describeConfigChange(after, narrower).changes).toContain("write limits changed: meter/setpoint (15 to 25)")
+  })
+
   it("says what waits for a restart, and when nothing changed", () => {
     const same = parseConfigSync(base)
     expect(describeConfigChange(same, same)).toEqual({ summary: "nothing to apply", changes: [], restartNeeded: [] })

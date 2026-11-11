@@ -17,8 +17,14 @@ import {
   unitShown,
   unitValue,
   withDevice,
-  withoutDevice,
-  withoutEmptyFields
+  canWrite,
+  discoveredDevice,
+  isBoolean,
+  pickedByDefault,
+  takesLimits,
+  touching,
+  visibleIssues,
+  withoutDevice
 } from "../src/lib/device-editor.ts"
 
 const meter = {
@@ -239,25 +245,154 @@ describe("unitShown", () => {
   })
 })
 
-describe("withoutEmptyFields", () => {
-  it("keeps a new device's form quiet about fields still empty, and says so", () => {
+/** A check's issues about a new device's id and host and its first point's id and address. */
+const issuesOf = (draft: ReturnType<typeof newDevice>) =>
+  deviceIssues(
+    [
+      { path: ["devices", 0, "id"], message: "Expected a slug" },
+      { path: ["devices", 0, "host"], message: "a host, without a port" },
+      { path: ["devices", 0, "points", 0, "id"], message: "Expected a slug" },
+      { path: ["devices", 0, "points", 0, "address"], message: "Expected number" }
+    ],
+    0,
+    draft
+  )
+
+describe("visibleIssues", () => {
+  it("shows a new device's issues only under the fields typed in, and says that some wait", () => {
     const draft = { ...newDevice("modbus-tcp"), host: "10.0.0.3:502" }
     const [point] = draft.points
     if (point === undefined) throw new Error("one point")
-    const quiet = withoutEmptyFields(
-      deviceIssues(
-        [
-          { path: ["devices", 0, "id"], message: "must be a slug" },
-          { path: ["devices", 0, "host"], message: "a host, without a port" },
-          { path: ["devices", 0, "points", 0, "address"], message: "must be a number" }
-        ],
-        0,
-        draft
-      ),
-      draft
-    )
-    expect(quiet.device).toEqual({ host: ["a host, without a port"] })
-    expect(quiet.points[point.key]).toEqual({})
-    expect(quiet.quiet).toBe(true)
+    const shown = visibleIssues(issuesOf(draft), draft, touching(new Set(), "device", "host", false), false)
+    expect(shown.device).toEqual({ host: ["a host, without a port"] })
+    expect(shown.points[point.key]).toEqual({})
+    expect(shown.quiet).toBe(true)
+  })
+
+  it("counts a typed name as touching the id that follows it, and shows everything once asked", () => {
+    const draft = newDevice("modbus-tcp")
+    const [point] = draft.points
+    if (point === undefined) throw new Error("one point")
+    const touched = touching(new Set(), point.key, "name", true)
+    expect(visibleIssues(issuesOf(draft), draft, touched, false).points[point.key]).toEqual({
+      id: ["Expected a slug"]
+    })
+    const all = visibleIssues(issuesOf(draft), draft, new Set(), true)
+    expect(all.quiet).toBe(false)
+    expect(all.points[point.key]).toEqual({ id: ["Expected a slug"], register: ["Expected number"] })
+  })
+
+  it("shows every issue of a device and point the file has already", () => {
+    const draft = draftOf(meter)
+    const shown = visibleIssues(issuesOf(draft), draft, new Set(), false)
+    expect(shown.device["host"]).toEqual(["a host, without a port"])
+    expect(shown.quiet).toBe(false)
+  })
+})
+
+describe("alarms and writes", () => {
+  it("writes alarmWhen for a boolean point only", () => {
+    const breaker = { ...newPoint("modbus-tcp"), name: "Main breaker tripped", id: "breaker", table: "discrete" }
+    expect(pointJson("modbus-tcp", { ...breaker, register: "0", alarmWhen: "on" })).toMatchObject({
+      table: "discrete",
+      dataType: "bool",
+      alarmWhen: "on"
+    })
+    const power = { ...newPoint("modbus-tcp"), id: "power", register: "100", alarmWhen: "on" as const }
+    expect(pointJson("modbus-tcp", power)).not.toHaveProperty("alarmWhen")
+    expect(draftOf({ ...meter, points: [{ ...meter.points[1], alarmWhen: "off" }] }).points[0]?.alarmWhen).toBe("off")
+  })
+
+  it("writes a writable point with its limits, and none of it once it is read-only again", () => {
+    const setpoint = { ...newPoint("modbus-tcp"), id: "setpoint", register: "10", writable: true }
+    expect(pointJson("modbus-tcp", { ...setpoint, limitMin: "15", limitMax: "25,5" })).toMatchObject({
+      writable: true,
+      limits: { min: 15, max: 25.5 }
+    })
+    // Without limits the gateway's check names the field: the limits are written as typed.
+    expect(pointJson("modbus-tcp", setpoint)).toMatchObject({ writable: true, limits: { min: "", max: "" } })
+    const relay = { ...newPoint("modbus-tcp"), id: "relay", table: "coil", register: "1", writable: true }
+    expect(pointJson("modbus-tcp", relay)).not.toHaveProperty("limits")
+    const original = {
+      id: "sp",
+      name: "Sp",
+      table: "holding",
+      address: 1,
+      dataType: "float32",
+      writable: true,
+      limits: { min: 1, max: 2 }
+    }
+    const draft = draftOf({ ...meter, points: [original] }).points[0]
+    if (draft === undefined) throw new Error("one point")
+    expect(draft).toMatchObject({ writable: true, limitMin: "1", limitMax: "2" })
+    const readOnly = pointJson("modbus-tcp", { ...draft, writable: false })
+    expect(readOnly).not.toHaveProperty("writable")
+    expect(readOnly).not.toHaveProperty("limits")
+  })
+
+  it("knows which points can be written and which need limits", () => {
+    const point = newPoint("modbus-tcp")
+    expect(canWrite("modbus-tcp", { ...point, table: "input" })).toBe(false)
+    expect(canWrite("modbus-tcp", { ...point, table: "coil" })).toBe(true)
+    expect(takesLimits("modbus-tcp", { ...point, table: "coil" })).toBe(false)
+    expect(takesLimits("modbus-tcp", point)).toBe(true)
+    const object = newPoint("bacnet-ip")
+    expect(canWrite("bacnet-ip", { ...object, objectType: "analog-input" })).toBe(false)
+    expect(canWrite("bacnet-ip", { ...object, objectType: "analog-value" })).toBe(true)
+    expect(isBoolean("bacnet-ip", { ...object, objectType: "binary-output" })).toBe(true)
+    expect(takesLimits("bacnet-ip", { ...object, objectType: "binary-output" })).toBe(false)
+  })
+})
+
+describe("discoveredDevice", () => {
+  const found = {
+    instance: 2001,
+    address: "127.0.0.1:47809",
+    name: "Heat pump",
+    id: "heat-pump",
+    listed: 4,
+    durationMs: 120,
+    objects: [
+      {
+        objectType: "analog-input",
+        instance: 1,
+        name: "Flow",
+        id: "flow",
+        unit: "unit:DEG_C",
+        value: 41.5,
+        configured: false
+      },
+      { objectType: "binary-value", instance: 2, name: "Fault", id: "fault", value: false, configured: false },
+      { objectType: "analog-output", instance: 3, name: "Setpoint", id: "setpoint", value: 45, configured: false },
+      { objectType: "analog-input", instance: 4, name: "Return", id: "return", configured: true }
+    ]
+  }
+
+  it("ticks inputs and values to start with, not outputs or objects read already", () => {
+    expect(found.objects.filter(pickedByDefault).map((object) => object.id)).toEqual(["flow", "fault"])
+  })
+
+  it("makes a new BACnet device of the objects picked, with their names and units, none writable", () => {
+    const draft = discoveredDevice(found, new Set(["analog-input:1", "analog-output:3"]))
+    expect(draft).toMatchObject({
+      protocol: "bacnet-ip",
+      id: "heat-pump",
+      deviceInstance: "2001",
+      address: "127.0.0.1:47809"
+    })
+    expect(draft.points.map((point) => [point.id, point.name, point.unit, point.objectType, point.instance])).toEqual([
+      ["flow", "Flow", "°C", "analog-input", "1"],
+      ["setpoint", "Setpoint", "", "analog-output", "3"]
+    ])
+    expect(deviceJson(draft)).toEqual({
+      protocol: "bacnet-ip",
+      id: "heat-pump",
+      deviceInstance: 2001,
+      address: "127.0.0.1:47809",
+      points: [
+        { id: "flow", name: "Flow", unit: "unit:DEG_C", objectType: "analog-input", instance: 1 },
+        { id: "setpoint", name: "Setpoint", objectType: "analog-output", instance: 3 }
+      ]
+    })
   })
 })

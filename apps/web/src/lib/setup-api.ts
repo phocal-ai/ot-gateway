@@ -3,7 +3,15 @@
  * typed client for `OtGatewayApi`. They are writes as far as the gateway's guard goes (they connect to devices), so
  * every one carries the same headers as a save. Each comes back as an outcome the page shows as it is.
  */
-import type { BrokerTest, ConfigIssue, ImportApplied, ImportCheck, ReadTest } from "@ot-gateway/api"
+import type {
+  BrokerTest,
+  ConfigIssue,
+  DiscoveredDevices,
+  DiscoveredObjects,
+  ImportApplied,
+  ImportCheck,
+  ReadTest
+} from "@ot-gateway/api"
 import { OtGatewayApi } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http"
@@ -112,6 +120,47 @@ export const applyImport = (text: string, name: string, etag: string) =>
         ConfigUnreadable: (error) => Effect.succeed(failed<ImportApplied>(error.message)),
         ConfigWriteFailed: (error) => Effect.succeed(failed<ImportApplied>(error.message)),
         ConfigApplyFailed: (error) => Effect.succeed(failed<ImportApplied>(error.message))
+      })
+    ),
+    30
+  )
+
+/** Who-Is, broadcast or to one address: the gateway listens `seconds` (3 by default) and reads names for up to 8 s. */
+export const discoverDevices = (address: string | undefined, seconds?: number) =>
+  settled<DiscoveredDevices>(
+    setup().pipe(
+      Effect.flatMap((client) =>
+        client.discoverDevices({
+          payload: {
+            ...(address === undefined || address.trim() === "" ? {} : { address: address.trim() }),
+            ...(seconds === undefined ? {} : { seconds })
+          }
+        })
+      ),
+      Effect.map((value): Outcome<DiscoveredDevices> => ({ _tag: "ok", value })),
+      Effect.catchTags({
+        TestBusy: (error) => Effect.succeed<Outcome<DiscoveredDevices>>({ _tag: "busy", message: error.message }),
+        TestInvalid: (error) =>
+          Effect.succeed<Outcome<DiscoveredDevices>>({ _tag: "invalid", message: error.message, issues: error.issues }),
+        DiscoveryFailed: (error) => Effect.succeed(failed<DiscoveredDevices>(error.message)),
+        EditingDisabled: (error) => Effect.succeed(failed<DiscoveredDevices>(error.message))
+      })
+    ),
+    25
+  )
+
+/** One device's objects, names, units and values: the gateway gives it 25 s. */
+export const discoverObjects = (instance: number, address: string) =>
+  settled<DiscoveredObjects>(
+    setup().pipe(
+      Effect.flatMap((client) => client.discoverObjects({ payload: { instance, address } })),
+      Effect.map((value): Outcome<DiscoveredObjects> => ({ _tag: "ok", value })),
+      Effect.catchTags({
+        TestBusy: (error) => Effect.succeed<Outcome<DiscoveredObjects>>({ _tag: "busy", message: error.message }),
+        TestInvalid: (error) =>
+          Effect.succeed<Outcome<DiscoveredObjects>>({ _tag: "invalid", message: error.message, issues: error.issues }),
+        DiscoveryFailed: (error) => Effect.succeed(failed<DiscoveredObjects>(error.message)),
+        EditingDisabled: (error) => Effect.succeed(failed<DiscoveredObjects>(error.message))
       })
     ),
     30

@@ -12,6 +12,9 @@
 import {
   type BrokerTest,
   type ConfigIssue,
+  type DiscoveredDevices,
+  type DiscoveredObjects,
+  type DiscoveryFailed,
   type ImportApplied,
   type ImportCheck,
   type ImportDevice,
@@ -45,6 +48,7 @@ import type { ConfigEditor } from "./ConfigEditor.ts"
 import { checkConfigText } from "./ConfigStore.ts"
 import { pointsListFromText } from "./Import.ts"
 import { checkPointsListByDevice, type PointsListDevice, profileNames } from "./PointsList.ts"
+import { makePageDiscovery } from "./PageDiscovery.ts"
 import { type Profile, resolveProfile } from "./Profile.ts"
 
 /** How long a device test may take in all: connecting, finding a BACnet device, reading every point asked for. */
@@ -70,6 +74,16 @@ export interface SetupTools {
     name: string | undefined,
     etag: string
   ) => Effect.Effect<ImportApplied, ImportInvalid | Effect.Error<ReturnType<ConfigEditor["save"]>>>
+  /** BACnet devices that answer Who-Is, broadcast or at one address (PageDiscovery.ts). */
+  readonly discoverDevices: (
+    address: string | undefined,
+    seconds: number | undefined
+  ) => Effect.Effect<DiscoveredDevices, TestBusy | TestInvalid | DiscoveryFailed>
+  /** One BACnet device's objects, as points to pick. */
+  readonly discoverObjects: (
+    instance: number,
+    address: string
+  ) => Effect.Effect<DiscoveredObjects, TestBusy | TestInvalid | DiscoveryFailed>
 }
 type ConfigUnreadableOf = Effect.Error<ConfigEditor["file"]>
 
@@ -574,7 +588,13 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
     } satisfies ImportApplied
   }, Effect.provideContext(files))
 
-  return { testBroker, testRead, importCheck, importApply } satisfies SetupTools
+  const { discoverDevices, discoverObjects } = makePageDiscovery({
+    gate,
+    running: deps.running,
+    network: deps.network
+  })
+
+  return { testBroker, testRead, importCheck, importApply, discoverDevices, discoverObjects } satisfies SetupTools
 })
 
 const brokerFailed = (config: GatewayConfig, error: string): BrokerTest => ({
