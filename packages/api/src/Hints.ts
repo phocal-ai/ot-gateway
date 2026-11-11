@@ -169,8 +169,8 @@ export const fallbackHint: Hint = {
   checks: ["The gateway's log has the details: docker compose logs gateway --since 10m"]
 }
 
-/** What to check for a device failing for `reason`, with the driver's words `error`. */
-export const whatToCheck = (protocol: Protocol, reason: string, error: string | undefined): Hint =>
+/** What to check for a device failing for `reason`, with the driver's words `error`; without a `protocol`, only the rules for any. */
+export const whatToCheck = (protocol: Protocol | undefined, reason: string, error: string | undefined): Hint =>
   hintRules.find(
     (rule) =>
       rule.reason === reason &&

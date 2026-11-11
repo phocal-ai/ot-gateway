@@ -7,6 +7,7 @@
  */
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer"
 import {
+  type AlarmStatus,
   type BrokerConnection,
   type CommandStatus,
   ConfigUnreadable,
@@ -147,7 +148,9 @@ export const makeStatusState = (
   since: number,
   host?: StatusHost,
   /** When this config started: `since`, or the moment a config saved on the page was applied. */
-  configSince = since
+  configSince = since,
+  /** The alarm points' states (Alarms.ts); without, the status has no `alarms`. */
+  alarms?: { readonly snapshot: () => ReadonlyArray<AlarmStatus> }
 ): StatusState => {
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
@@ -229,6 +232,14 @@ export const makeStatusState = (
           bufferDropReasons.map((reason) => [reason, total(bufferDropped.id, { reason })])
         )
         const dropped = Object.values(droppedBy).reduce((sum, count) => sum + count, 0)
+        const alarmPoints = alarms?.snapshot()
+        // Only for the points asked for: a lookup per point, by device then point, without a key string each.
+        const alarmOf = new Map<string, Map<string, AlarmStatus>>()
+        if (points === "all") {
+          for (const alarm of alarmPoints ?? []) {
+            alarmOf.set(alarm.device, (alarmOf.get(alarm.device) ?? new Map()).set(alarm.point, alarm))
+          }
+        }
         const devices = config.devices.map((device): DeviceStatus => {
           const state = health.devices.get(device.id) ?? { status: "starting" as const }
           return {
@@ -247,12 +258,15 @@ export const makeStatusState = (
                 ? []
                 : device.points.map((point) => {
                     const last = lastRead(`${device.id}/${point.id}`)
+                    const alarm = alarmOf.get(device.id)?.get(point.id)
                     return {
                       id: point.id,
                       name: point.name,
                       writable: point.writable,
                       ...(point.unit === undefined ? {} : { unit: point.unit }),
-                      ...(last === undefined ? {} : { value: last.value, ts: last.ts })
+                      ...(last === undefined ? {} : { value: last.value, ts: last.ts }),
+                      ...(point.alarmWhen === undefined ? {} : { alarmWhen: point.alarmWhen }),
+                      ...(alarm?.active === undefined ? {} : { alarmActive: alarm.active })
                     }
                   })
           }
@@ -297,6 +311,7 @@ export const makeStatusState = (
             ? {}
             : { host: { version: host.version, node: process.versions.node, ...sample } }),
           devices,
+          ...(alarmPoints === undefined || alarmPoints.length === 0 ? {} : { alarms: alarmPoints }),
           commands: [...commands]
         }
       }),

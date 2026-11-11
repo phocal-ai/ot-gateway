@@ -304,6 +304,22 @@ export const configApplies = Metric.counter("ot_gateway_config_applies", {
   incremental: true
 })
 
+/**
+ * Alarm points' changes, by `transition`: `raised` or `cleared`. Every change counts, also the ones the events leave
+ * unlisted while a point flaps; which point is in the events (`ot-gateway events`), not in a label, so a site with
+ * hundreds of alarm points still has two series per gateway.
+ */
+export const alarmChanges = Metric.counter("ot_gateway_alarm_changes", {
+  description: "Alarm points' changes, by transition",
+  incremental: true
+})
+
+/** Alarm points whose alarm is active now. */
+export const alarmsActive = Metric.gauge("ot_gateway_alarms_active", {
+  description: "Alarm points whose alarm is active",
+  attributes: { unit: "{alarm}" }
+})
+
 /*
  * The gateway process and the machine it runs on: one series each per gateway
  * (no `device`), sampled every 15 seconds by the gateway's host monitor. What

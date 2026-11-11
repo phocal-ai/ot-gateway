@@ -683,7 +683,7 @@ const status = Command.make("status", { config: targetConfig, url: urlFlag, json
   resolveTarget({ config, url }).pipe(
     Effect.flatMap((target) => fetchStatusFor(target, { json })),
     jsonFailure(json, { url: url ?? null, path: config ?? null }),
-    Effect.flatMap(statusOutcome(json))
+    Effect.flatMap(({ status: report, recent }) => statusOutcome(json)(report, recent))
   )
 ).pipe(
   Command.withDescription(

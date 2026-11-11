@@ -55,6 +55,7 @@ import {
 import { describeConfigChange } from "./ConfigChange.ts"
 import { type ConfigFileSource, makeConfigEditor } from "./ConfigEditor.ts"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
+import { type AlarmTracker, makeAlarmTracker } from "./Alarms.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
 import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways.ts"
@@ -395,6 +396,8 @@ interface Shared {
   readonly startedAt: number
   readonly host: HostMonitor | undefined
   readonly history: History | undefined
+  /** The alarm points' states and events, kept across configs applied from the page. */
+  readonly alarms: AlarmTracker
   /** Whether the status page is served, so that each config keeps a status state for it. */
   readonly serving: boolean
   /** The gateway's scope: each config runs in a scope of its own inside it. */
@@ -472,7 +475,8 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
         registry,
         startedAt,
         { latest: latestHost, version: options.version ?? "unknown" },
-        configSince
+        configSince,
+        shared.alarms
       )
     : undefined
   const drivers = makeDriverRegistry()
@@ -495,8 +499,15 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
   const otherGateways = makeOtherGatewaysCheck(config, startedAt, (overlap) =>
     events.gatewayConflict(overlap.gateway, overlap.devices, overlap.sameId)
   )
-  // Every read goes to the history and to the status page, whichever are on.
-  const sinks = [shared.history?.sink, status?.reads].filter((sink) => sink !== undefined)
+  // The broker connection's metrics carry site and building too, and so do the alarms'.
+  const attributes = withMetricAttributes({ site: config.site, building: config.building })
+  yield* shared.alarms.configure(config).pipe(attributes)
+  // Every read goes to the history, the status page and the alarms, whichever are on.
+  const sinks = [
+    shared.history?.sink,
+    status?.reads,
+    shared.alarms.hasPoints() ? shared.alarms.sink : undefined
+  ].filter((sink) => sink !== undefined)
   const reads: HistorySink | undefined =
     sinks.length === 0
       ? undefined
@@ -506,8 +517,6 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
     brokerConnected: yield* Deferred.make<void>(),
     brokerError: undefined
   }
-  // The broker connection's metrics carry site and building too.
-  const attributes = withMetricAttributes({ site: config.site, building: config.building })
   const scope = yield* Scope.fork(shared.scope)
   // A config from the page opens its outbox before it dials the broker: one whose file cannot open never connects,
   // so it leaves no will message (a retained "offline") behind under a site that never ran.
@@ -603,6 +612,7 @@ export const runGateway = Effect.fn("Gateway")(
       startedAt,
       host,
       history,
+      alarms: makeAlarmTracker(yield* Clock.clockWith(Effect.succeed), events.alarm),
       serving: config.status !== undefined,
       scope: yield* Effect.scope,
       fatal: yield* Deferred.make<never, DevicesError>(),
