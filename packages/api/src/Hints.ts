@@ -24,8 +24,40 @@ interface Rule {
 
 const firewall = "Is a firewall or a VLAN between the gateway and the device blocking the port?"
 
+/** The BACnet/IP checks a device that stops answering gets, as a Modbus device gets its unit id and port. */
+const bacnetInstance = "Is the device instance in the config the device's own (its Device object, not a point)?"
+const bacnetPort =
+  "Is BACnet/IP enabled on the device, on UDP 47808 or the port in the config's address (192.168.1.20:47809)?"
+const bacnetSubnets =
+  "Across subnets, broadcasts (Who-Is) do not cross routers: give the device a fixed address in the config, or set up a BBMD (bacnet.bbmdAddress)."
+const bacnetRouted =
+  "Behind a BACnet router (an MS/TP trunk, another network number): is the router up, and does it route the device's network number?"
+const bacnetFirewall = "Is a firewall or a VLAN between the gateway and the device blocking UDP 47808?"
+
 /** The hints, most specific first: the first rule whose reason, protocol and words match is the one shown. */
 export const hintRules: ReadonlyArray<Rule> = [
+  {
+    reason: "connection",
+    protocol: "bacnet-ip",
+    error: /not been found|not found/i,
+    hint: {
+      meaning: "The gateway has not found the device: no I-Am answered its Who-Is.",
+      checks: [bacnetInstance, bacnetSubnets, bacnetPort, bacnetRouted]
+    }
+  },
+  {
+    reason: "connection",
+    protocol: "bacnet-ip",
+    hint: {
+      meaning: "The gateway cannot reach the device over BACnet/IP.",
+      checks: [
+        "Is the device switched on and its network cable plugged in (link light)?",
+        bacnetPort,
+        bacnetSubnets,
+        bacnetFirewall
+      ]
+    }
+  },
   {
     reason: "connection",
     error: /refused/i,
@@ -74,22 +106,22 @@ export const hintRules: ReadonlyArray<Rule> = [
     error: /who-is/i,
     hint: {
       meaning: "No device with this instance number answered the gateway's broadcast (Who-Is).",
-      checks: [
-        "Is the device instance in the config the device's own (its Device object, not a point)?",
-        "Is the device in the gateway's subnet? Broadcasts do not cross routers: give the device a fixed address in the config, or use a BBMD.",
-        "Is the device switched on, with BACnet/IP enabled on UDP 47808 (or the port in the config)?"
-      ]
+      checks: [bacnetInstance, bacnetSubnets, bacnetPort, bacnetRouted]
     }
   },
   {
     reason: "timeout",
     protocol: "bacnet-ip",
     hint: {
-      meaning: "The device is reachable, but it does not answer the gateway's requests in time.",
+      meaning: "The device does not answer the gateway's BACnet requests in time.",
+      // Config first for a device that never answered; whatToCheck moves power and cable up for one that did.
       checks: [
-        "Is the device instance in the config right?",
-        "Is the device busy (many clients, a slow MS/TP trunk behind a router)? A longer poll interval helps.",
-        "Answers to a fixed address across subnets need the address and port right; broadcasts do not cross routers."
+        bacnetInstance,
+        "Is the device switched on and its network cable plugged in (link light)?",
+        bacnetPort,
+        bacnetSubnets,
+        bacnetRouted,
+        "Is the device busy (many clients, a slow MS/TP trunk)? A longer poll interval helps."
       ]
     }
   },
@@ -175,6 +207,20 @@ export interface FailureContext {
   readonly answeredBefore?: boolean
   /** Other devices stopped answering at the same moment: likely one cause they share. */
   readonly sharedCause?: boolean
+  /** With `sharedCause`: the one host they all sit on, which is then the likelier cause than a switch on the way. */
+  readonly sharedHost?: string
+}
+
+/**
+ * What to check for an alarm point that flaps: a fixed rhythm is rarely the plant tripping again and again. Shown
+ * under an `alarm-flapping` event and a flapping alarm in `ot-gateway status`.
+ */
+export const flappingAlarmHint: Hint = {
+  meaning: "The alarm switches on and off too often to be read as single trips.",
+  checks: [
+    "A fixed on/off rhythm like this usually points to the input's wiring or contact, or a device cycling, more than a real trip.",
+    "Check the contact and its terminals, and whether the device restarts or switches on a schedule at that rhythm."
+  ]
 }
 
 /** The failure classes where the device or the way to it is gone, rather than a reply the gateway cannot use. */
@@ -185,6 +231,8 @@ const aboutConfig = (check: string) => /\bconfig\b/.test(check)
 
 const sharedCheck =
   "Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link."
+const sameHostCheck = (host: string) =>
+  `Others on ${host} failed with it: check the host itself, its power and its network link before its config.`
 const answeredCheck =
   "It answered earlier in this run, so its config worked: did it lose power, or a switch or cable on the way? A device whose network module hangs answers again after a restart."
 
@@ -209,7 +257,12 @@ export const whatToCheck = (
         (rule.error === undefined || (error !== undefined && rule.error.test(error)))
     )?.hint ?? fallbackHint
   if (!unreachableReasons.has(reason) || (context.answeredBefore !== true && context.sharedCause !== true)) return hint
-  const first = context.sharedCause === true ? sharedCheck : answeredCheck
+  const first =
+    context.sharedCause !== true
+      ? answeredCheck
+      : context.sharedHost === undefined
+        ? sharedCheck
+        : sameHostCheck(context.sharedHost)
   const rest = hint === fallbackHint ? [] : hint.checks
   return {
     meaning: hint.meaning,

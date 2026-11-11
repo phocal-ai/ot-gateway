@@ -54,9 +54,21 @@ describe("GatewayEvents", () => {
           device: "energy-meter",
           reason: "connection",
           error: refused,
-          answeredBefore: true
+          answeredBefore: true,
+          // Its data stopped at its last good read, before the gateway called it failing.
+          lastReadAt: 1
         },
-        { id: 2, at: 100_000, type: "device-recovered", device: "energy-meter", downMs: 90_000 }
+        // The outage as data saw it: from the last read (1) to this one, the detection delay included.
+        {
+          id: 2,
+          at: 100_000,
+          type: "device-recovered",
+          device: "energy-meter",
+          downMs: 90_000,
+          lastReadAt: 1,
+          failingSince: 10_000,
+          noDataMs: 99_999
+        }
       ])
     }).pipe(Effect.provide(gatewayEventsLayer()))
   )

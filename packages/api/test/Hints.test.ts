@@ -2,7 +2,7 @@
  * What to check for a failing device: the hint follows the failure class, the driver's words and the protocol.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { fallbackHint, hintRules, whatToCheck } from "../src/Hints.ts"
+import { fallbackHint, flappingAlarmHint, hintRules, whatToCheck } from "../src/Hints.ts"
 
 const mentions = (checks: ReadonlyArray<string>, word: RegExp) => checks.some((check) => word.test(check))
 
@@ -69,6 +69,36 @@ describe("whatToCheck", () => {
     expect(hint.checks[0]).toMatch(/Others failed with it/)
     expect(hint.checks[1]).toMatch(/answered earlier/)
     expect(hint.checks.findIndex((check) => /in the config/.test(check))).toBeGreaterThan(2)
+  })
+
+  it("gives a BACnet device that cannot be reached BACnet's checks, not Modbus's", () => {
+    const notFound = whatToCheck("bacnet-ip", "connection", "device 2001 has not been found")
+    expect(notFound.meaning).toMatch(/I-Am/)
+    const unreachable = whatToCheck("bacnet-ip", "connection", "could not connect: host 10.0.0.9 unreachable")
+    for (const hint of [notFound, unreachable]) {
+      expect(mentions(hint.checks, /Modbus|unit id|port 502/)).toBe(false)
+      expect(mentions(hint.checks, /47808/)).toBe(true)
+      expect(mentions(hint.checks, /BBMD/)).toBe(true)
+    }
+    // An unanswered Who-Is and a timed-out request name the instance, UDP 47808, broadcasts and BACnet routers.
+    const timeout = whatToCheck("bacnet-ip", "timeout", "no answer from 10.0.0.5:47808")
+    for (const word of [/device instance/, /UDP 47808/, /BBMD/, /BACnet router/]) {
+      expect(mentions(timeout.checks, word)).toBe(true)
+    }
+  })
+
+  it("names the host that devices failing together share, as the first thing to check", () => {
+    const hint = whatToCheck("modbus-tcp", "timeout", "no response", {
+      sharedCause: true,
+      sharedHost: "10.0.1.20"
+    })
+    expect(hint.checks[0]).toBe(
+      "Others on 10.0.1.20 failed with it: check the host itself, its power and its network link before its config."
+    )
+  })
+
+  it("reads a flapping alarm's fixed rhythm as wiring or a cycling device first", () => {
+    expect(flappingAlarmHint.checks[0]).toMatch(/wiring or contact/)
   })
 
   it("keeps the config first for a refusal, where the device answers, whatever it did before", () => {

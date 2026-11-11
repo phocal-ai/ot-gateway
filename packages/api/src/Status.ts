@@ -53,6 +53,12 @@ export const DeviceStatus = Schema.Struct({
    * It stays while the device fails, so it says when the device last answered in full.
    */
   lastSuccess: Schema.optionalKey(Schema.Number),
+  /**
+   * The host the gateway reads it at, from the config: a Modbus device's `host`, a BACnet device's fixed `address`
+   * without its port. Absent for a BACnet device found by broadcast and for a simulator. Devices that fail together
+   * on one host point at that host (its power, its network link) rather than at a switch on the way.
+   */
+  host: Schema.optionalKey(Schema.String),
   /** How many points the config gives it, also when `points` is left out (`/api/status?points=none`). */
   pointCount: Schema.Number,
   points: Schema.Array(PointStatus)
@@ -293,9 +299,20 @@ export class ValuesQueryInvalid extends Schema.TaggedError<ValuesQueryInvalid>()
 export const Messages = Schema.Struct({
   messages: Schema.Array(MessageStatus),
   /** Topics left out because the gateway keeps at most this many. */
-  droppedTopics: Schema.Number
+  droppedTopics: Schema.Number,
+  /**
+   * Present in an answer for a window (`/api/messages/window`): the counts then run from `from` to `to` (Unix ms)
+   * instead of since the gateway started, and only topics with a message published or delivered in it are listed.
+   */
+  window: Schema.optionalKey(Schema.Struct({ from: Schema.Number, to: Schema.Number }))
 })
 export type Messages = typeof Messages.Type
+
+/**
+ * How far back `/api/messages/window` can count: the gateway keeps a count per topic per minute for the last hour,
+ * one small ring (about a third of a kilobyte) per topic it already keeps.
+ */
+export const MESSAGE_WINDOW_MINUTES = 60
 
 /**
  * A configured point as the points page lists it: what it is, where it comes from and how its values go out. Taken
@@ -435,7 +452,8 @@ export const GatewayStartedEvent = Schema.Struct({
 
 /**
  * A device that read fine, or had not read yet, failed: `reason` is the class, `error` the driver's words.
- * `answeredBefore`: the device read fine earlier in this run, so its config worked.
+ * `answeredBefore`: the device read fine earlier in this run, so its config worked. `lastReadAt`: Unix ms of its
+ * last good polling cycle: the data stopped there, before `at`, when the gateway gave up on it.
  */
 export const DeviceFailingEvent = Schema.Struct({
   ...eventFields,
@@ -443,15 +461,24 @@ export const DeviceFailingEvent = Schema.Struct({
   device: Schema.String,
   reason: Schema.String,
   error: Schema.String,
-  answeredBefore: Schema.optionalKey(Schema.Boolean)
+  answeredBefore: Schema.optionalKey(Schema.Boolean),
+  lastReadAt: Schema.optionalKey(Schema.Number)
 })
 
-/** A failing device read again, after `downMs` of failures. */
+/**
+ * A failing device read again, after `downMs` of failures, counted from when the gateway marked it failing
+ * (`failingSince`, Unix ms). The outage as the data shows it runs from `lastReadAt` (its last good read before, Unix
+ * ms) to `at`: `noDataMs` long, the span `ot-gateway history` shows too. These three are absent for a device that
+ * had not read yet, and from gateways before they were added.
+ */
 export const DeviceRecoveredEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("device-recovered"),
   device: Schema.String,
-  downMs: Schema.Number
+  downMs: Schema.Number,
+  lastReadAt: Schema.optionalKey(Schema.Number),
+  failingSince: Schema.optionalKey(Schema.Number),
+  noDataMs: Schema.optionalKey(Schema.Number)
 })
 
 /** The gateway lost its broker connection, or could not get one at start. Redials that fail too are not events. */
@@ -595,6 +622,48 @@ export const GatewayEvent = Schema.Union([
 export type GatewayEvent = typeof GatewayEvent.Type
 
 /**
+ * An energy counter (a point in Wh, kWh, MWh or J, `isEnergyUnit`) went back from `from` to `to`, in its `unit`: a
+ * meter that was reset or replaced, or another device answering at its address. The value is still published: this
+ * is a warning, not a filter.
+ */
+export const CounterWentBackEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("counter-went-back"),
+  device: Schema.String,
+  point: Schema.String,
+  unit: Schema.optionalKey(Schema.String),
+  from: Schema.Number,
+  to: Schema.Number
+})
+
+/**
+ * An energy counter rose from `from` to `to` in `elapsedMs`, more than `COUNTER_RATE_FACTOR` times faster than the
+ * fastest it rose over the last hour (`usualPerHour`, in its unit per hour), and by more than a minimum step: a meter
+ * reset or replaced, or another device answering at its address. The value is still published.
+ */
+export const CounterJumpedEvent = Schema.Struct({
+  ...eventFields,
+  type: Schema.Literal("counter-jumped"),
+  device: Schema.String,
+  point: Schema.String,
+  unit: Schema.optionalKey(Schema.String),
+  from: Schema.Number,
+  to: Schema.Number,
+  elapsedMs: Schema.Number,
+  usualPerHour: Schema.Number
+})
+
+/** How many times faster than its fastest rise of the last hour an energy counter may rise before it is a jump. */
+export const COUNTER_RATE_FACTOR = 10
+
+/**
+ * An event about a point's values rather than the gateway: an energy counter that went back or jumped. Kept apart
+ * from `GatewayEvent` (in `EventLog.valueEvents`), so clients that know only those keep decoding the answer.
+ */
+export const ValueEvent = Schema.Union([CounterWentBackEvent, CounterJumpedEvent])
+export type ValueEvent = typeof ValueEvent.Type
+
+/**
  * The gateway's recent events, oldest first. The gateway keeps the latest `capacity` in memory, since it started;
  * `dropped` counts the older ones it let go, so a gap is visible.
  */
@@ -602,6 +671,11 @@ export const EventLog = Schema.Struct({
   /** Unix ms on the gateway's clock when the answer was made, to read `at` against ("5 min ago") on any machine. */
   now: Schema.Number,
   events: Schema.Array(GatewayEvent),
+  /**
+   * The value events of the same ring, oldest first and filtered the same way: they share the ids and the capacity
+   * with `events`. Absent from gateways before they were added.
+   */
+  valueEvents: Schema.optionalKey(Schema.Array(ValueEvent)),
   capacity: Schema.Number,
   dropped: Schema.Number
 })
@@ -642,6 +716,18 @@ export class StatusGroup extends HttpApiGroup.make("status")
     })
   )
   .add(HttpApiEndpoint.get("messages", "/api/messages", { success: Messages }))
+  .add(
+    HttpApiEndpoint.get("messagesWindow", "/api/messages/window", {
+      query: {
+        /**
+         * Unix ms: count from then to now, in whole minutes (the minute it falls in counts whole), at most
+         * `MESSAGE_WINDOW_MINUTES` back; an earlier one is cut to that, and `window.from` says where it starts.
+         */
+        since: Schema.FiniteFromString
+      },
+      success: Messages
+    })
+  )
   .add(HttpApiEndpoint.get("points", "/api/points", { success: PointCatalog }))
   .add(HttpApiEndpoint.get("config", "/api/config", { success: ConfigView }))
   .add(

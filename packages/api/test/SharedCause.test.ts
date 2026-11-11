@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { preciseDuration, roughDuration, SHARED_CAUSE_WINDOW_MS, sharedCauses } from "../src/SharedCause.ts"
+import { commonHost, preciseDuration, roughDuration, SHARED_CAUSE_WINDOW_MS, sharedCauses } from "../src/SharedCause.ts"
 
 describe("sharedCauses", () => {
   it("groups two devices that failed within the window, with one line for both", () => {
@@ -31,6 +31,36 @@ describe("sharedCauses", () => {
       ])
     ).toEqual([])
     expect(sharedCauses([])).toEqual([])
+  })
+
+  it("names the one host a group's devices sit on: the host, its power or its link is the likelier cause", () => {
+    const hosts = new Map([
+      ["meter-a", "10.0.1.20"],
+      ["meter-b", "10.0.1.20"],
+      ["boiler", "10.0.2.5"]
+    ])
+    const [onOne] = sharedCauses(
+      [
+        { id: 1, device: "meter-a", at: 0 },
+        { id: 2, device: "meter-b", at: 2_000 }
+      ],
+      (device) => hosts.get(device)
+    )
+    expect(onOne).toEqual({
+      ids: [1, 2],
+      devices: ["meter-a", "meter-b"],
+      host: "10.0.1.20",
+      line: "2 devices (meter-a, meter-b) stopped answering within 2 s of each other, both on 10.0.1.20: likely the host itself, its power or its network link"
+    })
+    const [apart] = sharedCauses(
+      [
+        { id: 1, device: "meter-a", at: 0 },
+        { id: 2, device: "boiler", at: 2_000 }
+      ],
+      (device) => hosts.get(device)
+    )
+    expect(apart).not.toHaveProperty("host")
+    expect(commonHost(["meter-a", "nowhere"], (device) => hosts.get(device))).toBeUndefined()
   })
 })
 

@@ -13,7 +13,7 @@
  *   ot-gateway status [config]      the running gateway's status, one line per device (exit 1 when failing)
  *   ot-gateway events [config]      what changed lately: devices failing and recovering, the broker lost and back
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
- *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started
+ *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started (--since: the last minutes)
  *
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
@@ -37,7 +37,7 @@ import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
 import { DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
-import { messagesReport } from "./MessagesReport.ts"
+import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { watch } from "./Watch.ts"
 import {
   BrokerCommandError,
@@ -912,26 +912,45 @@ const messagesCommand = Command.make(
       Flag.map(Option.getOrUndefined)
     ),
     url: urlFlag,
+    since: Flag.String("since").pipe(
+      Flag.withDescription(
+        `Count only the last 30s, 10m or up to ${MESSAGE_WINDOW_MS / 60_000}m (the gateway keeps a count per topic per minute for an hour); since its start when left out`
+      ),
+      Flag.filter(
+        (since) => {
+          const ms = parseSince(since)
+          return since !== "all" && ms !== undefined && ms <= MESSAGE_WINDOW_MS
+        },
+        (since) => `--since takes 30s, 10m or up to ${MESSAGE_WINDOW_MS / 60_000}m, not ${since}`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
     json: jsonFlag
   },
-  ({ points: pointsArgument, positionalConfig, config: configFlag, url, json }) => {
+  ({ points: pointsArgument, positionalConfig, config: configFlag, url, since, json }) => {
     const chosen = messagesArguments(pointsArgument, positionalConfig, configFlag)
     const config = "error" in chosen ? undefined : chosen.config
     return Effect.gen(function* () {
       if ("error" in chosen) return yield* new BrokerCommandError({ message: chosen.error })
       const target = yield* resolveTarget({ config, url })
       const selection = chosen.points === undefined ? [] : (parseSelection(chosen.points) ?? [])
-      return yield* messagesReport(target, selection, { json })
+      return yield* messagesReport(target, selection, {
+        json,
+        since,
+        sinceMs: since === undefined ? undefined : parseSince(since)
+      })
     }).pipe(jsonFailure(json, { url: url ?? null, path: config ?? null }))
   }
 ).pipe(
   Command.withDescription(
-    "How many messages the running gateway published per topic since it started, how many reached the broker, and the last one"
+    "How many messages the running gateway published per topic since it started (or in the last --since, up to an hour), how many reached the broker, and the last one"
   ),
   Command.withExamples([
     { command: "ot-gateway messages", description: "Every topic under the gateway's site and building" },
     { command: "ot-gateway messages energy-meter/active-power", description: "One point's value and $meta topics" },
     { command: "ot-gateway messages energy-meter --json", description: "A device's topics as JSON" },
+    { command: "ot-gateway messages --since 5m", description: "Only the last 5 minutes, in whole minutes" },
     { command: "ot-gateway messages energy-meter site-1/ot-gateway.json", description: "The gateway of another config" }
   ])
 )
@@ -950,7 +969,7 @@ export const rootDescription = [
   "    status --json                    the running gateway, device by device, with what to check; exits 1 when something fails",
   "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
-  "    messages [<device/point>] --json how many messages went out per topic since start, and reached the broker",
+  "    messages [<device/point>] --json how many messages went out per topic since start (--since 10m: lately), and reached the broker",
   "  status, events, history and messages ask the gateway of ./ot-gateway.json (or the config named) at its status port."
 ].join("\n")
 

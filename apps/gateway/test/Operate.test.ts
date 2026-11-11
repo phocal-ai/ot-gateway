@@ -506,6 +506,61 @@ describe("history", () => {
     ])
   })
 
+  it("keeps a failure's last good read, where its data stopped, beside when it was called failing", () => {
+    const withLastRead: EventLog = {
+      ...meterLog,
+      events: meterLog.events.map((event) => (event.type === "device-failing" ? { ...event, lastReadAt: down } : event))
+    }
+    const failures = failuresOf(withLastRead).get("energy-meter") ?? []
+    expect(failures).toEqual([{ from: at(15, 58, 10), to: back, error: "no response within 3s", lastReadAt: down }])
+    const gaps = seriesJson(power, meterSeries(15_000), { since: at(15, 50, 0), failures }).gaps
+    expect(gaps).toHaveLength(1)
+    expect(gaps[0]).toMatchObject({ from: down, to: back, cause: { kind: "device-failing", since: at(15, 58, 10) } })
+  })
+
+  it("reads a stretch without a read of a point on change of value as no change while its device answered", () => {
+    const heatPump: PointInfo = {
+      ...power,
+      device: "heat-pump",
+      id: "supply-temp",
+      name: "Supply temperature",
+      unit: "unit:DEG_C",
+      source: "analog-input 1 · present-value",
+      read: "on change of value where the device supports it, polled every 5 s otherwise",
+      cov: true
+    }
+    const quiet: HistorySeries = {
+      ...series,
+      device: "heat-pump",
+      point: "supply-temp",
+      live: true,
+      to: at(12, 14, 0)
+    }
+    expect(formatSeries(heatPump, quiet, now, { cov: true })).toEqual([
+      "heat-pump/supply-temp (Supply temperature, °C): 1 min buckets from the per-minute rollups",
+      "  12:10:00  avg 12.4 °C  min 12.1  max 12.9  (12 reads)",
+      "  12:11:00  no reads for 2 min, until 12:13:00: it comes on change of value, so no change while its device answered",
+      "  12:13:00  3 °C  (1 read)"
+    ])
+    expect(seriesJson(heatPump, quiet, { cov: true }).gaps).toEqual([
+      {
+        from: at(12, 11, 0),
+        to: at(12, 13, 0),
+        emptyFrom: at(12, 11, 0),
+        emptyTo: at(12, 13, 0),
+        cause: { kind: "no-change" }
+      }
+    ])
+    expect(formatSeries(heatPump, { ...quiet, buckets: [] }, now, { cov: true }).at(-1)).toBe(
+      "  no reads in this range: it comes on change of value, so no change while its device answered"
+    )
+    // While its device failed, a gap is the failure's, on change of value or not.
+    const failures = [{ from: at(12, 11, 30), to: at(12, 13, 0), error: "timed out" }]
+    expect(formatSeries(heatPump, quiet, now, { cov: true, failures })[2]).toBe(
+      "  12:11:00  no reads for 2 min, until 12:13:00: heat-pump failing: timed out"
+    )
+  })
+
   it("does not call a gap at the end of a live series unwritten: it has every read", () => {
     const live = { ...series, live: true }
     expect(formatSeries(power, live, now).at(-1)).toBe("  12:14:00  no reads since then")
@@ -652,7 +707,20 @@ describe("against a running status page", () => {
         expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
         // Its publish mode, from the point catalog, instead of the JSON cut short; and why the counts run since start.
         expect(report[2]).toMatch(/retained {2}publish: every read$/)
-        expect(report.at(-1)).toContain("counts per topic since it started, not per time window")
+        expect(report.at(-1)).toBe("  (since the gateway started; --since 10m counts the last minutes, up to 60m back)")
+        // The last minutes only, over the window endpoint: the same counts here, all sent within this minute.
+        yield* messagesReport(target, [{ device: "energy-meter", point: "active-power" }], {
+          since: "5m",
+          sinceMs: 300_000
+        })
+        const recent = String((yield* TestConsole.logLines).at(-1)).split("\n")
+        expect(recent[0]).toMatch(/: messages per topic in the last 5m, since it started at /)
+        expect(recent[1]).toMatch(/3 sent, 2 reached the broker/)
+        expect(recent).toHaveLength(3)
+        yield* messagesReport(target, [], { json: true, since: "5m", sinceMs: 300_000 })
+        expect(JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")).toMatchObject({
+          window: { from: expect.any(Number), to: expect.any(Number) }
+        })
         yield* messagesReport(target, [], { json: true })
         const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
         expect(json).toMatchObject({

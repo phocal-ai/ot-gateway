@@ -56,6 +56,7 @@ import { describeConfigChange } from "./ConfigChange.ts"
 import { type ConfigFileSource, makeConfigEditor } from "./ConfigEditor.ts"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { type AlarmTracker, makeAlarmTracker } from "./Alarms.ts"
+import { type CounterTracker, makeCounterTracker } from "./Counters.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
 import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways.ts"
@@ -412,6 +413,8 @@ interface Shared {
   readonly history: History | undefined
   /** The alarm points' states and events, kept across configs applied from the page. */
   readonly alarms: AlarmTracker
+  /** The energy counters' plausibility (Counters.ts), kept across configs applied from the page. */
+  readonly counters: CounterTracker
   /** Whether the status page is served, so that each config keeps a status state for it. */
   readonly serving: boolean
   /** The gateway's scope: each config runs in a scope of its own inside it. */
@@ -490,6 +493,7 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
   // Each start a later time than the one before, even within a millisecond: the page keys what it keeps on it.
   const configSince = Math.max(yield* Clock.currentTimeMillis, shared.configSince + 1)
   shared.configSince = configSince
+  const clock = yield* Clock.clockWith(Effect.succeed)
   const status = shared.serving
     ? makeStatusState(
         config,
@@ -497,11 +501,11 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
         startedAt,
         { latest: latestHost, version: options.version ?? "unknown" },
         configSince,
-        shared.alarms
+        shared.alarms,
+        () => Number(clock.monotonicTimeNanosUnsafe() / 1_000_000n)
       )
     : undefined
   const drivers = makeDriverRegistry()
-  const clock = yield* Clock.clockWith(Effect.succeed)
   const guard = makeCommandGuard({
     site: config.site,
     building: config.building,
@@ -523,11 +527,13 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
   // The broker connection's metrics carry site and building too, and so do the alarms'.
   const attributes = withMetricAttributes({ site: config.site, building: config.building })
   yield* shared.alarms.configure(config).pipe(attributes)
-  // Every read goes to the history, the status page and the alarms, whichever are on.
+  yield* shared.counters.configure(config).pipe(attributes)
+  // Every read goes to the history, the status page, the alarms and the counters, whichever are on.
   const sinks = [
     shared.history?.sink,
     status?.reads,
-    shared.alarms.hasPoints() ? shared.alarms.sink : undefined
+    shared.alarms.hasPoints() ? shared.alarms.sink : undefined,
+    shared.counters.hasPoints() ? shared.counters.sink : undefined
   ].filter((sink) => sink !== undefined)
   const reads: HistorySink | undefined =
     sinks.length === 0
@@ -649,6 +655,7 @@ export const runGateway = Effect.fn("Gateway")(
       host,
       history,
       alarms: makeAlarmTracker(yield* Clock.clockWith(Effect.succeed), events.alarm),
+      counters: makeCounterTracker(yield* Clock.clockWith(Effect.succeed), events.value),
       serving: config.status !== undefined,
       scope: yield* Effect.scope,
       fatal: yield* Deferred.make<never, DevicesError>(),

@@ -12,8 +12,11 @@ import {
   ALARM_WINDOW_MS,
   type AlarmPattern,
   type AlarmStatus,
+  commonHost,
+  COUNTER_RATE_FACTOR,
   type DeviceStatus,
   type EventLog,
+  flappingAlarmHint,
   type GatewayEvent,
   type GatewayStatus,
   type Hint,
@@ -25,6 +28,8 @@ import {
   SHARED_CAUSE_WINDOW_MS,
   sharedCauseLine,
   sharedCauses,
+  unitLabel,
+  type ValueEvent,
   whatToCheck
 } from "@ot-gateway/api"
 import { Console, type Duration, Effect, Schema } from "effect"
@@ -62,15 +67,26 @@ export const brokerAway = (broker: GatewayStatus["broker"]) =>
  * fine in this run (`lastSuccess`), or one of several that failed together (`shared`), leads with power, switch,
  * cable and restart rather than its config.
  */
-export const hintsFor = (device: DeviceStatus, shared = false) =>
+export const hintsFor = (device: DeviceStatus, shared = false, sharedHost?: string) =>
   whatToCheck(device.protocol, device.reason ?? "", device.lastError, {
     answeredBefore: device.lastSuccess !== undefined,
-    sharedCause: shared
+    sharedCause: shared,
+    ...(sharedHost === undefined ? {} : { sharedHost })
   })
+
+/** The one host all of `devices` sit on (`DeviceStatus.host`); undefined when one has none or they differ. */
+export const sharedHostOf = (devices: ReadonlyArray<DeviceStatus>) => {
+  const hosts = new Map(devices.map((device) => [device.id, device.host]))
+  return commonHost(
+    devices.map((device) => device.id),
+    (device) => hosts.get(device)
+  )
+}
 
 /**
  * `all 3 devices stopped answering within 6 s of each other: …` when every device of two or more fails and their
- * failures began within `SHARED_CAUSE_WINDOW_MS`; undefined otherwise.
+ * failures began within `SHARED_CAUSE_WINDOW_MS`; undefined otherwise. Devices on one host say so: the host itself is
+ * then the likelier cause than a switch on the way.
  */
 export const sharedCause = (devices: ReadonlyArray<DeviceStatus>) => {
   if (devices.length < 2) return undefined
@@ -81,7 +97,7 @@ export const sharedCause = (devices: ReadonlyArray<DeviceStatus>) => {
   }
   const spread = Math.max(...starts) - Math.min(...starts)
   if (spread > SHARED_CAUSE_WINDOW_MS) return undefined
-  return sharedCauseLine(`all ${devices.length} devices`, spread)
+  return sharedCauseLine(`all ${devices.length} devices`, spread, sharedHostOf(devices), devices.length)
 }
 
 /** What `events` adds to an event: what to check for a device that failed, and whether others failed with it. */
@@ -96,37 +112,60 @@ export interface EventAdvice {
   readonly leads?: boolean
 }
 
+/** Any event `events` shows: the gateway's, and the value events (an energy counter that went back or jumped). */
+export type AnyEvent = GatewayEvent | ValueEvent
+
+/** Every event of `log`, the gateway's and the value events together, oldest first (by id: they share the ring). */
+export const allEvents = (log: EventLog): ReadonlyArray<AnyEvent> =>
+  log.valueEvents === undefined || log.valueEvents.length === 0
+    ? log.events
+    : [...log.events, ...log.valueEvents].toSorted((left, right) => left.id - right.id)
+
+/** What `events` knows of a device besides its events: its protocol and the host it is read at. */
+export interface DeviceInfo {
+  readonly protocol?: Protocol | undefined
+  readonly host?: string | undefined
+}
+
 /**
  * Advice per event id: for each `device-failing`, the hint table's advice (by the device's protocol from
- * `protocolOf`, any protocol's rules when the device is no longer in the config), and when two or more devices
- * started failing within `SHARED_CAUSE_WINDOW_MS` of the first of them, the shared-cause line on each of them.
+ * `deviceOf`, any protocol's rules when the device is no longer in the config), and when two or more devices
+ * started failing within `SHARED_CAUSE_WINDOW_MS` of the first of them, the shared-cause line on each of them
+ * (naming their host when they all sit on one). A flapping alarm gets what a fixed rhythm usually means.
  */
 export const adviseEvents = (
-  events: ReadonlyArray<GatewayEvent>,
-  protocolOf: (device: string) => Protocol | undefined
+  events: ReadonlyArray<AnyEvent>,
+  deviceOf: (device: string) => DeviceInfo | undefined
 ): ReadonlyMap<number, EventAdvice> => {
   const advice = new Map<number, EventAdvice>()
   const failures = events.filter((event) => event.type === "device-failing")
   const followers = new Set<number>()
-  for (const shared of sharedCauses(failures)) {
+  const hosts = new Map<number, string>()
+  for (const shared of sharedCauses(failures, (device) => deviceOf(device)?.host)) {
     const first = Math.min(...shared.ids)
     for (const id of shared.ids) {
       advice.set(id, { sharedCause: shared.line })
+      if (shared.host !== undefined) hosts.set(id, shared.host)
       if (id !== first) followers.add(id)
     }
   }
   // The hint knows whether the device worked before and whether others failed with it: then not its config first.
   for (const event of failures) {
     const shared = advice.get(event.id)?.sharedCause
-    const hint = whatToCheck(protocolOf(event.device), event.reason, event.error, {
+    const sharedHost = hosts.get(event.id)
+    const hint = whatToCheck(deviceOf(event.device)?.protocol, event.reason, event.error, {
       answeredBefore: event.answeredBefore === true,
-      sharedCause: shared !== undefined
+      sharedCause: shared !== undefined,
+      ...(sharedHost === undefined ? {} : { sharedHost })
     })
     advice.set(event.id, {
       hint,
       ...(shared === undefined ? {} : { sharedCause: shared }),
       ...(followers.has(event.id) ? {} : { leads: true })
     })
+  }
+  for (const event of events) {
+    if (event.type === "alarm-flapping") advice.set(event.id, { hint: flappingAlarmHint, leads: true })
   }
   return advice
 }
@@ -141,6 +180,24 @@ export interface RecentIncidents {
   readonly to?: number
   /** Times the broker connection was lost (or a first dial failed) in the window. */
   readonly brokerOutages: number
+  /**
+   * Each failure in the window as the data saw it: from the device's last good read (`lastReadAt`, absent when it
+   * had not read yet or from an older gateway) to its first read again (`recoveredAt`, absent while it still fails),
+   * and when the gateway called it failing (`detectedAt`). The same span `events` and `history` show.
+   */
+  readonly outages?: ReadonlyArray<RecentOutage>
+  /** Energy counters that went back or jumped in the window (value events), oldest first. */
+  readonly counters?: ReadonlyArray<ValueEvent>
+}
+
+/** One device failure, from its last good read to its first read again. */
+export interface RecentOutage {
+  readonly device: string
+  readonly lastReadAt?: number
+  readonly detectedAt: number
+  readonly recoveredAt?: number
+  /** From `lastReadAt` (or `detectedAt`) to `recoveredAt`, as the gateway measured it. */
+  readonly noDataMs?: number
 }
 
 /** What `status` says about the last 15 minutes, read from the events ring. */
@@ -152,11 +209,30 @@ export const recentIncidents = (log: EventLog, windowMs: number = RECENT_WINDOW_
   const failures = within.filter((event) => event.type === "device-failing")
   const first = failures[0]
   const last = failures.at(-1)
+  const counters = (log.valueEvents ?? []).filter((event) => event.at >= log.now - windowMs)
+  const outages = failures.map((failure): RecentOutage => {
+    const recovered = log.events.find(
+      (event) => event.type === "device-recovered" && event.device === failure.device && event.id > failure.id
+    )
+    const lastReadAt = failure.lastReadAt ?? (recovered?.type === "device-recovered" ? recovered.lastReadAt : undefined)
+    if (recovered?.type !== "device-recovered") {
+      return { device: failure.device, ...(lastReadAt === undefined ? {} : { lastReadAt }), detectedAt: failure.at }
+    }
+    return {
+      device: failure.device,
+      ...(lastReadAt === undefined ? {} : { lastReadAt }),
+      detectedAt: failure.at,
+      recoveredAt: recovered.at,
+      noDataMs: recovered.noDataMs ?? recovered.downMs
+    }
+  })
   return {
     windowMs,
     failedDevices: [...new Set(failures.map((event) => event.device))],
     ...(first === undefined || last === undefined ? {} : { from: first.at, to: last.at }),
-    brokerOutages: within.filter((event) => event.type === "broker-disconnected").length
+    brokerOutages: within.filter((event) => event.type === "broker-disconnected").length,
+    ...(outages.length === 0 ? {} : { outages }),
+    ...(counters.length === 0 ? {} : { counters })
   }
 }
 
@@ -165,22 +241,79 @@ const span = (from: number, to: number, now: number) =>
   from === to ? localTime(from, now) : `${localTime(from, now)}–${localTime(to, now)}`
 
 /**
- * The lines about the last 15 minutes: devices that failed, the broker lost, so a gateway that is fine again does
- * not read as one that always was. Empty when nothing happened.
+ * `no data 18:33:03–18:35:23 (2 min 20 s), detected 18:33:11`: an outage as the data saw it, from the last good read
+ * to the first read again, and when the gateway called it failing. Without a recovery, `no data since …`.
+ */
+export const outageText = (
+  outage: { readonly lastReadAt?: number; readonly detectedAt: number; readonly recoveredAt?: number },
+  noDataMs: number | undefined,
+  now: number
+) => {
+  const from = outage.lastReadAt ?? outage.detectedAt
+  const detected = outage.lastReadAt === undefined ? "" : `, detected ${localTime(outage.detectedAt, now)}`
+  if (outage.recoveredAt === undefined) return `no data since ${localTime(from, now)}${detected}, still failing`
+  const length = noDataMs ?? outage.recoveredAt - from
+  return `no data ${span(from, outage.recoveredAt, now)} (${preciseDuration(length)})${detected}`
+}
+
+/** Outages `status` lists one per line; more are counted in a line of their own. */
+const RECENT_OUTAGE_LINES = 5
+
+/** A number as a line shows it: up to three decimals, no trailing zeros. */
+const numberText = (value: number) => String(Number(value.toFixed(3)))
+
+/** `4270 → 12000 kWh`: a counter's two readings with its unit. */
+const counterStep = (event: ValueEvent) => {
+  const unit = unitLabel(event.unit)
+  return `${numberText(event.from)} to ${numberText(event.to)}${unit === "" ? "" : ` ${unit}`}`
+}
+
+/** What a counter's event means, in one sentence, for `events` and `status`. */
+export const counterText = (event: ValueEvent) => {
+  if (event.type === "counter-went-back")
+    return `counter went back from ${counterStep(event)}: meter reset or replaced?`
+  const unit = unitLabel(event.unit)
+  const usual = `${numberText(event.usualPerHour)}${unit === "" ? "" : ` ${unit}`}/h`
+  return `counter jumped from ${counterStep(event)} in ${preciseDuration(event.elapsedMs)}, more than ${COUNTER_RATE_FACTOR}× its fastest rise of the last hour (${usual}): meter reset or replaced, or another device answering at its address?`
+}
+
+/**
+ * The lines about the last 15 minutes: devices that failed and for how long, the broker lost, energy counters that
+ * went back or jumped, so a gateway that is fine again does not read as one that always was. Empty when nothing
+ * happened.
  */
 const recentLines = (recent: RecentIncidents, now: number) => {
   const minutes = `${Math.round(recent.windowMs / 60_000)} min`
+  // An older gateway's events say neither when the data stopped nor when it came back: the one summary line then.
+  const outages = (recent.outages ?? []).some(
+    (outage) => outage.lastReadAt !== undefined || outage.recoveredAt !== undefined
+  )
+    ? (recent.outages ?? [])
+    : []
+  const shown = outages.slice(-RECENT_OUTAGE_LINES)
+  const width = Math.max(0, ...shown.map((outage) => outage.device.length))
   const devices =
     recent.failedDevices.length === 0 || recent.from === undefined || recent.to === undefined
       ? []
-      : [
-          `  ${recent.failedDevices.length} device(s) failed in the last ${minutes} (${span(recent.from, recent.to, now)}: ${recent.failedDevices.join(", ")}), see ot-gateway events`
-        ]
+      : outages.length === 0
+        ? [
+            `  ${recent.failedDevices.length} device(s) failed in the last ${minutes} (${span(recent.from, recent.to, now)}: ${recent.failedDevices.join(", ")}), see ot-gateway events`
+          ]
+        : [
+            `  ${recent.failedDevices.length} device(s) failed in the last ${minutes}, see ot-gateway events:`,
+            ...(outages.length > shown.length
+              ? [`    (${outages.length - shown.length} earlier failure(s) left out)`]
+              : []),
+            ...shown.map((outage) => `    ${outage.device.padEnd(width)}  ${outageText(outage, outage.noDataMs, now)}`)
+          ]
   const broker =
     recent.brokerOutages === 0
       ? []
       : [`  broker connection lost ${recent.brokerOutages} time(s) in the last ${minutes}, see ot-gateway events`]
-  return [...devices, ...broker]
+  const counters = (recent.counters ?? []).map(
+    (event) => `  ${event.device}/${event.point} at ${localTime(event.at, now)}: ${counterText(event)}`
+  )
+  return [...devices, ...broker, ...counters]
 }
 
 /** `on 30 s, off 30 s, 6 times in 6 min`: how a flapping alarm switched. */
@@ -203,7 +336,7 @@ const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number) => {
   const minutes = `${Math.round(ALARM_WINDOW_MS / 60_000)} min`
   return [
     `  ${alarms.length} alarm point(s), ${active.length === 0 ? "none" : active.length} active`,
-    ...noteworthy.map((alarm) => {
+    ...noteworthy.flatMap((alarm) => {
       const state =
         alarm.active === true
           ? `ACTIVE${alarm.since === undefined ? "" : ` since ${localTime(alarm.since, now)} (${ago(now - alarm.since)})`}`
@@ -212,7 +345,10 @@ const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number) => {
         alarm.raised === 0
           ? ""
           : `, raised ${alarm.raised} time(s) in the last ${minutes}${alarm.flapping ? ` (flapping${alarm.pattern === undefined ? "" : `, ${patternText(alarm.pattern)}`}: its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)})` : ""}`
-      return `    ${`${alarm.device}/${alarm.point}`.padEnd(width)}  ${state}${raised}`
+      return [
+        `    ${`${alarm.device}/${alarm.point}`.padEnd(width)}  ${state}${raised}`,
+        ...(alarm.flapping ? [`    ${" ".repeat(width)}  check: ${flappingAlarmHint.checks[0] ?? ""}`] : [])
+      ]
     })
   ]
 }
@@ -282,6 +418,7 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
   const failing = status.devices.filter((device) => device.status === "failing").length
   const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
   const shared = sharedCause(status.devices)
+  const sharedHost = shared === undefined ? undefined : sharedHostOf(status.devices)
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)} (since ${localTime(status.since, status.now)})`,
     `  broker ${status.broker.url}: ${brokerState(status.broker, status.now, status.since)}`,
@@ -295,7 +432,7 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
     ...status.devices.flatMap((device) => [
       `    ${device.id.padEnd(width)}  ${deviceStateName(device, status.now).padEnd(8)} ${device.protocol}, ${device.pointCount} point(s), ${deviceState(device, status.now)}`,
       ...(device.status === "failing"
-        ? [`    ${" ".repeat(width)}  check: ${hintsFor(device, shared !== undefined).checks[0] ?? ""}`]
+        ? [`    ${" ".repeat(width)}  check: ${hintsFor(device, shared !== undefined, sharedHost).checks[0] ?? ""}`]
         : [])
     ]),
     ...(shared === undefined ? [] : [`  ${shared}`]),
@@ -377,13 +514,17 @@ export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: b
  */
 export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => {
   const shared = sharedCause(status.devices) !== undefined
+  const sharedHost = shared ? sharedHostOf(status.devices) : undefined
   return {
     ok: isHealthy(status),
     alarmsActive: activeAlarms(status),
     ...status,
     devices: status.devices.map((device) =>
-      device.status === "failing" ? { ...device, hints: hintsFor(device, shared) } : device
+      device.status === "failing" ? { ...device, hints: hintsFor(device, shared, sharedHost) } : device
     ),
+    ...(status.alarms === undefined
+      ? {}
+      : { alarms: status.alarms.map((alarm) => (alarm.flapping ? { ...alarm, hint: flappingAlarmHint } : alarm)) }),
     ...(recent === undefined ? {} : { recent })
   }
 }
@@ -412,8 +553,11 @@ export const parseSince = (text: string): number | undefined => {
 }
 
 /** The subject of an event's line: the device, or the part of the gateway it is about. */
-const subjectOf = (event: GatewayEvent) => {
+const subjectOf = (event: AnyEvent) => {
   switch (event.type) {
+    case "counter-went-back":
+    case "counter-jumped":
+      return `${event.device}/${event.point}`
     case "gateway-started":
       return "gateway"
     case "device-failing":
@@ -440,15 +584,27 @@ const subjectOf = (event: GatewayEvent) => {
 /** A point's value in an alarm line: `true`, `0`, `1.5`. */
 const valueText = (value: number | boolean) => String(value)
 
-/** What happened, after the subject: `failing: could not connect: …`, `ok again after 4 min`. */
-const describeEvent = (event: GatewayEvent, now: number) => {
+/**
+ * What happened, after the subject: `failing: could not connect: …`, `answering again: no data 18:33:03–18:35:23
+ * (2 min 20 s), detected 18:33:11`.
+ */
+const describeEvent = (event: AnyEvent, now: number) => {
   switch (event.type) {
+    case "counter-went-back":
+    case "counter-jumped":
+      return counterText(event)
     case "gateway-started":
       return `started (${event.version}, ${event.devices} device(s))`
     case "device-failing":
-      return `failing: ${withoutControls(event.error === "" ? event.reason : event.error)}`
+      return `failing: ${withoutControls(event.error === "" ? event.reason : event.error)}${event.lastReadAt === undefined ? "" : ` (last read ${localTime(event.lastReadAt, now)})`}`
     case "device-recovered":
-      return `ok again after ${preciseDuration(event.downMs)}`
+      return event.lastReadAt === undefined || event.failingSince === undefined
+        ? `ok again after ${preciseDuration(event.downMs)}`
+        : `answering again: ${outageText(
+            { lastReadAt: event.lastReadAt, detectedAt: event.failingSince, recoveredAt: event.at },
+            event.noDataMs,
+            now
+          )}`
     case "broker-disconnected":
       return `disconnected: ${withoutControls(event.error)}`
     case "broker-connected":
@@ -487,14 +643,16 @@ const describeEvent = (event: GatewayEvent, now: number) => {
   }
 }
 
-/** The events of `log` at or after `sinceMs` before the gateway's `now`. */
+/** The events of `log` (the gateway's and the value events) at or after `sinceMs` before the gateway's `now`. */
 export const eventsWithin = (log: EventLog, sinceMs: number) =>
-  log.events.filter((event) => event.at >= log.now - sinceMs)
+  allEvents(log).filter((event) => event.at >= log.now - sinceMs)
 
-/** The protocol of each device of a status, for the hints of `events`. */
-export const protocolsOf = (status: Pick<GatewayStatus, "devices">) => {
-  const protocols = new Map(status.devices.map((device) => [device.id, device.protocol]))
-  return (device: string) => protocols.get(device)
+/** The protocol and host of each device of a status, for the hints of `events`. */
+export const devicesOf = (status: Pick<GatewayStatus, "devices">) => {
+  const devices = new Map(
+    status.devices.map((device): [string, DeviceInfo] => [device.id, { protocol: device.protocol, host: device.host }])
+  )
+  return (device: string) => devices.get(device)
 }
 
 /**
@@ -506,18 +664,19 @@ export const formatEvents = (
   log: EventLog,
   sinceMs: number,
   sinceText: string,
-  protocolOf: (device: string) => Protocol | undefined = () => undefined
+  deviceOf: (device: string) => DeviceInfo | undefined = () => undefined
 ) => {
   const events = eventsWithin(log, sinceMs)
   const window = sinceMs === Number.POSITIVE_INFINITY ? "since the gateway started" : `in the last ${sinceText}`
+  const all = allEvents(log)
   // The ring let older events go and the oldest kept is inside the window: some of the window is missing.
   const gap =
-    log.dropped > 0 && events.length > 0 && events.length === log.events.length
+    log.dropped > 0 && events.length > 0 && events.length === all.length
       ? [`(the gateway keeps the latest ${log.capacity} events; ${log.dropped} older ones were let go)`]
       : []
   if (events.length === 0) return `no events ${window}`
   const width = Math.max(...events.map((event) => subjectOf(event).length))
-  const advice = adviseEvents(log.events, protocolOf)
+  const advice = adviseEvents(all, deviceOf)
   // The shared-cause line goes once, after the last failure of its group that is shown.
   const sharedShown = new Set<string>()
   const sharedAfter = new Set<number>()
@@ -552,14 +711,14 @@ const adviceLines = (hint: Hint | undefined, indent: string, count: number) => {
 }
 
 /** One event's line: local time, subject, what happened; the subject padded to `width`. */
-export const eventLine = (event: GatewayEvent, now: number, width = 0) =>
+export const eventLine = (event: AnyEvent, now: number, width = 0) =>
   `${localTime(event.at, now)}  ${subjectOf(event).padEnd(width)}  ${describeEvent(event, now)}`
 
 /**
  * An event as `events --json` gives it: as the gateway keeps it, with `hint` (what it means, what to check) for a
- * device that failed and `sharedCause` when others failed with it.
+ * device that failed or an alarm that flaps, and `sharedCause` when others failed with it.
  */
-export const eventJson = (event: GatewayEvent, advice: ReadonlyMap<number, EventAdvice>) => {
+export const eventJson = (event: AnyEvent, advice: ReadonlyMap<number, EventAdvice>) => {
   const found = advice.get(event.id)
   return {
     ...event,
@@ -590,8 +749,8 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
   yield* checkIdentity(target, status)
   const log = yield* fetchGatewayEvents(target.url)
   const gateway = { site: status.site, building: status.building, id: status.id }
-  const protocolOf = protocolsOf(status)
-  const advice = adviseEvents(log.events, protocolOf)
+  const deviceOf = devicesOf(status)
+  const advice = adviseEvents(allEvents(log), deviceOf)
   const events = eventsWithin(log, options.sinceMs).map((event) => eventJson(event, advice))
   if (options.json === true && options.follow !== true) {
     return yield* printJson({ ok: true, gateway, now: log.now, capacity: log.capacity, dropped: log.dropped, events })
@@ -606,12 +765,12 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
           : `then what comes for ${options.seconds} s`
         : ""
     yield* printResult(`${gatewayName(gateway)} at ${target.url}${window === "" ? "" : `, ${window}`}`)
-    yield* printResult(formatEvents(log, options.sinceMs, options.since, protocolOf))
+    yield* printResult(formatEvents(log, options.sinceMs, options.since, deviceOf))
   }
   if (options.follow !== true) return
-  const follow = followEvents((after) => fetchGatewayEvents(target.url, after), log.events.at(-1)?.id ?? 0, {
+  const follow = followEvents((after) => fetchGatewayEvents(target.url, after), allEvents(log).at(-1)?.id ?? 0, {
     json: options.json === true,
-    protocolOf
+    deviceOf
   })
   if (options.seconds === undefined) return yield* follow
   yield* Effect.timeoutOrElse(follow, { duration: `${options.seconds} seconds`, orElse: () => Effect.void })
@@ -625,10 +784,10 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
 export const followEvents = Effect.fn("followEvents")(function* (
   fetchAfter: (after: number) => Effect.Effect<EventLog, GatewayUnreachable>,
   lastId: number,
-  options: { readonly json: boolean; readonly protocolOf?: (device: string) => Protocol | undefined }
+  options: { readonly json: boolean; readonly deviceOf?: (device: string) => DeviceInfo | undefined }
 ) {
   const json = options.json
-  const protocolOf = options.protocolOf ?? (() => undefined)
+  const deviceOf = options.deviceOf ?? (() => undefined)
   let last = lastId
   let away = false
   while (true) {
@@ -644,13 +803,13 @@ export const followEvents = Effect.fn("followEvents")(function* (
     }
     if (away) yield* Console.error("the gateway answers again")
     away = false
-    const fresh = answer.events
+    const fresh = allEvents(answer)
     const first = fresh[0]
     if (first !== undefined && first.id <= last) {
       yield* Console.error("the gateway restarted: its events start over")
     }
     // Each new failure gets its hint; a shared cause needs the others of its group, which `events` shows afterwards.
-    const hints = adviseEvents(fresh, protocolOf)
+    const hints = adviseEvents(fresh, deviceOf)
     for (const event of fresh) {
       const found = hints.get(event.id)
       const hint = found?.hint
