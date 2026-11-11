@@ -47,11 +47,11 @@ describe("appendToPointsList", () => {
       const result = append(modbusList, heatPump())
       expect(result).toMatchObject({ added: 2, devices: 1, skipped: 0 })
       expect(result.text.split("\n")).toEqual([
-        "device,point,unit,host,register,type,device_instance,address,object_type,object_instance",
-        "boiler,Supply temperature,°C,10.0.1.5,100,int16,,,,",
-        "boiler,Return temperature,°C,10.0.1.5,101,int16,,,,",
-        "heat-pump,Flow temperature,unit:DEG_C,,,,2001,127.0.0.1:47809,analog-input,1",
-        "heat-pump,Compressor running,,,,,2001,127.0.0.1:47809,binary-input,1",
+        "device,point,unit,host,register,type,publish,device_instance,address,object_type,object_instance",
+        "boiler,Supply temperature,°C,10.0.1.5,100,int16,,,,,",
+        "boiler,Return temperature,°C,10.0.1.5,101,int16,,,,,",
+        "heat-pump,Flow temperature,unit:DEG_C,,,,sample,2001,127.0.0.1:47809,analog-input,1",
+        "heat-pump,Compressor running,,,,,sample,2001,127.0.0.1:47809,binary-input,1",
         ""
       ])
       const devices = yield* devicesFromPointsList(result.text)
@@ -69,9 +69,9 @@ describe("appendToPointsList", () => {
         heatPump("heat-pump", [{ objectType: "analog-input", instance: 1, name: "Supply, temp" }])
       )
       expect(result.text).toBe(
-        "﻿Device Name;Name;Unit;IP;Register;Data Type;device_instance;address;object_type;object_instance\r\n" +
-          "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;\r\n" +
-          'heat-pump;"Supply, temp";;;;;2001;127.0.0.1:47809;analog-input;1\r\n'
+        "﻿Device Name;Name;Unit;IP;Register;Data Type;publish;device_instance;address;object_type;object_instance\r\n" +
+          "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;;\r\n" +
+          'heat-pump;"Supply, temp";;;;;sample;2001;127.0.0.1:47809;analog-input;1\r\n'
       )
       const devices = yield* devicesFromPointsList(result.text)
       expect(devices[1]?.points.map((point) => point.name)).toEqual(["Supply, temp"])
@@ -96,7 +96,7 @@ describe("appendToPointsList", () => {
     const byHand = "device,point,device_instance,object_type,object_instance\nHeat Pump,Vorlauf,2001,analog-input,1\n"
     const result = append(byHand, heatPump())
     expect(result).toMatchObject({ added: 1, skipped: 1 })
-    expect(result.text.split("\n")[2]).toBe("Heat Pump,Compressor running,2001,binary-input,1,,127.0.0.1:47809")
+    expect(result.text.split("\n")[2]).toBe("Heat Pump,Compressor running,2001,binary-input,1,,sample,127.0.0.1:47809")
   })
 
   it("renames a discovered device whose name the list gives another device, so import keeps them apart", () =>
@@ -132,9 +132,9 @@ describe("appendToPointsList", () => {
       const list = 'device,point,host,register,type\nboiler,"Supply,\ntemp",10.0.1.5,0,int16\nboiler,Return\n\n'
       const result = append(list, heatPump())
       const width = result.text.split("\n")[0]?.split(",").length ?? 0
-      expect(result.text).toContain('boiler,"Supply,\ntemp",10.0.1.5,0,int16,,,,,\n')
-      expect(result.text).toContain("\nboiler,Return,,,,,,,,\n")
-      expect(width).toBe(10)
+      expect(result.text).toContain('boiler,"Supply,\ntemp",10.0.1.5,0,int16,,,,,,\n')
+      expect(result.text).toContain("\nboiler,Return,,,,,,,,,\n")
+      expect(width).toBe(11)
       const devices = yield* devicesFromPointsList(
         result.text.replace("boiler,Return,,,", "boiler,Return,10.0.1.5,1,int16")
       )

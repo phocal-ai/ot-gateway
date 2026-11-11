@@ -520,29 +520,31 @@ export const initNext = (
           step(`${cli} status`, "one line per device")
         ]
       : [step(`${cli} run${argument}`, "start the gateway")]
-  // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
+  // As the work goes: the broker answers, the points go in and pass the check, then the gateway starts. A wrong URL,
+  // port or password shows first, not later as a stale gateway.
+  const points = manual
+    ? [
+        step(
+          `${cli} points template > ${pointsList}`,
+          "fill in a points list (discover --points-list drafts one for BACnet), or add devices on the status page instead"
+        ),
+        step(`${cli} import ${pointsList}${argument}`, "add its devices to the config")
+      ]
+    : []
   const before = [
     step(`${cli} broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
+    ...points,
+    step(`${cli} check${argument}`, "validate the config without connecting, again after every edit"),
     ...start
   ]
   // Without devices, the status page is where they are added; a points list is the way from the terminal.
   const page = manual
-    ? `then open ${url} and add devices there (or upload a points list)`
+    ? `then open ${url} for the status page, where devices can be added too (or a points list uploaded)`
     : `then open ${url} for the status page: devices, values, charts`
   const next = [
     ...before,
     // Over SSH, 127.0.0.1 is the gateway's machine, not the laptop with the browser.
     ...(ssh === undefined ? [] : [sshTunnel(ssh, port)]),
-    ...(manual
-      ? [
-          step(
-            `${cli} points template > ${pointsList}`,
-            "or write a points list here (discover --points-list drafts one for BACnet)"
-          ),
-          step(`${cli} import ${pointsList}${argument}`, "add its devices to the config")
-        ]
-      : []),
-    step(`${cli} check${argument}`, "validate it again after an edit"),
     // Bounded, so an agent that runs the line as printed gets its answer and its prompt back.
     step(`${cli} watch${argument} --seconds 10`, `ten seconds of what arrives at ${config.mqtt.url}`)
   ]

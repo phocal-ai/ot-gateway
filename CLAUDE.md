@@ -22,7 +22,7 @@ pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim, --append adds to one)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
-pnpm ot-gateway points schema              # the points list's columns (--json); points template prints a list to fill in
+pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
