@@ -28,9 +28,25 @@ export const preciseDuration = (milliseconds: number) => {
   return rest === 0 ? `${seconds / 60} min` : `${Math.floor(seconds / 60)} min ${rest} s`
 }
 
-/** `<who> stopped answering within 6 s of each other: likely a shared cause (…)`. */
-export const sharedCauseLine = (who: string, spreadMs: number) =>
-  `${who} stopped answering within ${roughDuration(spreadMs)} of each other: likely a shared cause (power, a switch, the gateway's own network)`
+/**
+ * `<who> stopped answering within 6 s of each other: likely a shared cause (…)`. With `host`, the devices all sit on
+ * that one host (a Modbus gateway, a controller with several units): `…, both on 10.0.0.5: likely the host itself, its
+ * power or its network link`, which `count` makes `both` or `all`.
+ */
+export const sharedCauseLine = (who: string, spreadMs: number, host?: string, count = 2) =>
+  host === undefined
+    ? `${who} stopped answering within ${roughDuration(spreadMs)} of each other: likely a shared cause (power, a switch, the gateway's own network)`
+    : `${who} stopped answering within ${roughDuration(spreadMs)} of each other, ${count === 2 ? "both" : "all"} on ${host}: likely the host itself, its power or its network link`
+
+/** The one host all of `devices` sit on, by `hostOf`; undefined when one has none or they differ. */
+export const commonHost = (
+  devices: ReadonlyArray<string>,
+  hostOf: (device: string) => string | undefined
+): string | undefined => {
+  const hosts = new Set(devices.map(hostOf))
+  const [host] = hosts
+  return hosts.size === 1 ? host : undefined
+}
 
 /** A device that stopped answering: the `device-failing` event's id, device and time (Unix ms). */
 export interface DeviceFailure {
@@ -47,13 +63,19 @@ export interface SharedCause {
   readonly devices: ReadonlyArray<string>
   /** `2 devices (boiler, meter) stopped answering within 6 s of each other: …`. */
   readonly line: string
+  /** The one host every device of the group sits on, when `hostOf` knows it. */
+  readonly host?: string
 }
 
 /**
  * The shared causes among `failures` (oldest first): consecutive failures within `SHARED_CAUSE_WINDOW_MS` of the
- * first of a group form it, and a group of one device (that failed twice, say) is none.
+ * first of a group form it, and a group of one device (that failed twice, say) is none. With `hostOf`, a group whose
+ * devices all sit on one host says so.
  */
-export const sharedCauses = (failures: ReadonlyArray<DeviceFailure>): ReadonlyArray<SharedCause> => {
+export const sharedCauses = (
+  failures: ReadonlyArray<DeviceFailure>,
+  hostOf: (device: string) => string | undefined = () => undefined
+): ReadonlyArray<SharedCause> => {
   const found: Array<SharedCause> = []
   let index = 0
   while (index < failures.length) {
@@ -69,10 +91,12 @@ export const sharedCauses = (failures: ReadonlyArray<DeviceFailure>): ReadonlyAr
     const devices = [...new Set(group.map((failure) => failure.device))]
     if (devices.length >= 2) {
       const spread = (group.at(-1)?.at ?? first.at) - first.at
+      const host = commonHost(devices, hostOf)
       found.push({
         ids: group.map((failure) => failure.id),
         devices,
-        line: sharedCauseLine(`${devices.length} devices (${devices.join(", ")})`, spread)
+        line: sharedCauseLine(`${devices.length} devices (${devices.join(", ")})`, spread, host, devices.length),
+        ...(host === undefined ? {} : { host })
       })
     }
     index = end

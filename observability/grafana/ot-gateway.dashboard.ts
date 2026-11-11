@@ -484,9 +484,25 @@ timeseries(
   {
     unit: "short",
     x: 0,
-    w: 24,
+    w: 12,
     description:
       "Points marked as alarms (alarmWhen, the points list's alarm column): how many are active, and how often they were raised and cleared. Which point is in the events (ot-gateway events), not a label: a contact that chatters shows as many raises here and as one flapping event there."
+  }
+)
+timeseries(
+  "Energy counters that went back or jumped",
+  [
+    {
+      expr: `sum by (kind) (increase(ot_gateway_counter_implausible_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{kind}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    description:
+      "Reads of an energy counter (a point in Wh, kWh, MWh or J) lower than the one before (went-back: a meter reset or replaced), or rising more than 10 times faster than its fastest rise of the last hour (jumped: a reset, or another device answering at its address). The values are published all the same; which point is in the events (ot-gateway events)."
   }
 )
 y += 8

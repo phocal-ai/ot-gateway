@@ -21,6 +21,7 @@ import {
   HistoryUnavailable,
   MAX_IMPORT_BYTES,
   MAX_VALUES_PER_REQUEST,
+  MESSAGE_WINDOW_MINUTES,
   type Messages,
   OtGatewayApi,
   type PointCatalog,
@@ -34,6 +35,7 @@ import { configView } from "./ConfigView.ts"
 import { isLoopbackAddress, isReadOnlyMethod, writeRefusal } from "./EditGuard.ts"
 import { GatewayEvents } from "./Events.ts"
 import type { HostSnapshot } from "./Host.ts"
+import { makeMessageMinutes } from "./MessageWindow.ts"
 import { pointCatalog } from "./PointCatalog.ts"
 import {
   bufferDisabled,
@@ -94,6 +96,16 @@ const decodeValue = Schema.decodeUnknownOption(ValueMessage)
 /** The built web app, when the config does not name one: apps/web/out next to this app. */
 export const defaultWebRoot = fileURLToPath(new URL("../../web/out", import.meta.url))
 
+/** Where the gateway reads a device, for `DeviceStatus.host`: a Modbus host, a BACnet fixed address's host. */
+const hostOf = (device: GatewayConfig["devices"][number]): { readonly host?: string } => {
+  if (device.protocol === "modbus-tcp") return { host: device.host }
+  if (device.protocol === "bacnet-ip" && device.address !== undefined) {
+    const [host = ""] = device.address.split(":")
+    return host === "" ? {} : { host }
+  }
+  return {}
+}
+
 /**
  * Whether the web app's build in `webRoot` is older than its sources in `<webRoot>/../src`: in a checkout, where
  * `otg run` serves whatever `apps/web/out` holds and only `pnpm gateway` rebuilds it. A package or image has no
@@ -148,6 +160,8 @@ export interface StatusState {
   /** The last reads of the points named by comma-separated `device/point` keys, configured ones only. */
   readonly values: (keys: string) => Effect.Effect<PointReadings, ValuesQueryInvalid>
   readonly messages: Effect.Effect<Messages>
+  /** The messages per topic from Unix ms `since` (in whole minutes, the last hour at most), not since start. */
+  readonly messagesWindow: (since: number) => Effect.Effect<Messages>
   /** Every configured point with its topic, source and publish mode: built once, the config does not change. */
   readonly points: Effect.Effect<PointCatalog>
   /** The running config without its points, for the Settings tab: built once. */
@@ -168,7 +182,9 @@ export const makeStatusState = (
   /** When this config started: `since`, or the moment a config saved on the page was applied. */
   configSince = since,
   /** The alarm points' states (Alarms.ts); without, the status has no `alarms`. */
-  alarms?: { readonly snapshot: () => ReadonlyArray<AlarmStatus> }
+  alarms?: { readonly snapshot: () => ReadonlyArray<AlarmStatus> },
+  /** The monotonic clock in ms, for the messages per minute: the gateway's `Clock`, a test's `TestClock`. */
+  monotonicMs: () => number = () => performance.now()
 ): StatusState => {
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
@@ -177,6 +193,8 @@ export const makeStatusState = (
   const reads = new Map<string, { readonly value: number | boolean; readonly ts: number }>()
   const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number; delivered: number }>()
   const droppedTopics = new Set<string>()
+  /** Per kept topic, the messages of each of the last 60 minutes (MessageWindow.ts). */
+  const perMinute = makeMessageMinutes(MESSAGE_WINDOW_MINUTES)
   const commands: Array<CommandStatus> = []
   let broker: { readonly at: number; readonly connection: BrokerConnection } | undefined
   let brokerDown: { readonly since: number; readonly error: string } | undefined
@@ -195,6 +213,7 @@ export const makeStatusState = (
       // An empty retained message clears the topic at the broker (StaleMeta.ts): the page forgets it too.
       if (message.retained && payload === "") {
         latest.delete(topic)
+        perMinute.remove(topic)
         return
       }
       const previous = latest.get(topic)
@@ -203,8 +222,10 @@ export const makeStatusState = (
         previous.retained = message.retained
         previous.at = message.at
         previous.count++
+        perMinute.published(topic, monotonicMs())
       } else if (latest.size < MAX_TOPICS) {
         latest.set(topic, { payload, retained: message.retained, at: message.at, count: 1, delivered: 0 })
+        perMinute.published(topic, monotonicMs())
       } else if (droppedTopics.size < MAX_TOPICS) droppedTopics.add(topic)
       const rest = topic.slice(prefix.length)
       const slash = rest.indexOf("/")
@@ -213,7 +234,9 @@ export const makeStatusState = (
     },
     recordDelivered: (topic) => {
       const entry = latest.get(topic)
-      if (entry !== undefined) entry.delivered++
+      if (entry === undefined) return
+      entry.delivered++
+      perMinute.delivered(topic, monotonicMs())
     },
     reads: {
       record: (device, point, value, ts) => {
@@ -270,6 +293,7 @@ export const makeStatusState = (
             ...(state.lastError === undefined ? {} : { lastError: state.lastError }),
             ...(state.failures === undefined ? {} : { failures: state.failures }),
             ...(state.lastSuccess === undefined ? {} : { lastSuccess: state.lastSuccess }),
+            ...hostOf(device),
             pointCount: device.points.length,
             points:
               points === "none"
@@ -369,6 +393,35 @@ export const makeStatusState = (
         })),
       droppedTopics: droppedTopics.size
     })),
+    messagesWindow: (windowStart) =>
+      Effect.map(Clock.currentTimeMillis, (now) => {
+        const nowMono = monotonicMs()
+        // The minute `windowStart` falls in counts whole, so the window is never shorter than asked.
+        const minutes = Math.floor(Math.max(0, now - windowStart) / 60_000) + 1
+        const window = perMinute.window(minutes, nowMono)
+        return {
+          messages: [...window.counts.entries()]
+            .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            .flatMap(([topic, counted]) => {
+              const message = latest.get(topic)
+              return message === undefined
+                ? []
+                : [
+                    {
+                      topic,
+                      payload: message.payload.slice(0, MAX_PAYLOAD),
+                      truncated: message.payload.length > MAX_PAYLOAD,
+                      retained: message.retained,
+                      at: message.at,
+                      count: counted.published,
+                      delivered: counted.delivered
+                    }
+                  ]
+            }),
+          droppedTopics: droppedTopics.size,
+          window: { from: now - (nowMono - window.fromMs), to: now }
+        }
+      }),
     points: Effect.succeed(catalog),
     config: Effect.succeed(settings)
   }
@@ -391,6 +444,7 @@ export const switchableStatus = (initial: StatusState) => {
     snapshot: (points) => Effect.suspend(() => current.snapshot(points)),
     values: (keys) => Effect.suspend(() => current.values(keys)),
     messages: Effect.suspend(() => current.messages),
+    messagesWindow: (since) => Effect.suspend(() => current.messagesWindow(since)),
     points: Effect.suspend(() => current.points),
     config: Effect.suspend(() => current.config)
   }
@@ -486,6 +540,7 @@ export const serveStatus = (
             .handle("values", ({ query }) => state.values(query.points))
             .handle("events", ({ query }) => events.log(query))
             .handle("messages", () => state.messages)
+            .handle("messagesWindow", ({ query }) => state.messagesWindow(query.since))
             .handle("points", () => state.points)
             .handle("config", () => state.config)
             .handle("history", ({ query }) => history(query))

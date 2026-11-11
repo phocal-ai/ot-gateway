@@ -320,6 +320,16 @@ export const alarmsActive = Metric.gauge("ot_gateway_alarms_active", {
   attributes: { unit: "{alarm}" }
 })
 
+/**
+ * Energy counter reads that are not plausible, by `kind`: `went-back` (lower than the read before) or `jumped` (a
+ * rise far faster than the counter's fastest of the last hour). Every one counts, also the ones the events leave
+ * unlisted within an episode; which point is in the events, not in a label: two series per gateway at most.
+ */
+export const counterImplausible = Metric.counter("ot_gateway_counter_implausible", {
+  description: "Energy counter reads that went back or jumped, by kind",
+  incremental: true
+})
+
 /*
  * The gateway process and the machine it runs on: one series each per gateway
  * (no `device`), sampled every 15 seconds by the gateway's host monitor. What

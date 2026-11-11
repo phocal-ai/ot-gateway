@@ -5,23 +5,32 @@
  *
  * Transitions are rare and reads are not: nothing here runs per read. Each method is synchronous, called from a
  * listener at the moment of the transition, and allocates one event; the ring never grows past its capacity.
+ *
+ * Value events (an energy counter that went back or jumped, `Counters.ts`) share the ring and its ids, and are
+ * answered apart, as `valueEvents`, so a client that knows only the gateway's events keeps decoding the answer.
  */
-import type { EventLog, GatewayEvent } from "@ot-gateway/api"
+import type { EventLog, GatewayEvent, ValueEvent } from "@ot-gateway/api"
 import type { HealthChange, Slug } from "@ot-gateway/core"
 import { Clock, Context, Effect, Layer } from "effect"
 
 /** Events kept: a few hundred, about 100 kB at most, and weeks of incidents on a site that has a few a day. */
 export const EVENT_CAPACITY = 500
 
+/** Any event the ring keeps. */
+type StoredEvent = GatewayEvent | ValueEvent
+
 /** What the caller says about an event; the ring adds its `id` and `at`. */
-type EventInput = GatewayEvent extends infer Event
-  ? Event extends GatewayEvent
+type EventInput = StoredEvent extends infer Event
+  ? Event extends StoredEvent
     ? Omit<Event, "id" | "at">
     : never
   : never
 
 /** An alarm point's event, as the alarm tracker (Alarms.ts) hands it over: rate-limited there already. */
 export type AlarmEventInput = Extract<EventInput, { readonly type: `alarm-${string}` }>
+
+/** An energy counter's event, as the counter tracker (Counters.ts) hands it over: rate-limited there already. */
+export type ValueEventInput = Extract<EventInput, { readonly type: `counter-${string}` }>
 
 export interface EventQuery {
   /** Unix ms: only events at or after it. */
@@ -49,6 +58,8 @@ export interface GatewayEventsShape {
   readonly gatewayConflict: (gateway: string, devices: ReadonlyArray<string>, sameId: boolean) => void
   /** An alarm point was raised, cleared, flaps or settled (Alarms.ts decides which, and how many to list). */
   readonly alarm: (event: AlarmEventInput) => void
+  /** An energy counter went back or jumped (Counters.ts decides which, and how many to list). */
+  readonly value: (event: ValueEventInput) => void
   /** The events kept, oldest first, filtered by `query`. */
   readonly log: (query?: EventQuery) => Effect.Effect<EventLog>
 }
@@ -57,12 +68,15 @@ export class GatewayEvents extends Context.Service<GatewayEvents, GatewayEventsS
   "@ot-gateway/gateway/GatewayEvents"
 ) {}
 
+const isValueEvent = (event: StoredEvent): event is ValueEvent =>
+  event.type === "counter-went-back" || event.type === "counter-jumped"
+
 /**
  * The ring on `clock`: `at` from its wall clock, durations from its monotonic clock, because NTP steps the wall
  * clock of a Pi without a real-time clock while it is down.
  */
 export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_CAPACITY): GatewayEventsShape => {
-  const slots: Array<GatewayEvent | undefined> = Array.from({ length: capacity }, () => undefined)
+  const slots: Array<StoredEvent | undefined> = Array.from({ length: capacity }, () => undefined)
   /** Events recorded since start; also the id of the newest. */
   let total = 0
   const monotonicMs = () => Number(clock.monotonicTimeNanosUnsafe() / 1_000_000n)
@@ -89,12 +103,28 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
           device,
           reason: next.reason ?? "unknown",
           error: next.lastError ?? "",
-          ...(answered.has(device) ? { answeredBefore: true } : {})
+          ...(answered.has(device) ? { answeredBefore: true } : {}),
+          ...(previous.lastSuccess === undefined ? {} : { lastReadAt: previous.lastSuccess })
         })
       } else if (previous.status === "failing" && next.status === "ok") {
         const since = failingSince.get(device)
         failingSince.delete(device)
-        record({ type: "device-recovered", device, downMs: since === undefined ? 0 : monotonicMs() - since })
+        const downMs = since === undefined ? 0 : monotonicMs() - since
+        const { lastSuccess, failingSince: detectedAt } = previous
+        // From the last good read to this one: the time it took to call the device failing (wall clock, seconds
+        // apart), then the outage on the monotonic clock, so a clock step while the device was away does not bend it.
+        const noDataMs =
+          lastSuccess === undefined || detectedAt === undefined
+            ? undefined
+            : downMs + Math.max(0, detectedAt - lastSuccess)
+        record({
+          type: "device-recovered",
+          device,
+          downMs,
+          ...(lastSuccess === undefined ? {} : { lastReadAt: lastSuccess }),
+          ...(detectedAt === undefined ? {} : { failingSince: detectedAt }),
+          ...(noDataMs === undefined ? {} : { noDataMs })
+        })
       }
     },
     brokerConnected: (buffered) => {
@@ -116,19 +146,29 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
     configApplyFailed: (error) => record({ type: "config-apply-failed", error }),
     gatewayConflict: (gateway, devices, sameId) => record({ type: "gateway-conflict", gateway, devices, sameId }),
     alarm: record,
+    value: record,
     log: (query = {}) =>
       Effect.sync(() => {
         const kept = Math.min(total, capacity)
         const events: Array<GatewayEvent> = []
+        const valueEvents: Array<ValueEvent> = []
         const after = query.after !== undefined && query.after <= total ? query.after : undefined
         for (let index = total - kept; index < total; index++) {
           const event = slots[index % capacity]
           if (event === undefined) continue
           if (query.since !== undefined && event.at < query.since) continue
           if (after !== undefined && event.id <= after) continue
-          events.push(event)
+          if (isValueEvent(event)) valueEvents.push(event)
+          else events.push(event)
         }
-        return { now: clock.currentTimeMillisUnsafe(), events, capacity, dropped: total - kept }
+        return {
+          now: clock.currentTimeMillisUnsafe(),
+          events,
+          // Only when there are some: an answer without value events stays as it was.
+          ...(valueEvents.length === 0 ? {} : { valueEvents }),
+          capacity,
+          dropped: total - kept
+        }
       })
   }
 }

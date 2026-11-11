@@ -1,12 +1,12 @@
 /**
  * `ot-gateway messages`: how many messages the running gateway published per topic, and how many reached the
- * broker, from its status page (`/api/messages`). The counts run since the gateway started, and the report says so
- * and why: the gateway keeps one counter per topic, not a count per window (its history keeps reads, not
- * publishes), so there is no `--since`. For "how many in the last 10 minutes", ask twice and subtract, or
- * `ot-gateway history` for the reads. A point's `$meta` line shows its publish mode, from the point catalog, instead
- * of the JSON cut at 80 characters; `--json` has the whole payload and `publish` on the point's topics.
+ * broker, from its status page. Without `--since` the counts run since the gateway started (`/api/messages`); with
+ * `--since 10m` they cover the last minutes (`/api/messages/window`), as far back as the gateway keeps a count per
+ * topic per minute (`MESSAGE_WINDOW_MINUTES`, an hour), in whole minutes. A point's `$meta` line shows its publish
+ * mode, from the point catalog, instead of the JSON cut at 80 characters; `--json` has the whole payload and
+ * `publish` on the point's topics.
  */
-import type { MessageStatus } from "@ot-gateway/api"
+import { MESSAGE_WINDOW_MINUTES, type MessageStatus } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
@@ -71,11 +71,17 @@ export const formatMessages = (
 
 export interface MessagesOptions {
   readonly json?: boolean
+  /** `--since` as typed (`10m`) and in ms, at most `MESSAGE_WINDOW_MINUTES`: the counts of that window only. */
+  readonly since?: string | undefined
+  readonly sinceMs?: number | undefined
 }
 
+/** The longest `--since` the gateway can count, in ms. */
+export const MESSAGE_WINDOW_MS = MESSAGE_WINDOW_MINUTES * 60_000
+
 /**
- * Prints the messages the gateway `target` expects published, per topic, since it started: all under its site and
- * building, or the ones `selections` name.
+ * Prints the messages the gateway `target` expects published, per topic, since it started or in the last
+ * `options.sinceMs`: all under its site and building, or the ones `selections` name.
  */
 export const messagesReport = Effect.fn("messagesReport")(function* (
   target: GatewayTarget,
@@ -84,7 +90,12 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
 ) {
   const status = yield* fetchGatewayStatus(target.url, "none")
   yield* checkIdentity(target, status)
-  const answer = yield* askGateway(target.url, (client) => client.status.messages())
+  const sinceMs = options.sinceMs
+  const answer = yield* askGateway(target.url, (client) =>
+    sinceMs === undefined
+      ? client.status.messages()
+      : client.status.messagesWindow({ query: { since: status.now - sinceMs } })
+  )
   const catalog = yield* askGateway(target.url, (client) => client.status.points())
   const modes: PublishModes = new Map(catalog.points.map((point) => [point.topic, point.publish]))
   const prefix = `${status.site}/${status.building}/`
@@ -96,6 +107,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
       gateway,
       now: status.now,
       since: status.since,
+      ...(answer.window === undefined ? {} : { window: answer.window }),
       droppedTopics: answer.droppedTopics,
       messages: messages.map((message) => {
         const mode = publishModeOf(message.topic, modes)
@@ -103,21 +115,31 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
       })
     })
   }
-  const window = `since it started at ${localTime(status.since, status.now)} (${ago(status.now - status.since)} ago)`
-  // Said plainly: a per-topic counter answers "since start", nothing shorter.
+  const started = `since it started at ${localTime(status.since, status.now)} (${ago(status.now - status.since)} ago)`
+  // The window as the gateway counted it: whole minutes, and never before its start.
+  const window =
+    answer.window === undefined
+      ? started
+      : answer.window.from <= status.since
+        ? `in the last ${options.since ?? ago(answer.window.to - answer.window.from)}, ${started}`
+        : `in the last ${options.since ?? ago(answer.window.to - answer.window.from)} (from ${localTime(answer.window.from, status.now)}, in whole minutes)`
   const why =
-    "  (the gateway counts per topic since it started, not per time window; ot-gateway history shows a point's reads over any --since)"
+    answer.window === undefined
+      ? `  (since the gateway started; --since 10m counts the last minutes, up to ${MESSAGE_WINDOW_MINUTES}m back)`
+      : undefined
   yield* printResult(
     [
       `${gatewayName(gateway)} at ${target.url}: messages per topic ${window}`,
       ...(messages.length === 0
         ? [
-            selections.length === 0
-              ? "  nothing published yet"
-              : "  nothing published on these topics yet: ot-gateway status lists the devices"
+            answer.window !== undefined
+              ? "  nothing published in this window"
+              : selections.length === 0
+                ? "  nothing published yet"
+                : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
         : formatMessages(messages, prefix, status.now, modes)),
-      why,
+      ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
         ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]
         : [])

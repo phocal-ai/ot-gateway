@@ -9,7 +9,8 @@
  *   up every 10 s, booleans flip every 30 s). Devices on the same port are
  *   units behind one simulated gateway, each answering its own unit id.
  * - an energy counter (a point in Wh, kWh or MWh) on a device with an active power point (W, kW or MW) counts the
- *   energy that power delivers (`benchEnergyOf`), so the two agree as a real meter's do
+ *   energy that power delivers (`benchEnergyOf`), so the two agree as a real meter's do. It counts from a fixed
+ *   moment (`benchEnergyTotal`), so a restarted bench carries on where the last one stopped rather than going back
  * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
  *   is on localhost with a port other than the gateway's own, with analog
  *   values on the same sine and binary values flipping every 30 s
@@ -148,6 +149,21 @@ export const benchEnergyOf = (
   return (from, seconds) => ((integral(seconds) - integral(from)) * kw) / 3600 / perUnitKwh
 }
 
+/**
+ * Unix ms the bench's energy counters count from: 2026-11-01, UTC. Counting from a fixed moment rather than from
+ * the bench's start makes a counter a function of the clock alone, so a restarted bench (or demo) carries on from
+ * where the last one left off instead of starting at `BENCH_ENERGY_START` again, which read as a meter that went back.
+ */
+export const BENCH_ENERGY_EPOCH_MS = Date.UTC(2026, 10, 1)
+
+/**
+ * An energy counter's reading at simulated second `seconds` (the clock's seconds times `speed`): `BENCH_ENERGY_START`
+ * plus what `counted` delivered since `BENCH_ENERGY_EPOCH_MS` at that pace. Never below the start, and the same
+ * for the same clock, so it never goes back across restarts at one pace.
+ */
+export const benchEnergyTotal = (counted: (from: number, seconds: number) => number, seconds: number, speed: number) =>
+  BENCH_ENERGY_START + Math.max(0, counted((BENCH_ENERGY_EPOCH_MS / 1000) * speed, seconds))
+
 const simulatedSeconds = (pace: Pace) => Effect.map(Clock.currentTimeMillis, (millis) => (millis / 1000) * pace.speed)
 
 const runBroker = Effect.fn("runBroker")(function* (
@@ -205,7 +221,6 @@ const simulateDevice = Effect.fn("simulateDevice")(function* (device: ModbusDevi
   const analog = device.points.map((_, index) => benchAnalogOf(device.points, index))
   const binary = device.points.map((_, index) => benchBinaryOf(device.points, index))
   const energy = device.points.map((_, index) => benchEnergyOf(device.points, index))
-  const startedAt = yield* simulatedSeconds(pace)
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
@@ -216,7 +231,7 @@ const simulateDevice = Effect.fn("simulateDevice")(function* (device: ModbusDevi
       // floats swing through their unit's range.
       const counted = energy[index]
       if (counted !== undefined) {
-        const total = BENCH_ENERGY_START + counted(startedAt, seconds)
+        const total = benchEnergyTotal(counted, seconds, pace.speed)
         return setPointValue(bank, point, float ? Math.round(total * 1000) / 1000 : Math.floor(total))
       }
       setPointValue(bank, point, float ? (analog[index]?.(seconds) ?? 0) : Math.floor(seconds / 10) % 32_768)
@@ -235,7 +250,6 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
   const analog = device.points.map((_, index) => benchAnalogOf(device.points, index))
   const binary = device.points.map((_, index) => benchBinaryOf(device.points, index))
   const energy = device.points.map((_, index) => benchEnergyOf(device.points, index))
-  const startedAt = yield* simulatedSeconds(pace)
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
@@ -251,7 +265,7 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
         const value =
           counted === undefined
             ? (analog[index]?.(seconds) ?? 0)
-            : Math.round((BENCH_ENERGY_START + counted(startedAt, seconds)) * 1000) / 1000
+            : Math.round(benchEnergyTotal(counted, seconds, pace.speed) * 1000) / 1000
         setPresentValue(simulated, object, { type: "real", value })
       }
     })

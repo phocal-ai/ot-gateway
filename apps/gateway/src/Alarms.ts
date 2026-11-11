@@ -55,7 +55,7 @@ const WINDOW_MINUTES = ALARM_WINDOW_MS / MINUTE_MS
  * A count over the last 15 minutes, in one-minute slots on the monotonic clock: fixed memory however often it is
  * bumped. The window is the current minute and the 14 before it.
  */
-const makeWindowCount = () => {
+export const makeWindowCount = () => {
   const minutes = new Float64Array(WINDOW_MINUTES).fill(Number.NEGATIVE_INFINITY)
   const counts = new Uint32Array(WINDOW_MINUTES)
   const slotOf = (minute: number) => ((minute % WINDOW_MINUTES) + WINDOW_MINUTES) % WINDOW_MINUTES

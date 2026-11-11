@@ -306,6 +306,7 @@ describe("status", () => {
           status: "ok",
           pollIntervalMs: 5000,
           lastSuccess: 1_000,
+          host: "10.0.1.1",
           pointCount: 2,
           points: [
             { id: "power", name: "Power", unit: "unit:KiloW", writable: false, value: 12.5, ts: 900 },
@@ -421,6 +422,42 @@ describe("status", () => {
       state.recordPublish("s/b/meter/old/$meta", '{"name":"Old"}', { retained: true, at: 10 })
       state.recordPublish("s/b/meter/old/$meta", "", { retained: true, at: 11 })
       expect((yield* state.messages).messages).toEqual([])
+    })
+  )
+
+  it.effect("counts the messages of the last minutes per topic, in whole minutes, for --since", () =>
+    Effect.gen(function* () {
+      let monotonic = 0
+      const state = makeStatusState(
+        yield* config,
+        makeHealthRegistry(["meter"]),
+        0,
+        undefined,
+        0,
+        undefined,
+        () => monotonic
+      )
+      // Ten minutes ago: a value and its $meta; then a value a minute for the last five minutes, one not delivered.
+      state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: true, at: 0 })
+      state.recordDelivered("s/b/meter/power/$meta")
+      state.recordPublish("s/b/meter/power", '{"value":1,"ts":0}', { retained: false, at: 0 })
+      state.recordDelivered("s/b/meter/power")
+      for (let minute = 5; minute < 10; minute++) {
+        monotonic = minute * 60_000 + 30_000
+        state.recordPublish("s/b/meter/power", `{"value":${minute},"ts":0}`, { retained: false, at: monotonic })
+        if (minute < 9) state.recordDelivered("s/b/meter/power")
+      }
+      yield* TestClock.setTime(monotonic)
+      // The last 4 minutes and a half: the minute it starts in counts whole, so five values.
+      const window = yield* state.messagesWindow(monotonic - 270_000)
+      expect(window.messages).toEqual([
+        expect.objectContaining({ topic: "s/b/meter/power", count: 5, delivered: 4, payload: '{"value":9,"ts":0}' })
+      ])
+      expect(window.window).toEqual({ from: 5 * 60_000, to: monotonic })
+      // Since the start: everything, with the window cut to the hour it keeps.
+      expect((yield* state.messagesWindow(-10 * 3_600_000)).messages.map((message) => message.count)).toEqual([6, 1])
+      // The counts since start are unchanged by it.
+      expect((yield* state.messages).messages.map((message) => message.count)).toEqual([6, 1])
     })
   )
 

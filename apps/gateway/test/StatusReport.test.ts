@@ -318,15 +318,15 @@ describe("events", () => {
     ["boiler", "bacnet-ip"],
     ["meter", "modbus-tcp"]
   ])
-  const protocolOf = (device: string) => protocols.get(device)
+  const protocolOf = (device: string) => ({ protocol: protocols.get(device) })
 
   it("gives a cleared failure its hint by the device's protocol, and a shared cause after its group", () => {
     expect(formatEvents(outage, Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")).toEqual([
       // In a shared outage the first check is what the devices share, not their config.
       "12:10:00  boiler  failing: no answer to Who-Is for device 1201",
       "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
+      "                    then: Behind a BACnet router (an MS/TP trunk, another network number): is the router up, and does it route the device's network number?",
       "                    then: Is the device instance in the config the device's own (its Device object, not a point)?",
-      "                    then: Is the device in the gateway's subnet? Broadcasts do not cross routers: give the device a fixed address in the config, or use a BBMD.",
       "12:10:04  meter   failing: timed out",
       "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
       "                  2 devices (boiler, meter) stopped answering within 4 s of each other: likely a shared cause (power, a switch, the gateway's own network)",
@@ -342,7 +342,7 @@ describe("events", () => {
 
   it("leads with power, switch and cable for a device that answered before it failed, config for one that never did", () => {
     expect(formatEvents(boilerTimeout(false), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
-      "                  check: Is the device instance in the config right?"
+      "                  check: Is the device instance in the config the device's own (its Device object, not a point)?"
     )
     expect(formatEvents(boilerTimeout(true), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
       "                  check: It answered earlier in this run, so its config worked: did it lose power, or a switch or cable on the way? A device whose network module hangs answers again after a restart."
@@ -403,6 +403,9 @@ describe("events", () => {
       "12:01:00  ahu/filter  alarm cleared after 1 min (value false)",
       "12:02:00  pump/trip   alarm raised (value 1)",
       "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping (on 30 s, off 30 s, 4 time(s) in 4 min), so its changes are counted, not listed, until it keeps still for 5 min",
+      // A fixed rhythm reads as wiring or a cycling device more than a real trip: say what to check.
+      "                      check: A fixed on/off rhythm like this usually points to the input's wiring or contact, or a device cycling, more than a real trip.",
+      "                        then: Check the contact and its terminals, and whether the device restarts or switches on a schedule at that rhythm.",
       "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 change(s) were counted, not listed (it flapped on 30 s, off 90 s, 8 time(s) in 16 min)"
     ])
   })
@@ -462,7 +465,12 @@ describe("status after an outage, and its alarms", () => {
       failedDevices: ["energy-meter", "pv"],
       from: at(12, 10, 0),
       to: at(12, 13, 0),
-      brokerOutages: 1
+      brokerOutages: 1,
+      outages: [
+        { device: "energy-meter", detectedAt: at(12, 10, 0) },
+        { device: "pv", detectedAt: at(12, 12, 30) },
+        { device: "energy-meter", detectedAt: at(12, 13, 0) }
+      ]
     })
     expect(recentIncidents({ ...recentLog, events: [] })).toEqual({
       windowMs: 900_000,
@@ -499,10 +507,11 @@ describe("status after an outage, and its alarms", () => {
         ]
       }
       const lines = formatStatus(withAlarms, recentIncidents(recentLog)).split("\n")
-      expect(lines.slice(-5)).toEqual([
+      expect(lines.slice(-6)).toEqual([
         "  3 alarm point(s), 1 active",
         "    ahu/filter  ACTIVE since 12:17:00 (3 min), raised 1 time(s) in the last 15 min",
         "    pump/trip   off since 12:19:00, raised 7 time(s) in the last 15 min (flapping, on 30 s, off 30 s, 6 time(s) in 6 min: its changes are counted, not listed, until it keeps still for 5 min)",
+        "                check: A fixed on/off rhythm like this usually points to the input's wiring or contact, or a device cycling, more than a real trip.",
         "  2 device(s) failed in the last 15 min (12:10:00–12:13:00: energy-meter, pv), see ot-gateway events",
         "  broker connection lost 1 time(s) in the last 15 min, see ot-gateway events"
       ])
@@ -520,4 +529,129 @@ describe("status after an outage, and its alarms", () => {
       yield* statusOutcome(false, { failOnAlarm: true })(quiet)
     })
   )
+})
+
+/** Two Modbus devices behind one gateway or one IP: the same host. */
+const onOneHost = () => ({ protocol: "modbus-tcp" as const, host: "10.0.1.20" })
+
+describe("outages as the data saw them, counters and a shared host", () => {
+  // The walk's outage: last read 12:10:00, called failing 12:10:08, answering again 12:12:20.
+  const outageLog: EventLog = {
+    now,
+    capacity: 500,
+    dropped: 0,
+    events: [
+      {
+        id: 1,
+        at: at(12, 10, 8),
+        type: "device-failing",
+        device: "energy-meter",
+        reason: "timeout",
+        error: "timed out",
+        answeredBefore: true,
+        lastReadAt: at(12, 10, 0)
+      },
+      {
+        id: 2,
+        at: at(12, 12, 20),
+        type: "device-recovered",
+        device: "energy-meter",
+        downMs: 132_000,
+        lastReadAt: at(12, 10, 0),
+        failingSince: at(12, 10, 8),
+        noDataMs: 140_000
+      },
+      {
+        id: 4,
+        at: at(12, 15, 0),
+        type: "device-failing",
+        device: "heat-pump",
+        reason: "timeout",
+        error: "timed out",
+        lastReadAt: at(12, 14, 50)
+      }
+    ],
+    valueEvents: [
+      {
+        id: 3,
+        at: at(12, 12, 25),
+        type: "counter-went-back",
+        device: "energy-meter",
+        point: "energy-total",
+        unit: "KiloW-HR",
+        from: 12_000.5,
+        to: 4_270
+      }
+    ]
+  }
+
+  it("prints a failure from its last read, when it was detected, and an outage from the last read to the next", () => {
+    const lines = formatEvents(outageLog, Number.POSITIVE_INFINITY, "all").split("\n")
+    expect(lines.filter((line) => /^\d/.test(line))).toEqual([
+      "12:10:08  energy-meter               failing: timed out (last read 12:10:00)",
+      "12:12:20  energy-meter               answering again: no data 12:10:00–12:12:20 (2 min 20 s), detected 12:10:08",
+      "12:12:25  energy-meter/energy-total  counter went back from 12000.5 to 4270 kWh: meter reset or replaced?",
+      "12:15:00  heat-pump                  failing: timed out (last read 12:14:50)"
+    ])
+  })
+
+  it("lists each recent failure under status with its span, and the counters that went back", () => {
+    const recent = recentIncidents(outageLog)
+    expect(recent.outages).toEqual([
+      {
+        device: "energy-meter",
+        lastReadAt: at(12, 10, 0),
+        detectedAt: at(12, 10, 8),
+        recoveredAt: at(12, 12, 20),
+        noDataMs: 140_000
+      },
+      { device: "heat-pump", lastReadAt: at(12, 14, 50), detectedAt: at(12, 15, 0) }
+    ])
+    expect(formatStatus(healthyGateway, recent).split("\n").slice(-4)).toEqual([
+      "  2 device(s) failed in the last 15 min, see ot-gateway events:",
+      "    energy-meter  no data 12:10:00–12:12:20 (2 min 20 s), detected 12:10:08",
+      "    heat-pump     no data since 12:14:50, detected 12:15:00, still failing",
+      "  energy-meter/energy-total at 12:12:25: counter went back from 12000.5 to 4270 kWh: meter reset or replaced?"
+    ])
+  })
+
+  it("says how much faster a jumped counter rose than its fastest rise of the last hour", () => {
+    const jumped: EventLog = {
+      ...outageLog,
+      events: [],
+      valueEvents: [
+        {
+          id: 1,
+          at: at(12, 12, 25),
+          type: "counter-jumped",
+          device: "energy-meter",
+          point: "energy-total",
+          unit: "KiloW-HR",
+          from: 4_270,
+          to: 12_000,
+          elapsedMs: 145_000,
+          usualPerHour: 3.6
+        }
+      ]
+    }
+    expect(formatEvents(jumped, Number.POSITIVE_INFINITY, "all")).toBe(
+      "12:12:25  energy-meter/energy-total  counter jumped from 4270 to 12000 kWh in 2 min 25 s, more than 10× its fastest rise of the last hour (3.6 kWh/h): meter reset or replaced, or another device answering at its address?"
+    )
+  })
+
+  it("names the host two failing devices share, as the likelier cause than a switch", () => {
+    const together: EventLog = {
+      ...outageLog,
+      events: [
+        { id: 1, at: at(12, 10, 0), type: "device-failing", device: "meter-a", reason: "timeout", error: "timed out" },
+        { id: 2, at: at(12, 10, 3), type: "device-failing", device: "meter-b", reason: "timeout", error: "timed out" }
+      ],
+      valueEvents: []
+    }
+    const lines = formatEvents(together, Number.POSITIVE_INFINITY, "all", onOneHost).split("\n")
+    expect(lines[1]).toBe(
+      "                   check: Others on 10.0.1.20 failed with it: check the host itself, its power and its network link before its config."
+    )
+    expect(lines.at(-1)).toContain("both on 10.0.1.20: likely the host itself, its power or its network link")
+  })
 })

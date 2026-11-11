@@ -1,6 +1,15 @@
 /** The test bench's simulated values: in a range that fits their unit. */
 import { describe, expect, it } from "@effect/vitest"
-import { benchAnalogOf, benchBinaryOf, benchEnergyOf, benchSpread, benchValue } from "../src/TestBench.ts"
+import {
+  BENCH_ENERGY_EPOCH_MS,
+  BENCH_ENERGY_START,
+  benchAnalogOf,
+  benchBinaryOf,
+  benchEnergyOf,
+  benchEnergyTotal,
+  benchSpread,
+  benchValue
+} from "../src/TestBench.ts"
 
 const sweep = (unit: string | undefined) => Array.from({ length: 240 }, (_, second) => benchValue(unit, second, 0))
 
@@ -90,5 +99,23 @@ describe("benchEnergyOf", () => {
     expect(inWattHours?.(0, 3600)).toBeCloseTo(50_000, -1)
     expect(benchEnergyOf(meter, 0)).toBeUndefined()
     expect(benchEnergyOf([{ id: "energy", unit: "unit:KiloW-HR" }], 0)).toBeUndefined()
+  })
+
+  it("reads the same for the same clock, so a restarted bench carries on instead of going back", () => {
+    const energy = benchEnergyOf(meter, 1)
+    expect(energy).toBeDefined()
+    if (energy === undefined) return
+    const nowSeconds = (BENCH_ENERGY_EPOCH_MS + 10 * 86_400_000) / 1000
+    // Before the restart and after it, nothing of the first run is kept: only the clock moved on.
+    const beforeRestart = benchEnergyTotal(energy, nowSeconds, 1)
+    const afterRestart = benchEnergyTotal(energy, nowSeconds + 30, 1)
+    expect(afterRestart).toBeGreaterThan(beforeRestart)
+    expect(benchEnergyTotal(energy, nowSeconds, 1)).toBe(beforeRestart)
+    // Ten days at 50 kW on average: about 12 000 kWh counted on top of where it starts.
+    expect(beforeRestart).toBeCloseTo(BENCH_ENERGY_START + 12_000, -1)
+    // A clock before the epoch (a Pi that has not synced yet) reads the start, never less.
+    expect(benchEnergyTotal(energy, BENCH_ENERGY_EPOCH_MS / 1000 - 3600, 1)).toBe(BENCH_ENERGY_START)
+    // At a faster pace a simulated second is the clock's seconds times the speed, counted from the same moment.
+    expect(benchEnergyTotal(energy, nowSeconds * 60, 60)).toBeGreaterThan(beforeRestart)
   })
 })

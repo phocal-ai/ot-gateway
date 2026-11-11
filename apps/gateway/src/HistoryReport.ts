@@ -122,20 +122,28 @@ export const gapsOf = (series: HistorySeries): ReadonlyArray<Gap> => {
 /** Why the newest reads can be missing, from a gateway whose answers do not hold the reads it has not written. */
 const notYet = "the gateway writes reads to its history every 30 s"
 
-/** A device failing for a while, from the gateway's events: `[from, to)`, `to` absent while it still fails. */
+/**
+ * A device failing for a while, from the gateway's events: `[from, to)`, `to` absent while it still fails. `from` is
+ * when the gateway called it failing; `lastReadAt`, when its data stopped (its last good read, a poll or more before).
+ */
 export interface Failure {
   readonly from: number
   readonly to?: number
   readonly error: string
+  readonly lastReadAt?: number
 }
 
 /** Each device's failures in `log`, oldest first: a `device-failing` event up to the device's next recovery. */
 export const failuresOf = (log: EventLog): ReadonlyMap<string, ReadonlyArray<Failure>> => {
   const failures = new Map<string, Array<Failure>>()
-  const open = new Map<string, { readonly from: number; readonly error: string }>()
+  const open = new Map<string, Failure>()
   for (const event of log.events) {
     if (event.type === "device-failing") {
-      open.set(event.device, { from: event.at, error: event.error === "" ? event.reason : event.error })
+      open.set(event.device, {
+        from: event.at,
+        error: event.error === "" ? event.reason : event.error,
+        ...(event.lastReadAt === undefined ? {} : { lastReadAt: event.lastReadAt })
+      })
     } else if (event.type === "device-recovered") {
       const started = open.get(event.device)
       if (started === undefined) continue
@@ -154,6 +162,7 @@ export const failuresOf = (log: EventLog): ReadonlyMap<string, ReadonlyArray<Fai
 export type GapCause =
   | { readonly kind: "gateway-start"; readonly started: number }
   | { readonly kind: "device-failing"; readonly since: number; readonly error: string }
+  | { readonly kind: "no-change" }
 
 /**
  * A stretch without a read, with its cause when known. `from` and `to` are the real span: from the last read before
@@ -175,6 +184,12 @@ export interface SeriesContext {
   readonly since?: number
   /** The device's failures in this run, from the events: a gap while it failed says why. */
   readonly failures?: ReadonlyArray<Failure>
+  /**
+   * The point comes on change of value (BACnet COV, `PointInfo.cov`): a stretch without a read while its device
+   * answers is one without a change (cause `no-change`), not an outage. A gap that a failure overlaps is split: the
+   * failure's part runs from the device's last good read to its recovery, the rest is no change.
+   */
+  readonly cov?: boolean
 }
 
 /**
@@ -182,18 +197,27 @@ export interface SeriesContext {
  * the last read before it and on to the first read after it. When the gateway started inside it, the part before
  * the start ends at the start (why reads stopped in an earlier run is unknown), and the part after it is a gap of its
  * own only when the bucket the gateway started in had no read either (otherwise it is just the time to the first
- * poll). The rest of a gap names the first failure of the device that overlaps it, when there is one.
+ * poll). The rest of a gap names the first failure of the device that overlaps it, when there is one: a failure starts
+ * at its last good read when the events say so, which is where the data stopped. A gap of a point that comes on
+ * change of value, with neither cause, is one without a change.
  */
 export const explainGaps = (series: HistorySeries, context: SeriesContext = {}): ReadonlyArray<ExplainedGap> => {
   const since = context.since
   const byStart = new Map(series.buckets.map((bucket) => [bucket.t, bucket]))
-  const failed = (gap: Omit<ExplainedGap, "cause">): ExplainedGap => {
+  const failed = (gap: Omit<ExplainedGap, "cause">): ReadonlyArray<ExplainedGap> => {
     const failure = context.failures?.find(
-      (each) => each.from < gap.to && (each.to === undefined || each.to > gap.from)
+      (each) => (each.lastReadAt ?? each.from) < gap.to && (each.to === undefined || each.to > gap.from)
     )
-    return failure === undefined
-      ? gap
-      : { ...gap, cause: { kind: "device-failing", since: failure.from, error: failure.error } }
+    if (failure === undefined) return [context.cov === true ? { ...gap, cause: { kind: "no-change" } } : gap]
+    const cause: GapCause = { kind: "device-failing", since: failure.from, error: failure.error }
+    if (context.cov !== true) return [{ ...gap, cause }]
+    // On change of value, only the failure's own stretch is the failure: from the device's last good read to its
+    // recovery. Before it and after it the device answered, and the point had nothing new to say.
+    const down = Math.max(gap.from, failure.lastReadAt ?? failure.from)
+    const back = Math.min(gap.to, failure.to ?? gap.to)
+    const quiet = (from: number, to: number): ReadonlyArray<ExplainedGap> =>
+      from < to ? [{ ...gap, from, to, cause: { kind: "no-change" } }] : []
+    return [...quiet(gap.from, down), { ...gap, from: down, to: back, cause }, ...quiet(back, gap.to)]
   }
   return gapsOf(series).flatMap((empty): ReadonlyArray<ExplainedGap> => {
     const from = byStart.get(empty.from - series.stepMs)?.last ?? empty.from
@@ -201,10 +225,10 @@ export const explainGaps = (series: HistorySeries, context: SeriesContext = {}):
     const startsNext = since !== undefined && since >= empty.to && since < empty.to + series.stepMs
     const to = byStart.get(empty.to)?.first ?? (startsNext ? since : empty.to)
     const buckets = { emptyFrom: empty.from, emptyTo: empty.to }
-    if (since === undefined || since <= from || since > to) return [failed({ from, to, ...buckets })]
+    if (since === undefined || since <= from || since > to) return failed({ from, to, ...buckets })
     return [
       { from, to: since, ...buckets, cause: { kind: "gateway-start", started: since } },
-      ...(since < empty.to && since < to ? [failed({ from: since, to, ...buckets })] : [])
+      ...(since < empty.to && since < to ? failed({ from: since, to, ...buckets }) : [])
     ]
   })
 }
@@ -273,7 +297,11 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
   const heading = `${point.device}/${point.id} (${point.name}${unit === "" ? "" : `, ${unit}`}): ${width(series.stepMs)} buckets ${source}`
   const live = series.live === true
   const failing = (cause: GapCause | undefined) =>
-    cause?.kind === "device-failing" ? `: ${point.device} failing: ${withoutControls(cause.error)}` : ""
+    cause?.kind === "device-failing"
+      ? `: ${point.device} failing: ${withoutControls(cause.error)}`
+      : cause?.kind === "no-change"
+        ? ": it comes on change of value, so no change while its device answered"
+        : ""
   const gaps = explainGaps(series, context)
   if (series.buckets.length === 0) {
     const start = gaps.find((gap) => gap.cause?.kind === "gateway-start")?.cause
@@ -282,7 +310,15 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
       start?.kind === "gateway-start"
         ? ` before the gateway started at ${localTime(start.started, now)}${failing(failure)}`
         : failing(failure)
-    return [heading, live ? `  no reads in this range${why}` : `  no reads in this range (${notYet})`]
+    const quiet = context.cov === true && failure === undefined && start === undefined
+    return [
+      heading,
+      live
+        ? quiet
+          ? "  no reads in this range: it comes on change of value, so no change while its device answered"
+          : `  no reads in this range${why}`
+        : `  no reads in this range (${notYet})`
+    ]
   }
   for (const gap of gaps) {
     const atEnd = gap.to >= series.to
@@ -290,18 +326,23 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     const line =
       cause?.kind === "gateway-start"
         ? `no reads until the gateway started at ${localTime(cause.started, now)}`
-        : live
-          ? atEnd
-            ? gap.emptyFrom >= series.to - series.stepMs
-              ? `no read yet in this bucket${failing(cause)}`
-              : `no reads since then${failing(cause)}`
-            : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
-          : // A gateway without live answers wrote its reads every 30 s: a short gap at the end is that.
-            atEnd && gap.emptyFrom >= series.to - FLUSH_MS - series.stepMs
-            ? "not written yet"
-            : atEnd
-              ? `no reads since then (${notYet})${failing(cause)}`
+        : cause?.kind === "no-change"
+          ? // A change-of-value point that kept still: nothing missing, so not "no reads".
+            atEnd
+            ? "no change since then (it comes on change of value)"
+            : `no change for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)} (it comes on change of value)`
+          : live
+            ? atEnd
+              ? gap.emptyFrom >= series.to - series.stepMs
+                ? `no read yet in this bucket${failing(cause)}`
+                : `no reads since then${failing(cause)}`
               : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
+            : // A gateway without live answers wrote its reads every 30 s: a short gap at the end is that.
+              atEnd && gap.emptyFrom >= series.to - FLUSH_MS - series.stepMs
+              ? "not written yet"
+              : atEnd
+                ? `no reads since then (${notYet})${failing(cause)}`
+                : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
     rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}` })
   }
   return [
@@ -398,7 +439,12 @@ export const historyReport = Effect.fn("historyReport")(function* (
     points,
     (point) => {
       const boolean = switches.has(`${point.device}/${point.id}`)
-      const context: SeriesContext = { boolean, since: status.since, failures: failures.get(point.device) ?? [] }
+      const context: SeriesContext = {
+        boolean,
+        since: status.since,
+        failures: failures.get(point.device) ?? [],
+        ...(point.cov ? { cov: true } : {})
+      }
       return Effect.map(fetchSeries(target.url, point, range, buckets, boolean), (series) => ({
         point,
         series,
