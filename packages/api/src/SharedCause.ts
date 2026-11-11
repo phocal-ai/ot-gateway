@@ -16,6 +16,18 @@ export const roughDuration = (milliseconds: number) => {
   return `${Math.round(seconds / 86_400)} d`
 }
 
+/**
+ * `45 s`, `2 min 5 s`, `4 min`, then as `roughDuration` from 10 minutes on: how long an outage lasted, exact to the
+ * second while that is still worth reading.
+ */
+export const preciseDuration = (milliseconds: number) => {
+  const seconds = Math.max(0, Math.round(milliseconds / 1000))
+  if (seconds < 60) return `${seconds} s`
+  if (seconds >= 600) return roughDuration(milliseconds)
+  const rest = seconds % 60
+  return rest === 0 ? `${seconds / 60} min` : `${Math.floor(seconds / 60)} min ${rest} s`
+}
+
 /** `<who> stopped answering within 6 s of each other: likely a shared cause (…)`. */
 export const sharedCauseLine = (who: string, spreadMs: number) =>
   `${who} stopped answering within ${roughDuration(spreadMs)} of each other: likely a shared cause (power, a switch, the gateway's own network)`

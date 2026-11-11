@@ -476,6 +476,8 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
   const registry = makeHealthRegistry(config.devices.map((device) => device.id))
   // The registry lives as long as this config runs, so the listener needs no removal.
   registry.onChange(events.deviceChanged)
+  // A device that fails hides its alarm points' state until it answers again.
+  registry.onChange(shared.alarms.deviceChanged)
   const latestHost = () => shared.host?.latest()
   const health: GatewayHealth = {
     topic: healthTopic(config.site, config.building, config.id),

@@ -405,9 +405,12 @@ export interface PointsListWritten {
   readonly next?: string
 }
 
-/** The command that adds the list at `listPath` to the config at `configPath`, both named, so it runs anywhere. */
-export const importCommand = (listPath: string, configPath: string | undefined) =>
-  `ot-gateway import ${shellArgument(listPath)}${configPath === undefined ? "" : ` ${shellArgument(configPath)}`}`
+/**
+ * The command that adds the list at `listPath` to the config at `configPath`, both named, so it runs anywhere; `cli`
+ * is how the CLI was run (`cliCommand`).
+ */
+export const importCommand = (listPath: string, configPath: string | undefined, cli = "ot-gateway") =>
+  `${cli} import ${shellArgument(listPath)}${configPath === undefined ? "" : ` ${shellArgument(configPath)}`}`
 
 /**
  * `text` at `path` in one step: written next to it under a temporary name, then renamed over it, so an
@@ -423,6 +426,8 @@ const writeAtomically = Effect.fn("writeAtomically")(function* (path: string, te
 })
 
 export interface PointsListOptions extends DiscoverOptions {
+  /** How the CLI was run (`cliCommand`), for the import command it prints; `ot-gateway` when undefined. */
+  readonly command?: string | undefined
   /** Add to the list at the path when there is one, instead of refusing to touch it. */
   readonly append?: boolean | undefined
 }
@@ -475,7 +480,7 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
       message: `no points to list; ${path} was ${existing === undefined ? "not written" : "left as it was"}.`
     })
   }
-  const next = importCommand(path, options.configPath)
+  const next = importCommand(path, options.configPath, options.command)
   if (existing === undefined) {
     yield* writeAtomically(path, draftPointsList(fresh))
     yield* Console.error(

@@ -122,7 +122,13 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
    To redo the devices from a fixed list, run `init` again with `--force` and the same flags (it keeps `compose.yaml` and `ot-gateway.env`), then import the list again.
 
 4. Show the user a few real values with units, and the status page URL.
-5. Show the user every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) with what it did over the last minutes, not a single snapshot: `otg history <device>/<point>` for each (comma-separate several: `otg history pump/fault,pump/running`) prints it as on or off per minute and when it switched, so a point that chatters or flips with the equipment shows up. Ask whether that is the state the equipment is in: a breaker that reads `true` (tripped) or an alarm that is on may be real, or the point's polarity may be the other way round. For each alarm point, the answer fills its `alarm` column: `on` when the alarm is active at true or 1, `off` when it is active at false or 0; then import the list again (step 7.3). Don't call the setup done until the user has confirmed each one or fixed it.
+5. Check every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) by what it did over the last minutes, not a single snapshot: `otg history <device>/<point>` for each (comma-separate several: `otg history pump/fault,pump/running`) prints it as on or off per minute and when it switched, so a point that chatters or flips with the equipment shows up. Each alarm point needs its `alarm` column: `on` when the alarm is active at true or 1, `off` when it is active at false or 0; then import the list again (step 7.3). What the user already said a point means (in their list, a datasheet they gave you, or their answers: "true means tripped") counts as confirmed: fill the column from that and don't ask again. Ask the user only about:
+   - an alarm that is active now, at the end of setup (`otg status` lists it): is the equipment really in alarm, or is the polarity the other way round?
+   - an alarm that flaps: `otg history` shows it switching back and forth, or `otg status` says flapping. Is the contact chattering, or is it a point that changes with normal operation and is no alarm?
+   - an alarm point whose meaning nobody stated: which value is the alarm?
+
+   Fix what the answers show (the `alarm` column, or the point's address), import again, and check those points once more. Setup is done when no question is open.
+
 6. With Docker Compose, stop the test run before step 8 (`docker stop ot-gateway-test`, which also removes it). With `otg run` (macOS and Windows), the test run is the real run: leave it running and go to step 8's "This machine, for now".
 
 ## 8. Run it for real

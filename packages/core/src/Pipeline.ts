@@ -290,6 +290,14 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   const pushedAt = new Map<string, bigint>()
 
   /**
+   * Each point's last value the broker took, with its own timestamp, in the modes that publish a read as it is. A
+   * reading that repeats both is the same reading twice, not a new one (at start, the first poll and a
+   * change-of-value subscription's first notification can read the same value in the same millisecond), so it is
+   * neither published nor recorded again. One whose publish failed is not remembered, so a repeat retries it.
+   */
+  const lastPublished = new Map<string, { readonly value: PointValue; readonly ts: number }>()
+
+  /**
    * Points whose last value was not a finite number. Each one is a point read
    * failure, counted every time and logged once until the point reads a
    * number again; nothing is published and the deadband reference is kept.
@@ -327,6 +335,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     if (nonFinitePoints.delete(point.id)) {
       yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
     }
+    const previous = lastPublished.get(point.id)
+    if (previous !== undefined && previous.ts === reading.timestamp && previous.value === value) return nothing
+    const published = () => lastPublished.set(point.id, { value, ts: reading.timestamp })
     ctx.history?.record(driver.deviceId, point.id, value, reading.timestamp)
     const message: ValueMessage = {
       value,
@@ -336,7 +347,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     const policy = policyOf(point.id)
     switch (policy.mode) {
       case "sample": {
-        if (policy.intervalMs === undefined) return { pointId: point.id, message }
+        if (policy.intervalMs === undefined) return { pointId: point.id, message, onSent: published }
         latest.set(point.id, message)
         fresh.add(point.id)
         return nothing
@@ -362,6 +373,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
           onSent: () => {
             last.set(point.id, value)
             lastSentAt.set(point.id, atMono)
+            published()
           }
         }
       }

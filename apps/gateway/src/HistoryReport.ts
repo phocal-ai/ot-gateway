@@ -14,12 +14,13 @@ import {
   type HistorySeries,
   MAX_VALUES_PER_REQUEST,
   type PointInfo,
+  preciseDuration,
   unitLabel
 } from "@ot-gateway/api"
 import { Effect, Result, Schema } from "effect"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import { localTime, printJson, printResult } from "./Output.ts"
-import { ago, askGateway, fetchGatewayEvents, fetchGatewayStatus } from "./StatusReport.ts"
+import { askGateway, fetchGatewayEvents, fetchGatewayStatus } from "./StatusReport.ts"
 import { closestMatch } from "./Suggest.ts"
 import { withoutControls } from "./Discover.ts"
 
@@ -151,8 +152,15 @@ export type GapCause =
   | { readonly kind: "gateway-not-running"; readonly started: number }
   | { readonly kind: "device-failing"; readonly since: number; readonly error: string }
 
-/** A gap with its cause, when known. */
+/**
+ * A stretch without a read, with its cause when known. `from` and `to` are the real span: from the last read before
+ * it to the first read after it (from the buckets' `first` and `last`), or the range's edge when there is no read
+ * on that side, or the bucket's edge from a gateway or rollup without read times. `emptyFrom` and `emptyTo` are the
+ * empty buckets it covers.
+ */
 export interface ExplainedGap extends Gap {
+  readonly emptyFrom: number
+  readonly emptyTo: number
   readonly cause?: GapCause
 }
 
@@ -167,17 +175,16 @@ export interface SeriesContext {
 }
 
 /**
- * The gaps of `series` with their causes. The stretch before the bucket the gateway started in is split off as
- * the gateway not running, however the buckets fall (the start's bucket begins before the start); the rest of a
- * gap names the first failure of the device that overlaps it, when there is one.
+ * The gaps of `series` with their real span and their causes. A run of empty buckets is a gap; it reaches back to
+ * the last read before it and on to the first read after it. When the gateway started inside it, the part before
+ * the start is the gateway not running, and the part after it is a gap of its own only when the bucket the gateway
+ * started in had no read either (otherwise it is just the time to the first poll). The rest of a gap names the
+ * first failure of the device that overlaps it, when there is one.
  */
 export const explainGaps = (series: HistorySeries, context: SeriesContext = {}): ReadonlyArray<ExplainedGap> => {
   const since = context.since
-  const startBucket =
-    since === undefined || since <= series.from || since >= series.to
-      ? undefined
-      : series.from + Math.floor((since - series.from) / series.stepMs) * series.stepMs
-  const failed = (gap: Gap): ExplainedGap => {
+  const byStart = new Map(series.buckets.map((bucket) => [bucket.t, bucket]))
+  const failed = (gap: Omit<ExplainedGap, "cause">): ExplainedGap => {
     const failure = context.failures?.find(
       (each) => each.from < gap.to && (each.to === undefined || each.to > gap.from)
     )
@@ -185,16 +192,17 @@ export const explainGaps = (series: HistorySeries, context: SeriesContext = {}):
       ? gap
       : { ...gap, cause: { kind: "device-failing", since: failure.from, error: failure.error } }
   }
-  return gapsOf(series).flatMap((gap): ReadonlyArray<ExplainedGap> => {
-    if (since === undefined || startBucket === undefined || gap.from > startBucket || gap.to < startBucket) {
-      return [failed(gap)]
-    }
-    const before: ReadonlyArray<ExplainedGap> =
-      gap.from < startBucket
-        ? [{ from: gap.from, to: startBucket, cause: { kind: "gateway-not-running", started: since } }]
-        : []
-    const after = gap.to > startBucket ? [failed({ from: startBucket, to: gap.to })] : []
-    return [...before, ...after]
+  return gapsOf(series).flatMap((empty): ReadonlyArray<ExplainedGap> => {
+    const from = byStart.get(empty.from - series.stepMs)?.last ?? empty.from
+    // Without read times, a gap that the gateway's start ends reaches at least to the start.
+    const startsNext = since !== undefined && since >= empty.to && since < empty.to + series.stepMs
+    const to = byStart.get(empty.to)?.first ?? (startsNext ? since : empty.to)
+    const buckets = { emptyFrom: empty.from, emptyTo: empty.to }
+    if (since === undefined || since <= from || since > to) return [failed({ from, to, ...buckets })]
+    return [
+      { from, to: since, ...buckets, cause: { kind: "gateway-not-running", started: since } },
+      ...(since < empty.to && since < to ? [failed({ from: since, to, ...buckets })] : [])
+    ]
   })
 }
 
@@ -231,6 +239,18 @@ const changeLines = (series: HistorySeries, now: number) => {
   ]
 }
 
+/**
+ * When a bucket's line says it starts: its start, or the gateway's start for the bucket the gateway started in
+ * when all of its reads came after that, so no line claims a time before the gateway ran.
+ */
+export const labelOf = (bucket: HistoryBucket, stepMs: number, since: number | undefined) =>
+  since !== undefined &&
+  since > bucket.t &&
+  since < bucket.t + stepMs &&
+  (bucket.first === undefined || bucket.first >= since)
+    ? since
+    : bucket.t
+
 /** The lines of one point's series: a heading, then a bucket or a gap per line, oldest first. */
 export const formatSeries = (point: PointInfo, series: HistorySeries, now: number, context: SeriesContext = {}) => {
   const unit = unitLabel(point.unit)
@@ -245,7 +265,7 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
         : bucket.count === 1
           ? `${withUnit(bucket.avg)}  (1 read)`
           : `avg ${withUnit(bucket.avg)}  min ${number(bucket.min)}  max ${number(bucket.max)}  (${bucket.count} reads)`
-    return { t: bucket.t, line: `${localTime(bucket.t, now)}  ${values}${soFar}` }
+    return { t: bucket.t, line: `${localTime(labelOf(bucket, series.stepMs, context.since), now)}  ${values}${soFar}` }
   })
   const heading = `${point.device}/${point.id} (${point.name}${unit === "" ? "" : `, ${unit}`}): ${width(series.stepMs)} buckets ${source}`
   const live = series.live === true
@@ -269,16 +289,16 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
         ? `the gateway was not running (started ${localTime(cause.started, now)})`
         : live
           ? atEnd
-            ? gap.from >= series.to - series.stepMs
+            ? gap.emptyFrom >= series.to - series.stepMs
               ? `no read yet in this bucket${failing(cause)}`
               : `no reads since then${failing(cause)}`
-            : `no reads for ${ago(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
+            : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
           : // A gateway without live answers wrote its reads every 30 s: a short gap at the end is that.
-            atEnd && gap.from >= series.to - FLUSH_MS - series.stepMs
+            atEnd && gap.emptyFrom >= series.to - FLUSH_MS - series.stepMs
             ? "not written yet"
             : atEnd
               ? `no reads since then (${notYet})${failing(cause)}`
-              : `no reads for ${ago(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
+              : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
     rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}` })
   }
   return [

@@ -336,13 +336,20 @@ export type PointInfo = typeof PointInfo.Type
 export const PointCatalog = Schema.Struct({ points: Schema.Array(PointInfo) })
 export type PointCatalog = typeof PointCatalog.Type
 
-/** One bucket of a point's history: what its reads in `[t, t + stepMs)` were. Booleans count as 0 and 1. */
+/**
+ * One bucket of a point's history: what its reads in `[t, t + stepMs)` were. Booleans count as 0 and 1. `first`
+ * and `last` (Unix ms) are when its first and last read came, so a gap between buckets is known to the
+ * millisecond: from the `last` of the bucket before it to the `first` of the bucket after it. Absent from gateways
+ * before they were added, and from per-minute rollups written before then.
+ */
 export const HistoryBucket = Schema.Struct({
   t: Schema.Number,
   min: Schema.Number,
   max: Schema.Number,
   avg: Schema.Number,
-  count: Schema.Number
+  count: Schema.Number,
+  first: Schema.optionalKey(Schema.Number),
+  last: Schema.optionalKey(Schema.Number)
 })
 export type HistoryBucket = typeof HistoryBucket.Type
 
@@ -355,7 +362,8 @@ export const HISTORY_CHANGES_MAX = 200
 
 /**
  * A point's history between `from` and `to` (Unix ms), in buckets of `stepMs`, oldest first; buckets without a
- * read are left out. `resolution` says where it came from: every read (buckets under a minute, or a range of an
+ * read are left out. Buckets start on whole multiples of `stepMs` (minute buckets on whole minutes), so `from` can
+ * be up to a step before the `from` asked for. `resolution` says where it came from: every read (buckets under a minute, or a range of an
  * hour or less, that starts within the last day) or per-minute rollups (everything else). `changes`, when asked
  * for and the range starts within the last day: the first read and every read that changed the value, oldest
  * first, at most `HISTORY_CHANGES_MAX`. `live`: the answer holds the reads the gateway has not written to its file
@@ -507,7 +515,8 @@ export const GatewayConflictEvent = Schema.Struct({
 
 /**
  * An alarm point's alarm became active (its value turned on, or off for `alarmWhen: off`), or was active at its
- * first read (`first`).
+ * first read (`first`), or at the first read after its device failed and answered again (`afterOutage`). The
+ * latter is no new trip, since when it tripped is not known: it does not count in `raised` or in a flapping pattern.
  */
 export const AlarmRaisedEvent = Schema.Struct({
   ...eventFields,
@@ -515,17 +524,22 @@ export const AlarmRaisedEvent = Schema.Struct({
   device: Schema.String,
   point: Schema.String,
   value: Schema.Union([Schema.Number, Schema.Boolean]),
-  first: Schema.optionalKey(Schema.Boolean)
+  first: Schema.optionalKey(Schema.Boolean),
+  afterOutage: Schema.optionalKey(Schema.Boolean)
 })
 
-/** An active alarm cleared, after `activeMs` (measured on a clock NTP does not step). */
+/**
+ * An active alarm cleared, after `activeMs` (measured on a clock NTP does not step). `afterOutage`: it was found
+ * off at the first read after its device failed and answered again, so when it cleared is not known.
+ */
 export const AlarmClearedEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("alarm-cleared"),
   device: Schema.String,
   point: Schema.String,
   value: Schema.Union([Schema.Number, Schema.Boolean]),
-  activeMs: Schema.Number
+  activeMs: Schema.Number,
+  afterOutage: Schema.optionalKey(Schema.Boolean)
 })
 
 /**

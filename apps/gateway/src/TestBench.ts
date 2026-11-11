@@ -8,6 +8,8 @@
  *   values that change over time (floats follow a slow sine, integers count
  *   up every 10 s, booleans flip every 30 s). Devices on the same port are
  *   units behind one simulated gateway, each answering its own unit id.
+ * - an energy counter (a point in Wh, kWh or MWh) on a device with an active power point (W, kW or MW) counts the
+ *   energy that power delivers (`benchEnergyOf`), so the two agree as a real meter's do
  * - a simulated BACnet/IP device for every `bacnet-ip` device whose `address`
  *   is on localhost with a port other than the gateway's own, with analog
  *   values on the same sine and binary values flipping every 30 s
@@ -110,6 +112,42 @@ export const benchBinaryOf = (points: ReadonlyArray<BenchPoint>, index: number):
   return (seconds) => Math.floor(seconds / 30) % 2 === 0
 }
 
+/** Each power unit in kW, and each energy unit in kWh: the units `benchEnergyOf` pairs. */
+const POWER_IN_KW: Readonly<Record<string, number>> = { "unit:W": 0.001, "unit:KiloW": 1, "unit:MegaW": 1000 }
+const ENERGY_IN_KWH: Readonly<Record<string, number>> = {
+  "unit:W-HR": 0.001,
+  "unit:KiloW-HR": 1,
+  "unit:MegaW-HR": 1000
+}
+
+/** Where a simulated energy counter starts, in its own unit: a meter that has run for a while. */
+export const BENCH_ENERGY_START = 12_000
+
+/**
+ * The energy counter `points[index]` (a point in an energy unit), as the energy the device's first power point
+ * delivered from simulated second `from` to `seconds`, in the counter's unit: the integral of `benchValue`'s sine,
+ * worked out exactly, so it never runs backwards and agrees with the power read at any pace. Undefined for a point
+ * that is no energy counter, or one on a device without a power point.
+ */
+export const benchEnergyOf = (
+  points: ReadonlyArray<BenchPoint>,
+  index: number
+): ((from: number, seconds: number) => number) | undefined => {
+  const unit = points[index]?.unit
+  const perUnitKwh = unit === undefined ? undefined : ENERGY_IN_KWH[unit]
+  if (perUnitKwh === undefined) return undefined
+  const powerIndex = points.findIndex((point) => point.unit !== undefined && POWER_IN_KW[point.unit] !== undefined)
+  const powerUnit = points[powerIndex]?.unit
+  const kw = powerUnit === undefined ? undefined : POWER_IN_KW[powerUnit]
+  if (powerUnit === undefined || kw === undefined) return undefined
+  const [low, high] = rangeByUnit[powerUnit] ?? [0, 100]
+  const half = (high - low) / 2
+  const omega = (2 * Math.PI) / 120
+  // The integral of low + half * (1 + sin(omega * s + powerIndex)) over s, in the power's unit times seconds.
+  const integral = (seconds: number) => (low + half) * seconds - (half / omega) * Math.cos(omega * seconds + powerIndex)
+  return (from, seconds) => ((integral(seconds) - integral(from)) * kw) / 3600 / perUnitKwh
+}
+
 const simulatedSeconds = (pace: Pace) => Effect.map(Clock.currentTimeMillis, (millis) => (millis / 1000) * pace.speed)
 
 const runBroker = Effect.fn("runBroker")(function* (
@@ -166,17 +204,22 @@ const simulateDevice = Effect.fn("simulateDevice")(function* (device: ModbusDevi
   for (const point of device.points) if (point.writable) setPointValue(bank, point, point.limits?.min ?? 0)
   const analog = device.points.map((_, index) => benchAnalogOf(device.points, index))
   const binary = device.points.map((_, index) => benchBinaryOf(device.points, index))
+  const energy = device.points.map((_, index) => benchEnergyOf(device.points, index))
+  const startedAt = yield* simulatedSeconds(pace)
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
       if (point.writable) return
       if (point.dataType === "bool") return setPointValue(bank, point, binary[index]?.(seconds) ?? false)
-      // Integers count up like a meter; floats swing through their unit's range.
-      const value =
-        point.dataType === "float32" || point.dataType === "float64"
-          ? (analog[index]?.(seconds) ?? 0)
-          : Math.floor(seconds / 10) % 32_768
-      setPointValue(bank, point, value)
+      const float = point.dataType === "float32" || point.dataType === "float64"
+      // An energy counter counts what the device's power delivered; other integers count up like a meter; other
+      // floats swing through their unit's range.
+      const counted = energy[index]
+      if (counted !== undefined) {
+        const total = BENCH_ENERGY_START + counted(startedAt, seconds)
+        return setPointValue(bank, point, float ? Math.round(total * 1000) / 1000 : Math.floor(total))
+      }
+      setPointValue(bank, point, float ? (analog[index]?.(seconds) ?? 0) : Math.floor(seconds / 10) % 32_768)
     })
   })
   yield* update.pipe(Effect.repeat(pace.update), Effect.forkScoped)
@@ -191,6 +234,8 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
   const simulated = simulatedDeviceFor(device)
   const analog = device.points.map((_, index) => benchAnalogOf(device.points, index))
   const binary = device.points.map((_, index) => benchBinaryOf(device.points, index))
+  const energy = device.points.map((_, index) => benchEnergyOf(device.points, index))
+  const startedAt = yield* simulatedSeconds(pace)
   const update = Effect.gen(function* () {
     const seconds = yield* simulatedSeconds(pace)
     device.points.forEach((point, index) => {
@@ -202,7 +247,12 @@ const runBacnetSimulator = Effect.fn("runBacnetSimulator")(function* (
       if (point.objectType.startsWith("binary-")) {
         setPresentValue(simulated, object, { type: "enumerated", value: binary[index]?.(seconds) === true ? 1 : 0 })
       } else {
-        setPresentValue(simulated, object, { type: "real", value: analog[index]?.(seconds) ?? 0 })
+        const counted = energy[index]
+        const value =
+          counted === undefined
+            ? (analog[index]?.(seconds) ?? 0)
+            : Math.round((BENCH_ENERGY_START + counted(startedAt, seconds)) * 1000) / 1000
+        setPresentValue(simulated, object, { type: "real", value })
       }
     })
   })

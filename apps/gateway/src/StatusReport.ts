@@ -19,6 +19,7 @@ import {
   type Hint,
   isDeviceLate,
   OtGatewayApi,
+  preciseDuration,
   type Protocol,
   roughDuration,
   SHARED_CAUSE_WINDOW_MS,
@@ -88,6 +89,11 @@ export interface EventAdvice {
   readonly hint?: Hint
   /** The shared-cause line, on every device failure of a group that began within `SHARED_CAUSE_WINDOW_MS`. */
   readonly sharedCause?: string
+  /**
+   * The failure is the first of its shared-cause group, or failed alone: `events` lists more of what to check under
+   * it. The others of a group list only the first check, since the group's checks are the same.
+   */
+  readonly leads?: boolean
 }
 
 /**
@@ -99,10 +105,15 @@ export const adviseEvents = (
   events: ReadonlyArray<GatewayEvent>,
   protocolOf: (device: string) => Protocol | undefined
 ): ReadonlyMap<number, EventAdvice> => {
-  const advice = new Map<number, { hint?: Hint; sharedCause?: string }>()
+  const advice = new Map<number, EventAdvice>()
   const failures = events.filter((event) => event.type === "device-failing")
+  const followers = new Set<number>()
   for (const shared of sharedCauses(failures)) {
-    for (const id of shared.ids) advice.set(id, { sharedCause: shared.line })
+    const first = Math.min(...shared.ids)
+    for (const id of shared.ids) {
+      advice.set(id, { sharedCause: shared.line })
+      if (id !== first) followers.add(id)
+    }
   }
   // The hint knows whether the device worked before and whether others failed with it: then not its config first.
   for (const event of failures) {
@@ -111,7 +122,11 @@ export const adviseEvents = (
       answeredBefore: event.answeredBefore === true,
       sharedCause: shared !== undefined
     })
-    advice.set(event.id, { hint, ...(shared === undefined ? {} : { sharedCause: shared }) })
+    advice.set(event.id, {
+      hint,
+      ...(shared === undefined ? {} : { sharedCause: shared }),
+      ...(followers.has(event.id) ? {} : { leads: true })
+    })
   }
   return advice
 }
@@ -433,12 +448,12 @@ const describeEvent = (event: GatewayEvent, now: number) => {
     case "device-failing":
       return `failing: ${withoutControls(event.error === "" ? event.reason : event.error)}`
     case "device-recovered":
-      return `ok again after ${ago(event.downMs)}`
+      return `ok again after ${preciseDuration(event.downMs)}`
     case "broker-disconnected":
       return `disconnected: ${withoutControls(event.error)}`
     case "broker-connected":
       return [
-        event.downMs === undefined ? "connected" : `connected again after ${ago(event.downMs)}`,
+        event.downMs === undefined ? "connected" : `connected again after ${preciseDuration(event.downMs)}`,
         ...(event.buffered === undefined || event.buffered === 0
           ? []
           : [`${event.buffered} message(s) waiting in the buffer at reconnect`])
@@ -458,9 +473,13 @@ const describeEvent = (event: GatewayEvent, now: number) => {
     case "alarm-raised":
       return event.first === true
         ? `alarm active at its first read (value ${valueText(event.value)})`
-        : `alarm raised (value ${valueText(event.value)})`
+        : event.afterOutage === true
+          ? `alarm active when ${event.device} answered again (value ${valueText(event.value)})`
+          : `alarm raised (value ${valueText(event.value)})`
     case "alarm-cleared":
-      return `alarm cleared after ${ago(event.activeMs)} (value ${valueText(event.value)})`
+      return event.afterOutage === true
+        ? `alarm off when ${event.device} answered again (value ${valueText(event.value)})`
+        : `alarm cleared after ${preciseDuration(event.activeMs)} (value ${valueText(event.value)})`
     case "alarm-flapping":
       return `alarm raised ${event.raised} times in the last ${ago(ALARM_WINDOW_MS)}: flapping${event.pattern === undefined ? "" : ` (${patternText(event.pattern)})`}, so its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)}`
     case "alarm-settled":
@@ -516,17 +535,20 @@ export const formatEvents = (
       const found = advice.get(event.id)
       return [
         line,
-        ...adviceLines(found?.hint, indent),
+        ...adviceLines(found?.hint, indent, found?.leads === true ? LEAD_CHECKS : 1),
         ...(found?.sharedCause !== undefined && sharedAfter.has(event.id) ? [`${indent}${found.sharedCause}`] : [])
       ]
     })
   ].join("\n")
 }
 
-/** `check: <the most likely cause>` under a device's failure. */
-const adviceLines = (hint: Hint | undefined, indent: string) => {
-  const first = hint?.checks[0]
-  return first === undefined ? [] : [`${indent}check: ${first}`]
+/** Checks `events` lists under a failure that leads its group, or failed alone. */
+export const LEAD_CHECKS = 3
+
+/** `check: <the most likely cause>` under a device's failure, then up to `count - 1` more, most likely first. */
+const adviceLines = (hint: Hint | undefined, indent: string, count: number) => {
+  const checks = hint?.checks.slice(0, count) ?? []
+  return checks.map((check, index) => `${indent}${index === 0 ? "check: " : "  then: "}${check}`)
 }
 
 /** One event's line: local time, subject, what happened; the subject padded to `width`. */
@@ -630,13 +652,18 @@ export const followEvents = Effect.fn("followEvents")(function* (
     // Each new failure gets its hint; a shared cause needs the others of its group, which `events` shows afterwards.
     const hints = adviseEvents(fresh, protocolOf)
     for (const event of fresh) {
-      const hint = hints.get(event.id)?.hint
+      const found = hints.get(event.id)
+      const hint = found?.hint
       yield* printResult(
         json
           ? JSON.stringify(eventJson(event, new Map(hint === undefined ? [] : [[event.id, { hint }]])))
           : [
               eventLine(event, answer.now),
-              ...adviceLines(hint, " ".repeat(localTime(event.at, answer.now).length + 2))
+              ...adviceLines(
+                hint,
+                " ".repeat(localTime(event.at, answer.now).length + 2),
+                found?.leads === true ? LEAD_CHECKS : 1
+              )
             ].join("\n")
       )
     }
