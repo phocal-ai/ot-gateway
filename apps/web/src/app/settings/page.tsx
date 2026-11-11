@@ -4,21 +4,23 @@
  * The Settings tab: the gateway's running config (`/api/config`), every default filled in. When the gateway lets
  * this page edit (`/api/config/edit`), the Gateway and Broker cards have an Edit button
  * (components/settings-editor.tsx), and the Devices card adds a Modbus TCP or BACnet/IP device, edits or removes one
- * (components/device-editor.tsx), or adds the devices of an uploaded points list or EDE file
- * (components/import-panel.tsx). Every save writes the config file and the gateway applies it without a restart.
+ * (components/device-editor.tsx), finds BACnet devices and picks their objects (components/discover-panel.tsx), or
+ * adds the devices of an uploaded points list or EDE file (components/import-panel.tsx). Every save writes the config file and the gateway applies it without a restart.
  * When it does not let the page edit, the page says why and what to change.
  *
- * Links open a panel: `?add=modbus-tcp` or `?add=bacnet-ip` (a new device), `?edit=<device id>`, `?upload=1`.
+ * Links open a panel: `?add=modbus-tcp` or `?add=bacnet-ip` (a new device), `?edit=<device id>`, `?find=1`,
+ * `?upload=1`, and `?broker=1` opens the Broker card's form.
  */
 import type { ConfigView, EditStatus } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"
 import { DeviceEditor } from "@/components/device-editor"
+import { DiscoverPanel } from "@/components/discover-panel"
 import { ImportPanel } from "@/components/import-panel"
 import { EditForm } from "@/components/settings-editor"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { type EditableProtocol, isEditableProtocol } from "@/lib/device-editor"
+import { type DeviceDraft, type EditableProtocol, isEditableProtocol } from "@/lib/device-editor"
 import type { EditCard } from "@/lib/editor"
 import { fetchEditStatus } from "@/lib/editor-api"
 import { formatNumber } from "@/lib/format"
@@ -84,7 +86,14 @@ const editable = (key: string): EditCard | undefined => (key === "gateway" || ke
 
 /** What the Devices card shows above its list. */
 type DevicePanel =
-  | { readonly _tag: "device"; readonly id: string | undefined; readonly protocol: EditableProtocol }
+  | {
+      readonly _tag: "device"
+      readonly id: string | undefined
+      readonly protocol: EditableProtocol
+      /** A discovered device's fields, for a new one. */
+      readonly initial?: DeviceDraft
+    }
+  | { readonly _tag: "discover" }
   | { readonly _tag: "upload" }
 
 /** The panel a link asks for (`?add=modbus-tcp`, `?edit=meter`, `?upload=1`). */
@@ -95,6 +104,7 @@ const panelFromLink = (search: string): DevicePanel | undefined => {
   const editId = params.get("edit")
   if (editId !== null && editId !== "") return { _tag: "device", id: editId, protocol: "modbus-tcp" }
   if (params.get("upload") !== null) return { _tag: "upload" }
+  if (params.get("find") !== null) return { _tag: "discover" }
   return undefined
 }
 
@@ -125,6 +135,11 @@ const SettingsPage = () => {
   useEffect(() => {
     if (linked.current || edit?.enabled !== true || load._tag !== "ok") return
     linked.current = true
+    if (new URLSearchParams(window.location.search).get("broker") !== null) {
+      setEditing("mqtt")
+      window.history.replaceState(null, "", window.location.pathname)
+      return
+    }
     const fromLink = panelFromLink(window.location.search)
     if (fromLink === undefined) return
     setPanel(fromLink)
@@ -266,6 +281,9 @@ const SettingsPage = () => {
               >
                 Add BACnet device
               </Button>
+              <Button size="sm" variant="outline" onClick={() => openPanel({ _tag: "discover" })}>
+                Find BACnet devices
+              </Button>
               <Button size="sm" variant="outline" onClick={() => openPanel({ _tag: "upload" })}>
                 Upload a points list
               </Button>
@@ -281,12 +299,21 @@ const SettingsPage = () => {
           <div className="border-b px-5 py-4">
             {panel._tag === "upload" ? (
               <ImportPanel edit={edit} onDone={done("devices")} />
+            ) : panel._tag === "discover" ? (
+              <DiscoverPanel
+                onPicked={(initial) => {
+                  setPanel({ _tag: "device", id: undefined, protocol: "bacnet-ip", initial })
+                  devicesCard.current?.scrollIntoView({ block: "start" })
+                }}
+                onCancel={() => setPanel(undefined)}
+              />
             ) : (
               <DeviceEditor
-                key={panel.id ?? `new-${panel.protocol}`}
+                key={panel.id ?? `new-${panel.protocol}-${panel.initial?.deviceInstance ?? ""}`}
                 edit={edit}
                 deviceId={panel.id}
                 protocol={panel.protocol}
+                initial={panel.initial}
                 onDone={done("devices")}
               />
             )}
@@ -294,7 +321,9 @@ const SettingsPage = () => {
         ) : null}
         {devices.length === 0 ? (
           <p className="p-5 text-sm text-muted-foreground">
-            {canEdit ? "No devices yet: add one, or upload a points list." : "The config has no devices."}
+            {canEdit
+              ? "No devices yet: add one, find BACnet devices, or upload a points list."
+              : "The config has no devices."}
           </p>
         ) : (
           <Table>
