@@ -50,6 +50,32 @@ describe("whatToCheck", () => {
     expect(mentions(whatToCheck("bacnet-ip", "protocol", "unknown-object").checks, /object/)).toBe(true)
   })
 
+  it("leads with power, switch, cable and a restart for a device that answered before, config checks last", () => {
+    const never = whatToCheck("bacnet-ip", "timeout", "no answer from 10.0.0.5:47808")
+    expect(never.checks[0]).toMatch(/device instance in the config/)
+    const worked = whatToCheck("bacnet-ip", "timeout", "no answer from 10.0.0.5:47808", { answeredBefore: true })
+    expect(worked.checks[0]).toMatch(/answered earlier in this run/)
+    expect(worked.checks[0]).toMatch(/power/)
+    expect(worked.checks.at(-1)).toMatch(/in the config/)
+    // The same checks, reordered: nothing is lost.
+    expect(worked.checks.slice(1).toSorted()).toEqual(never.checks.toSorted())
+  })
+
+  it("leads with what the devices share in a shared outage, and never with the config", () => {
+    const hint = whatToCheck("modbus-tcp", "connection", "could not connect: connection refused", {
+      sharedCause: true,
+      answeredBefore: true
+    })
+    expect(hint.checks[0]).toMatch(/Others failed with it/)
+    expect(hint.checks[1]).toMatch(/answered earlier/)
+    expect(hint.checks.findIndex((check) => /in the config/.test(check))).toBeGreaterThan(2)
+  })
+
+  it("keeps the config first for a refusal, where the device answers, whatever it did before", () => {
+    const refused = whatToCheck("modbus-tcp", "protocol", "illegal_data_address", { answeredBefore: true })
+    expect(refused).toBe(whatToCheck("modbus-tcp", "protocol", "illegal_data_address"))
+  })
+
   it("falls back to the gateway's log for a reason it has no hint for", () => {
     expect(whatToCheck("modbus-tcp", "crashed", "boom")).toBe(fallbackHint)
     expect(whatToCheck("simulator", "something-new", undefined)).toBe(fallbackHint)

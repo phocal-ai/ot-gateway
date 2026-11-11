@@ -176,6 +176,17 @@ describe("status: what to check", () => {
     )
   })
 
+  it("leads with power, switch and cable for a device that read fine before, and in a shared outage", () => {
+    const worked = { ...failingDevice("energy-meter", at(12, 18, 20)), lastSuccess: at(12, 18, 15) }
+    const lines = formatStatus({ ...failing, devices: [worked] }).split("\n")
+    expect(lines[lines.findIndex((line) => line.includes("energy-meter  failing")) + 1]).toMatch(
+      /check: It answered earlier in this run, so its config worked/
+    )
+    const all = [failingDevice("a", at(12, 18, 20)), failingDevice("b", at(12, 18, 26))]
+    const shared = formatStatus({ ...failing, devices: all }).split("\n")
+    expect(shared.filter((line) => line.includes("check: Others failed with it"))).toHaveLength(2)
+  })
+
   it("gives each failing device its hints in --json, and none to the others", () => {
     const [meter, pv] = statusJson(failing).devices
     expect(meter).toMatchObject({ hints: { meaning: expect.stringMatching(/nothing accepts a connection/) } })

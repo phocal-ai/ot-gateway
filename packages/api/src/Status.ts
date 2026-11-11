@@ -411,13 +411,17 @@ export const GatewayStartedEvent = Schema.Struct({
   devices: Schema.Number
 })
 
-/** A device that read fine, or had not read yet, failed: `reason` is the class, `error` the driver's words. */
+/**
+ * A device that read fine, or had not read yet, failed: `reason` is the class, `error` the driver's words.
+ * `answeredBefore`: the device read fine earlier in this run, so its config worked.
+ */
 export const DeviceFailingEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("device-failing"),
   device: Schema.String,
   reason: Schema.String,
-  error: Schema.String
+  error: Schema.String,
+  answeredBefore: Schema.optionalKey(Schema.Boolean)
 })
 
 /** A failing device read again, after `downMs` of failures. */

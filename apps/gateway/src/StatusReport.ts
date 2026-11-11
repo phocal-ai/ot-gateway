@@ -57,8 +57,16 @@ export const failingHint = [
 export const brokerAway = (broker: GatewayStatus["broker"]) =>
   !broker.connected && (broker.disconnectedSince !== undefined || broker.failedConnects > 0 || broker.connects > 0)
 
-/** What to check for a failing device, from the table the status page's device sheet shows. */
-export const hintsFor = (device: DeviceStatus) => whatToCheck(device.protocol, device.reason ?? "", device.lastError)
+/**
+ * What to check for a failing device, from the table the status page's device sheet shows: a device that read
+ * fine in this run (`lastSuccess`), or one of several that failed together (`shared`), leads with power, switch,
+ * cable and restart rather than its config.
+ */
+export const hintsFor = (device: DeviceStatus, shared = false) =>
+  whatToCheck(device.protocol, device.reason ?? "", device.lastError, {
+    answeredBefore: device.lastSuccess !== undefined,
+    sharedCause: shared
+  })
 
 /** Failing devices that all started failing within this much of each other point at one cause, not at each device. */
 export const SHARED_CAUSE_WINDOW_MS = 10_000
@@ -101,9 +109,6 @@ export const adviseEvents = (
 ): ReadonlyMap<number, EventAdvice> => {
   const advice = new Map<number, { hint?: Hint; sharedCause?: string }>()
   const failures = events.filter((event) => event.type === "device-failing")
-  for (const event of failures) {
-    advice.set(event.id, { hint: whatToCheck(protocolOf(event.device), event.reason, event.error) })
-  }
   let index = 0
   while (index < failures.length) {
     const first = failures[index]
@@ -120,9 +125,18 @@ export const adviseEvents = (
     if (devices.length >= 2) {
       const spread = (group.at(-1)?.at ?? first.at) - first.at
       const line = sharedCauseLine(`${devices.length} devices (${devices.join(", ")})`, spread)
-      for (const event of group) advice.set(event.id, { ...advice.get(event.id), sharedCause: line })
+      for (const event of group) advice.set(event.id, { sharedCause: line })
     }
     index = end
+  }
+  // The hint knows whether the device worked before and whether others failed with it: then not its config first.
+  for (const event of failures) {
+    const shared = advice.get(event.id)?.sharedCause
+    const hint = whatToCheck(protocolOf(event.device), event.reason, event.error, {
+      answeredBefore: event.answeredBefore === true,
+      sharedCause: shared !== undefined
+    })
+    advice.set(event.id, { hint, ...(shared === undefined ? {} : { sharedCause: shared }) })
   }
   return advice
 }
@@ -282,7 +296,9 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
     `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}${late > 0 ? `, ${late} late` : ""}`,
     ...status.devices.flatMap((device) => [
       `    ${device.id.padEnd(width)}  ${deviceStateName(device, status.now).padEnd(8)} ${device.protocol}, ${device.pointCount} point(s), ${deviceState(device, status.now)}`,
-      ...(device.status === "failing" ? [`    ${" ".repeat(width)}  check: ${hintsFor(device).checks[0] ?? ""}`] : [])
+      ...(device.status === "failing"
+        ? [`    ${" ".repeat(width)}  check: ${hintsFor(device, shared !== undefined).checks[0] ?? ""}`]
+        : [])
     ]),
     ...(shared === undefined ? [] : [`  ${shared}`]),
     ...alarmLines(status.alarms ?? [], status.now),
@@ -342,14 +358,17 @@ export const statusOutcome = (json: boolean) =>
  * and what to check, most likely first (the status page's table), and `recent`, what failed in the last 15 minutes
  * (from the events), so `ok: true` right after an outage does not hide it.
  */
-export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => ({
-  ok: isHealthy(status),
-  ...status,
-  devices: status.devices.map((device) =>
-    device.status === "failing" ? { ...device, hints: hintsFor(device) } : device
-  ),
-  ...(recent === undefined ? {} : { recent })
-})
+export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => {
+  const shared = sharedCause(status.devices) !== undefined
+  return {
+    ok: isHealthy(status),
+    ...status,
+    devices: status.devices.map((device) =>
+      device.status === "failing" ? { ...device, hints: hintsFor(device, shared) } : device
+    ),
+    ...(recent === undefined ? {} : { recent })
+  }
+}
 
 /**
  * The status `ot-gateway status` reports on, from the gateway the target expects (else `GatewayMismatch`), and what

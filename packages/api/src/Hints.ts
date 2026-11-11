@@ -169,11 +169,56 @@ export const fallbackHint: Hint = {
   checks: ["The gateway's log has the details: docker compose logs gateway --since 10m"]
 }
 
-/** What to check for a device failing for `reason`, with the driver's words `error`; without a `protocol`, only the rules for any. */
-export const whatToCheck = (protocol: Protocol | undefined, reason: string, error: string | undefined): Hint =>
-  hintRules.find(
-    (rule) =>
-      rule.reason === reason &&
-      (rule.protocol === undefined || rule.protocol === protocol) &&
-      (rule.error === undefined || (error !== undefined && rule.error.test(error)))
-  )?.hint ?? fallbackHint
+/** What the gateway knows about a failure besides its words: whether the device worked, whether others failed too. */
+export interface FailureContext {
+  /** The device read fine earlier in this run: its config worked, so something changed at the device or on the way. */
+  readonly answeredBefore?: boolean
+  /** Other devices stopped answering at the same moment: likely one cause they share. */
+  readonly sharedCause?: boolean
+}
+
+/** The failure classes where the device or the way to it is gone, rather than a reply the gateway cannot use. */
+const unreachableReasons = new Set(["connection", "timeout", "cycle-timeout"])
+
+/** A check about the config: it comes after the others for a device whose config has worked. */
+const aboutConfig = (check: string) => /\bconfig\b/.test(check)
+
+const sharedCheck =
+  "Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link."
+const answeredCheck =
+  "It answered earlier in this run, so its config worked: did it lose power, or a switch or cable on the way? A device whose network module hangs answers again after a restart."
+
+/**
+ * What to check for a device failing for `reason`, with the driver's words `error`; without a `protocol`, only the
+ * rules for any. For a device that answered earlier in this run, or one of several that failed together, a device
+ * or network that is gone is the likelier cause than its config, which worked: the checks then lead with power,
+ * the switch, the cable and a restart, and the config's come last. Config checks lead only for a device that never
+ * answered.
+ */
+export const whatToCheck = (
+  protocol: Protocol | undefined,
+  reason: string,
+  error: string | undefined,
+  context: FailureContext = {}
+): Hint => {
+  const hint =
+    hintRules.find(
+      (rule) =>
+        rule.reason === reason &&
+        (rule.protocol === undefined || rule.protocol === protocol) &&
+        (rule.error === undefined || (error !== undefined && rule.error.test(error)))
+    )?.hint ?? fallbackHint
+  if (!unreachableReasons.has(reason) || (context.answeredBefore !== true && context.sharedCause !== true)) return hint
+  const first = context.sharedCause === true ? sharedCheck : answeredCheck
+  const rest = hint === fallbackHint ? [] : hint.checks
+  return {
+    meaning: hint.meaning,
+    checks: [
+      first,
+      ...(context.sharedCause === true && context.answeredBefore === true ? [answeredCheck] : []),
+      ...rest.filter((check) => !aboutConfig(check)),
+      ...rest.filter(aboutConfig),
+      ...(hint === fallbackHint ? hint.checks : [])
+    ]
+  }
+}

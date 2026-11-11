@@ -302,10 +302,11 @@ describe("events", () => {
 
   it("gives a cleared failure its hint by the device's protocol, and a shared cause after its group", () => {
     expect(formatEvents(outage, Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")).toEqual([
+      // In a shared outage the first check is what the devices share, not their config.
       "12:10:00  boiler  failing: no answer to Who-Is for device 1201",
-      "                  check: Is the device instance in the config the device's own (its Device object, not a point)?",
+      "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
       "12:10:04  meter   failing: timed out",
-      "                  check: Is the device switched on and its network cable plugged in (link light)?",
+      "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
       "                  2 devices (boiler, meter) stopped answering within 4 s of each other: likely a shared cause (power, a switch, the gateway's own network)",
       "12:12:00  boiler  ok again after 2 min",
       "12:12:01  meter   ok again after 117 s",
@@ -313,6 +314,31 @@ describe("events", () => {
       // pump is gone from the config: only the rules for any protocol, so Modbus's words, not BACnet's.
       "                  check: Do the register addresses match the device's register map? Maps often count from 1 (40001) where the config counts from 0."
     ])
+  })
+
+  it("leads with power, switch and cable for a device that answered before it failed, config for one that never did", () => {
+    const failing = (answeredBefore: boolean): EventLog => ({
+      now,
+      capacity: 500,
+      dropped: 0,
+      events: [
+        {
+          id: 1,
+          at: at(12, 10, 0),
+          type: "device-failing",
+          device: "boiler",
+          reason: "timeout",
+          error: "no answer from 10.0.0.5:47808",
+          ...(answeredBefore ? { answeredBefore } : {})
+        }
+      ]
+    })
+    expect(formatEvents(failing(false), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
+      "                  check: Is the device instance in the config right?"
+    )
+    expect(formatEvents(failing(true), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
+      "                  check: It answered earlier in this run, so its config worked: did it lose power, or a switch or cable on the way? A device whose network module hangs answers again after a restart."
+    )
   })
 
   it("puts the hint and the shared cause into the JSON of the failures", () => {
