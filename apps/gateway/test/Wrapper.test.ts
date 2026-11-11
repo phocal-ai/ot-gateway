@@ -88,6 +88,17 @@ describe("packaging/ot-gateway", () => {
     expect(runCall(result.log)).not.toContain("--name")
   })
 
+  it("passes the SSH session and the user into the container, by name only", () => {
+    const result = runWrapper(["init"], {
+      FAKE_IMAGE_PRESENT: "1",
+      SSH_CONNECTION: "192.168.1.20 53412 192.168.1.50 22",
+      USER: "pi"
+    })
+    expect(result.status).toBe(0)
+    expect(runCall(result.log)).toContain(" -e SSH_CONNECTION -e USER ")
+    expect(runCall(result.log)).not.toContain("192.168.1.50")
+  })
+
   it("pulls a missing image quietly, retrying twice with a backoff", () => {
     const result = runWrapper(["--version"], { FAKE_PULL_FAILURES: "2" })
     expect(result.status).toBe(0)

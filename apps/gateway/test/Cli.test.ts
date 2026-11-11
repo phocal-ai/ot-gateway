@@ -9,7 +9,7 @@ import { Effect, FileSystem } from "effect"
 import { TestConsole } from "effect/testing"
 import type { NetworkInterfaceInfo } from "node:os"
 import type { BrokerReport } from "../src/Broker.ts"
-import { brokerOutcome, cliVersion, describeConfig, pointsListOutcome, runCli, toCliArgs } from "../src/Cli.ts"
+import { brokerOutcome, describeConfig, pointsListOutcome, runCli, toCliArgs, versionLine } from "../src/Cli.ts"
 import {
   demoBanner,
   demoConfig,
@@ -23,16 +23,24 @@ import {
 } from "../src/Demo.ts"
 import { loadConfig } from "../src/LoadConfig.ts"
 
-describe("cliVersion", () => {
-  it("drops a release tag's v, which the CLI prints itself", () => {
-    expect(cliVersion("v0.7.0")).toBe("0.7.0")
-    expect(cliVersion("v0.8.0-rc.1")).toBe("0.8.0-rc.1")
+describe("versionLine", () => {
+  it("prints a release as its tag", () => {
+    expect(versionLine("ot-gateway", "v0.7.0")).toBe("ot-gateway v0.7.0")
+    expect(versionLine("ot-gateway", "v0.8.0-rc.1")).toBe("ot-gateway v0.8.0-rc.1")
+    expect(versionLine("ot-gateway", "0.9.0")).toBe("ot-gateway v0.9.0")
   })
 
-  it("leaves a dev build or a commit as it is", () => {
-    expect(cliVersion("dev")).toBe("dev")
-    expect(cliVersion("c78bb4e09-dirty")).toBe("c78bb4e09-dirty")
+  it("prints a local build or a commit without a v", () => {
+    expect(versionLine("ot-gateway", "dev")).toBe("ot-gateway dev")
+    expect(versionLine("ot-gateway", "c78bb4e09-dirty")).toBe("ot-gateway c78bb4e09-dirty")
   })
+
+  it.effect("is what --version prints: a checkout without a VERSION file is dev, with no v", () =>
+    Effect.gen(function* () {
+      yield* runCli(["--version"])
+      expect(yield* TestConsole.logLines).toEqual(["ot-gateway dev"])
+    }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
 })
 
 describe("toCliArgs", () => {

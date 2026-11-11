@@ -25,7 +25,7 @@ A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What run
    ```
 
    ```bash
-   curl -fsSL https://get.docker.com | sudo sh && sudo usermod -aG docker "$USER"
+   curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh && sudo usermod -aG docker "$USER"
    ```
 
 3. Note the baseline: no power or thermal conditions (`0x0`), no under-voltage in the kernel log, and the idle temperature. `vcgencmd` shows only the last two seconds (the kernel clears the flags that often); the kernel log is the record since boot.

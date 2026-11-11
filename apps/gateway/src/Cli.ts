@@ -17,13 +17,13 @@
  */
 import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
-import { Argument, Command, Flag } from "effect/cli"
+import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
+import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -49,6 +49,16 @@ import {
 import { telemetryLayer } from "./Telemetry.ts"
 import { printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+
+const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
+
+/** Whether the CLI runs over SSH, and as whom: init's next steps then add the tunnel to the status page. */
+const sshEnvironment = Config.all({
+  SSH_CONNECTION: optionalEnv("SSH_CONNECTION"),
+  SSH_CLIENT: optionalEnv("SSH_CLIENT"),
+  USER: optionalEnv("USER"),
+  LOGNAME: optionalEnv("LOGNAME")
+})
 
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
 export const describeConfig = (config: GatewayConfig) => {
@@ -277,14 +287,18 @@ const init = Command.make(
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun })
       const files = { ...folder, written: [config, ...folder.written] }
+      const ssh = sshSession(yield* sshEnvironment)
       if (json) {
+        const { notes, next } = initNext(config, written, files, ssh)
         return yield* printJson({
           ...configSummary(written),
           dryRun: flags.dryRun,
           path: config,
           files: { [flags.dryRun ? "wouldWrite" : "written"]: files.written, kept: files.kept },
           ...(folder.noCompose === undefined ? {} : { noCompose: folder.noCompose }),
-          ...(flags.dryRun ? { config: written } : {})
+          ...(flags.dryRun ? { config: written } : {}),
+          notes,
+          next
         })
       }
       if (flags.dryRun) {
@@ -295,7 +309,7 @@ const init = Command.make(
         )
       }
       yield* Console.log(describeConfig(written))
-      yield* Console.log(nextSteps(config, written, files))
+      yield* Console.log(nextSteps(config, written, files, ssh))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
@@ -629,13 +643,28 @@ const legacyFlags = new Set(["--check", "--discover"])
 /** A config path as the forms before the subcommands took it: a file name with an extension, or a directory. */
 const looksLikePath = (arg: string) => arg.includes("/") || arg.includes("\\") || arg.includes(".")
 
-/** The version as `--version` gets it: the CLI prints `v` before it, and a release tag already starts with one. */
-export const cliVersion = (version: string) => version.replace(/^v(?=\d)/, "")
+/**
+ * What `--version` prints: a release as its tag (`ot-gateway v0.12.0`, with the `v` added to a bare number), and any
+ * other build as it is (`ot-gateway dev`, `ot-gateway c78bb4e09-dirty`). The CLI's own formatter puts a `v` before
+ * every version, which turns a local build into `vdev`.
+ */
+export const versionLine = (name: string, version: string) =>
+  `${name} ${/^\d+\.\d/.test(version) ? `v${version}` : version}`
+
+/** The CLI's output, with `--version` printed by `versionLine`; help and errors as the CLI prints them. */
+const presenter: CliOutput.Presenter = {
+  present: (event) =>
+    event._tag === "Version"
+      ? Console.log(versionLine(event.name, event.version))
+      : CliOutput.defaultPresenter.present(event)
+}
 
 /** Runs the command line for `argv` (without node and the script). */
 export const runCli = (argv: ReadonlyArray<string>) => {
   const args = toCliArgs(argv)
-  const program = Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version: cliVersion(version) })(args))
+  const program = Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version })(args)).pipe(
+    Effect.provideService(CliOutput.Presenter, presenter)
+  )
   // A one-shot command prints its result; the client's info lines (connected, subscribed) would bury it.
   // `--log-level info` brings them back, since the CLI's own setting is applied inside this one.
   return longRunning.has(args[0] ?? "") ? program : Effect.provideService(program, References.MinimumLogLevel, "Warn")

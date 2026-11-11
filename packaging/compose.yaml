@@ -1,7 +1,7 @@
 # The gateway as a container, for a Raspberry Pi or any Linux edge box with Docker (amd64 or arm64).
 # Put this file in a folder of its own, with the config next to it:
 #
-#   curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+#   curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
 #   # ot-gateway.json next to it, and ot-gateway.env for secrets if the config names any
 #   docker compose up -d
 #
