@@ -28,7 +28,7 @@ import { get } from "node:http"
 import { createServer } from "node:net"
 import type { HostSnapshot } from "../src/Host.ts"
 import { configView } from "../src/ConfigView.ts"
-import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
+import { historyHandler, makeStatusState, serveStatus, webBuildStale } from "../src/Status.ts"
 import { GatewayEvents, gatewayEventsLayer, makeGatewayEvents } from "../src/Events.ts"
 
 const config = parseConfig(
@@ -681,5 +681,30 @@ describe("the running gateway's delivery counts", () => {
       expect(power?.delivered).toBe(valuesAtBroker)
       expect(power?.count).toBeGreaterThanOrEqual(valuesAtBroker)
     }).pipe(Effect.scoped, Effect.provide([NodeServices.layer, FetchHttpClient.layer]))
+  )
+})
+
+describe("webBuildStale", () => {
+  it.effect("is true only in a checkout whose web sources changed after the build", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped()
+      const out = `${root}/out`
+      yield* fs.makeDirectory(out, { recursive: true })
+      yield* fs.makeDirectory(`${root}/src/app`, { recursive: true })
+      yield* fs.writeFileString(`${out}/index.html`, "<html></html>")
+      yield* fs.writeFileString(`${root}/src/app/page.tsx`, "export default 1")
+      const hourAgo = new Date(Date.now() - 3_600_000)
+      yield* fs.utimes(`${root}/src/app/page.tsx`, hourAgo, hourAgo)
+      expect(yield* webBuildStale(fs, out)).toBe(false)
+
+      const later = new Date(Date.now() + 60_000)
+      yield* fs.utimes(`${root}/src/app/page.tsx`, later, later)
+      expect(yield* webBuildStale(fs, out)).toBe(true)
+
+      // A package or an image: a build without sources next to it.
+      yield* fs.remove(`${root}/src`, { recursive: true })
+      expect(yield* webBuildStale(fs, out)).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

@@ -80,9 +80,9 @@ Read `otg points schema --json` once. Then, by what the user has, into one `poin
 - **A Modbus model in the profile library** (`otg profiles list --json`): one row per device with `profile` set and `point` `*` (or one row per point it needs), plus its `host` and `unit_id`. `otg profiles show <id>` lists its points.
 - **Modbus datasheets:** for a model the library lacks, write `points.csv` yourself, one row per register. Start with the 10 to 20 registers that matter (energy, power, temperatures, states), not all 300, and say that more can be added later.
   - `table`: `holding` for 4xxxx/FC03, `input` for 3xxxx/FC04, `coil` for 0xxxx/FC01, `discrete` for 1xxxx/FC02.
-  - `register`: **0-based.** Datasheets often list 40001-style numbers or 1-based addresses, so 40001 is holding register 0. When the sheet is unclear, say which you assumed; a wrong guess shows up in step 7.
+  - `register`: **0-based.** Datasheets often list 40001-style numbers or 1-based addresses, so 40001 is holding register 0. A plain number with the table named apart ("holding register 100") is usually already the 0-based address: use it as it is. When the sheet is unclear, say which you assumed; a wrong guess (off by one) shows up in step 7 as absurd values.
   - `type`: `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`, or `bool` for a single bit; a coil or discrete input is always `bool`, which is its default, so its `type` can stay empty.
-  - `byte_order` (default `ABCD`, high word first): `CDAB` when the sheet says low word first, "word swap" or "little-endian word order" (common on meters). When it doesn't say, leave the default and let step 7 show it.
+  - `byte_order` (default `ABCD`, high word first, which is what "big-endian" means on a sheet): `CDAB` when the sheet says low word first, "word swap" or "little-endian word order" (common on meters). When it doesn't say, leave the default and let step 7 show it.
   - `scale` for registers in tenths and so on; `unit` as the sheet writes it (`kW`, `kWh`, `°C`, `%`).
   - `point`: the sheet's name for the register ("Active power", "Main breaker tripped"); the id in the topic is made from it. If you write ids (`active-power`), they are shown as "Active power"; a `name` column gives another name.
   - `alarm`: `on` for an alarm, trip or fault point that is active when the value is true or not 0 ("true = tripped"), `off` for one that is active when it is false or 0 (a normally-closed contact, an "OK" signal). Leave it empty for states that are no alarm (a running compressor). The status page shows an active alarm in red and counts it. EDE files and `discover` leave this column empty: fill it for their alarm points too.
@@ -122,12 +122,11 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
    To redo the devices from a fixed list, run `init` again with `--force` and the same flags (it keeps `compose.yaml` and `ot-gateway.env`), then import the list again.
 
 4. Show the user a few real values with units, and the status page URL.
-5. Check every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) by what it did over the last minutes, not a single snapshot: `otg history <device>/<point>` for each (comma-separate several: `otg history pump/fault,pump/running`) prints it as on or off per minute and when it switched, so a point that chatters or flips with the equipment shows up. Each alarm point needs its `alarm` column: `on` when the alarm is active at true or 1, `off` when it is active at false or 0; then import the list again (step 7.3). What the user already said a point means (in their list, a datasheet they gave you, or their answers: "true means tripped") counts as confirmed: fill the column from that and don't ask again. Ask the user only about:
-   - an alarm that is active now, at the end of setup (`otg status` lists it): is the equipment really in alarm, or is the polarity the other way round?
-   - an alarm that flaps: `otg history` shows it switching back and forth, or `otg status` says flapping. Is the contact chattering, or is it a point that changes with normal operation and is no alarm?
-   - an alarm point whose meaning nobody stated: which value is the alarm?
+5. Check every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) with what it did since the gateway started, not a single snapshot: `otg history <device>/<point>` for each (comma-separate several: `otg history pump/fault,pump/running`) prints it as on or off per minute and when it switched. Don't wait for more history: what the first minutes show is enough, and the user can look again later on the status page. Each alarm point needs its `alarm` column: `on` when the alarm is active at true or 1, `off` when it is active at false or 0; then import the list again (step 7.3). What the user already said a point means (in their list, a datasheet they gave you, or their answers: "true means tripped") counts as confirmed: fill the column from that and don't ask again. Only an alarm point whose meaning nobody stated needs an answer now (which value is the alarm?). Put the rest in the wrap-up (step 9) as one question, not a separate round trip:
+   - an alarm that is active at the end of setup (`otg status` lists it): is the equipment really in alarm, or is the polarity the other way round?
+   - an alarm that already switched back and forth (`otg history`, or `otg status` says flapping): is the contact chattering, or does it change with normal operation and is no alarm?
 
-   Fix what the answers show (the `alarm` column, or the point's address), import again, and check those points once more. Setup is done when no question is open.
+   Fix what the answers show (the `alarm` column, or the point's address), import again, and check those points once more.
 
 6. With Docker Compose, stop the test run before step 8 (`docker stop ot-gateway-test`, which also removes it). With `otg run` (macOS and Windows), the test run is the real run: leave it running and go to step 8's "This machine, for now".
 
@@ -135,18 +134,19 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 
 - **Docker Compose** (the default on Linux where `docker compose version` worked; not on macOS or Windows, where Docker Desktop cannot reach the building network, step 1): with a yes from the user, `docker compose up -d` in the folder. It pins a release tag, restarts the gateway after a crash and at boot, uses host networking for BACnet and caps Docker's logs; the outbox and the history live in the `ot-gateway_data` volume. Check it with `otg status` and `docker compose logs --tail 20`; when something failed, `otg events` says what broke, since when and why, and when it came back (`--follow` while you fix it), and `otg history <device>/<point>` what a value did meanwhile. Upgrades write the new tag into `compose.yaml`, then `docker compose up -d` (docs/operations.md, "Upgrade").
 - **No Docker** (systemd, from a checkout): with a yes, `sudo packaging/install.sh ot-gateway.json`, then `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env` and `sudo systemctl restart ot-gateway`. Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
-- **This machine, for now** (macOS and Windows always): the one command to start it again is `otg run` in the folder (`otg run <config path>` elsewhere). Say that it stops with the terminal or the session, and that a Linux box with Compose is the way to run it unattended.
+- **This machine, for now** (macOS and Windows always): the one command to start it again is `otg run` in the folder (`otg run <config path>` elsewhere). Its logs go to the terminal; when you start it in the background, send them to a file in the folder (`otg run > gateway.log 2>&1`) and name that file in the wrap-up. `otg events` and the status page say what broke without the logs. Say that it stops with the terminal or the session, and that a Linux box with Compose is the way to run it unattended.
 
 The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>` (any free local port works). Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`; the Settings tab then saves nothing unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env`. On loopback, the user can change the site, building and broker, and find, add, test and edit devices (commands on a point included, with limits) or upload a points list, on the Settings tab without a restart; a gateway without devices shows a setup guide on the Status tab (docs/operations.md, "Editing in the status page").
 
 ## 9. Wrap up
 
-Five lines at most:
+Five lines at most (six with an open alarm question):
 
 - what's running and where;
 - the folder;
 - the status page URL;
 - where the logs are;
+- the open alarm question from step 7.5, if there is one;
 - one next step, picked from:
   - add the remaining points (edit `points.csv`, import the new rows);
   - send telemetry to Grafana: after a fresh `init` it is off (the `OTEL_*` lines in `ot-gateway.env` are commented out); the user pastes them in, then `docker compose up -d` (`observability/README.md`);
