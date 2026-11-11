@@ -12,6 +12,7 @@ import { createServer } from "node:net"
 import { makeGatewayEvents, GatewayEvents } from "../src/Events.ts"
 import { checkIdentity, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf, targetOf } from "../src/GatewayTarget.ts"
 import { formatSeries, gapsOf, historyReport, parseSelection, selectPoints, seriesJson } from "../src/HistoryReport.ts"
+import { messagesReport } from "../src/MessagesReport.ts"
 import { localTime } from "../src/Output.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
 import {
@@ -375,6 +376,29 @@ describe("against a running status page", () => {
         historyReport(target, [{ device: "meter" }], { since: "10m", sinceMs: 600_000 })
       )
       expect(unknown.message).toContain("no device meter")
+
+      // What went out per topic, since start, and how much reached the broker.
+      const power = "plant-1/hall-a/energy-meter/active-power"
+      for (let sent = 0; sent < 3; sent++) {
+        state.recordPublish(power, `{"value":${sent},"ts":1}`, { retained: false, at: Date.now() })
+      }
+      state.recordDelivered(power)
+      state.recordDelivered(power)
+      state.recordPublish(`${power}/$meta`, `{"name":"Active power"}`, { retained: true, at: Date.now() })
+      state.recordPublish("plant-1/hall-a/energy-meter/voltage", `{"value":230,"ts":1}`, {
+        retained: false,
+        at: Date.now()
+      })
+      yield* messagesReport(target, [{ device: "energy-meter", point: "active-power" }])
+      const report = String((yield* TestConsole.logLines).at(-1)).split("\n")
+      expect(report[0]).toMatch(/^plant-1\/hall-a gateway main at .*: messages per topic since it started at /)
+      expect(report[1]).toMatch(
+        /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting or lost\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
+      )
+      expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
+      yield* messagesReport(target, [], { json: true })
+      const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
+      expect(json).toMatchObject({ ok: true, since: expect.any(Number), messages: [{}, {}, { count: 1 }] })
       yield* Fiber.interrupt(server)
     }).pipe(Effect.provide(TestConsole.layer))
   )

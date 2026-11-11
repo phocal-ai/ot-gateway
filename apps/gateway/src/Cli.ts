@@ -30,6 +30,7 @@ import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
 import { DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
+import { messagesReport } from "./MessagesReport.ts"
 import { watch } from "./Watch.ts"
 import {
   type BrokerReport,
@@ -799,6 +800,44 @@ const historyCommand = Command.make(
   ])
 )
 
+const messagesCommand = Command.make(
+  "messages",
+  {
+    points: Argument.String("points").pipe(
+      Argument.withDescription(
+        "device/point, a device for all its topics, or several of either comma-separated; every topic when left out"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription(
+        `Path of the gateway's JSON config (default ${defaultConfigPath} when it is in this folder): which gateway to ask, and where`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    url: urlFlag,
+    json: jsonFlag
+  },
+  ({ points: selection, config, url, json }) =>
+    resolveTarget({ config, url }).pipe(
+      Effect.flatMap((target) =>
+        messagesReport(target, selection === undefined ? [] : (parseSelection(selection) ?? []), { json })
+      ),
+      jsonFailure(json, { url: url ?? null, path: config ?? null })
+    )
+).pipe(
+  Command.withDescription(
+    "How many messages the running gateway published per topic since it started, how many reached the broker, and the last one"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway messages", description: "Every topic under the gateway's site and building" },
+    { command: "ot-gateway messages energy-meter/active-power", description: "One point's value and $meta topics" },
+    { command: "ot-gateway messages energy-meter --json", description: "A device's topics as JSON" }
+  ])
+)
+
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
@@ -813,7 +852,8 @@ export const rootDescription = [
   "    status --json                    the running gateway, device by device, with what to check; exits 1 when something fails",
   "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
-  "  status, events and history ask the gateway of ./ot-gateway.json (or the config named) at its status port."
+  "    messages [<device/point>] --json how many messages went out per topic since start, and reached the broker",
+  "  status, events, history and messages ask the gateway of ./ot-gateway.json (or the config named) at its status port."
 ].join("\n")
 
 export const cli = Command.make("ot-gateway").pipe(
@@ -832,7 +872,8 @@ export const cli = Command.make("ot-gateway").pipe(
     publishCommand,
     status,
     eventsCommand,
-    historyCommand
+    historyCommand,
+    messagesCommand
   ])
 )
 
@@ -850,7 +891,8 @@ const subcommands = new Set([
   "publish",
   "status",
   "events",
-  "history"
+  "history",
+  "messages"
 ])
 
 /**
