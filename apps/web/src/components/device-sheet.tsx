@@ -5,24 +5,40 @@
  * (`/api/events`). ↑/↓ (or j/k) step through the listed devices without closing it; Esc or a click beside it closes
  * it. It shares the point panel's look and its slide (`point-sheet`).
  */
-import type { DeviceStatus, GatewayEvent, PointInfo, PointReading } from "@ot-gateway/api"
+import type { DeviceStatus, PointInfo, PointReading } from "@ot-gateway/api"
 import Link from "next/link"
 import { useLayoutEffect, useRef } from "react"
 import { ON_CHANGE_HINT, PointRead, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
 import { formatNumber } from "@/lib/format"
-import { eventSentence, eventTone } from "@/lib/events"
+import {
+  eventDetail,
+  eventDetailTitle,
+  eventNote,
+  eventSentence,
+  eventTone,
+  type PageEvent,
+  type SharedFailure
+} from "@/lib/events"
 import { alarmWhen, pointFreshness } from "@/lib/glance"
 import { whatToCheck } from "@ot-gateway/api"
 import { filterToSearch, pointKey } from "@/lib/points"
-import { clockTime, every, failureLabel, freshness, protocolName, sinceClock } from "@/lib/status"
+import { clockTime, every, failingSinceText, failureLabel, freshness, protocolName, sinceClock } from "@/lib/status"
 
 /** Points the panel lists before "All n points of this device". */
 export const SHEET_POINTS = 12
 
 const iconButton = "rounded-md px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground disabled:opacity-40"
 
-const toneDot = { bad: "bg-destructive", good: "bg-success", neutral: "bg-muted-foreground/40" } as const
+const toneDot = {
+  bad: "bg-destructive",
+  warning: "bg-warning",
+  good: "bg-success",
+  neutral: "bg-muted-foreground/40"
+} as const
+
+/** Capitalized, for a headline: "No data since 18:33:03 (3 min)". */
+const headline = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`
 
 /** Whether it answers, and since when, in one headline and a line under it. */
 const Health = ({ device, now }: { readonly device: DeviceStatus; readonly now: number }) => {
@@ -70,10 +86,13 @@ const Health = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
         <div className="flex flex-col gap-1">
           <p className="flex flex-wrap items-center gap-2 text-xl font-semibold text-destructive">
             <Badge variant="destructive">{failureLabel(state.reason)}</Badge>
-            {device.failingSince === undefined ? "Failing" : `Failing since ${sinceClock(device.failingSince, now)}`}
+            {headline(failingSinceText(device, now) ?? "failing")}
           </p>
           <p className="text-sm text-muted-foreground">
-            {read}, {lastRead}
+            {read}
+            {device.lastSuccess !== undefined && device.failingSince !== undefined
+              ? `, marked failing ${clockTime(device.failingSince, now)}`
+              : `, ${lastRead}`}
             {device.failures === undefined
               ? "."
               : `, ${formatNumber(device.failures)} ${device.failures === 1 ? "read" : "reads"} failed in a row.`}
@@ -83,14 +102,22 @@ const Health = ({ device, now }: { readonly device: DeviceStatus; readonly now: 
   }
 }
 
-/** Why it fails in the driver's words, what that means and what to check, most likely first. */
-const WhatToCheck = ({ device }: { readonly device: DeviceStatus }) => {
-  const hint = whatToCheck(device.protocol, device.reason ?? "", device.lastError)
+/**
+ * Why it fails in the driver's words, what that means and what to check, most likely first: as `ot-gateway status`
+ * orders them, power and network before its config for a device that answered earlier in this run or failed
+ * together with others (on one host: that host first).
+ */
+const WhatToCheck = ({ device, shared }: { readonly device: DeviceStatus; readonly shared: SharedFailure }) => {
+  const hint = whatToCheck(device.protocol, device.reason ?? "", device.lastError, {
+    answeredBefore: device.lastSuccess !== undefined,
+    ...shared.context
+  })
   return (
     <section className="flex flex-col gap-3 rounded-lg border border-destructive/40 bg-destructive/5 p-4">
       {device.lastError === undefined ? null : (
         <p className="font-mono text-sm break-words text-destructive">{device.lastError}</p>
       )}
+      {shared.line === undefined ? null : <p className="text-sm">{shared.line}</p>}
       <p className="text-sm">{hint.meaning}</p>
       <div className="flex flex-col gap-1">
         <h3 className="text-sm font-medium">What to check</h3>
@@ -110,6 +137,7 @@ export const DeviceSheet = ({
   points,
   readings,
   events,
+  shared,
   now,
   position,
   morph,
@@ -123,8 +151,10 @@ export const DeviceSheet = ({
   /** Its points from the catalog, in config order; undefined until the catalog came. */
   readonly points: ReadonlyArray<PointInfo> | undefined
   readonly readings: ReadonlyMap<string, PointReading>
-  /** What happened to it and its alarm points, oldest first. */
-  readonly events: ReadonlyArray<GatewayEvent>
+  /** What happened to it, its alarm points and its energy counters, oldest first. */
+  readonly events: ReadonlyArray<PageEvent>
+  /** Whether its failure is one of several at once (`sharedFailure`), for what to check. */
+  readonly shared: SharedFailure
   readonly now: number
   /** Where the device is in the listed devices (1-based), when it is listed. */
   readonly position: { readonly index: number; readonly total: number } | undefined
@@ -221,7 +251,7 @@ export const DeviceSheet = ({
             </Badge>
           ) : null}
           <Health device={device} now={now} />
-          {state._tag === "failing" ? <WhatToCheck device={device} /> : null}
+          {state._tag === "failing" ? <WhatToCheck device={device} shared={shared} /> : null}
           {device.protocol === "modbus-tcp" || device.protocol === "bacnet-ip" ? (
             <Link
               className="w-fit text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
@@ -307,20 +337,31 @@ export const DeviceSheet = ({
             <p className="text-sm text-muted-foreground">It has not failed since the gateway started.</p>
           ) : (
             <ul className="flex flex-col gap-1.5 text-sm">
-              {events.toReversed().map((event) => (
-                <li className="flex min-w-0 items-baseline gap-2" key={event.id}>
-                  <span
-                    aria-hidden="true"
-                    className={`size-2 shrink-0 translate-y-[-1px] rounded-full ${toneDot[eventTone(event)]}`}
-                  />
-                  <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
-                    {clockTime(event.at, now)}
-                  </span>
-                  <span className="min-w-0 break-words">
-                    {eventSentence(event, (_, pointId) => points?.find((point) => point.id === pointId)?.name)}
-                  </span>
-                </li>
-              ))}
+              {events.toReversed().map((event) => {
+                const detail = eventDetail(event, now)
+                const note = eventNote(event)
+                return (
+                  <li className="flex min-w-0 items-baseline gap-2" key={event.id}>
+                    <span
+                      aria-hidden="true"
+                      className={`size-2 shrink-0 translate-y-[-1px] rounded-full ${toneDot[eventTone(event)]}`}
+                    />
+                    <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums">
+                      {clockTime(event.at, now)}
+                    </span>
+                    <span className="min-w-0 break-words">
+                      {eventSentence(event, (_, pointId) => points?.find((point) => point.id === pointId)?.name, now)}
+                      {detail === undefined ? null : (
+                        <span className="text-xs text-muted-foreground" title={eventDetailTitle(event)}>
+                          {" "}
+                          · {detail}
+                        </span>
+                      )}
+                      {note === undefined ? null : <span className="block text-xs text-muted-foreground">{note}</span>}
+                    </span>
+                  </li>
+                )
+              })}
             </ul>
           )}
         </section>

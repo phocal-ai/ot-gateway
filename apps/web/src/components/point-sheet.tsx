@@ -11,6 +11,7 @@ import { useGatewayEvents } from "@/components/gateway-shell"
 import { HistoryChart } from "@/components/history-chart"
 import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
+import { counterNote, pointCounterEvents } from "@/lib/events"
 import { alarmWhen, pointFreshness, readLabel } from "@/lib/glance"
 import {
   failuresOf,
@@ -135,6 +136,12 @@ export const PointSheet = ({
   const history = useHistory(point.device, point.id, range, now)
   const events = useGatewayEvents()
   const failures = useMemo(() => failuresOf(events?.events ?? [], point.device), [events, point.device])
+  // Its energy counter went back or jumped in this run of the gateway: a muted note, the newest last.
+  const counters = useMemo(
+    () =>
+      events === undefined || events.since !== since ? [] : pointCounterEvents(events.events, point.device, point.id),
+    [events, since, point.device, point.id]
+  )
   const value = live?.value
   const device = live?.device
   const state = device === undefined ? undefined : freshness(device, now)
@@ -245,6 +252,16 @@ export const PointSheet = ({
               <span>{readLabel(value?.ts, now, read._tag === "stale")}</span>
             )}
           </div>
+          {counters.length === 0 ? null : (
+            <ul className="mt-1 flex flex-col gap-1 text-xs text-muted-foreground">
+              {counters.map((event) => (
+                <li className="flex items-baseline gap-2" key={event.id}>
+                  <span aria-hidden="true" className="size-2 shrink-0 translate-y-[-1px] rounded-full bg-warning" />
+                  <span className="min-w-0 break-words">{counterNote(event, now)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <section className="flex flex-col gap-2">
@@ -277,6 +294,7 @@ export const PointSheet = ({
               <HistoryChart
                 boolean={typeof value?.value === "boolean"}
                 device={point.device}
+                cov={point.cov}
                 failures={failures}
                 label={pointTitle(point)}
                 startedAt={since}

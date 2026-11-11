@@ -44,14 +44,19 @@ import { machineCard, machineProblems, powerLabel } from "@/lib/host"
 import { deviceAddress } from "@/lib/device"
 import {
   deviceEvents,
+  eventDetail,
+  eventDetailTitle,
+  eventNote,
   eventSentence,
   eventTone,
+  hostsOf,
   isIncident,
   type KnownEvents,
   latestEvents,
   nothingYet,
   type PointNames,
-  sharedCauseNotes
+  sharedCauseNotes,
+  sharedFailure
 } from "@/lib/events"
 import { devicesById, filterToSearch, pointKey } from "@/lib/points"
 import {
@@ -72,6 +77,7 @@ import {
   byAttention,
   clockTime,
   every,
+  failingSinceText,
   fillPercent,
   failureLabel,
   formatBytes,
@@ -98,7 +104,7 @@ const deviceBadge = (state: Freshness) => {
 
 /**
  * Under the device's name: how often it is read, and since when it hasn't been once that matters: a failing device
- * since the clock time it started failing ("failing since 12:18:20 (3 min)").
+ * since its data stopped, at its last good read ("no data since 12:18:20 (3 min)").
  */
 const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
   const read = `read ${every(device.pollIntervalMs)}`
@@ -107,10 +113,7 @@ const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
     case "starting":
       return read
     case "failing":
-      if (device.failingSince !== undefined) return `${read} · failing since ${sinceClock(device.failingSince, now)}`
-      return state.lastSuccess === undefined
-        ? `${read} · no answer yet`
-        : `${read} · no answer for ${since(state.lastSuccess, now)}`
+      return `${read} · ${failingSinceText(device, now) ?? "no answer yet"}`
     case "late":
       return state.lastSuccess === undefined
         ? `${read} · no answer yet`
@@ -827,11 +830,18 @@ const useGlance = (
 /** Events the Recent events card lists before "Show all". */
 const CARD_EVENTS = 10
 
-const toneDot = { bad: "bg-destructive", good: "bg-success", neutral: "bg-muted-foreground/40" } as const
+const toneDot = {
+  bad: "bg-destructive",
+  warning: "bg-warning",
+  good: "bg-success",
+  neutral: "bg-muted-foreground/40"
+} as const
 
 /**
- * Events, newest first, one line each: a dot for bad or good news, the local time and what happened. Above the newest
- * failure of devices that stopped answering within seconds of each other, a line says they likely share a cause.
+ * Events, newest first, one line each: a dot for bad news, a warning or good news, the local time and what happened,
+ * with a muted detail after it (when a recovered device was detected failing) and a muted note under it (what a
+ * flapping alarm usually means). Above the newest failure of devices that stopped answering within seconds of each
+ * other, a line says they likely share a cause (their host, when they all sit on one).
  */
 const EventList = ({
   events,
@@ -850,32 +860,50 @@ const EventList = ({
   <ul className="flex flex-col text-sm">
     {events.map((event) => {
       const sharedCause = shared.get(event.id)
+      const detail = eventDetail(event, now)
+      const note = eventNote(event)
       const line = (
         <>
           <span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${toneDot[eventTone(event)]}`} />
           <span className="shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">
             {clockTime(event.at, now)}
           </span>
-          <span className="min-w-0 break-words">{eventSentence(event, names)}</span>
+          <span className="min-w-0 break-words">
+            {eventSentence(event, names, now)}
+            {detail === undefined ? null : (
+              <span className="text-xs text-muted-foreground" title={eventDetailTitle(event)}>
+                {" "}
+                · {detail}
+              </span>
+            )}
+            {note === undefined ? null : <span className="block text-xs text-muted-foreground">{note}</span>}
+          </span>
         </>
       )
       const row = "flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-left"
+      const device =
+        event.type === "device-failing" ||
+        event.type === "device-recovered" ||
+        event.type === "counter-went-back" ||
+        event.type === "counter-jumped"
+          ? event.device
+          : undefined
       return (
         <li key={event.id}>
           {sharedCause === undefined ? null : (
             <p className="mt-1 rounded-md bg-destructive/10 px-2 py-1 text-xs break-words">{sharedCause}</p>
           )}
-          {event.type === "device-failing" || event.type === "device-recovered" ? (
+          {device === undefined ? (
+            <div className={row}>{line}</div>
+          ) : (
             <button
               className={`${row} hover:bg-muted/50`}
-              onClick={() => onOpenDevice(event.device)}
-              title={`Open ${event.device}`}
+              onClick={() => onOpenDevice(device)}
+              title={`Open ${device}`}
               type="button"
             >
               {line}
             </button>
-          ) : (
-            <div className={row}>{line}</div>
           )}
         </li>
       )
@@ -905,7 +933,8 @@ const RecentEvents = ({
   // Events of an older run of the gateway are not shown against this one's start.
   const events = known?.since === status.since ? known.events : []
   const happened = events.some(isIncident)
-  const shared = useMemo(() => sharedCauseNotes(events), [events])
+  const hostOf = useMemo(() => hostsOf(status.devices), [status.devices])
+  const shared = useMemo(() => sharedCauseNotes(events, hostOf), [events, hostOf])
   const open = () => {
     const transition = morphFrom(card.current)
     setMorph(transition.morph)
@@ -1061,6 +1090,11 @@ const StatusView = () => {
           address={configDevice === undefined ? undefined : deviceAddress(configDevice)}
           device={device}
           events={known?.since === status.since ? deviceEvents(known.events, device.id) : []}
+          shared={
+            known?.since === status.since
+              ? sharedFailure(known.events, device.id, hostsOf(status.devices))
+              : { context: {} }
+          }
           morph={morph}
           now={status.now}
           onClose={closeDevice}

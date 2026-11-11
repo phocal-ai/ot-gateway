@@ -2,10 +2,11 @@
  * A point's history for the point panel: fetched from `/api/history`, and the pure parts of drawing it (ranges,
  * ticks, gaps), kept here so they are tested without a browser.
  */
-import { type GatewayEvent, type HistoryBucket, type HistorySeries, OtGatewayApi } from "@ot-gateway/api"
+import { type HistoryBucket, type HistorySeries, OtGatewayApi } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
+import type { PageEvent } from "./events"
 import { StatusUnavailable } from "./status"
 
 export const ranges = [
@@ -59,13 +60,25 @@ export const fetchHistory = (device: string, point: string, range: Range, now: n
     })
   )
 
-/** The buckets as runs without gaps: a gap of more than two steps (the device did not answer) breaks the line. */
-export const segments = (buckets: ReadonlyArray<HistoryBucket>, stepMs: number) => {
+/**
+ * The buckets as runs without gaps: a gap of more than two steps (the device did not answer) breaks the line. With
+ * `gaps` (a point read on change of value, `chartGaps` with `cov`), only a stretch with one of those gaps in it breaks
+ * the line: the rest is a point that kept still, and its line goes on flat.
+ */
+export const segments = (
+  buckets: ReadonlyArray<HistoryBucket>,
+  stepMs: number,
+  gaps?: ReadonlyArray<{ readonly from: number; readonly to: number }>
+) => {
   const runs: Array<Array<HistoryBucket>> = []
   let run: Array<HistoryBucket> = []
   for (const bucket of buckets) {
     const previous = run.at(-1)
-    if (previous !== undefined && bucket.t - previous.t > 2 * stepMs) {
+    if (
+      previous !== undefined &&
+      bucket.t - previous.t > 2 * stepMs &&
+      (gaps === undefined || gaps.some((gap) => gap.from >= previous.t && gap.to <= bucket.t + stepMs))
+    ) {
       runs.push(run)
       run = []
     }
@@ -150,27 +163,35 @@ export const nearest = (buckets: ReadonlyArray<HistoryBucket>, at: number) => {
   return best
 }
 
-/** A device failing for a while, from the gateway's events: `[from, to)`, `to` absent while it still fails. */
+/**
+ * A device failing for a while, from the gateway's events: `[from, to)` from when the gateway called it failing,
+ * `to` absent while it still fails. `lastReadAt`: its last good read before, where its data stopped, when the events
+ * say so.
+ */
 export interface Failure {
   readonly from: number
   readonly to?: number
+  readonly lastReadAt?: number
 }
 
 /**
  * A device's failures in `events` (oldest first): each `device-failing` up to its next `device-recovered`, the last
- * one open while it still fails. The same pairing as `ot-gateway history` (apps/gateway/src/HistoryReport.ts).
+ * one open while it still fails, with the last good read from either. The same pairing as `ot-gateway history`
+ * (apps/gateway/src/HistoryReport.ts).
  */
-export const failuresOf = (events: ReadonlyArray<GatewayEvent>, device: string): ReadonlyArray<Failure> => {
+export const failuresOf = (events: ReadonlyArray<PageEvent>, device: string): ReadonlyArray<Failure> => {
   const failures: Array<Failure> = []
-  let open: number | undefined
+  let open: Failure | undefined
   for (const event of events) {
-    if (event.type === "device-failing" && event.device === device) open ??= event.at
+    if (event.type === "device-failing" && event.device === device)
+      open ??= { from: event.at, ...(event.lastReadAt === undefined ? {} : { lastReadAt: event.lastReadAt }) }
     else if (event.type === "device-recovered" && event.device === device && open !== undefined) {
-      failures.push({ from: open, to: event.at })
+      const lastReadAt = open.lastReadAt ?? event.lastReadAt
+      failures.push({ from: open.from, to: event.at, ...(lastReadAt === undefined ? {} : { lastReadAt }) })
       open = undefined
     }
   }
-  if (open !== undefined) failures.push({ from: open })
+  if (open !== undefined) failures.push(open)
   return failures
 }
 
@@ -194,7 +215,10 @@ export interface ChartGap {
 
 /**
  * The stretches of `[from, series.to)` without reads that break the line (more than two steps, as `segments`), each
- * with its cause where it is known. After `startedAt`: a failure of the device that overlaps the stretch. A stretch
+ * with its cause where it is known. After `startedAt`: a failure of the device that overlaps the stretch (from its
+ * last good read on, when the events say it). A point read on change of value (`cov`) has no reads while it keeps
+ * still: a stretch of it without a failure is no gap, and one with a failure is only the failure's part, from the
+ * last good read to the recovery, as `ot-gateway history` splits it. A stretch
  * that ends at `startedAt` (within a step, as bucket edges fall) or spans it: up to the start, that the gateway
  * restarted then; the rest after the start is a stretch of its own when it breaks the line, else part of this one.
  * A stretch that ends earlier, inside an older run: no cause, as the page has no events from it. Nothing before
@@ -204,7 +228,11 @@ export interface ChartGap {
 export const chartGaps = (
   series: HistorySeries,
   from: number,
-  context: { readonly startedAt?: number | undefined; readonly failures?: ReadonlyArray<Failure> } = {}
+  context: {
+    readonly startedAt?: number | undefined
+    readonly failures?: ReadonlyArray<Failure>
+    readonly cov?: boolean | undefined
+  } = {}
 ): ReadonlyArray<ChartGap> => {
   const { buckets, stepMs, to } = series
   if (buckets.length === 0) return []
@@ -228,26 +256,46 @@ export const chartGaps = (
     holes.push({ from: Math.max(from, previous.last), to: Math.min(to, next.first) })
   }
   const startedAt = context.startedAt
-  const failed = (hole: { readonly from: number; readonly to: number }): ChartGap => {
+  const failed = (hole: { readonly from: number; readonly to: number }): ReadonlyArray<ChartGap> => {
     const failure = context.failures?.find(
-      (each) => each.from < hole.to && (each.to === undefined || each.to > hole.from)
+      (each) => (each.lastReadAt ?? each.from) < hole.to && (each.to === undefined || each.to > hole.from)
     )
-    return failure === undefined ? hole : { ...hole, cause: { kind: "device-failing" } }
+    if (failure === undefined) return context.cov === true ? [] : [hole]
+    if (context.cov !== true) return [{ ...hole, cause: { kind: "device-failing" } }]
+    const down = Math.max(hole.from, failure.lastReadAt ?? failure.from)
+    const back = Math.min(hole.to, failure.to ?? hole.to)
+    return down < back ? [{ from: down, to: back, cause: { kind: "device-failing" } }] : []
   }
   // An axis moved up to the gateway's start has a note that says there is nothing before it: no band repeats that.
   if (startedAt !== undefined && from > series.from) {
     return holes.flatMap((hole) => {
       const after = { from: Math.max(hole.from, startedAt), to: hole.to }
-      return after.to - after.from > 2 * stepMs ? [failed(after)] : []
+      return after.to - after.from > 2 * stepMs ? failed(after) : []
     })
   }
   return holes.flatMap((hole): ReadonlyArray<ChartGap> => {
-    if (startedAt === undefined || startedAt <= hole.from) return [failed(hole)]
+    if (startedAt === undefined || startedAt <= hole.from) return failed(hole)
     const restart: GapCause = { kind: "gateway-restart", at: startedAt }
     if (hole.to <= startedAt) return [hole.to >= startedAt - stepMs ? { ...hole, cause: restart } : hole]
     if (hole.to - startedAt <= 2 * stepMs) return [{ ...hole, cause: restart }]
-    return [{ from: hole.from, to: startedAt, cause: restart }, failed({ from: startedAt, to: hole.to })]
+    return [{ from: hole.from, to: startedAt, cause: restart }, ...failed({ from: startedAt, to: hole.to })]
   })
+}
+
+/**
+ * Until when a point read on change of value holds the last value of a run of its line (`segments` with its gaps):
+ * to the start of the next gap after it (its device stopped answering then), else to the end of the axis, so the line
+ * goes on flat instead of stopping at its last change. Undefined for a polled point, whose line ends at its last read.
+ */
+export const heldUntil = (
+  run: ReadonlyArray<HistoryBucket>,
+  gaps: ReadonlyArray<ChartGap>,
+  to: number,
+  cov: boolean
+): number | undefined => {
+  const last = run.at(-1)
+  if (!cov || last === undefined) return undefined
+  return gaps.find((gap) => gap.from >= last.t)?.from ?? to
 }
 
 /**
