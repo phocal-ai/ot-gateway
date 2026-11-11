@@ -14,7 +14,7 @@ set -eu
 
 image=${OT_GATEWAY_IMAGE:-ghcr.io/phocal-ai/ot-gateway}
 # Moved by each release with the other pins (CONTRIBUTING.md, "Branches").
-release=v0.11.0
+release=v0.12.0
 
 tag_of() {
   [ -f "$1" ] && sed -n 's/.*ot-gateway:\${OT_GATEWAY_TAG:-\([^}]*\)}.*/\1/p' "$1" | head -n 1
