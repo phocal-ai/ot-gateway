@@ -303,13 +303,29 @@ export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">, 
 
 type Draft = ReturnType<typeof draftDevices>[number]
 
+/** `text` with its first letter upper-cased ("flow temperature" → "Flow temperature"). */
+const capitalized = (text: string) => {
+  const [first = ""] = text
+  return first.toUpperCase() + text.slice(first.length)
+}
+
 /**
- * A device-supplied point name as the list's `point` column: as named when import makes the same id from it,
- * otherwise the id. Names that a spreadsheet would run as a formula (=, +, -, @) become the id too: anyone on
- * the LAN can answer Who-Is with any name.
+ * A device-supplied point name as the list's `point` column, readable and with the point's id as its slug,
+ * since import makes the id from it: the object name from the word where its id starts, so the device's name
+ * in front ("Heat pump flow temperature" with id `flow-temperature`) is dropped as `draftDevices` drops it
+ * from the id, first letter upper-cased ("Flow temperature"). Otherwise the id: a name made unique with a
+ * suffix, or one whose words do not slug to the id. The name must start with a letter or digit, which keeps
+ * out names that a spreadsheet would run as a formula (=, +, -, @, tab, CR): anyone on the LAN can answer Who-Is
+ * with any name. A symbol between the device's name and the point's ("Heat pump ★ flow") is dropped with it.
  */
-const pointColumn = (point: Draft["points"][number]) =>
-  slugify(point.name) === point.id && !/^[=+\-@\t\r]/.test(point.name) ? point.name : point.id
+export const pointColumn = (point: { readonly id: string; readonly name: string }) => {
+  const words = point.name.trim().split(/\s+/)
+  for (let start = 0; start < words.length; start++) {
+    const name = capitalized(words.slice(start).join(" "))
+    if (/^[\p{L}\p{N}]/u.test(name) && slugify(name) === point.id) return name
+  }
+  return point.id
+}
 
 /** The drafts as a points list (PointsSchema.ts): one row per object, to trim and import. */
 export const draftPointsList = (drafts: ReadonlyArray<Draft>) => {
