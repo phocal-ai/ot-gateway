@@ -212,6 +212,37 @@ describe("alarm events", () => {
     ).toBe("Alarm cleared after 61 s: Main breaker tripped on energy-meter")
   })
 
+  it("word a state found changed when the device answered again as the CLI does, in neither red nor green", () => {
+    const foundOn: GatewayEvent = { ...raised, afterOutage: true }
+    const foundOff: GatewayEvent = {
+      id: 9,
+      at: now,
+      type: "alarm-cleared",
+      device: "energy-meter",
+      point: "main-breaker-tripped",
+      value: false,
+      activeMs: 300_000,
+      afterOutage: true
+    }
+    expect(eventSentence(foundOn, names)).toBe(
+      "Alarm active when energy-meter answered again: Main breaker tripped on energy-meter"
+    )
+    expect(eventSentence(foundOff, names)).toBe(
+      "Alarm off when energy-meter answered again: Main breaker tripped on energy-meter"
+    )
+    expect(eventTone(foundOn)).toBe("neutral")
+    expect(eventTone(foundOff)).toBe("neutral")
+    expect(eventTone(raised)).toBe("bad")
+  })
+
+  it("belong to their device's events", () => {
+    expect(deviceEvents([failing, raised, recovered, { ...raised, id: 12, device: "ahu-1" }], "energy-meter")).toEqual([
+      failing,
+      raised,
+      recovered
+    ])
+  })
+
   it("fall back to device/point without a name, or when the name is the id", () => {
     expect(eventSentence(raised)).toBe("Alarm raised: energy-meter/main-breaker-tripped")
     expect(eventSentence(raised, () => "main-breaker-tripped")).toBe("Alarm raised: energy-meter/main-breaker-tripped")

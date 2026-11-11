@@ -2,8 +2,8 @@
 /**
  * One point's history: the average as a line, the range of its reads in each bucket as a band behind it, on one
  * axis. Hovering shows a crosshair and the bucket's time, average, range and reads. A gap where the device did not
- * answer breaks the line instead of bridging it, and a muted band behind the break says why (the device was failing,
- * the gateway was not running), also in a line under the chart and on hover.
+ * answer breaks the line instead of bridging it, and a muted band behind the break says why where it is known (the
+ * device was failing, the reads came back with a restart of the gateway), also in a line under the chart and on hover.
  */
 import type { HistorySeries } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"
@@ -85,14 +85,16 @@ export const HistoryChart = ({
   // The pointer's time is `hover` plus half a step (`hover` is a bucket's start, as `nearest` wants it).
   const hoveredGap = hover === undefined ? undefined : gapAt(gaps, hover + stepMs / 2)
   const hovered = hover === undefined || hoveredGap !== undefined ? undefined : nearest(buckets, hover)
-  // A band covers the break in the line: from the last read's point before it to the first one after it, inside the
-  // plot. A gap split at the gateway's start does not overlap the band before it.
+  // A band covers the break in the line: from the last read before it to the first one after it (`chartGaps`: their
+  // times where the buckets say them, else the edges of their buckets), inside the plot. `x` places a bucket's start
+  // at its middle, so a moment `at` is `x(at - stepMs / 2)`. A gap split at the gateway's start does not overlap the
+  // band before it.
   const plotLeft = margin.left
   const plotRight = width - margin.right
   const bands: Array<{ readonly left: number; readonly right: number }> = []
   for (const gap of gaps) {
-    const left = Math.max(plotLeft, x(gap.from - stepMs), bands.at(-1)?.right ?? plotLeft)
-    const right = Math.min(plotRight, x(gap.to))
+    const left = Math.max(plotLeft, x(gap.from - stepMs / 2), bands.at(-1)?.right ?? plotLeft)
+    const right = Math.min(plotRight, x(gap.to - stepMs / 2))
     bands.push({ left, right: Math.max(left, right) })
   }
   const listed = gaps.toReversed().slice(0, GAPS_LISTED)

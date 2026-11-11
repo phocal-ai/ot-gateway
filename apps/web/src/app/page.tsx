@@ -30,13 +30,15 @@ import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { formatNumber } from "@/lib/format"
 import { statusOf, useValues } from "@/components/live"
 import {
-  activeAlarms,
   alarmCount,
+  alarmNote,
   glanceKeys,
   glancePoints,
   alarmWhen,
   pointFreshness,
-  pointsByDevice
+  pointsByDevice,
+  type ShownAlarm,
+  shownAlarms
 } from "@/lib/glance"
 import { machineCard, machineProblems, powerLabel } from "@/lib/host"
 import { deviceAddress } from "@/lib/device"
@@ -51,7 +53,7 @@ import {
   type PointNames,
   sharedCauseNotes
 } from "@/lib/events"
-import { filterToSearch, pointKey } from "@/lib/points"
+import { devicesById, filterToSearch, pointKey } from "@/lib/points"
 import {
   addSample,
   type BufferSample,
@@ -745,29 +747,44 @@ const MachineNotice = ({ host, upMs }: { readonly host: HostStatus; readonly upM
 
 /**
  * The alarm points that are on (lib/glance.ts), above everything else: how many, and each by name with its device,
- * a link to the point on the Points tab.
+ * a link to the point on the Points tab. An alarm whose value is stale (its device does not answer) is listed muted,
+ * as its value is, and counted apart: it is only last known to be active. Without one known to be on now, the banner
+ * is muted too.
  */
-const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<PointInfo> }) => {
+const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<ShownAlarm> }) => {
   if (alarms.length === 0) return null
+  const lastKnown = alarms.filter((alarm) => alarm.lastKnown !== undefined).length
+  const active = alarms.length - lastKnown
   return (
     <div
-      className="flex flex-col gap-1 rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm text-destructive"
-      role="alert"
+      className={`flex flex-col gap-1 rounded-xl border px-4 py-3 text-sm ${
+        active > 0 ? "border-destructive/40 bg-destructive/10 text-destructive" : "bg-muted/40 text-muted-foreground"
+      }`}
+      role={active > 0 ? "alert" : "status"}
     >
-      <p className="font-semibold">{alarmCount(alarms.length)}</p>
+      <p className="font-semibold">{alarmCount(active, lastKnown)}</p>
       <ul className="flex flex-col gap-0.5">
-        {alarms.map((point) => (
-          <li className="min-w-0 truncate" key={pointKey(point)}>
-            <Link
-              className="underline-offset-4 hover:underline"
-              href={`/points/${filterToSearch({ query: "", device: point.device }, pointKey(point))}`}
-              title={pointKey(point)}
+        {alarms.map((alarm) => {
+          const { point } = alarm
+          const why = alarmNote(alarm, active)
+          return (
+            <li
+              className={`min-w-0 truncate ${why === undefined ? "" : "text-muted-foreground"}`}
+              data-stale={why === undefined ? undefined : ""}
+              key={pointKey(point)}
             >
-              {point.name}
-            </Link>{" "}
-            <span className="font-mono text-xs opacity-80">on {point.device}</span>
-          </li>
-        ))}
+              <Link
+                className="underline-offset-4 hover:underline"
+                href={`/points/${filterToSearch({ query: "", device: point.device }, pointKey(point))}`}
+                title={pointKey(point)}
+              >
+                {point.name}
+              </Link>{" "}
+              <span className="font-mono text-xs opacity-80">on {point.device}</span>
+              {why === undefined ? null : <span>: {why}</span>}
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
@@ -800,7 +817,11 @@ const useGlance = (
   }, [catalog, listedIds, opened, byDevice])
   const readings = useValues(keys)
   if (catalog === undefined) return undefined
-  return { glance: { byDevice, readings, unreachable }, alarms: activeAlarms(catalog.points, readings) }
+  return {
+    glance: { byDevice, readings, unreachable },
+    alarms:
+      status === undefined ? [] : shownAlarms(catalog.points, readings, devicesById(status), status.now, unreachable)
+  }
 }
 
 /** Events the Recent events card lists before "Show all". */
