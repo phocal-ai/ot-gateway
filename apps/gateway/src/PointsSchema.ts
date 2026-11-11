@@ -174,6 +174,44 @@ export const pointsListSchema = () => ({
   }))
 })
 
+/** A description's first sentence, for `--brief`: what the column is, without the cases and examples after it. */
+export const firstSentence = (description: string) => description.split(/\.\s+(?=[A-Z])/)[0] ?? description
+
+/**
+ * The schema as `points schema --brief --json` prints it: each column's name, scope, whether it is required, its
+ * first sentence, and its default and allowed values where it has them; no aliases, which `import` reads anyway.
+ */
+export const briefPointsListSchema = () => ({
+  format: "ot-gateway points list",
+  version: pointsListVersion,
+  rules: pointsListRules,
+  columns: pointsListColumns.map((column) => ({
+    name: column.name,
+    scope: column.scope,
+    required: column.required,
+    description: firstSentence(column.description),
+    ...(column.default === undefined ? {} : { default: column.default }),
+    ...(column.values === undefined ? {} : { values: column.values })
+  }))
+})
+
+/** The brief schema as JSON text, one column per line, so it reads in a few dozen lines instead of a few hundred. */
+export const briefPointsListSchemaJson = () => {
+  const { columns, ...head } = briefPointsListSchema()
+  const headLines = JSON.stringify(head, null, 2).split("\n").slice(1, -1)
+  const columnLines = columns.map(
+    (column, index) => `    ${JSON.stringify(column)}${index < columns.length - 1 ? "," : ""}`
+  )
+  return [
+    "{",
+    ...headLines.map((line, index) => (index === headLines.length - 1 ? `${line},` : line)),
+    '  "columns": [',
+    ...columnLines,
+    "  ]",
+    "}"
+  ].join("\n")
+}
+
 const scopes: ReadonlyArray<ColumnScope> = ["any", "modbus-tcp", "bacnet-ip"]
 
 const scopeTitles: Record<ColumnScope, string> = {
@@ -182,8 +220,8 @@ const scopeTitles: Record<ColumnScope, string> = {
   "bacnet-ip": "BACnet/IP rows"
 }
 
-/** The schema as `points schema` prints it, for people. */
-export const describePointsListSchema = () => {
+/** The schema as `points schema` prints it, for people; `brief` keeps each description's first sentence. */
+export const describePointsListSchema = (options: { readonly brief?: boolean } = {}) => {
   const width = Math.max(...pointsListColumns.map((column) => column.name.length)) + 2
   const sections = scopes.map((scope) => [
     `${scopeTitles[scope]}:`,
@@ -195,7 +233,8 @@ export const describePointsListSchema = () => {
           column.default === undefined ? undefined : `default ${column.default}`,
           column.values === undefined ? undefined : column.values.join(" | ")
         ].filter((note) => note !== undefined)
-        return `  ${column.name.padEnd(width)}${column.description}${notes.length === 0 ? "" : ` (${notes.join("; ")})`}`
+        const description = options.brief === true ? firstSentence(column.description) : column.description
+        return `  ${column.name.padEnd(width)}${description}${notes.length === 0 ? "" : ` (${notes.join("; ")})`}`
       })
   ])
   return [

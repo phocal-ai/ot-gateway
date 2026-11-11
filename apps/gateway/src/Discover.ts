@@ -370,8 +370,23 @@ export const pointColumn = (point: { readonly id: string; readonly name: string 
   return point.id
 }
 
-/** The points list columns discover fills (PointsSchema.ts), in the schema's order. */
-export const draftColumns = ["device", "point", "unit", "device_instance", "address", "object_type", "object_instance"]
+/**
+ * The points list columns discover fills (PointsSchema.ts), in the schema's order. `publish` is written out as the
+ * default, `sample` (every read), so the list shows what each row sends and where to change it.
+ */
+export const draftColumns = [
+  "device",
+  "point",
+  "unit",
+  "publish",
+  "device_instance",
+  "address",
+  "object_type",
+  "object_instance"
+]
+
+/** What a discovered row sends: every read, the points list's default, written out. */
+export const draftPublish = "sample"
 
 /** The drafts as points list rows, fields in the order of `draftColumns`. */
 export const draftRows = (drafts: ReadonlyArray<Draft>) =>
@@ -380,6 +395,7 @@ export const draftRows = (drafts: ReadonlyArray<Draft>) =>
       draft.id,
       pointColumn(point),
       point.unit ?? "",
+      draftPublish,
       String(draft.deviceInstance),
       draft.address ?? "",
       point.objectType,

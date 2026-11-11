@@ -11,8 +11,12 @@ import { importPointsList } from "../src/Import.ts"
 import { columnAliases, devicesFromPointsList, parseDelimited, readColumns } from "../src/PointsList.ts"
 import { resolveProfile } from "../src/Profile.ts"
 import {
+  briefPointsListSchema,
+  briefPointsListSchemaJson,
   describePointsListSchema,
+  firstSentence,
   pointsListColumns,
+  pointsListRules,
   pointsListSchema,
   pointsListTemplate,
   unknownColumns
@@ -40,6 +44,33 @@ describe("the points list schema", () => {
     expect(schema.columns.find((column) => column.name === "type")?.values).toContain("float32")
     const text = describePointsListSchema()
     for (const column of pointsListColumns) expect(text).toContain(`  ${column.name} `)
+  })
+
+  it("prints in brief as JSON with one line per column: name, scope, required, first sentence, values, no aliases", () => {
+    const text = briefPointsListSchemaJson()
+    const brief = JSON.parse(text)
+    expect(brief).toEqual(briefPointsListSchema())
+    expect(text.split("\n").length).toBeLessThan(pointsListColumns.length + pointsListRules.length + 10)
+    expect(text).not.toContain("aliases")
+    const point = brief.columns.find((column: { name: string }) => column.name === "point")
+    expect(point).toEqual({
+      name: "point",
+      scope: "any",
+      required: true,
+      description: "The point's name, unique within its device; its id (the topic) is the name as a slug"
+    })
+    const publish = brief.columns.find((column: { name: string }) => column.name === "publish")
+    expect(publish?.values).toEqual(["sample", "aggregate", "change"])
+    expect(describePointsListSchema({ brief: true })).not.toContain("A slug (active-power)")
+    expect(describePointsListSchema()).toContain("A slug (active-power)")
+  })
+
+  it("keeps a description's first sentence, and the whole of one that has only one", () => {
+    expect(firstSentence("The address. A data sheet's 40101 is register 100")).toBe("The address")
+    expect(firstSentence("value = raw × scale + offset")).toBe("value = raw × scale + offset")
+    expect(firstSentence("kW, kWh, °C, %, … or a QUDT name such as unit:KiloW")).toBe(
+      "kW, kWh, °C, %, … or a QUDT name such as unit:KiloW"
+    )
   })
 
   it("names the columns it does not know, as written", () => {

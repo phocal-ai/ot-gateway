@@ -396,12 +396,14 @@ describe("draftPointsList", () => {
         })
       ])
       const list = draftPointsList(drafts)
-      expect(list.split("\n")[0]).toBe("device,point,unit,device_instance,address,object_type,object_instance")
-      expect(list).toContain('ventilation-2,"Supply Temp, °C",unit:DEG_C,2001,10.0.0.5,analog-input,1')
+      expect(list.split("\n")[0]).toBe("device,point,unit,publish,device_instance,address,object_type,object_instance")
+      expect(list).toContain('ventilation-2,"Supply Temp, °C",unit:DEG_C,sample,2001,10.0.0.5,analog-input,1')
       expect(list).not.toContain("=HYPERLINK")
       const [device] = yield* devicesFromPointsList(list)
       expect(device?.id).toBe("ventilation-2")
       expect(device?.points.map((point) => point.id)).toEqual(drafts[0]?.points.map((point) => point.id))
+      // Every read, written out so the list shows where to change it.
+      expect(device?.points.map((point) => point.publish?.mode)).toEqual(["sample", "sample", "sample", "sample"])
     }).pipe(Effect.runSync))
 
   it("names points without the device's name in front, and import keeps the ids and takes the names", () =>
@@ -421,10 +423,10 @@ describe("draftPointsList", () => {
       ])
       const list = draftPointsList(drafts)
       expect(list.split("\n").slice(1, 5)).toEqual([
-        "heat-pump,Flow temperature,unit:DEG_C,2001,127.0.0.1:47809,analog-input,1",
-        "heat-pump,Return temperature,unit:DEG_C,2001,127.0.0.1:47809,analog-input,2",
-        "heat-pump,Compressor running,,2001,127.0.0.1:47809,binary-input,1",
-        "heat-pump,compressor-running-2,,2001,127.0.0.1:47809,binary-input,2"
+        "heat-pump,Flow temperature,unit:DEG_C,sample,2001,127.0.0.1:47809,analog-input,1",
+        "heat-pump,Return temperature,unit:DEG_C,sample,2001,127.0.0.1:47809,analog-input,2",
+        "heat-pump,Compressor running,,sample,2001,127.0.0.1:47809,binary-input,1",
+        "heat-pump,compressor-running-2,,sample,2001,127.0.0.1:47809,binary-input,2"
       ])
       const [device] = yield* devicesFromPointsList(list)
       expect(device?.points.map((point) => [point.id, point.name])).toEqual([
@@ -551,10 +553,10 @@ describe("discover --points-list", () => {
       expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: true, next })
       const list = yield* fs.readFileString(path)
       expect(list.split("\n")).toEqual([
-        "device;point;unit;host;register;type;device_instance;address;object_type;object_instance",
-        "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;",
-        "ventilation-2;Supply Temp;unit:DEG_C;;;;2001;10.0.2.1;analog-input;1",
-        "ventilation-2;Fan;;;;;2001;10.0.2.1;binary-output;2",
+        "device;point;unit;host;register;type;publish;device_instance;address;object_type;object_instance",
+        "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;;",
+        "ventilation-2;Supply Temp;unit:DEG_C;;;;sample;2001;10.0.2.1;analog-input;1",
+        "ventilation-2;Fan;;;;;sample;2001;10.0.2.1;binary-output;2",
         ""
       ])
       const devices = yield* devicesFromPointsList(list)
