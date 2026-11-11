@@ -6,7 +6,7 @@
  * Relative file paths in the config (`buffer.path`, `history.path`) are resolved here, once: against the folder
  * the config file is in, so `ot-gateway run /home/pi/site-1/ot-gateway.json` keeps its outbox in that folder
  * wherever it is started from. `OT_GATEWAY_DATA_DIR` names another base: the container image sets it to its data
- * volume, since Docker Compose mounts the config read-only at `/etc/ot-gateway/gateway.json`.
+ * volume, so the outbox and the history outlive the container and stay out of the folder Compose mounts.
  */
 import { type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Config, Effect, FileSystem, Option, Schema } from "effect"

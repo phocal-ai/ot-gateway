@@ -507,7 +507,9 @@ const makeBufferedPublisher = Effect.fnUntraced(function* (
   const opened = yield* open(settings.path).pipe(
     Effect.map((database): OutboxDatabase | undefined => database),
     Effect.catchTag("BufferOpenFailed", (error) =>
-      options.requireOpen === true ? Effect.fail(error) : Effect.as(failed("open", cannotOpen, error.message), undefined)
+      options.requireOpen === true
+        ? Effect.fail(error)
+        : Effect.as(failed("open", cannotOpen, error.message), undefined)
     )
   )
   yield* install(opened)
