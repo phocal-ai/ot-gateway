@@ -5,11 +5,13 @@
  * (`ot-gateway points schema` prints them).
  *
  * Commas, semicolons (what Excel writes where the decimal mark is a comma) or tabs separate the fields, the
- * first line decides which, and a decimal comma is read as a point. Nothing is made writable: a write is a
+ * first line decides which, and a decimal comma is read as a point. A row with more fields than the header (an
+ * unquoted decimal comma), a quote never closed and a column named twice are refused, naming the line. Nothing is
+ * made writable: a write is a
  * decision for the config, not for a spreadsheet. The result still goes through the gateway's schema, which
  * checks everything this module does not.
  */
-import { Effect, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import { slugify } from "./Discover.ts"
 import type { Profile, ProfilePoint } from "./Profile.ts"
 import { closestMatch } from "./Suggest.ts"
@@ -18,11 +20,27 @@ export class PointsListError extends Schema.TaggedError<PointsListError>()("Poin
   message: Schema.String
 }) {}
 
+/** One record of a delimited text: its fields and the 1-based line of the text it starts on. */
+export interface DelimitedRecord {
+  readonly line: number
+  readonly fields: ReadonlyArray<string>
+}
+
+/** A quote that is never closed: the line it opened on, and the records read up to the end of the text. */
+export interface UnterminatedQuote {
+  readonly line: number
+  readonly records: ReadonlyArray<DelimitedRecord>
+}
+
 /**
- * Fields of a delimited text (RFC 4180: quotes, doubled quotes, line breaks inside quotes), empty lines dropped.
- * The separator is the one the first line has most of, unless given.
+ * The records of a delimited text (RFC 4180: quotes, doubled quotes, line breaks inside quotes), each with the line
+ * it starts on, empty lines dropped. The separator is the one the first line has most of, unless given. A quote that
+ * is never closed is a failure naming the line it opened on.
  */
-export const parseDelimited = (text: string, separator?: string): ReadonlyArray<ReadonlyArray<string>> => {
+export const readDelimited = (
+  text: string,
+  separator?: string
+): Result.Result<ReadonlyArray<DelimitedRecord>, UnterminatedQuote> => {
   const body = text.replace(/^﻿/, "")
   const firstLine = body.split(/\r?\n/, 1)[0] ?? ""
   const delimiter =
@@ -30,10 +48,13 @@ export const parseDelimited = (text: string, separator?: string): ReadonlyArray<
     [";", "\t", ","].reduce((best, candidate) =>
       firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
     )
-  const rows: Array<Array<string>> = []
+  const records: Array<DelimitedRecord> = []
   let row: Array<string> = []
   let field = ""
   let quoted = false
+  let line = 1
+  let rowLine = 1
+  let quoteLine = 1
   for (let index = 0; index < body.length; index++) {
     const char = body[index]
     if (quoted) {
@@ -41,24 +62,41 @@ export const parseDelimited = (text: string, separator?: string): ReadonlyArray<
         field += '"'
         index++
       } else if (char === '"') quoted = false
-      else field += char
-    } else if (char === '"' && field === "") quoted = true
-    else if (char === delimiter) {
+      else {
+        field += char
+        if (char === "\n" || (char === "\r" && body[index + 1] !== "\n")) line++
+      }
+    } else if (char === '"' && field === "") {
+      quoted = true
+      quoteLine = line
+    } else if (char === delimiter) {
       row.push(field)
       field = ""
     } else if (char === "\n" || char === "\r") {
       if (char === "\r" && body[index + 1] === "\n") index++
       row.push(field)
-      rows.push(row)
+      records.push({ line: rowLine, fields: row })
       row = []
       field = ""
+      line++
+      rowLine = line
     } else field += char
   }
-  if (field !== "" || row.length > 0) {
+  if (field !== "" || row.length > 0 || quoted) {
     row.push(field)
-    rows.push(row)
+    records.push({ line: rowLine, fields: row })
   }
-  return rows.filter((fields) => fields.some((value) => value.trim() !== ""))
+  const filled = records.filter((record) => record.fields.some((value) => value.trim() !== ""))
+  return quoted ? Result.fail({ line: quoteLine, records: filled }) : Result.succeed(filled)
+}
+
+/**
+ * Fields of a delimited text, as `readDelimited` reads them, without line numbers. A quote that is never closed
+ * runs to the end of the text.
+ */
+export const parseDelimited = (text: string, separator?: string): ReadonlyArray<ReadonlyArray<string>> => {
+  const read = readDelimited(text, separator)
+  return (Result.isSuccess(read) ? read.success : read.failure.records).map((record) => record.fields)
 }
 
 /** Common ways of writing a unit, as QUDT names. Anything else is kept as written. */
@@ -124,6 +162,34 @@ export const columnAliases: Readonly<Record<string, string>> = {
   publish_interval_s: "publish_s",
   publish_every_s: "publish_s"
 }
+
+/**
+ * The columns this reader reads, the same as PointsSchema.ts's `pointsListColumns` (its test checks they agree).
+ * Kept here so the reader does not import the schema, which imports the reader.
+ */
+export const readColumns: ReadonlyArray<string> = [
+  "device",
+  "point",
+  "unit",
+  "interval_s",
+  "publish",
+  "publish_s",
+  "deadband",
+  "scale",
+  "offset",
+  "host",
+  "port",
+  "unit_id",
+  "profile",
+  "register",
+  "table",
+  "type",
+  "byte_order",
+  "device_instance",
+  "address",
+  "object_type",
+  "object_instance"
+]
 
 /** A header as the column it names: lower case, `_` for spaces and `-`, aliases resolved. */
 export const columnName = (header: string) => {
@@ -334,12 +400,24 @@ const namedPoints = Effect.fnUntraced(function* (name: string, rows: ReadonlyArr
   return points
 })
 
-/** The rows of one device as its config entry. */
-const toDevice = Effect.fnUntraced(function* (name: string, rows: ReadonlyArray<Row>, taken: Set<string>) {
+/**
+ * The rows of one device as its config entry. Its id must not be in the config (`inConfig`) or taken by another
+ * spelling earlier in the list (`listed`, id to name as written, which this adds to).
+ */
+const toDevice = Effect.fnUntraced(function* (
+  name: string,
+  rows: ReadonlyArray<Row>,
+  inConfig: ReadonlySet<string>,
+  listed: Map<string, string>
+) {
   const id = slugify(name)
   if (id === "") return yield* fail(`device "${name}": its name has no letters or digits`)
-  if (taken.has(id)) return yield* fail(`device id "${id}" is already in the config`)
-  taken.add(id)
+  if (inConfig.has(id)) return yield* fail(`device id "${id}" is already in the config`)
+  const earlier = listed.get(id)
+  if (earlier !== undefined) {
+    return yield* fail(`"${earlier}" and "${name}" are the same device id "${id}"; use one spelling`)
+  }
+  listed.set(id, name)
   const points = yield* namedPoints(name, rows)
   const intervalSeconds = yield* deviceNumber(name, rows, "interval_s")
   const pollIntervalMs = intervalSeconds === undefined ? {} : { pollIntervalMs: Math.round(intervalSeconds * 1000) }
@@ -383,16 +461,36 @@ export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function
   existing: ReadonlyArray<string> = [],
   profiles: ReadonlyMap<string, Profile> = new Map()
 ) {
-  const [header, ...records] = parseDelimited(text)
-  if (header === undefined) return yield* fail("the points list is empty")
+  const read = readDelimited(text)
+  if (Result.isFailure(read)) return yield* fail(`line ${read.failure.line}: a quote opened here is never closed`)
+  const [headerRecord, ...records] = read.success
+  if (headerRecord === undefined) return yield* fail("the points list is empty")
+  const header = headerRecord.fields
   const columns = header.map(columnName)
   for (const required of ["device", "point"]) {
     if (!columns.includes(required)) {
       return yield* fail(`the points list needs a "${required}" column; its header has ${header.join(", ")}`)
     }
   }
-  const rows: ReadonlyArray<Row> = records.map((fields, index) => ({
-    line: index + 2,
+  // Only columns the reader reads: unknown ones are ignored, so two of the same name (two "Notes") are fine.
+  for (const [index, column] of columns.entries()) {
+    const first = columns.indexOf(column)
+    if (readColumns.includes(column) && first !== index) {
+      return yield* fail(
+        `the header has both "${header[first]?.trim()}" and "${header[index]?.trim()}", which are the same column`
+      )
+    }
+  }
+  for (const record of records) {
+    // Extra fields that are all empty are trailing delimiters, which spreadsheets export.
+    if (record.fields.slice(header.length).some((value) => value.trim() !== "")) {
+      return yield* fail(
+        `line ${record.line}: ${record.fields.length} fields, but the header has ${header.length} columns; a value containing the delimiter (a decimal comma, say) needs quotes`
+      )
+    }
+  }
+  const rows: ReadonlyArray<Row> = records.map(({ line, fields }) => ({
+    line,
     get: (column) => {
       const value = fields[columns.indexOf(column)]?.trim()
       return value === undefined || value === "" ? undefined : value
@@ -404,6 +502,7 @@ export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function
     if (device === undefined) return yield* fail(`line ${row.line}: no device`)
     byDevice.set(device, [...(byDevice.get(device) ?? []), ...(yield* expandProfile(row, profiles))])
   }
-  const taken = new Set(existing)
-  return yield* Effect.forEach(byDevice, ([name, deviceRows]) => toDevice(name, deviceRows, taken))
+  const inConfig = new Set(existing)
+  const listed = new Map<string, string>()
+  return yield* Effect.forEach(byDevice, ([name, deviceRows]) => toDevice(name, deviceRows, inConfig, listed))
 })

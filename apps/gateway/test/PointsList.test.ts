@@ -5,11 +5,11 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Result } from "effect"
 import { exampleConfigPath } from "../src/Demo.ts"
 import { importPointsList } from "../src/Import.ts"
 import { initConfig } from "../src/Init.ts"
-import { devicesFromPointsList, parseDelimited, qudtUnit } from "../src/PointsList.ts"
+import { devicesFromPointsList, parseDelimited, qudtUnit, readDelimited } from "../src/PointsList.ts"
 
 const minimalConfig = { site: "s", building: "b", mqtt: { url: "mqtt://localhost:1883" } }
 
@@ -42,6 +42,24 @@ describe("parseDelimited", () => {
       ["a", "b"],
       ["1", "2"]
     ])
+  })
+})
+
+describe("readDelimited", () => {
+  it("gives each record the line it starts on, past blank lines and quoted line breaks", () => {
+    expect(readDelimited('﻿a,b\r\n\r\n"x\r\ny",z\r\n1,2\n\n\n3,4')).toEqual(
+      Result.succeed([
+        { line: 1, fields: ["a", "b"] },
+        { line: 3, fields: ["x\r\ny", "z"] },
+        { line: 5, fields: ["1", "2"] },
+        { line: 8, fields: ["3", "4"] }
+      ])
+    )
+  })
+
+  it("names the line an unclosed quote opened on", () => {
+    const read = readDelimited('a,b\n1,2\n\n3,"4\n5,6\n')
+    expect(Result.isFailure(read) ? read.failure.line : undefined).toBe(4)
   })
 })
 
@@ -174,6 +192,57 @@ describe("devicesFromPointsList", () => {
         "ventilation-1"
       ]).pipe(Effect.flip)
       expect(error.message).toBe('device id "ventilation-1" is already in the config')
+    })
+  )
+
+  it.effect("refuses two spellings of one device in the list, naming both", () =>
+    Effect.gen(function* () {
+      expect(yield* mistake("device,point,host,register,type\nAHU-1,p,1.2.3.4,1,int16\nAHU 1,q,1.2.3.4,2,int16")).toBe(
+        '"AHU-1" and "AHU 1" are the same device id "ahu-1"; use one spelling'
+      )
+    })
+  )
+
+  it.effect("refuses a row with more fields than the header, an unclosed quote and a column given twice", () =>
+    Effect.gen(function* () {
+      expect(yield* mistake("device,point,host,register,type,scale\nm,p,1.2.3.4,1,int16,1,5")).toBe(
+        "line 2: 7 fields, but the header has 6 columns; a value containing the delimiter (a decimal comma, say) needs quotes"
+      )
+      expect(yield* mistake('device,point,host,register,type\nm,p,1.2.3.4,1,int16\n\nm,"q,1.2.3.4,2,int16\n')).toBe(
+        "line 4: a quote opened here is never closed"
+      )
+      expect(yield* mistake("device,name,point,host\nm,p,q,1.2.3.4")).toBe(
+        'the header has both "name" and "point", which are the same column'
+      )
+    })
+  )
+
+  it.effect("reads a list with two unknown columns of the same name, which it ignores", () =>
+    Effect.gen(function* () {
+      const devices = yield* devicesFromPointsList(
+        "device,point,host,register,type,notes,Notes\nm,p,1.2.3.4,1,int16,first,second\n"
+      )
+      expect(devices.map((device) => device.id)).toEqual(["m"])
+    })
+  )
+
+  it.effect("names the line as the file has it, past blank lines and quoted line breaks", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* mistake('device,point,host,register,type\n\nm,"p\nq",1.2.3.4,1,int16\n\nm,r,1.2.3.4,abc,int16')
+      ).toBe('line 6: register "abc" is not a number')
+    })
+  )
+
+  it.effect("reads rows with trailing empty fields or fewer fields than the header", () =>
+    Effect.gen(function* () {
+      const devices = yield* devicesFromPointsList(
+        "device,point,host,register,type,unit,\nm,p,1.2.3.4,1,int16,kW,,,\nm,q,1.2.3.4,2,int16\n"
+      )
+      expect(devices[0]?.points.map((point) => [point.id, point.unit])).toEqual([
+        ["p", "unit:KiloW"],
+        ["q", undefined]
+      ])
     })
   )
 })
