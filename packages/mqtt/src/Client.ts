@@ -143,6 +143,11 @@ export interface MqttClientOptions {
    */
   readonly onConnect?: (client: MqttClient) => Effect.Effect<void>
   /**
+   * Told whenever the connection is lost (`lost`) and whenever a dial fails or the broker refuses it, with why
+   * in one line. A broker that stays down calls it on every redial. It runs on the connection loop: return at once.
+   */
+  readonly onDisconnected?: (failure: ConnectionFailure) => Effect.Effect<void>
+  /**
    * Topic filters subscribed on every connect. The session is clean, so
    * nothing sent while the client was away is delivered later: a command
    * reaches the gateway live or not at all.
@@ -154,6 +159,12 @@ export interface MqttClientOptions {
    * runs on the connection's read loop: hand the message on and return.
    */
   readonly onMessage?: (message: InboundMessage) => Effect.Effect<void>
+}
+
+/** Why the client has no connection: one it had broke (`lost`), or a dial failed or was refused. */
+export interface ConnectionFailure {
+  readonly error: string
+  readonly lost: boolean
 }
 
 export interface InboundMessage {
@@ -595,6 +606,9 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
      */
     let unreachable: string | undefined
     let failedDials = 0
+    const onDisconnected = options.onDisconnected
+    const disconnected = (failure: ConnectionFailure) =>
+      onDisconnected === undefined ? Effect.void : onDisconnected(failure)
     const dialFailed = (reason: string, log: Effect.Effect<void>) =>
       Effect.suspend(() => {
         failedDials++
@@ -621,6 +635,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           MqttRejected: (error) =>
             Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
               Effect.andThen(countConnect("rejected")),
+              Effect.andThen(disconnected({ error: error.message, lost: false })),
               Effect.andThen(
                 dialFailed(
                   `rejected ${error.reasonCode}`,
@@ -632,9 +647,13 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
             ),
           MqttConnectionError: (error) =>
             connectedAt !== undefined
-              ? Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: error.message }))
+              ? Effect.logWarning("MQTT connection lost").pipe(
+                  Effect.annotateLogs({ error: error.message }),
+                  Effect.andThen(disconnected({ error: error.message, lost: true }))
+                )
               : Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
                   Effect.andThen(countConnect("failed")),
+                  Effect.andThen(disconnected({ error: error.message, lost: false })),
                   Effect.andThen(
                     dialFailed(
                       "unreachable",
