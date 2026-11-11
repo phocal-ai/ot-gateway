@@ -21,7 +21,7 @@ import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
-import { importPointsList } from "./Import.ts"
+import { defaultConfigPath, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
@@ -220,7 +220,7 @@ const discoverCommand = Command.make(
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
       const decoded = yield* loadConfig(config)
-      const options = { address: Option.getOrUndefined(address), append }
+      const options = { address: Option.getOrUndefined(address), append, configPath: config }
       return Option.isSome(pointsList)
         ? yield* Effect.flatMap(
             discoverToPointsList(decoded, pointsList.value, undefined, options),
@@ -379,35 +379,48 @@ const importCommand = Command.make(
     list: Argument.String("points-list").pipe(
       Argument.withDescription("A CSV with a device and a point column, one row per point")
     ),
-    config: configPath,
-    dryRun: dryRunFlag("Check the list and print its devices instead of adding them to the config"),
+    // Optional rather than defaulted: a dry run that names no config may check the list on its own.
+    config: Argument.String("config").pipe(
+      Argument.withDescription(
+        `Path of the gateway's JSON config (default ${defaultConfigPath}); it must exist, ot-gateway init writes one`
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    dryRun: dryRunFlag(
+      "Check the list and print its devices instead of adding them; without a config named or here, on their own"
+    ),
     json: jsonFlag
   },
   ({ list, config, dryRun, json }) =>
     Effect.gen(function* () {
-      const { added, decoded, config: written } = yield* importPointsList(list, config, { dryRun })
+      const { added, decoded, config: written, against } = yield* importPointsList(list, config, { dryRun })
       const points = added.reduce((total, device) => total + device.points.length, 0)
+      const alone = `no ${defaultConfigPath} here, so the devices were checked on their own; name a config to check them against it`
       if (json) {
         return yield* printJson({
           ok: true,
           dryRun,
-          path: config,
+          path: against ?? null,
+          ...(against === undefined ? { note: alone } : {}),
           points,
           devices: added,
           summary: decoded.map(deviceSummary)
         })
       }
+      if (against === undefined) yield* Console.error(alone)
       if (written === undefined) return yield* printJson({ devices: added })
-      yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${config}, none writable`)
+      yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${against}, none writable`)
       yield* Console.log(describeConfig(written))
-    }).pipe(jsonFailure(json, { path: config }))
+    }).pipe(jsonFailure(json, { path: config ?? defaultConfigPath }))
 ).pipe(
   Command.withDescription(
     "Add the devices of a points list (CSV: device, point, host, register, type, unit, …) to the config"
   ),
   Command.withExamples([
     { command: "ot-gateway import points.csv", description: "Add them to ot-gateway.json" },
-    { command: "ot-gateway import points.csv --dry-run", description: "Only print them" }
+    { command: "ot-gateway import points.csv site-1/ot-gateway.json", description: "Add them to another config" },
+    { command: "ot-gateway import points.csv --dry-run", description: "Only check and print them" }
   ])
 )
 

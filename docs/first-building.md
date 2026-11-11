@@ -53,7 +53,7 @@ Modbus devices can't describe themselves, so their points come from your list. T
 
 ```bash
 pnpm ot-gateway points template > points.csv  # every column and example rows, to fill in
-pnpm ot-gateway import points.csv --dry-run    # checks the list and prints its devices (no config needed)
+pnpm ot-gateway import points.csv --dry-run    # checks the list and prints its devices (alone, without an ot-gateway.json here)
 pnpm ot-gateway import points.csv              # adds the devices to ot-gateway.json
 ```
 

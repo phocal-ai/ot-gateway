@@ -453,7 +453,8 @@ describe("discover --points-list", () => {
         yield* TestClock.adjust("200 millis")
       }
       const written = yield* Fiber.join(running)
-      expect(written).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: false })
+      const next = `ot-gateway import ${path}`
+      expect(written).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: false, next })
       expect(yield* fs.readDirectory(directory)).toEqual(["points.csv"])
       const list = yield* fs.readFileString(path)
       const devices = yield* devicesFromPointsList(list, ["ahu"])
@@ -487,7 +488,8 @@ describe("discover --points-list", () => {
         JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
       )
       const appendOnce = Effect.gen(function* () {
-        const running = yield* discoverToPointsList(config, path, network.host("10.0.0.1"), { append: true }).pipe(
+        const options = { append: true, configPath: "/srv/site 1/ot-gateway.json" }
+        const running = yield* discoverToPointsList(config, path, network.host("10.0.0.1"), options).pipe(
           Effect.forkChild
         )
         for (let step = 0; step < 30; step++) {
@@ -496,7 +498,8 @@ describe("discover --points-list", () => {
         }
         return yield* Fiber.join(running)
       })
-      expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: true })
+      const next = `ot-gateway import ${path} '/srv/site 1/ot-gateway.json'`
+      expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: true, next })
       const list = yield* fs.readFileString(path)
       expect(list.split("\n")).toEqual([
         "device;point;unit;host;register;type;device_instance;address;object_type;object_instance",
@@ -513,6 +516,7 @@ describe("discover --points-list", () => {
       expect(yield* fs.readFileString(path)).toBe(list)
       const errors = (yield* TestConsole.errorLines).map(String)
       expect(errors.some((line) => line.includes("added 2 point(s), skipped 0 already in the list"))).toBe(true)
+      expect(errors.some((line) => line.endsWith(`then: ${next}`))).toBe(true)
       expect(errors.some((line) => line.includes("added 0 point(s), skipped 2 already in the list"))).toBe(true)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
