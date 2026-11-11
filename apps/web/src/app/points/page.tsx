@@ -31,7 +31,7 @@ import {
   type PointFilter,
   pointKey
 } from "@/lib/points"
-import { isAlarm, pointFreshness } from "@/lib/glance"
+import { alarmWhen, pointFreshness } from "@/lib/glance"
 import { failureLabel, type Freshness, freshness, protocolName } from "@/lib/status"
 import { canMorph, withTransition } from "@/lib/transition"
 import { useWindowRows } from "@/lib/virtual"
@@ -325,7 +325,7 @@ const PointsList = () => {
                       <TableCell
                         className={`text-right font-mono tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}
                       >
-                        <PointValue alarm={isAlarm(point)} now={now} unit={point.unit} value={current.value} />
+                        <PointValue alarm={alarmWhen(point)} now={now} unit={point.unit} value={current.value} />
                       </TableCell>
                       <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
                         <PointRead now={now} short state={read} />

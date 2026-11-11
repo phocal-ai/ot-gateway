@@ -109,7 +109,7 @@ describe("nextSteps", () => {
       expect(steps).toContain("ot-gateway points template > points.csv")
       expect(steps.indexOf("ot-gateway import points.csv site.json")).toBeLessThan(steps.indexOf("ot-gateway run"))
       expect(steps).toContain("ot-gateway run site.json")
-      expect(steps).toContain("ot-gateway watch site.json")
+      expect(steps).toContain("ot-gateway watch site.json --seconds 10")
     })
   )
 })
@@ -205,7 +205,7 @@ describe("initNext", () => {
         "ot-gateway status",
         "http://127.0.0.1:8080",
         "ot-gateway check site-1/ot-gateway.json",
-        "ot-gateway watch site-1/ot-gateway.json"
+        "ot-gateway watch site-1/ot-gateway.json --seconds 10"
       ])
       const spaced = initNext("/srv/site 1/ot-gateway.json", config, compose, { cwd: "/repo" })
       expect(spaced.next[0]?.command).toBe("ot-gateway broker '/srv/site 1/ot-gateway.json'")
@@ -418,6 +418,7 @@ describe("configSummary", () => {
             writable: 0,
             pollIntervalMs: 2000,
             covPoints: [],
+            alarmPoints: [],
             reading: "every 2000 ms"
           }
         ]

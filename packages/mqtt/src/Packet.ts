@@ -870,6 +870,29 @@ export interface Disconnect {
   readonly reasonString?: string
 }
 
+/**
+ * What a broker's DISCONNECT reason code means (§3.14.2.1), for the codes a broker sends a client it drops. 0x8e is
+ * the one a person can fix: another client connected with the same client id and took the session over.
+ */
+export const disconnectReasonName = (code: number): string | undefined =>
+  ({
+    0x00: "normal disconnection",
+    0x80: "unspecified error",
+    0x81: "malformed packet",
+    0x82: "protocol error",
+    0x87: "not authorized",
+    0x89: "server busy",
+    0x8b: "server shutting down",
+    0x8d: "keep alive timeout",
+    0x8e: "session taken over: another client connected with the same client id (set a client id no other client uses)",
+    0x93: "receive maximum exceeded",
+    0x95: "packet too large",
+    0x97: "quota exceeded",
+    0x98: "administrative action",
+    0x9c: "use another server",
+    0x9d: "server moved"
+  })[code]
+
 export const decodeDisconnect = (body: Uint8Array): Result.Result<Disconnect, MqttCodecError> =>
   decodeWith(body, (r) => {
     const reasonCode = r.remaining > 0 ? r.byte() : 0

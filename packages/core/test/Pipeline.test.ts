@@ -42,13 +42,16 @@ const scriptedDriver = (values: ReadonlyArray<number | "fail">, deviceId = "test
 }
 
 /** The first retained metadata `runDevice` publishes for the scripted point, parsed. */
-const metaOf = (covPoints?: ReadonlyArray<string>) =>
+const metaOf = (
+  context: { readonly covPoints?: ReadonlyArray<string>; readonly gateway?: string } = {},
+  driver: Driver = scriptedDriver([200])
+) =>
   Effect.gen(function* () {
     const { messages, layer } = yield* makeMemoryPublisher
-    const fiber = yield* runDevice(
-      { site: "s", building: "b", pollIntervalMs: 1000, ...(covPoints === undefined ? {} : { covPoints }) },
-      scriptedDriver([200])
-    ).pipe(Effect.provide(layer), Effect.forkChild)
+    const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, ...context }, driver).pipe(
+      Effect.provide(layer),
+      Effect.forkChild
+    )
     yield* TestClock.adjust("1 millis")
     yield* Fiber.interrupt(fiber)
     const meta = messages.find((message) => message.topic.endsWith("$meta"))
@@ -74,9 +77,24 @@ describe("runDevice", () => {
     })
   )
 
+  it.effect("says when an alarm point's alarm is active", () =>
+    Effect.gen(function* () {
+      const alarm = { ...scriptedDriver([0]), points: [{ ...point, alarmWhen: "off" as const }] }
+      expect(yield* metaOf({}, alarm)).toMatchObject({ name: "Zone temperature", alarmWhen: "off" })
+      expect(yield* metaOf()).not.toHaveProperty("alarmWhen")
+    })
+  )
+
+  it.effect("names the gateway that published the metadata", () =>
+    Effect.gen(function* () {
+      expect(yield* metaOf({ gateway: "roof" })).toMatchObject({ name: "Zone temperature", gateway: "roof" })
+      expect(yield* metaOf()).not.toHaveProperty("gateway")
+    })
+  )
+
   it.effect("marks a point asked for by change of value in its metadata, and only that one", () =>
     Effect.gen(function* () {
-      expect(yield* metaOf(["zone-temp"])).toMatchObject({ name: "Zone temperature", cov: true })
+      expect(yield* metaOf({ covPoints: ["zone-temp"] })).toMatchObject({ name: "Zone temperature", cov: true })
       expect(yield* metaOf()).not.toHaveProperty("cov")
     })
   )

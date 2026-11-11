@@ -1,6 +1,7 @@
 import { Schema } from "effect"
-import type { DatagramSocketError } from "effect/socket/DatagramSocket"
-import type { SocketError } from "effect/socket/Socket"
+import { type DatagramSocketError, isDatagramSocketError } from "effect/socket/DatagramSocket"
+import { isSocketError, type SocketError } from "effect/socket/Socket"
+import { SocketServerError } from "effect/socket/SocketServer"
 
 /** An expected failure while talking to a field device. */
 export class DriverError extends Schema.TaggedError<DriverError>()("DriverError", {
@@ -71,6 +72,8 @@ const systemErrorText = (error: Error): string | undefined => {
   if (code === "ETIMEDOUT") return `no answer from ${target}`
   if (code === "EHOSTUNREACH") return `host ${address} unreachable`
   if (code === "ENETUNREACH") return `no route to ${address}`
+  if (code === "EADDRINUSE") return `${target} is in use by another program`
+  if (code === "EADDRNOTAVAIL") return `${address} is not an address of this machine`
   return undefined
 }
 
@@ -124,10 +127,13 @@ export const describeSocketError = (error: SocketError): string => {
 export const describeDatagramSocketError = (error: DatagramSocketError): string => {
   const reason = error.reason
   switch (reason._tag) {
-    case "DatagramSocketOpenError":
-      return reason.kind === "AddressInUse"
-        ? withCause("could not open the UDP socket, the port is in use", reason.cause)
-        : withCause("could not open the UDP socket", reason.cause)
+    case "DatagramSocketOpenError": {
+      const text = causeText(reason.cause)
+      if (reason.kind !== "AddressInUse" || text?.endsWith("in use by another program") === true) {
+        return withCause("could not open the UDP socket", reason.cause)
+      }
+      return withCause("could not open the UDP socket, the port is in use", reason.cause)
+    }
     case "DatagramSocketReadError":
       return withCause("UDP read failed", reason.cause)
     case "DatagramSocketWriteError":
@@ -137,4 +143,25 @@ export const describeDatagramSocketError = (error: DatagramSocketError): string 
     case "DatagramSocketUnsupportedError":
       return reason.message
   }
+}
+
+/** A log-friendly description of a server socket that could not listen: its own message is a bare "Open". */
+export const describeSocketServerError = (error: SocketServerError): string =>
+  withCause(
+    error.reason._tag === "SocketServerOpenError" ? "could not listen" : "server socket failed",
+    error.reason.cause
+  )
+
+/**
+ * An expected failure in words, for the command line's last line. Socket errors carry their detail in a reason
+ * (a UDP socket that could not bind has an empty message, a server socket says "Open"), so they are described
+ * from it; any other error with an empty message is named by its tag and cause, never printed as nothing.
+ */
+export const describeFailure = (error: { readonly message: string }): string => {
+  if (isDatagramSocketError(error)) return describeDatagramSocketError(error)
+  if (isSocketError(error)) return describeSocketError(error)
+  if (error instanceof SocketServerError) return describeSocketServerError(error)
+  if (error.message.trim() !== "") return error.message
+  const tag: unknown = Reflect.get(error, "_tag")
+  return withCause(typeof tag === "string" ? tag : "failed", Reflect.get(error, "cause"))
 }

@@ -148,7 +148,9 @@ export const qudtUnit = (unit: string) => {
 export const columnAliases: Readonly<Record<string, string>> = {
   device_name: "device",
   point_name: "point",
-  name: "point",
+  display_name: "name",
+  label: "name",
+  alarm_when: "alarm",
   ip: "host",
   unitid: "unit_id",
   slave: "unit_id",
@@ -173,11 +175,13 @@ export const columnAliases: Readonly<Record<string, string>> = {
 export const readColumns: ReadonlyArray<string> = [
   "device",
   "point",
+  "name",
   "unit",
   "interval_s",
   "publish",
   "publish_s",
   "deadband",
+  "alarm",
   "scale",
   "offset",
   "host",
@@ -193,6 +197,15 @@ export const readColumns: ReadonlyArray<string> = [
   "object_type",
   "object_instance"
 ]
+
+/**
+ * A header's columns as `columnName` names them. A list from before the `name` column has `name` where `point`
+ * belongs: without a `point` column, `name` is the point.
+ */
+export const headerColumns = (header: ReadonlyArray<string>) => {
+  const named = header.map(columnName)
+  return named.includes("point") ? named : named.map((column) => (column === "name" ? "point" : column))
+}
 
 /** A header as the column it names: lower case, `_` for spaces and `-`, aliases resolved. */
 export const columnName = (header: string) => {
@@ -220,6 +233,9 @@ const numberIn = Effect.fnUntraced(function* (row: Row, column: string) {
 
 const publishModes = ["sample", "aggregate", "change"]
 
+/** A point as its row writes it, for an error to name: its `point` column, which may differ from its shown name. */
+const listedAs = (row: Row, name: string) => row.get("point") ?? name
+
 /**
  * The point's `publish` or `deadband` from its `publish`, `publish_s` and `deadband` columns. A deadband alone stays
  * the short form; ranges and clock alignment are the schema's to check.
@@ -231,7 +247,9 @@ const publishOf = Effect.fnUntraced(function* (row: Row, name: string) {
   const intervalMs = seconds === undefined ? {} : { intervalMs: Math.round(seconds * 1000) }
   if (mode === undefined) {
     if (seconds !== undefined) {
-      return yield* fail(`line ${row.line}: "${name}" has publish_s but no publish (sample or aggregate)`)
+      return yield* fail(
+        `line ${row.line}: "${listedAs(row, name)}" has publish_s but no publish (sample or aggregate)`
+      )
     }
     return deadband === undefined ? {} : { deadband }
   }
@@ -240,16 +258,33 @@ const publishOf = Effect.fnUntraced(function* (row: Row, name: string) {
   }
   if (mode === "change") {
     if (seconds !== undefined)
-      return yield* fail(`line ${row.line}: "${name}" sends on change, so it takes no publish_s`)
+      return yield* fail(`line ${row.line}: "${listedAs(row, name)}" sends on change, so it takes no publish_s`)
     return { publish: { mode, ...(deadband === undefined ? {} : { deadband }) } }
   }
   if (deadband !== undefined) {
-    return yield* fail(`line ${row.line}: "${name}" has a deadband, which only change mode uses`)
+    return yield* fail(`line ${row.line}: "${listedAs(row, name)}" has a deadband, which only change mode uses`)
   }
   if (mode === "aggregate" && seconds === undefined) {
-    return yield* fail(`line ${row.line}: "${name}" aggregates, so it needs publish_s, the window (900 for 15 minutes)`)
+    return yield* fail(
+      `line ${row.line}: "${listedAs(row, name)}" aggregates, so it needs publish_s, the window (900 for 15 minutes)`
+    )
   }
   return { publish: { mode, ...intervalMs } }
+})
+
+const alarmValues = ["on", "off"] as const
+
+/** The point's `alarmWhen` from its `alarm` column: `on` or `off`, empty for a point that is no alarm. */
+const alarmOf = Effect.fnUntraced(function* (row: Row, name: string) {
+  const text = row.get("alarm")?.toLowerCase()
+  if (text === undefined) return {}
+  const alarmWhen = alarmValues.find((value) => value === text)
+  if (alarmWhen === undefined) {
+    return yield* fail(
+      `line ${row.line}: "${listedAs(row, name)}" has alarm "${text}"; write on (the alarm is active when the value is true or not 0) or off (active when false or 0), or leave it empty`
+    )
+  }
+  return { alarmWhen }
 })
 
 const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: string) {
@@ -261,6 +296,7 @@ const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: str
     id,
     name,
     ...(unit === undefined ? {} : { unit: qudtUnit(unit) }),
+    ...(yield* alarmOf(row, name)),
     ...publish,
     ...(factor === undefined && offset === undefined
       ? {}
@@ -271,12 +307,12 @@ const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: str
 const modbusPoint = Effect.fnUntraced(function* (row: Row, id: string, name: string) {
   const table = row.get("table")?.toLowerCase() ?? "holding"
   const address = yield* numberIn(row, "register")
-  if (address === undefined) return yield* fail(`line ${row.line}: "${name}" has a host but no register`)
+  if (address === undefined) return yield* fail(`line ${row.line}: "${listedAs(row, name)}" has a host but no register`)
   const bits = table === "coil" || table === "discrete"
   const dataType = row.get("type")?.toLowerCase() ?? (bits ? "bool" : undefined)
   if (dataType === undefined) {
     return yield* fail(
-      `line ${row.line}: "${name}" needs a type (int16, uint16, int32, uint32, float32, …): the register alone does not say how to read it`
+      `line ${row.line}: "${listedAs(row, name)}" needs a type (int16, uint16, int32, uint32, float32, …): the register alone does not say how to read it`
     )
   }
   const byteOrder = row.get("byte_order")?.toUpperCase()
@@ -296,7 +332,9 @@ const bacnetPoint = Effect.fnUntraced(function* (row: Row, id: string, name: str
     .replace(/[\s_]+/g, "-")
   const instance = yield* numberIn(row, "object_instance")
   if (objectType === undefined || instance === undefined) {
-    return yield* fail(`line ${row.line}: "${name}" needs object_type and object_instance (analog-input 1, say)`)
+    return yield* fail(
+      `line ${row.line}: "${listedAs(row, name)}" needs object_type and object_instance (analog-input 1, say)`
+    )
   }
   return { ...(yield* commonPoint(row, id, name)), objectType, instance }
 })
@@ -367,7 +405,13 @@ const expandProfile = Effect.fnUntraced(function* (row: Row, profiles: ReadonlyM
   }
   return picked.map((point): Row => ({
     line: row.line,
-    get: (column) => (column === "point" ? point.name : (row.get(column) ?? profileValue(point, column)))
+    get: (column) =>
+      column === "point"
+        ? point.name
+        : // A name given on a row that stands for several points would name them all alike.
+          column === "name" && picked.length > 1
+          ? undefined
+          : (row.get(column) ?? profileValue(point, column))
   }))
 })
 
@@ -385,14 +429,22 @@ interface NamedPoint {
   readonly pointName: string
 }
 
+/**
+ * A name to show for a point (or device) written as an id: `active-power` → `Active power`, `main_breaker_tripped` →
+ * `Main breaker tripped`. Anything that is not already a slug is a name as written, and kept.
+ */
+export const readableName = (written: string) =>
+  slugify(written) === written ? (written.charAt(0).toUpperCase() + written.slice(1)).replace(/[-_]+/g, " ") : written
+
 /** The points of one device with their ids, which must be unique within it. */
 const namedPoints = Effect.fnUntraced(function* (name: string, rows: ReadonlyArray<Row>) {
   const lines = new Map<string, number>()
   const points: Array<NamedPoint> = []
   for (const row of rows) {
-    const pointName = row.get("point") ?? ""
-    const pointId = slugify(pointName)
-    if (pointId === "") return yield* fail(`line ${row.line}: the point name "${pointName}" has no letters or digits`)
+    const written = row.get("point") ?? ""
+    const pointId = slugify(written)
+    const pointName = row.get("name") ?? readableName(written)
+    if (pointId === "") return yield* fail(`line ${row.line}: the point name "${written}" has no letters or digits`)
     const seen = lines.get(pointId)
     if (seen !== undefined) {
       return yield* fail(`lines ${seen} and ${row.line}: two points of "${name}" are both called ${pointId}`)
@@ -475,7 +527,7 @@ const groupRows = Effect.fnUntraced(function* (text: string, profiles: ReadonlyM
   const [headerRecord, ...records] = read.success
   if (headerRecord === undefined) return yield* fail("the points list is empty")
   const header = headerRecord.fields
-  const columns = header.map(columnName)
+  const columns = headerColumns(header)
   for (const required of ["device", "point"]) {
     if (!columns.includes(required)) {
       return yield* fail(`the points list needs a "${required}" column; its header has ${header.join(", ")}`)

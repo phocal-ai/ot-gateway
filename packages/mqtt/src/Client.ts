@@ -31,6 +31,7 @@ import {
   decodeConnack,
   decodeDisconnect,
   decodePuback,
+  disconnectReasonName,
   decodePublish,
   decodeSuback,
   encodeConnect,
@@ -45,6 +46,27 @@ import {
   refusesProtocolLevel
 } from "./Packet.ts"
 import type { ProtocolVersion, Subscription, Will } from "./Packet.ts"
+
+/** A broker's DISCONNECT in words: `session taken over: … (0x8e)`, with the broker's own reason string if any. */
+export const describeDisconnect = (reasonCode: number, reasonString: string | undefined) => {
+  const code = `0x${reasonCode.toString(16)}`
+  const name = disconnectReasonName(reasonCode)
+  const described = name === undefined ? code : `${name} (${code})`
+  return reasonString === undefined ? described : `${described} ${reasonString}`
+}
+
+/**
+ * Connections in a row the broker closed without a word soon after accepting them, before the error says why that
+ * usually happens. An MQTT 3.1.1 broker drops a session taken over by a client with the same id without a reason
+ * code (3.1.1 §3.1.4), so the pattern is the only sign of it.
+ */
+const quickDropsBeforeHint = 3
+
+/** A lost connection's error, with the likely cause once the broker has dropped it soon after connecting a few times. */
+export const explainQuickDrops = (message: string, quickDrops: number) =>
+  quickDrops >= quickDropsBeforeHint && message.startsWith("connection closed")
+    ? `${message} soon after connecting, ${quickDrops} times in a row: another client may be using the same client id (set a client id no other client uses)`
+    : message
 
 /** The connection could not be opened, broke, or the broker stopped answering. */
 export class MqttConnectionError extends Schema.TaggedError<MqttConnectionError>()("MqttConnectionError", {
@@ -509,7 +531,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
               case PacketType.DISCONNECT: {
                 const disconnect = decodeDisconnect(packet.body)
                 const reason = Result.isSuccess(disconnect)
-                  ? `0x${disconnect.success.reasonCode.toString(16)}${disconnect.success.reasonString === undefined ? "" : ` ${disconnect.success.reasonString}`}`
+                  ? describeDisconnect(disconnect.success.reasonCode, disconnect.success.reasonString)
                   : "unreadable reason"
                 return yield* new MqttConnectionError({ message: `broker disconnected: ${reason}` })
               }
@@ -606,6 +628,8 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
      */
     let unreachable: string | undefined
     let failedDials = 0
+    /** Connections in a row that were lost before they held for `stableConnectionMs`. */
+    let quickDrops = 0
     const onDisconnected = options.onDisconnected
     const disconnected = (failure: ConnectionFailure) =>
       onDisconnected === undefined ? Effect.void : onDisconnected(failure)
@@ -645,12 +669,15 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 )
               )
             ),
-          MqttConnectionError: (error) =>
-            connectedAt !== undefined
-              ? Effect.logWarning("MQTT connection lost").pipe(
-                  Effect.annotateLogs({ error: error.message }),
-                  Effect.andThen(disconnected({ error: error.message, lost: true }))
-                )
+          MqttConnectionError: (error, since = connectedAt) =>
+            since !== undefined
+              ? Effect.gen(function* () {
+                  const heldFor = (yield* monotonicMillis) - since
+                  quickDrops = heldFor < stableConnectionMs ? quickDrops + 1 : 0
+                  const message = explainQuickDrops(error.message, quickDrops)
+                  yield* Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: message }))
+                  yield* disconnected({ error: message, lost: true })
+                })
               : Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
                   Effect.andThen(countConnect("failed")),
                   Effect.andThen(disconnected({ error: error.message, lost: false })),

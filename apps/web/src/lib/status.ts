@@ -121,28 +121,8 @@ export const protocolName: Readonly<Record<string, string>> = {
   simulator: "Simulated"
 }
 
-/** QUDT unit names (`unit:DEG_C`) as people write them. */
-export const unitSymbols: Readonly<Record<string, string>> = {
-  DEG_C: "°C",
-  DEG_F: "°F",
-  PERCENT: "%",
-  KiloW: "kW",
-  W: "W",
-  "KiloW-HR": "kWh",
-  V: "V",
-  A: "A",
-  PA: "Pa",
-  BAR: "bar",
-  "M3-PER-HR": "m³/h",
-  "L-PER-SEC": "l/s",
-  PPM: "ppm"
-}
-
-export const unitLabel = (unit: string | undefined) => {
-  if (unit === undefined) return ""
-  const name = unit.replace(/^unit:/, "")
-  return unitSymbols[name] ?? name
-}
+/** QUDT unit names as people write them: shared with `ot-gateway history`. */
+export { unitLabel, unitSymbols } from "@ot-gateway/api"
 
 /**
  * A point's value for people: whole numbers and values from 1000 grouped with up to three decimals (1,500; 1,234.5),

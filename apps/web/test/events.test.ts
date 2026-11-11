@@ -44,6 +44,14 @@ const brokerGone: GatewayEvent = {
 }
 const brokerBack: GatewayEvent = { id: 5, at: at(12, 19, 57), type: "broker-connected", downMs: 20_000, buffered: 55 }
 const drained: GatewayEvent = { id: 6, at: at(12, 19, 58), type: "buffer-drained" }
+const conflict: GatewayEvent = {
+  id: 7,
+  at: at(12, 20, 0),
+  type: "gateway-conflict",
+  gateway: "roof",
+  devices: ["energy-meter"],
+  sameId: false
+}
 
 const log = (events: ReadonlyArray<GatewayEvent>, fields: Partial<EventLog> = {}): EventLog => ({
   now,
@@ -61,11 +69,16 @@ describe("eventSentence", () => {
     expect(eventSentence(brokerGone)).toBe("Broker disconnected: connection closed by the peer")
     expect(eventSentence(brokerBack)).toBe("Broker back after 20 s, 55 values from the buffer on their way")
     expect(eventSentence(drained)).toBe("Buffer emptied: every value kept while the broker was away reached it")
+    expect(eventSentence(conflict)).toBe("Gateway roof publishes energy-meter too: values from both gateways mix")
+    expect(eventSentence({ ...conflict, gateway: "main", devices: [], sameId: true })).toBe(
+      "Another gateway with this gateway's id (main) is online: both publish into the same topics"
+    )
   })
 
   it("leaves out what it does not know: the first connect, an empty buffer, a missing error", () => {
     expect(eventSentence({ id: 2, at: now, type: "broker-connected" })).toBe("Connected to the broker")
     expect(eventSentence({ ...brokerBack, buffered: 0 })).toBe("Broker back after 20 s")
+    expect(eventSentence({ ...drained, delivered: 66 })).toBe("Buffer emptied: 66 values from it reached the broker")
     expect(eventSentence({ ...brokerBack, buffered: 1 })).toBe(
       "Broker back after 20 s, 1 value from the buffer on its way"
     )
@@ -101,6 +114,7 @@ describe("eventTone", () => {
   it("marks failures bad and recoveries good", () => {
     expect(eventTone(failing)).toBe("bad")
     expect(eventTone(brokerGone)).toBe("bad")
+    expect(eventTone(conflict)).toBe("bad")
     expect(eventTone(recovered)).toBe("good")
     expect(eventTone(brokerBack)).toBe("good")
     expect(eventTone(started)).toBe("neutral")

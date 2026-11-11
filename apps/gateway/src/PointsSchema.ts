@@ -33,7 +33,19 @@ export const pointsListColumns: ReadonlyArray<PointsListColumn> = [
     required: true,
     description: "The device's name; rows with the same name are one device"
   },
-  { name: "point", scope: "any", required: true, description: "The point's name, unique within its device" },
+  {
+    name: "point",
+    scope: "any",
+    required: true,
+    description:
+      "The point's name, unique within its device; its id (the topic) is the name as a slug. A slug (active-power) is shown as a name (Active power) unless the name column gives one"
+  },
+  {
+    name: "name",
+    scope: "any",
+    required: false,
+    description: "The name shown on the status page and in $meta, when point is an id (active-power)"
+  },
   { name: "unit", scope: "any", required: false, description: "kW, kWh, °C, %, … or a QUDT name such as unit:KiloW" },
   {
     name: "interval_s",
@@ -62,6 +74,14 @@ export const pointsListColumns: ReadonlyArray<PointsListColumn> = [
     scope: "any",
     required: false,
     description: "The smallest change worth sending, in the point's unit; with publish empty or change"
+  },
+  {
+    name: "alarm",
+    scope: "any",
+    required: false,
+    values: ["on", "off"],
+    description:
+      "The point is an alarm, active when its value is on (true, not 0: a trip flag) or off (false, 0: a normally-closed contact); empty for a point that is no alarm"
   },
   { name: "scale", scope: "any", required: false, description: "value = raw × scale + offset" },
   { name: "offset", scope: "any", required: false, description: "value = raw × scale + offset" },

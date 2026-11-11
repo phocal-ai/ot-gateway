@@ -37,7 +37,7 @@ import {
 } from "@/lib/device-editor"
 import { hourMinute, savedMessage } from "@/lib/editor"
 import { checkConfig, fetchConfigFile, readToken, type SaveOutcome, saveConfig, storeToken } from "@/lib/editor-api"
-import { whatToCheck } from "@/lib/hints"
+import { whatToCheck } from "@ot-gateway/api"
 import { type Outcome, testRead } from "@/lib/setup-api"
 import { formatValue, protocolName, settle, unitLabel } from "@/lib/status"
 
