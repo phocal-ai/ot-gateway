@@ -40,6 +40,9 @@ const decodeMetaGateway = Schema.decodeUnknownOption(
   Schema.fromJsonString(Schema.Struct({ gateway: Schema.optionalKey(Schema.String) }))
 )
 
+/** The gateway a `$meta` payload names, or undefined when it names none or is not one. */
+export const metaGateway = (payload: string) => Option.getOrUndefined(decodeMetaGateway(payload))?.gateway
+
 /**
  * What to do with a retained `$meta` of a point that one of the config's devices no longer has: `clear` it when this
  * gateway published it, `skip` it when another gateway did or the payload does not say (`owner` undefined).
@@ -60,7 +63,7 @@ export const staleMeta = (
   }
   const device = config.devices.find((candidate) => candidate.id === parts[2])
   if (device === undefined || device.points.some((point) => point.id === parts[3])) return undefined
-  const owner = Option.getOrUndefined(decodeMetaGateway(message.payload))?.gateway
+  const owner = metaGateway(message.payload)
   return owner === config.id ? { _tag: "clear", topic: message.topic } : { _tag: "skip", topic: message.topic, owner }
 }
 
