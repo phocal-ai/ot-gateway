@@ -9,6 +9,7 @@ import {
   eventSentence,
   eventsAfter,
   eventTone,
+  isIncident,
   latestEvents,
   mergeEvents,
   nothingYet,
@@ -83,6 +84,16 @@ describe("plainError", () => {
     expect(plainError("could not connect: host 10.0.0.9 unreachable")).toBe("host 10.0.0.9 unreachable")
     expect(plainError("could not connect")).toBe("could not connect")
     expect(plainError("no response to 4 item(s) within 3s")).toBe("no response to 4 item(s) within 3s")
+  })
+})
+
+describe("isIncident", () => {
+  it("does not count the start and the first connect to the broker as something that happened", () => {
+    expect(isIncident(started)).toBe(false)
+    expect(isIncident({ id: 2, at: now, type: "broker-connected", buffered: 0 })).toBe(false)
+    expect(isIncident(brokerBack)).toBe(true)
+    expect(isIncident(failing)).toBe(true)
+    expect(isIncident(drained)).toBe(true)
   })
 })
 

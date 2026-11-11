@@ -5,6 +5,7 @@
 import {
   type ConfigView,
   type DeviceStatus,
+  type EventLog,
   type GatewayStatus,
   isDeviceLate,
   type Messages,
@@ -94,6 +95,17 @@ export const fetchPoints: Effect.Effect<PointCatalog, StatusUnavailable> = gatew
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )
+
+/**
+ * The gateway's recent events (`/api/events`): all it keeps, or only those after the event id `after`, which is what
+ * the status poll asks for each time, so it is usually an empty list.
+ */
+export const fetchEvents = (after: number | undefined): Effect.Effect<EventLog, StatusUnavailable> =>
+  gateway.pipe(
+    Effect.flatMap((client) => client.status.events({ query: after === undefined ? {} : { after } })),
+    Effect.provide(FetchHttpClient.layer),
+    withinThreeSeconds
+  )
 
 /** The running config without its points, for the Settings tab; it changes only when the gateway restarts. */
 export const fetchConfig: Effect.Effect<ConfigView, StatusUnavailable> = gateway.pipe(

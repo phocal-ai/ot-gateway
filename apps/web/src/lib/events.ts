@@ -65,6 +65,13 @@ export const eventSentence = (event: GatewayEvent): string => {
   }
 }
 
+/**
+ * Whether an event says something happened: not the gateway's start, nor its first connect to the broker, which
+ * every start has. A ring with only those is a quiet gateway.
+ */
+export const isIncident = (event: GatewayEvent) =>
+  event.type !== "gateway-started" && !(event.type === "broker-connected" && event.downMs === undefined)
+
 /** Whether an event is bad news (shown in red), good news or neither. */
 export const eventTone = (event: GatewayEvent): "bad" | "good" | "neutral" =>
   event.type === "device-failing" || event.type === "broker-disconnected"

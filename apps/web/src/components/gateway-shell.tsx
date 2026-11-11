@@ -8,11 +8,17 @@ import { usePathname } from "next/navigation"
 import { createContext, type ReactNode, useContext, useEffect, useState } from "react"
 import { type Load, useStatus } from "@/components/live"
 import { type ListCount, PageHeader, pageOf } from "@/components/page-header"
+import type { KnownEvents } from "@/lib/events"
 
 const GatewayLoad = createContext<Load>({ _tag: "loading" })
 
 /** The latest status poll, shared by every page. */
 export const useGateway = () => useContext(GatewayLoad)
+
+const GatewayEvents = createContext<KnownEvents | undefined>(undefined)
+
+/** The gateway's events as far as the status poll has seen them, oldest first; undefined until the first answer. */
+export const useGatewayEvents = () => useContext(GatewayEvents)
 
 const CountSetter = createContext<(count: ListCount | undefined) => void>(() => undefined)
 
@@ -30,17 +36,19 @@ export const useListCount = (total: number | undefined, matching: number | undef
 }
 
 export const GatewayShell = ({ children }: { readonly children: ReactNode }) => {
-  const load = useStatus()
+  const { load, events } = useStatus()
   const pathname = usePathname()
   const [count, setCount] = useState<ListCount | undefined>(undefined)
   return (
     <GatewayLoad.Provider value={load}>
-      <CountSetter.Provider value={setCount}>
-        <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-8">
-          <PageHeader count={count} current={pageOf(pathname)} load={load} />
-          {children}
-        </main>
-      </CountSetter.Provider>
+      <GatewayEvents.Provider value={events}>
+        <CountSetter.Provider value={setCount}>
+          <main className="mx-auto flex max-w-6xl flex-col gap-6 p-4 sm:p-8">
+            <PageHeader count={count} current={pageOf(pathname)} load={load} />
+            {children}
+          </main>
+        </CountSetter.Provider>
+      </GatewayEvents.Provider>
     </GatewayLoad.Provider>
   )
 }
