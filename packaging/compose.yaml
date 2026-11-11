@@ -5,9 +5,9 @@
 #   # ot-gateway.json next to it, and ot-gateway.env for secrets if the config names any
 #   docker compose up -d
 #
-# No sudo and no folders to make: the outbox and the history live in the `ot-gateway_data` volume, which is
-# also the gateway's working directory, so relative paths in the config (`./ot-gateway-buffer.sqlite`, as
-# `ot-gateway init` writes them) end up in it and outlive the container.
+# No sudo and no folders to make: the outbox and the history live in the `ot-gateway_data` volume. The image
+# resolves relative paths in the config (`./ot-gateway-buffer.sqlite`, as `ot-gateway init` writes them) against
+# it (OT_GATEWAY_DATA_DIR), not against the read-only config's folder, so they outlive the container.
 #
 # Upgrade by writing the new tag into the default below, then docker compose up -d; go back the same way:
 #   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-<new tag>/' compose.yaml && docker compose up -d
@@ -24,7 +24,8 @@ services:
     restart: unless-stopped
     # Time to flush the outbox and say goodbye to the broker before the container is killed.
     stop_grace_period: 30s
-    # Relative paths in the config resolve here, in the volume. The entrypoint is absolute, so this is safe.
+    # The volume, where releases before OT_GATEWAY_DATA_DIR resolved relative paths (their working directory).
+    # The entrypoint is absolute, so this is safe.
     working_dir: /var/lib/ot-gateway
     volumes:
       # Fails with a clear error when ot-gateway.json is missing, instead of mounting an empty folder in its place.

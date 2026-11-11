@@ -153,6 +153,9 @@ export type Freshness =
   | { readonly _tag: "late"; readonly lastSuccess: number | undefined }
   | { readonly _tag: "failing"; readonly reason: string; readonly lastSuccess: number | undefined }
 
+/** How long a read may be missing before it counts as late, shared with `ot-gateway status`. */
+export { lateAfterMs } from "@ot-gateway/api"
+
 export const freshness = (device: DeviceStatus, now: number): Freshness => {
   if (device.status === "failing")
     return { _tag: "failing", reason: device.reason ?? "failing", lastSuccess: device.lastSuccess }

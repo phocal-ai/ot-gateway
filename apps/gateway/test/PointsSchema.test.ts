@@ -71,15 +71,25 @@ describe("import --dry-run without a config", () => {
       const absent = `${directory}/ot-gateway.json`
       const template = `${directory}/points.csv`
       yield* fs.writeFileString(template, pointsListTemplate())
-      const result = yield* importPointsList(template, absent, { dryRun: true })
+      // No config named, and none in the working directory (this package's folder).
+      expect(yield* fs.exists("ot-gateway.json")).toBe(false)
+      const result = yield* importPointsList(template, undefined, { dryRun: true })
       expect(result.added).toHaveLength(3)
-      expect(yield* fs.exists(absent)).toBe(false)
+      expect(result.against).toBeUndefined()
 
       const bad = `${directory}/bad.csv`
       yield* fs.writeFileString(bad, "device,point,host,register,type\nMeter,p,1.2.3.4,1,float99\n")
-      const error = yield* importPointsList(bad, absent, { dryRun: true }).pipe(Effect.flip)
+      const error = yield* importPointsList(bad, undefined, { dryRun: true }).pipe(Effect.flip)
       expect(error.message).toContain("would make a config invalid")
       expect(error.message).not.toContain("nothing was written")
+
+      // A config that is named but not there is a mistake, dry run or not: never "ok" against a file that is missing.
+      for (const dryRun of [true, false]) {
+        const missing = yield* importPointsList(template, absent, { dryRun }).pipe(Effect.flip)
+        expect(missing.message).toContain(`no config at ${absent}`)
+        expect(missing.message).toContain(`ot-gateway init <folder> --points ${template}`)
+      }
+      expect(yield* fs.exists(absent)).toBe(false)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

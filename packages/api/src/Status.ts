@@ -58,8 +58,10 @@ const LATE_MIN_MS = 15_000
  */
 export const isDeviceLate = (device: DeviceStatus, now: number) =>
   device.status === "ok" &&
-  (device.lastSuccess === undefined ||
-    now - device.lastSuccess > Math.max(LATE_INTERVALS * device.pollIntervalMs, LATE_MIN_MS))
+  (device.lastSuccess === undefined || now - device.lastSuccess > lateAfterMs(device.pollIntervalMs))
+
+/** How long a read may be missing before it counts as late: a few poll intervals, and never under 15 s. */
+export const lateAfterMs = (pollIntervalMs: number) => Math.max(LATE_INTERVALS * pollIntervalMs, LATE_MIN_MS)
 
 /** One command and what became of it. */
 export const CommandStatus = Schema.Struct({

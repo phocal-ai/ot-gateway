@@ -99,6 +99,12 @@ describe("packaging/ot-gateway", () => {
     expect(runCall(result.log)).not.toContain("192.168.1.50")
   })
 
+  it("resolves the config's relative paths in the current folder, not in the image's data volume", () => {
+    const result = runWrapper(["run"], { FAKE_IMAGE_PRESENT: "1" })
+    expect(result.status).toBe(0)
+    expect(runCall(result.log)).toContain(" -e OT_GATEWAY_DATA_DIR= -v ")
+  })
+
   it("pulls a missing image quietly, retrying twice with a backoff", () => {
     const result = runWrapper(["--version"], { FAKE_PULL_FAILURES: "2" })
     expect(result.status).toBe(0)

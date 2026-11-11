@@ -11,12 +11,12 @@ Say in one line what is about to happen, then start with step 1. Keep the user p
 
 Everything goes through the `ot-gateway` command. Call it `otg` below:
 
-- in a checkout of the ot-gateway repository: `pnpm ot-gateway` (after `pnpm install`), from the repository root;
+- in a checkout of the ot-gateway repository: `pnpm ot-gateway` (after `pnpm install`). It always runs from the repository root, whatever folder you are in, so give every command the config's absolute path (`pnpm ot-gateway broker /home/me/site-1/ot-gateway.json`) and the points list's too; without it, a command looks for `ot-gateway.json` in the repository root. The outbox, the history and `ot-gateway.env` are found next to the config;
 - anywhere else with Node: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`);
 - with Docker and no Node (a Raspberry Pi, most edge boxes): `~/.local/bin/ot-gateway`, from that folder. It runs the CLI from the image at the gateway's version and leaves out `-t` when there is no terminal. Install it once, no sudo:
   `mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway`. Use the full path: a command over SSH does not read the login profile that puts `~/.local/bin` on the PATH.
 
-The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema`, `profiles list|get`, `broker`, `publish`, `status` and `events` to get the result as JSON on stdout, and nothing else there: a failure is `{"ok": false, "error": …}` (exit code 1), a usage mistake (unknown command or flag) `{"ok": false, "code": "usage", "error": …, "hint": …}` (exit code 2); help and logs go to stderr. `init --json` lists the commands to run next as `next: [{command, description}]`, over SSH with the tunnel to the status page among them. `watch --json` prints one JSON object per message (NDJSON). `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running; with `--seconds` it fails (exit code 1) when it cannot reach the broker, so empty output means connected with nothing arriving.
+The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to run it) and `ot-gateway.env` (the broker password), all written by `otg init`. Every command takes `--help`. Add `--json` to `init`, `check`, `discover`, `import`, `points schema`, `profiles list|get`, `broker`, `publish`, `status` and `events` to get the result as JSON on stdout, and nothing else there: a failure is `{"ok": false, "error": …}` (exit code 1), a usage mistake (unknown command or flag) `{"ok": false, "code": "usage", "error": …, "hint": …}` (exit code 2); help and logs go to stderr. `init --json` lists the commands to run next as `next: [{command, description}]`, with the status page's URL (and over SSH the tunnel to it) among them; when the folder is not the working directory they name the config's path, so run them as they are. Its `notes` say where the password goes, what the history takes on disk, and on macOS or Windows why not Compose: tell the user each one. `watch --json` prints one JSON object per message (NDJSON). `--dry-run` on `init` and `import` writes nothing. `watch` runs until stopped: always give it `--seconds`, since stopping the `docker` command leaves the image's container running; with `--seconds` it fails (exit code 1) when it cannot reach the broker, so empty output means connected with nothing arriving.
 
 ## Ground rules
 
@@ -28,7 +28,7 @@ The folder ends up holding `ot-gateway.json` (the config), `compose.yaml` (to ru
 
 ## 1. Preflight (no questions)
 
-- `docker compose version` says whether Docker Compose (2.24 or newer) is there. That decides step 8's default.
+- `docker compose version` says whether Docker Compose (2.24 or newer) is there, and `uname -s` (or the OS you know you are on) which system this is. On Linux, Compose decides step 8's default. On macOS and Windows it does not: Docker Desktop runs containers in a VM, so host networking does not reach devices on the LAN and BACnet broadcasts never get to the gateway. There the gateway runs with `otg run` (or Compose on a Linux box on the building network).
 - `node --version` must be 22.18 or later for `npx`. Without it, and with Docker there, use the image as `otg` (above) rather than install Node. With neither, stop and give the one install command for their OS: `fnm install 24` or `nvm install 24` if one is present; on a Raspberry Pi or Debian, Docker (`curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://get.docker.com -o get-docker.sh && sudo sh get-docker.sh`, docs/raspberry-pi-install.md part 5).
 - `otg --version` prints the version.
 
@@ -66,7 +66,7 @@ Add `--dry-run --json` first to see the config and the files it would write with
 - With a points list or EDE file already in hand, check it as in step 5 first, then use `--points <file>` instead of `--devices none`.
 - "None yet (simulated)": `--devices simulated`.
 
-It writes `ot-gateway.json`, `compose.yaml` and `ot-gateway.env`, and it never replaces a `compose.yaml` or `ot-gateway.env` that is already there. An existing `ot-gateway.json` is replaced only with `--force`: ask first. Ask the user to put the broker password into `ot-gateway.env` now, and the `OTEL_*` lines there (commented out) if they want telemetry.
+It writes `ot-gateway.json` (with the outbox and the history next to it, so the status page charts every point; `--no-history` leaves the history out when the disk is tight), `compose.yaml` and `ot-gateway.env`, and it never replaces a `compose.yaml` or `ot-gateway.env` that is already there. An existing `ot-gateway.json` is replaced only with `--force`: ask first. Ask the user to put the broker password into `ot-gateway.env` now, and the `OTEL_*` lines there (commented out) if they want telemetry.
 
 Then run `otg broker --json`, the cheapest test of the whole chain. `"ok": false` (exit code 1) means stop and fix the broker before any points work: the URL, TLS (`mqtts://`), the password in `ot-gateway.env` (`MQTT_PASSWORD is not set` means it is empty), or the broker's ACL when a message did not come back under the site's topics.
 
@@ -95,6 +95,8 @@ otg import points.csv --dry-run --json   # checks every row against the gateway'
 otg import points.csv             # adds the devices to ot-gateway.json
 ```
 
+`import` adds to a config that exists and fails, naming `init`, when the config it is given is not there. Only a dry run that names no config, before step 4, checks the list on its own; its JSON then says `"path": null` and why. `discover --points-list` ends with the import command for the config it read: run that one.
+
 `import` names columns it does not know: a misspelling there means a value was ignored. A few device settings have no column; add them to the device in `ot-gateway.json` when needed: `requestGapMs` (50–200) for a device behind a Modbus gateway or serial bridge, `maxRegistersPerRead` when the sheet limits a read, `bit` (0–15) points for a status word documented bit by bit.
 
 ## 6. Check
@@ -103,7 +105,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 
 ## 7. First run: values must flow
 
-1. Start the gateway in the background from the folder. With Docker Compose: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise `otg run`. Either reads `ot-gateway.env` from the folder.
+1. Start the gateway in the background from the folder. With Docker Compose on Linux: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise (and always on macOS and Windows, step 1) `otg run`. Either reads `ot-gateway.env` from the folder.
 2. After about 15 s, run `otg status --json`. Every device should be ok (`ok: true`; the command exits with 1 while a device fails or is late, or the broker was lost or a connect failed, but not while the gateway is still starting; and a failing device carries `failingSince` and `lastError`) and its points should have values (a point published as an aggregate gets its first value at the end of its first window). To show what reaches the broker, run `otg watch --seconds 10`.
 3. Diagnose what isn't working, fix `points.csv` or the config, and run again. Repeat until every device is ok or the cause is outside your reach:
 
@@ -118,13 +120,14 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
    To redo the devices from a fixed list, run `init` again with `--force` and the same flags (it keeps `compose.yaml` and `ot-gateway.env`), then import the list again.
 
 4. Show the user a few real values with units, and the status page URL.
-5. Stop the gateway before step 8 (`docker stop ot-gateway-test`, which also removes it).
+5. Show the user every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) with its value right now, and ask whether that is the state the equipment is in: a breaker that reads `true` (tripped) or an alarm that is on may be real, or the point's polarity may be the other way round. Don't call the setup done until the user has confirmed each one or fixed it.
+6. Stop the gateway before step 8 (`docker stop ot-gateway-test`, which also removes it).
 
 ## 8. Run it for real
 
-- **Docker Compose** (the default where `docker compose version` worked): with a yes from the user, `docker compose up -d` in the folder. It pins a release tag, restarts the gateway after a crash and at boot, uses host networking for BACnet and caps Docker's logs; the outbox and the history live in the `ot-gateway_data` volume. Check it with `otg status` and `docker compose logs --tail 20`; when something failed, `otg events` says what broke, since when and why, and when it came back. Upgrades write the new tag into `compose.yaml`, then `docker compose up -d` (docs/operations.md, "Upgrade").
+- **Docker Compose** (the default on Linux where `docker compose version` worked; not on macOS or Windows, where Docker Desktop cannot reach the building network, step 1): with a yes from the user, `docker compose up -d` in the folder. It pins a release tag, restarts the gateway after a crash and at boot, uses host networking for BACnet and caps Docker's logs; the outbox and the history live in the `ot-gateway_data` volume. Check it with `otg status` and `docker compose logs --tail 20`; when something failed, `otg events` says what broke, since when and why, and when it came back. Upgrades write the new tag into `compose.yaml`, then `docker compose up -d` (docs/operations.md, "Upgrade").
 - **No Docker** (systemd, from a checkout): with a yes, `sudo packaging/install.sh ot-gateway.json`, then `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env` and `sudo systemctl restart ot-gateway`. Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
-- **This machine, for now:** the one command to start it again is `otg run` in the folder.
+- **This machine, for now** (macOS and Windows always): the one command to start it again is `otg run` in the folder (`otg run <config path>` elsewhere). Say that it stops with the terminal or the session, and that a Linux box with Compose is the way to run it unattended.
 
 The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>` (any free local port works). Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`.
 

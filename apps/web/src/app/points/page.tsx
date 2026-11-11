@@ -7,13 +7,15 @@
  * Read-only. The catalog (`/api/points`) is asked for once; values follow the shared status poll. The filter and
  * the open point live in the URL, so a view can be linked.
  */
-import type { DeviceStatus, PointCatalog, PointInfo } from "@ot-gateway/api"
+import type { DeviceStatus, PointInfo } from "@ot-gateway/api"
 import { useSearchParams } from "next/navigation"
 import { type KeyboardEvent, type MouseEvent, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { useCatalog } from "@/components/catalog"
 import { useGateway, useListCount } from "@/components/gateway-shell"
 import { statusOf, useValues } from "@/components/live"
+import { NoDevicesYet } from "@/components/no-devices"
 import { PointSheet } from "@/components/point-sheet"
-import { PointValue } from "@/components/point-value"
+import { PointRead, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox"
@@ -29,56 +31,13 @@ import {
   type PointFilter,
   pointKey
 } from "@/lib/points"
-import { clockTime, failureLabel, fetchPoints, type Freshness, freshness, protocolName, settle } from "@/lib/status"
+import { isAlarm, pointFreshness } from "@/lib/glance"
+import { failureLabel, type Freshness, freshness, protocolName } from "@/lib/status"
 import { canMorph, withTransition } from "@/lib/transition"
 import { useWindowRows } from "@/lib/virtual"
 
 /** A row's height before the first one is measured (`h-14` and its border): spacers are sized from it. */
 const ROW_HEIGHT = 57
-
-/** Try again after this long when the catalog did not come. */
-const RETRY_MS = 5000
-
-type CatalogLoad =
-  | { readonly _tag: "loading" }
-  | { readonly _tag: "ok"; readonly catalog: PointCatalog }
-  | { readonly _tag: "failed"; readonly message: string }
-
-/**
- * The catalog once it came, and from which run of the gateway (its start time): it changes only when the gateway
- * restarts, so coming back to the page shows it at once, and a restart (perhaps with a new config) asks again.
- */
-let cachedCatalog: { readonly since: number; readonly catalog: PointCatalog } | undefined
-
-/** The catalog of the gateway that started at `since`, asked for until it comes once; nothing before the status says. */
-const useCatalog = (since: number | undefined) => {
-  const cached = since !== undefined && cachedCatalog?.since === since ? cachedCatalog.catalog : undefined
-  const [load, setLoad] = useState<CatalogLoad>(() =>
-    cached === undefined ? { _tag: "loading" } : { _tag: "ok", catalog: cached }
-  )
-  useEffect(() => {
-    if (since === undefined) return
-    if (cachedCatalog?.since === since) return setLoad({ _tag: "ok", catalog: cachedCatalog.catalog })
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const ask = () =>
-      settle(fetchPoints).then((result) => {
-        if (cancelled) return
-        if (result._tag === "Success") {
-          cachedCatalog = { since, catalog: result.success }
-          return setLoad({ _tag: "ok", catalog: result.success })
-        }
-        setLoad({ _tag: "failed", message: result.failure.message })
-        timer = setTimeout(() => void ask(), RETRY_MS)
-      })
-    void ask()
-    return () => {
-      cancelled = true
-      if (timer !== undefined) clearTimeout(timer)
-    }
-  }, [since])
-  return load
-}
 
 /** The filter and the open point: from the URL (a link, or the status page's device rows), written back on change. */
 const useUrlState = () => {
@@ -302,7 +261,7 @@ const PointsList = () => {
         <CardContent className="px-0">
           {found.length === 0 ? (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-6 text-sm text-muted-foreground">
-              <p>{catalog.points.length === 0 ? "The config has no points." : "No point matches."}</p>
+              {catalog.points.length === 0 ? <NoDevicesYet /> : <p>No point matches.</p>}
               {filtered ? (
                 <button
                   className="font-medium text-foreground underline-offset-4 hover:underline"
@@ -337,7 +296,7 @@ const PointsList = () => {
                   const index = range.start + offset
                   const key = pointKey(point)
                   const current = live(point)
-                  const failing = current.device?.status === "failing"
+                  const read = pointFreshness(point, current, now, unreachable)
                   return (
                     <TableRow
                       aria-rowindex={index + 2}
@@ -364,12 +323,12 @@ const PointsList = () => {
                         <span title={point.device}>{point.device}</span>
                       </TableCell>
                       <TableCell
-                        className={`text-right font-mono tabular-nums ${failing || unreachable ? "opacity-50" : ""}`}
+                        className={`text-right font-mono tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}
                       >
-                        <PointValue now={now} unit={point.unit} value={current?.value} />
+                        <PointValue alarm={isAlarm(point)} now={now} unit={point.unit} value={current.value} />
                       </TableCell>
                       <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
-                        {current?.value?.ts === undefined ? "–" : clockTime(current.value.ts, now)}
+                        <PointRead now={now} short state={read} />
                       </TableCell>
                       <TableCell className="hidden font-mono text-xs text-muted-foreground md:table-cell">
                         {point.source}
