@@ -57,7 +57,7 @@ All of the above is one file, the config. It says, in plain JSON, which broker t
 ## How you know it works
 
 - **The status page**, at `http://localhost:8080` on the gateway: every device, ok or failing with the reason; every point with its latest value (each lights up when it changes) and its history; the last message on each topic that went to the broker; and the running config.
-- **`ot-gateway status`** says the same in the terminal, and **`ot-gateway watch`** prints every message as it reaches the broker.
+- **`ot-gateway status`** says the same in the terminal, **`ot-gateway events`** what broke and when it came back, and **`ot-gateway watch`** prints every message as it reaches the broker.
 - **A health message** on the broker says whether the gateway is online and which devices are failing, so your platform can alert on it.
 
 ## What it won't do by accident
