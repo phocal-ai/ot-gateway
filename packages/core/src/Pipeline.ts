@@ -1,7 +1,9 @@
 /**
  * The polling pipeline for one device: read → scale → publish, repeated on the device's schedule. How a value
  * goes out is the point's publish mode (`Publish.ts`): on every read, the latest once per interval, a window's
- * aggregate, or on change. Windows close on clock-aligned timers, one per distinct interval.
+ * aggregate, or on change. Windows close on clock-aligned timers, one per distinct interval. A cycle publishes its
+ * points' values concurrently, so across points they reach the broker in no set order (each carries its own `ts`);
+ * one point's values keep the order they were read in.
  */
 import { Clock, Duration, Effect, Metric, Option, Random, Result, Schedule, Semaphore, Stream } from "effect"
 import type { Driver, PointValue, Reading } from "./Driver.ts"
@@ -74,6 +76,21 @@ const metaPayload = (point: AnyPoint, publish: Publish): string =>
     publish,
     semantics: point.semantics
   })
+
+/** A value to publish now, and what to remember once the broker took it. */
+interface Outgoing {
+  readonly pointId: string
+  readonly message: ValueMessage
+  readonly onSent?: () => void
+}
+const nothing: Outgoing | undefined = undefined
+
+/**
+ * How many of a cycle's values are published at once. QoS 1 waits for the broker's acknowledgement, so one at a time
+ * costs a round trip per point; the outbox drains with the same number, and the MQTT client's Receive Maximum bounds
+ * it further. Values of one point never overtake each other.
+ */
+const PUBLISH_CONCURRENCY = 16
 
 /** Retry transient driver failures with jittered exponential backoff, capped at 5 attempts per cycle. */
 const retryPolicy = {
@@ -215,14 +232,18 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   // gateway starts delays metadata instead of stopping the device. Metadata the
   // broker refuses is given up on: retrying cannot help.
   const unpublishedMeta = new Set(driver.points)
-  const publishMeta = Effect.forEach(
-    [...unpublishedMeta],
-    (point) =>
-      publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id)), { retain: true }).pipe(
-        Effect.catchTag("PublishError", skipRefused),
-        Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
-      ),
-    { discard: true }
+  // Suspended so each retry takes the points still missing then, not the ones missing when this was defined.
+  const publishMeta = Effect.suspend(() =>
+    Effect.forEach(
+      [...unpublishedMeta],
+      (point) =>
+        publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id)), { retain: true }).pipe(
+          Effect.catchTag("PublishError", skipRefused),
+          Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
+        ),
+      // A broker failure interrupts the others in flight; what did not get out is retried next cycle.
+      { concurrency: PUBLISH_CONCURRENCY, discard: true }
+    )
   ).pipe(
     // The device is still read: its health is independent of the broker's.
     Effect.catchTag("PublishError", (error) =>
@@ -256,15 +277,26 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     )
   })
 
-  const handleReading = Effect.fnUntraced(function* (reading: Reading, polledSince?: bigint) {
+  /**
+   * Everything handling a reading does short of publishing it: drop a stale polled value, scale, refuse a
+   * non-finite number, record to the history, and apply the publish mode. Returns what to publish now, if anything;
+   * `onSent` is what to remember once the broker took it. Nothing here waits on I/O.
+   */
+  const decideReading = Effect.fnUntraced(function* (reading: Reading, polledSince?: bigint) {
     const point = points.get(reading.pointId)
-    if (point === undefined) return
+    if (point === undefined) return nothing
     if (polledSince === undefined) pushedAt.set(point.id, yield* Clock.monotonicTimeNanos)
-    else if ((pushedAt.get(point.id) ?? -1n) >= polledSince) return
+    else if ((pushedAt.get(point.id) ?? -1n) >= polledSince) return nothing
     const value = typeof reading.value === "number" ? applyScaling(reading.value, point.scaling) : reading.value
     // NaN or ±Infinity (a float register holding NaN, or scaling that overflows) is not a reading:
     // JSON has no such number, and NaN as the deadband reference would never compare as changed again.
-    if (typeof value === "number" && !Number.isFinite(value)) return yield* nonFinite(point.id, reading.value)
+    // It also ends what the point's window holds, so later windows do not report the last good value as if it held.
+    if (typeof value === "number" && !Number.isFinite(value)) {
+      yield* nonFinite(point.id, reading.value)
+      const window = windows.get(point.id)
+      if (window !== undefined) windows.set(point.id, interruptWindow(window, yield* monotonicMillis))
+      return nothing
+    }
     if (nonFinitePoints.delete(point.id)) {
       yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
     }
@@ -277,18 +309,15 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     const policy = policyOf(point.id)
     switch (policy.mode) {
       case "sample": {
-        if (policy.intervalMs === undefined) {
-          yield* send(point.id, message)
-          return
-        }
+        if (policy.intervalMs === undefined) return { pointId: point.id, message }
         latest.set(point.id, message)
         fresh.add(point.id)
-        return
+        return nothing
       }
       case "aggregate": {
         const atMono = yield* monotonicMillis
         windows.set(point.id, addReading(windows.get(point.id) ?? openWindow(atMono), value, atMono, reading.timestamp))
-        return
+        return nothing
       }
       case "change": {
         const atMono = yield* monotonicMillis
@@ -296,15 +325,27 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         const quietTooLong =
           policy.maxSilenceMs !== undefined && sentAt !== undefined && atMono - sentAt >= policy.maxSilenceMs
         if (!quietTooLong && !exceedsDeadband(Option.fromUndefinedOr(last.get(point.id)), value, policy.deadband)) {
-          return yield* Metric.update(counters.suppressed, 1)
+          yield* Metric.update(counters.suppressed, 1)
+          return nothing
         }
         // Only remember the value once it is out, so a failed publish is retried with the next read.
-        if (!(yield* send(point.id, message))) return
-        last.set(point.id, value)
-        lastSentAt.set(point.id, atMono)
-        return
+        return {
+          pointId: point.id,
+          message,
+          onSent: () => {
+            last.set(point.id, value)
+            lastSentAt.set(point.id, atMono)
+          }
+        }
       }
     }
+  })
+
+  /** Handles one reading start to finish: pushed values, and a cycle that read the same point twice. */
+  const handleReading = Effect.fnUntraced(function* (reading: Reading, polledSince?: bigint) {
+    const outgoing = yield* decideReading(reading, polledSince)
+    if (outgoing === undefined) return
+    if (yield* send(outgoing.pointId, outgoing.message)) outgoing.onSent?.()
   })
 
   /**
@@ -325,19 +366,43 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   })
 
   /**
+   * Publishes one of a cycle's values, alongside up to `PUBLISH_CONCURRENCY - 1` others. A broker failure is kept in
+   * `unavailable` instead of failing, so the publishes already in flight finish on their own and none starts after it.
+   */
+  const publishOutgoing = Effect.fnUntraced(function* (outgoing: Outgoing) {
+    const sent = yield* send(outgoing.pointId, outgoing.message).pipe(
+      Effect.catchTag("PublishError", (error) =>
+        Effect.sync(() => {
+          unavailable ??= error
+          return false
+        })
+      )
+    )
+    if (sent) outgoing.onSent?.()
+  })
+
+  /**
    * Closes the windows of one interval at `endMs`: the latest value of each sample point that read one since the
    * last send, and the aggregate of each aggregate point. A window with no read in it is sent only while the
    * device is fine: then its value held unchanged (a quiet change-of-value point); otherwise nothing is known.
+   *
+   * Every window of the interval closes, whether or not the broker takes its message, so no window stays open
+   * across an outage and later reports it as one interval. After the first broker failure the rest are not offered
+   * to it (a broker that is down would make each wait for the publish timeout), and the failure is reported once,
+   * after the loop. A sample point whose latest value was not sent keeps it fresh, so the next boundary offers it.
    */
   const closeWindows = Effect.fnUntraced(function* (intervalMs: number, endMs: number) {
     const atMono = yield* monotonicMillis
+    let failed: PublishError | undefined
     for (const point of driver.points) {
       const policy = policyOf(point.id)
       if (windowIntervalMs(policy) !== intervalMs) continue
       if (policy.mode === "sample") {
         const message = latest.get(point.id)
-        if (message === undefined || !fresh.delete(point.id)) continue
-        yield* send(point.id, message)
+        if (message === undefined || !fresh.has(point.id) || failed !== undefined) continue
+        const sent = yield* Effect.result(send(point.id, message))
+        if (Result.isFailure(sent)) failed = sent.failure
+        else fresh.delete(point.id)
         continue
       }
       const window = windows.get(point.id)
@@ -345,8 +410,11 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       const closed = closeWindow(window, atMono, endMs, intervalMs, point.unit)
       windows.set(point.id, closed.next)
       if (closed.message === undefined || (closed.message.count === 0 && deviceProblem !== undefined)) continue
-      yield* send(point.id, closed.message)
+      if (failed !== undefined) continue
+      const sent = yield* Effect.result(send(point.id, closed.message))
+      if (Result.isFailure(sent)) failed = sent.failure
     }
+    if (failed !== undefined) return yield* failed
   })
 
   /** A device that stops answering ends what its last values said: an outage is not averaged as if they held. */
@@ -360,6 +428,11 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
 
   // A hung driver or publisher must not hold the device forever with its health still `ok`.
   const deadlineMs = ctx.cycleTimeoutMs ?? defaultCycleTimeoutMs(ctx.pollIntervalMs)
+  const stageNames = {
+    "poll-cycle": "polling cycle",
+    "pushed-value": "pushed value",
+    "publish-window": "closing a window"
+  } as const
   const deadline = (stage: PipelineTimeout["stage"]) =>
     Effect.timeoutOrElse({
       duration: deadlineMs,
@@ -369,7 +442,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
             device: driver.deviceId,
             stage,
             timeoutMs: deadlineMs,
-            message: `${stage === "poll-cycle" ? "polling cycle" : "pushed value"} did not finish within ${deadlineMs} ms`
+            message: `${stageNames[stage]} did not finish within ${deadlineMs} ms`
           })
         )
     })
@@ -386,16 +459,28 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     const readAt = yield* Clock.currentTimeMillis
     yield* Metric.update(deviceLastSuccess, readAt / 1000)
     yield* Effect.annotateCurrentSpan("ot_gateway.readings", readings.length)
-    // Every reading is handled even when the broker is down: a failed publish must not keep the points after it out
-    // of the history and the status page. After the first one, the rest of the cycle skips publishing (`send`), and
-    // the failure is reported once, after all of them.
+    // Two phases, both under the permit and the cycle's deadline. First every reading is decided one after another
+    // (history, deadband, windows: nothing that waits), so a broker that is down cannot keep any point out of the
+    // history and the status page. Then the values to send are published `PUBLISH_CONCURRENCY` at a time, so a slow
+    // uplink costs one round trip per batch instead of one per point. After the first broker failure no new publish
+    // starts (`send`), and the failure is reported once, after all of them. A cycle that read a point twice is
+    // handled one reading at a time, so a point's values never overtake each other or race its deadband.
     const failedPublish = yield* handling.withPermit(
       Effect.gen(function* () {
         unavailable = undefined
-        for (const reading of readings) {
-          const handled = yield* Effect.result(handleReading(reading, polledSince))
-          if (Result.isFailure(handled)) unavailable ??= handled.failure
+        if (new Set(readings.map((reading) => reading.pointId)).size < readings.length) {
+          for (const reading of readings) {
+            const handled = yield* Effect.result(handleReading(reading, polledSince))
+            if (Result.isFailure(handled)) unavailable ??= handled.failure
+          }
+          return unavailable
         }
+        const outgoing: Array<Outgoing> = []
+        for (const reading of readings) {
+          const decided = yield* decideReading(reading, polledSince)
+          if (decided !== undefined) outgoing.push(decided)
+        }
+        yield* Effect.forEach(outgoing, publishOutgoing, { concurrency: PUBLISH_CONCURRENCY, discard: true })
         return unavailable
       }).pipe(
         // Also when the cycle's deadline interrupts it: pushed values and closing windows must not skip publishing.

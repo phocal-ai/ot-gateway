@@ -9,6 +9,7 @@ import {
   every,
   failureLabel,
   fillPercent,
+  formatValue,
   freshness,
   since,
   topicKind
@@ -101,8 +102,20 @@ describe("the words for time", () => {
 
   it("gives a clock time, with the date only when it isn't today", () => {
     const now = new Date(2026, 10, 5, 14, 30).getTime()
-    expect(clockTime(new Date(2026, 10, 5, 14, 2, 31).getTime(), now)).toMatch(/14:02:31|2:02:31/)
-    expect(clockTime(new Date(2026, 10, 4, 9, 0, 0).getTime(), now)).toMatch(/Nov.*4|4.*Nov/)
+    expect(clockTime(new Date(2026, 10, 5, 14, 2, 31).getTime(), now)).toBe("14:02:31")
+    expect(clockTime(new Date(2026, 10, 4, 9, 0, 0).getTime(), now)).toBe("Nov 4 09:00:00")
+  })
+})
+
+describe("formatValue", () => {
+  it("groups thousands with a comma and writes decimals with a dot, whatever the browser's locale", () => {
+    expect(formatValue(1500)).toBe("1,500")
+    expect(formatValue(1.5)).toBe("1.50")
+    expect(formatValue(1234.5)).toBe("1,234.5")
+    expect(formatValue(-0.125)).toBe("-0.13")
+    expect(formatValue(42)).toBe("42")
+    expect(formatValue(true)).toBe("on")
+    expect(formatValue(undefined)).toBe("–")
   })
 })
 

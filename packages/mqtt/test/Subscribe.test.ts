@@ -4,8 +4,8 @@
  * Client and test broker run on an in-memory network under the test clock.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { makeMemoryNetwork } from "@ot-gateway/core"
-import { Effect, Exit, Fiber, Scope } from "effect"
+import { makeMemoryNetwork, mqttSubscribes } from "@ot-gateway/core"
+import { Effect, Exit, Fiber, Metric, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { makeMqttClient } from "../src/Client.ts"
 import type { InboundMessage } from "../src/Client.ts"
@@ -125,5 +125,88 @@ describe("MQTT subscriptions", () => {
       ])
       expect(control.connects.map((connect) => connect.protocolVersion)).toEqual([4])
     })
+  )
+})
+
+const count = (outcome: "granted" | "refused" | "missing") =>
+  Metric.value(Metric.withAttributes(mqttSubscribes, { outcome })).pipe(Effect.map((state) => state.count))
+
+/** How many SUBSCRIBEs ended with each outcome. */
+const subscribes = Effect.gen(function* () {
+  return { granted: yield* count("granted"), refused: yield* count("refused"), missing: yield* count("missing") }
+})
+
+/** Each test counts into a registry of its own. */
+const withOwnMetrics = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  effect.pipe(Effect.provideService(Metric.MetricRegistry, new Map()))
+
+describe("MQTT SUBACK tracking", () => {
+  it.effect("counts a granted subscription once per connect, and again after a reconnect", () =>
+    Effect.gen(function* () {
+      const { startBroker } = yield* setup()
+      const { stop } = yield* startBroker
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* subscribes).toEqual({ granted: 1, refused: 0, missing: 0 })
+      yield* stop
+      yield* startBroker
+      yield* TestClock.adjust("30 seconds")
+      expect(yield* subscribes).toEqual({ granted: 2, refused: 0, missing: 0 })
+    }).pipe(Effect.scoped, withOwnMetrics)
+  )
+
+  it.effect("counts a refused filter as refused, not granted", () =>
+    Effect.gen(function* () {
+      const { control, startBroker } = yield* setup()
+      control.refusedFilters.add(commands)
+      yield* startBroker
+      yield* TestClock.adjust("30 seconds")
+      expect(yield* subscribes).toEqual({ granted: 0, refused: 1, missing: 0 })
+    }).pipe(Effect.scoped, withOwnMetrics)
+  )
+
+  it.effect("counts a missing SUBACK after 10 seconds, once, and keeps the connection", () =>
+    Effect.gen(function* () {
+      const { control, startBroker, client } = yield* setup()
+      control.ackSubscribes = false
+      yield* startBroker
+      // Connected within the first 2 seconds: the deadline has not passed yet.
+      yield* TestClock.adjust("2 seconds")
+      yield* TestClock.adjust("7 seconds")
+      expect(yield* subscribes).toEqual({ granted: 0, refused: 0, missing: 0 })
+      yield* TestClock.adjust("10 seconds")
+      expect(yield* subscribes).toEqual({ granted: 0, refused: 0, missing: 1 })
+      yield* TestClock.adjust("60 seconds")
+      expect(yield* subscribes).toEqual({ granted: 0, refused: 0, missing: 1 })
+      expect(control.connects).toHaveLength(1)
+      yield* client.publish("s/b/ventilation-1/temperature", "21.5")
+      expect(control.messages.map((message) => message.payload)).toEqual(["21.5"])
+    }).pipe(Effect.scoped, withOwnMetrics)
+  )
+
+  it.effect("does not settle the SUBSCRIBE with a SUBACK for another packet id", () =>
+    Effect.gen(function* () {
+      const { control, startBroker } = yield* setup()
+      control.subackPacketId = 999
+      yield* startBroker
+      yield* TestClock.adjust("2 seconds")
+      expect(yield* subscribes).toEqual({ granted: 0, refused: 0, missing: 0 })
+      yield* TestClock.adjust("10 seconds")
+      expect(yield* subscribes).toEqual({ granted: 0, refused: 0, missing: 1 })
+    }).pipe(Effect.scoped, withOwnMetrics)
+  )
+
+  it.effect("counts nothing missing for a connection that ended before the deadline", () =>
+    Effect.gen(function* () {
+      const { control, startBroker } = yield* setup()
+      control.ackSubscribes = false
+      const { stop } = yield* startBroker
+      yield* TestClock.adjust("2 seconds")
+      yield* stop
+      control.ackSubscribes = true
+      yield* startBroker
+      yield* TestClock.adjust("30 seconds")
+      expect(control.connects).toHaveLength(2)
+      expect(yield* subscribes).toEqual({ granted: 1, refused: 0, missing: 0 })
+    }).pipe(Effect.scoped, withOwnMetrics)
   )
 })

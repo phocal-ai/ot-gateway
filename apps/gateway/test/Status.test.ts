@@ -336,6 +336,24 @@ describe("status", () => {
     })
   )
 
+  it.effect("ignores a topic longer than any the gateway publishes", () =>
+    Effect.gen(function* () {
+      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+      // Below the topic cap: not kept.
+      state.recordPublish(`s/b/${"x".repeat(600)}/p/$set/result`, "{}", { retained: false, at: 1 })
+      expect((yield* state.messages).messages).toEqual([])
+      for (let index = 0; index < 2_000; index++) {
+        state.recordPublish(`s/b/meter/p${index}`, "x", { retained: false, at: index })
+      }
+      // At the cap: not counted as a dropped topic either.
+      state.recordPublish(`s/b/meter/p0/${"y".repeat(600)}`, "{}", { retained: false, at: 3_001 })
+      const { messages, droppedTopics } = yield* state.messages
+      expect(messages).toHaveLength(2_000)
+      expect(messages.every((message) => message.topic.length <= 512)).toBe(true)
+      expect(droppedTopics).toBe(0)
+    })
+  )
+
   it.effect("shows the host monitor's last sample with the gateway's version", () =>
     Effect.gen(function* () {
       const parsed = yield* config
@@ -412,7 +430,8 @@ describe("status", () => {
       yield* Effect.sleep("300 millis")
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
       const series = yield* client.status.history({ query: { device: "meter", point: "power", buckets: 1 } })
-      expect(series.resolution).toBe("read")
+      // The last hour in one bucket: an hour-wide step, so from the minute rollups.
+      expect(series.resolution).toBe("minute")
       expect(series.buckets).toEqual([expect.objectContaining({ min: 3, max: 5, avg: 4, count: 2 })])
       const unknown = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "nope" } }))
       expect(unknown._tag).toBe("HistoryQueryInvalid")

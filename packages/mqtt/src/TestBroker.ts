@@ -10,7 +10,7 @@
  *
  * A client that goes away without DISCONNECT has its last will published, as
  * a real broker would. `BrokerControl` injects faults: refuse connections,
- * withhold PUBACKs or PINGRESPs, refuse messages, or drop the client on a
+ * withhold PUBACKs, PINGRESPs or SUBACKs, refuse messages or filters, or drop the client on a
  * message above a size limit it never announced.
  */
 import { Effect, Queue, Result } from "effect"
@@ -70,6 +70,17 @@ export interface BrokerControl {
   readonly refusedTopics: Set<string>
   /** Answer PINGREQ. With pings unanswered and nothing else sent, the client sees a dead broker. */
   answerPings: boolean
+  /** Answer SUBSCRIBE with a SUBACK. */
+  ackSubscribes: boolean
+  /**
+   * Route accepted messages to subscribers (default true). Off, the broker takes messages and delivers none,
+   * as one whose access rules let a user publish but not read.
+   */
+  routeMessages: boolean
+  /** Topic filters refused with 0x87 (not authorized) in the SUBACK. */
+  readonly refusedFilters: Set<string>
+  /** Answer SUBSCRIBE with this packet id instead of its own: a SUBACK for no pending SUBSCRIBE. */
+  subackPacketId?: number
   readonly connects: Array<Omit<Connect, "password"> & { readonly hasPassword: boolean }>
   readonly messages: Array<ReceivedMessage>
   /** Last retained payload per topic. */
@@ -100,6 +111,9 @@ export const makeBrokerControl = (): BrokerControl => ({
   pubackReason: 0,
   refusedTopics: new Set(),
   answerPings: true,
+  ackSubscribes: true,
+  routeMessages: true,
+  refusedFilters: new Set(),
   connects: [],
   messages: [],
   retained: new Map(),
@@ -158,6 +172,7 @@ const accept = (control: BrokerControl, message: ReceivedMessage) => {
     control.retained.set(message.topic, message.payload)
     control.retainedMessages.set(message.topic, message)
   }
+  if (!control.routeMessages) return
   for (const subscriber of control.subscribers) deliver(subscriber, message, false)
 }
 
@@ -256,18 +271,25 @@ const serveConnection = (control: BrokerControl) =>
             case PacketType.SUBSCRIBE: {
               const subscribe = decodeSubscribe(split.body, subscriber.version)
               if (Result.isFailure(subscribe) || clientId === undefined) return
-              subscriber.subscriptions.push(...subscribe.success.subscriptions)
-              yield* writer.write(
-                encodeSuback(
-                  {
-                    packetId: subscribe.success.packetId,
-                    reasonCodes: subscribe.success.subscriptions.map((subscription) => subscription.qos)
-                  },
-                  subscriber.version
-                )
+              const granted = subscribe.success.subscriptions.filter(
+                (subscription) => !control.refusedFilters.has(subscription.filter)
               )
+              subscriber.subscriptions.push(...granted)
+              if (control.ackSubscribes) {
+                yield* writer.write(
+                  encodeSuback(
+                    {
+                      packetId: control.subackPacketId ?? subscribe.success.packetId,
+                      reasonCodes: subscribe.success.subscriptions.map((subscription) =>
+                        control.refusedFilters.has(subscription.filter) ? 0x87 : subscription.qos
+                      )
+                    },
+                    subscriber.version
+                  )
+                )
+              }
               // Retain Handling 0: the retained messages a new subscription matches, flagged as retained (§3.3.1.3).
-              const fresh = { ...subscriber, subscriptions: [...subscribe.success.subscriptions] }
+              const fresh = { ...subscriber, subscriptions: [...granted] }
               for (const message of control.retainedMessages.values()) deliver(fresh, message, true)
               subscriber.nextPacketId = fresh.nextPacketId
               break

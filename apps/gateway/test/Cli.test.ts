@@ -5,8 +5,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig, publicTestBrokers } from "@ot-gateway/core"
-import { Effect } from "effect"
-import { cliVersion, describeConfig, toCliArgs } from "../src/Cli.ts"
+import { Effect, FileSystem } from "effect"
+import { TestConsole } from "effect/testing"
+import type { BrokerReport } from "../src/Broker.ts"
+import { brokerOutcome, cliVersion, describeConfig, pointsListOutcome, runCli, toCliArgs } from "../src/Cli.ts"
 import {
   demoBanner,
   demoConfig,
@@ -105,5 +107,74 @@ describe("demo", () => {
       // Every broker the demo may pick is one the config guard knows as public.
       for (const broker of publicBrokers) expect(publicTestBrokers.has(broker.host)).toBe(true)
     })
+  )
+})
+
+describe("discover --points-list", () => {
+  it.effect("prints what it wrote as JSON with --json, and nothing on stdout without", () =>
+    Effect.gen(function* () {
+      const written = { path: "points.csv", devices: 2, points: 14 }
+      yield* pointsListOutcome(false)(written)
+      expect(yield* TestConsole.logLines).toEqual([])
+      yield* pointsListOutcome(true)(written)
+      const [line] = yield* TestConsole.logLines
+      expect(JSON.parse(String(line))).toEqual({ ok: true, path: "points.csv", devices: 2, points: 14 })
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it.effect("fails with {ok: false} when the file exists, before it asks the network", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      yield* fs.writeFileString(path, "kept")
+      const error = yield* Effect.flip(runCli(["discover", exampleConfigPath, "--points-list", path, "--json"]))
+      expect(error.message).toContain(`${path} exists`)
+      const [line] = yield* TestConsole.logLines
+      expect(JSON.parse(String(line))).toMatchObject({ ok: false, path: exampleConfigPath })
+      expect(yield* fs.readFileString(path)).toBe("kept")
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+})
+
+describe("broker", () => {
+  const noRoundTrip: BrokerReport = {
+    ok: false,
+    broker: "mqtt://127.0.0.1:1883",
+    protocolVersion: "5",
+    receiveMaximum: 10,
+    maximumQoS: 1,
+    retainAvailable: true,
+    keepAliveSeconds: 30,
+    roundTripTopic: "s/b/$gateway/g/check/abcdef",
+    warnings: ["a message to s/b/$gateway/g/check/abcdef did not come back within 5 seconds"]
+  }
+
+  it.effect("prints the report, then fails when the message did not come back", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(brokerOutcome(false)(noRoundTrip))
+      expect(error._tag).toBe("BrokerCommandError")
+      expect(error.message).toContain("did not come back")
+      const lines = yield* TestConsole.logLines
+      expect(lines).toHaveLength(1)
+      expect(String(lines[0])).toContain("round trip: NO ANSWER")
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it.effect("with --json, prints the report with ok false once, and fails", () =>
+    Effect.gen(function* () {
+      yield* Effect.flip(brokerOutcome(true)(noRoundTrip))
+      const lines = yield* TestConsole.logLines
+      expect(lines).toHaveLength(1)
+      expect(JSON.parse(String(lines[0]))).toMatchObject({ ok: false, roundTripTopic: noRoundTrip.roundTripTopic })
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it.effect("succeeds when the message came back", () =>
+    Effect.gen(function* () {
+      yield* brokerOutcome(true)({ ...noRoundTrip, ok: true, roundTripMs: 3, warnings: [] })
+      const [line] = yield* TestConsole.logLines
+      expect(JSON.parse(String(line))).toMatchObject({ ok: true, roundTripMs: 3 })
+    }).pipe(Effect.provide(TestConsole.layer))
   )
 })

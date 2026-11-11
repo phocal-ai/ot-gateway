@@ -6,7 +6,11 @@
 #   scripts/build-package.sh             # dist/npm, and dist/ot-gateway-<version>.tgz
 #
 # OT_GATEWAY_VERSION sets the version (a release tag such as v0.8.0, or
-# 0.8.0; default: 0.0.0-dev). The package has no dependencies: esbuild bundles
+# 0.8.0; default: 0.0.0-dev). A plain release (X.Y.Z, no prerelease suffix)
+# must match the tag packaging/compose.yaml pins (OT_GATEWAY_TAG), which `init`
+# writes next to ot-gateway.json: the script refuses to build otherwise, so a
+# release whose pins pull request was missed cannot ship a compose file that
+# runs the previous image. The package has no dependencies: esbuild bundles
 # Effect and our packages, and Node runs it directly (Node does not strip
 # TypeScript types under node_modules, so the sources cannot ship as they are).
 #
@@ -25,6 +29,14 @@ version=${tag#v}
   echo "not a version: $tag" >&2
   exit 1
 }
+
+if [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  pinned=$(sed -n 's/^ *image: .*OT_GATEWAY_TAG:-\([^}]*\)}.*/\1/p' "$repo/packaging/compose.yaml")
+  [[ $pinned == "v$version" ]] || {
+    echo "packaging/compose.yaml pins ${pinned:-no tag}, not v$version: move the release pins first (CONTRIBUTING.md)" >&2
+    exit 1
+  }
+fi
 
 rm -rf "$out" "$repo"/dist/ot-gateway-*.tgz
 mkdir -p "$out/apps/gateway/src" "$out/apps/web" "$out/examples" "$out/packaging" "$out/profiles"

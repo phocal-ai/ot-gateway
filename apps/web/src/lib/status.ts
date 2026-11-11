@@ -14,6 +14,7 @@ import {
 import { Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
+import { formatNumber } from "./format"
 import { chunkKeys } from "./points"
 
 /** The gateway did not answer, not in time, or not with a status: for the page, all the same. */
@@ -130,10 +131,14 @@ export const unitLabel = (unit: string | undefined) => {
   return unitSymbols[name] ?? name
 }
 
+/**
+ * A point's value for people: whole numbers and values from 1000 grouped with up to three decimals (1,500; 1,234.5),
+ * smaller fractions with exactly two (1.50), always in `formatNumber`'s `en-US` convention.
+ */
 export const formatValue = (value: number | boolean | undefined) => {
   if (value === undefined) return "–"
   if (typeof value === "boolean") return value ? "on" : "off"
-  return Math.abs(value) >= 1000 || Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2)
+  return Math.abs(value) >= 1000 || Number.isInteger(value) ? formatNumber(value) : formatNumber(value, 2)
 }
 
 /** A device counts as late once this many poll intervals pass without a read, and never sooner than `LATE_MIN_MS`. */
@@ -206,13 +211,21 @@ export const since = (then: number | undefined, now: number) => {
   return `${Math.floor(seconds / 86_400)} d`
 }
 
-/** A moment as a clock time (14:02:31), with the date when it is not today. Unlike "12 s ago", it does not change while you look. */
+/**
+ * A moment as a clock time (14:02:31), with the date when it is not today (Nov 4 09:00:00), in the browser's time
+ * zone but the same words in every locale. Unlike "12 s ago", it does not change while you look.
+ */
 export const clockTime = (at: number, now: number) => {
   const moment = new Date(at)
-  const time = moment.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+  const time = moment.toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23"
+  })
   return moment.toDateString() === new Date(now).toDateString()
     ? time
-    : `${moment.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`
+    : `${moment.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`
 }
 
 /** "0.4 %", "37 %": how full the buffer is; under 1 % keeps a decimal, so a filling buffer never reads 0 %. */

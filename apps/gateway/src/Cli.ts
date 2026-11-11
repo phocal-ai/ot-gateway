@@ -19,7 +19,7 @@ import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover, discoverToPointsList } from "./Discover.ts"
+import { discover, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -27,7 +27,14 @@ import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
-import { checkBroker, formatBrokerReport, formatPublished, publishOnce } from "./Broker.ts"
+import {
+  type BrokerReport,
+  checkBroker,
+  formatBrokerReport,
+  formatPublished,
+  publishOnce,
+  roundTripFailure
+} from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
 import { ConfigFileError, loadConfig } from "./LoadConfig.ts"
@@ -148,6 +155,10 @@ const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ c
   )
 ).pipe(Command.withDescription("Validate a config without connecting to anything; lists every mistake with its path"))
 
+/** What `discover --points-list` prints on stdout: with --json its outcome; without, stderr has said it already. */
+export const pointsListOutcome = (json: boolean) => (written: PointsListWritten) =>
+  json ? printJson({ ok: true, ...written }) : Effect.void
+
 const discoverCommand = Command.make(
   "discover",
   {
@@ -164,12 +175,12 @@ const discoverCommand = Command.make(
     ),
     json: jsonFlag
   },
-  // The draft is JSON already; --json makes a failure JSON too.
+  // The draft is JSON already; --json makes a failure JSON too, and what --points-list wrote.
   ({ config, pointsList, address, json }) =>
     Effect.flatMap(loadConfig(config), (decoded) => {
       const options = { address: Option.getOrUndefined(address) }
       return Option.isSome(pointsList)
-        ? discoverToPointsList(decoded, pointsList.value, undefined, options)
+        ? Effect.flatMap(discoverToPointsList(decoded, pointsList.value, undefined, options), pointsListOutcome(json))
         : discover(decoded, undefined, options)
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
@@ -460,11 +471,21 @@ const watchCommand = Command.make(
   ])
 )
 
+/**
+ * `broker`'s report, as JSON or text, then a failure when its message did not come back, so the exit code is 1.
+ * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON.
+ */
+export const brokerOutcome = (json: boolean) =>
+  Effect.fnUntraced(function* (report: BrokerReport) {
+    yield* json ? printJson(report) : Console.log(formatBrokerReport(report))
+    if (!report.ok) return yield* roundTripFailure(report)
+  })
+
 const brokerCommand = Command.make("broker", { config: configPath, json: jsonFlag }, ({ config, json }) =>
   loadConfig(config).pipe(
     Effect.flatMap(checkBroker),
-    Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatBrokerReport(report)))),
-    jsonFailure(json, { path: config })
+    jsonFailure(json, { path: config }),
+    Effect.flatMap(brokerOutcome(json))
   )
 ).pipe(
   Command.withDescription(

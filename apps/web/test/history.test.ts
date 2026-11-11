@@ -1,6 +1,6 @@
 /** Drawing a history: where lines break, and the ticks on both axes. */
 import { describe, expect, it } from "@effect/vitest"
-import { nearest, segments, timeTicks, valueTicks } from "../src/lib/history"
+import { gatewayTime, nearest, segments, timeTicks, valueTicks } from "../src/lib/history"
 
 const bucket = (t: number, avg = 1) => ({ t, min: avg, max: avg, avg, count: 1 })
 
@@ -63,5 +63,13 @@ describe("nearest", () => {
   it("finds the bucket closest to a time", () => {
     expect(nearest([bucket(0), bucket(10), bucket(20)], 14)?.t).toBe(10)
     expect(nearest([], 14)).toBeUndefined()
+  })
+})
+
+describe("gatewayTime", () => {
+  it("is the gateway's last time, moved on by the monotonic time since it arrived", () => {
+    // The browser's own clock (a day off here) plays no part.
+    expect(gatewayTime({ now: 1_000_000, at: 500 }, 500)).toBe(1_000_000)
+    expect(gatewayTime({ now: 1_000_000, at: 500 }, 2_500)).toBe(1_002_000)
   })
 })

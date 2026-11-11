@@ -13,10 +13,11 @@ import {
   makeMqttClient,
   type MqttClientOptions,
   MqttConnectionError,
-  parseBrokerUrl
+  parseBrokerUrl,
+  readBrokerPassword
 } from "@ot-gateway/mqtt"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { Config, Deferred, Effect, Option, Random, Schema } from "effect"
+import { Deferred, Effect, Option, Random, Schema } from "effect"
 
 /** How long the first dial may take, past the client's own connect timeout, before the command gives up. */
 const DIAL_TIMEOUT = "15 seconds"
@@ -40,7 +41,7 @@ export const brokerClient = Effect.fn("brokerClient")(function* (
   options: Omit<MqttClientOptions, "clientId" | "username" | "password" | "protocolVersion"> = {}
 ) {
   const address = yield* parseBrokerUrl(settings.url)
-  const password = settings.passwordEnv === undefined ? undefined : yield* Config.Redacted(settings.passwordEnv)
+  const password = yield* readBrokerPassword(settings)
   const openTimeout = "10 seconds"
   const socket = address.tls
     ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
@@ -54,8 +55,11 @@ export const brokerClient = Effect.fn("brokerClient")(function* (
   })
 })
 
-/** The first dial's outcome, as one error a person can read. */
-const firstDialOf = (client: { readonly firstDial: Effect.Effect<void, { readonly message: string }> }, url: string) =>
+/** The first dial's outcome, as one error a person can read. Shared by `watch --seconds`, `broker` and `publish`. */
+export const firstDialOf = (
+  client: { readonly firstDial: Effect.Effect<void, { readonly message: string }> },
+  url: string
+) =>
   client.firstDial.pipe(
     Effect.timeoutOrElse({
       duration: DIAL_TIMEOUT,
@@ -71,13 +75,17 @@ const firstDialOf = (client: { readonly firstDial: Effect.Effect<void, { readonl
   )
 
 export interface BrokerReport extends ConnectionInfo {
-  readonly ok: true
+  /** False when the round trip's message did not come back: the gateway could not read what it publishes. */
+  readonly ok: boolean
   readonly broker: string
   /** How long a QoS 1 message took to the broker and back; absent when it did not come back. */
   readonly roundTripMs?: number
   readonly roundTripTopic: string
   readonly warnings: ReadonlyArray<string>
 }
+
+/** The site and building of a round-trip topic (`site/building/$gateway/...`), where the gateway publishes. */
+const topicRoot = (topic: string) => topic.split("/").slice(0, 2).join("/")
 
 /** What a broker's limits mean for the gateway, one sentence each. */
 export const brokerWarnings = (info: ConnectionInfo, roundTripMs: number | undefined, topic: string) => [
@@ -94,7 +102,7 @@ export const brokerWarnings = (info: ConnectionInfo, roundTripMs: number | undef
     : []),
   ...(roundTripMs === undefined
     ? [
-        `a message to ${topic} did not come back within ${ROUND_TRIP_TIMEOUT}: the broker's ACL may not let this user publish or subscribe there`
+        `a message to ${topic} did not come back within ${ROUND_TRIP_TIMEOUT}: check the broker's access rules (ACL) for this user under ${topicRoot(topic)}/#; they must allow both publishing and subscribing there (the gateway subscribes for commands and its own retained messages)`
       ]
     : [])
 ]
@@ -133,7 +141,7 @@ export const checkBroker = Effect.fn("checkBroker")(function* (config: GatewayCo
     onSome: (at) => Math.max(0, at - sentAt)
   })
   const report: BrokerReport = {
-    ok: true,
+    ok: roundTripMs !== undefined,
     broker: config.mqtt.url,
     ...info,
     ...(roundTripMs === undefined ? {} : { roundTripMs }),
@@ -161,6 +169,12 @@ export const formatBrokerReport = (report: BrokerReport) =>
     ...report.warnings.map((warning) => `  warning: ${warning}`)
   ].join("\n")
 
+/** `broker`'s failure after its report: the message did not come back, so the gateway would not work as it should. */
+export const roundTripFailure = (report: BrokerReport) =>
+  new BrokerCommandError({
+    message: `${report.broker}: a message to ${report.roundTripTopic} did not come back within ${ROUND_TRIP_TIMEOUT}; see the warning above`
+  })
+
 export interface PublishCommandOptions {
   readonly retain: boolean
   readonly qos: 0 | 1
@@ -178,6 +192,9 @@ export const publishOnce = Effect.fn("publishOnce")(function* (
 ) {
   const client = yield* brokerClient(config.mqtt, "publish")
   yield* firstDialOf(client, config.mqtt.url)
+  // The client lowers the QoS to what the broker's CONNACK allows: report the one that was used.
+  const connection = yield* client.connection
+  const qos: 0 | 1 = options.qos === 1 && (connection?.maximumQoS ?? 1) === 1 ? 1 : 0
   yield* client
     .publish(topic, payload, { qos: options.qos, retain: options.retain })
     .pipe(Effect.mapError((error) => new BrokerCommandError({ message: `${topic}: ${error.message}` })))
@@ -186,7 +203,8 @@ export const publishOnce = Effect.fn("publishOnce")(function* (
     broker: config.mqtt.url,
     topic,
     bytes: new TextEncoder().encode(payload).length,
-    qos: options.qos,
+    qos,
+    ...(qos === options.qos ? {} : { requestedQos: options.qos }),
     retain: options.retain,
     cleared: options.retain && payload === ""
   }
@@ -196,4 +214,4 @@ export const publishOnce = Effect.fn("publishOnce")(function* (
 export const formatPublished = (result: Effect.Success<ReturnType<typeof publishOnce>>) =>
   result.cleared
     ? `cleared the retained message on ${result.topic}`
-    : `published ${result.bytes} byte(s) to ${result.topic} (QoS ${result.qos}${result.retain ? ", retained" : ""})`
+    : `published ${result.bytes} byte(s) to ${result.topic} (QoS ${result.qos}${result.requestedQos === undefined ? "" : ": the broker allows QoS 0 only"}${result.retain ? ", retained" : ""})`

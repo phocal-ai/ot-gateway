@@ -54,6 +54,12 @@ const RECENT_COMMANDS = 50
 /** Topics whose latest message is kept for the page, and how much of each payload: bounded memory on a Pi. */
 const MAX_TOPICS = 2_000
 const MAX_PAYLOAD = 2_000
+/**
+ * The longest topic kept. The gateway's own topics are four slug levels of at
+ * most 64 characters plus a suffix such as `/$set/result`, well under this; a
+ * longer one is not the gateway's and is not kept.
+ */
+const MAX_TOPIC_LENGTH = 512
 
 /** Connections the server holds at once: a page polls with one; more is someone else's problem, not the gateway's memory. */
 const MAX_CONNECTIONS = 32
@@ -134,7 +140,7 @@ export const makeStatusState = (
   const attributes = { site: config.site, building: config.building }
   return {
     recordPublish: (topic, payload, message) => {
-      if (!topic.startsWith(prefix)) return
+      if (!topic.startsWith(prefix) || topic.length > MAX_TOPIC_LENGTH) return
       // An empty retained message clears the topic at the broker (StaleMeta.ts): the page forgets it too.
       if (message.retained && payload === "") {
         latest.delete(topic)

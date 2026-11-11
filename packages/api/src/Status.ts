@@ -234,7 +234,8 @@ export type HistoryBucket = typeof HistoryBucket.Type
 
 /**
  * A point's history between `from` and `to` (Unix ms), in buckets of `stepMs`, oldest first; buckets without a
- * read are left out. `resolution` says where it came from: every read (the last day) or per-minute rollups.
+ * read are left out. `resolution` says where it came from: every read
+ * (buckets under a minute on a range that starts within the last day) or per-minute rollups (everything else).
  */
 export const HistorySeries = Schema.Struct({
   device: Schema.String,

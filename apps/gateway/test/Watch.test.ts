@@ -1,8 +1,24 @@
-/** `watch` and `status`: what they print. */
+/** `watch` and `status`: what they print, and `watch --seconds` against the in-process test broker over real TCP. */
+import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import type { GatewayStatus } from "@ot-gateway/api"
+import { parseConfig } from "@ot-gateway/core"
+import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
+import { Effect } from "effect"
+import { TestConsole } from "effect/testing"
+import { publishOnce } from "../src/Broker.ts"
 import { ago, formatStatus } from "../src/StatusReport.ts"
-import { formatMessage, watchFilter } from "../src/Watch.ts"
+import { formatMessage, watch, watchFilter } from "../src/Watch.ts"
+
+const configFor = (port: number) =>
+  parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url: `mqtt://127.0.0.1:${port}` }, devices: [] }))
+
+/** A port on this machine that nothing listens on: one a server had, closed again. */
+const closedPort = Effect.scoped(
+  Effect.map(NodeSocketServer.make({ host: "127.0.0.1", port: 0 }), (server) =>
+    server.address._tag === "UnixPathAddress" ? 0 : server.address.port
+  )
+)
 
 describe("watch", () => {
   it("subscribes to everything under the site and building", () => {
@@ -21,6 +37,40 @@ describe("watch", () => {
     expect(long.length).toBeLessThan(320)
     expect(long.endsWith("…")).toBe(true)
   })
+
+  it("keeps a publisher's control characters off the terminal: tabs become a space, the rest ?", () => {
+    const at = new Date(2026, 10, 5, 9, 4, 7)
+    const line = formatMessage(
+      { topic: "s/b/\u001b[2Jx/\u009b31m", payload: "a\tb\r\u001b]0;title\u0007c\u009bd", retain: false },
+      at
+    )
+    expect(line).toBe("09:04:07 s/b/?[2Jx/?31m a b ?]0;title?c?d")
+    expect(line).not.toMatch(/\p{Cc}/u)
+  })
+})
+
+describe("watch --seconds", () => {
+  it.live("fails when it cannot reach the broker, instead of watching nothing", () =>
+    Effect.gen(function* () {
+      const config = yield* configFor(yield* closedPort)
+      const error = yield* Effect.flip(watch(config, { seconds: 1 }))
+      expect(error._tag).toBe("BrokerCommandError")
+      expect(error.message).toMatch(/^could not connect to mqtt:\/\/127\.0\.0\.1:\d+/)
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it.live("prints what the broker sends for the seconds asked, then stops", () =>
+    Effect.gen(function* () {
+      const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 0 })
+      yield* serveMqtt(server, makeBrokerControl()).pipe(Effect.forkScoped)
+      const config = yield* configFor(server.address._tag === "UnixPathAddress" ? 0 : server.address.port)
+      yield* publishOnce(config, "s/b/meter/power", "42", { retain: true, qos: 1 })
+      yield* watch(config, { seconds: 1 })
+      // The client's own log lines reach the test console too: only the message lines count.
+      const lines = (yield* TestConsole.logLines).map(String).filter((line) => line.includes("s/b/"))
+      expect(lines).toEqual([expect.stringMatching(/^\d\d:\d\d:\d\d retained s\/b\/meter\/power 42$/)])
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+  )
 })
 
 describe("status", () => {

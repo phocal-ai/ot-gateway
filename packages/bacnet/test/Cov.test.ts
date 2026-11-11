@@ -19,6 +19,7 @@ import {
   parseDeviceAddress,
   PropertyId
 } from "../src/index.ts"
+import { captureLogs } from "./chaos/scripted.ts"
 
 const addressOf = (text: string) => Result.getOrThrow(parseDeviceAddress(text))
 const here = addressOf("10.0.0.5")
@@ -238,6 +239,32 @@ describe("change of value, over time", () => {
       const before = subscribed().length
       yield* TestClock.adjust("1 second")
       expect(subscribed().length).toBe(before + 1)
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("subscribes again and polls when a device found by Who-Is answers again after it was lost", () =>
+    Effect.gen(function* () {
+      const logs = captureLogs()
+      yield* Effect.gen(function* () {
+        const { state, notify, poll, subscribed, driver } = yield* start([supplyTemp, objectType])
+        notify(21)
+        yield* settle
+        expect(yield* poll).toEqual(["ai-type"])
+        state.offline = true
+        // Long enough to be looked for again by Who-Is; it comes back at the same address, rebooted.
+        for (let cycle = 0; cycle < 3; cycle++) yield* Effect.flip(driver.readAll)
+        state.offline = false
+        const linesBefore = logs.lines.length
+        expect(yield* poll).toEqual(["supply-temp", "ai-type"])
+        const recovery = logs.count(linesBefore)
+        // One line for the recovery, not "found" and "answers again" both.
+        expect((recovery["found BACnet device"] ?? 0) + (recovery["BACnet device answers again"] ?? 0)).toBe(1)
+        const before = subscribed().length
+        yield* TestClock.adjust("1 second")
+        // Subscribed again at once, not at the renewal 150 s later, and polled until a notification arrives.
+        expect(subscribed().length).toBe(before + 1)
+        expect(yield* poll).toEqual(["supply-temp", "ai-type"])
+      }).pipe(Effect.provide(logs.layer))
     }).pipe(Effect.scoped)
   )
 

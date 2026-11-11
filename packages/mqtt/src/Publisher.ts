@@ -14,7 +14,7 @@ import {
   Publisher,
   PublishError
 } from "@ot-gateway/core"
-import { Config, Effect, Layer, Schema } from "effect"
+import { Config, Effect, Layer, type Redacted, Schema } from "effect"
 import { hostname } from "node:os"
 import { makeMqttClient, MqttPublishError } from "./Client.ts"
 import type { ConnectionInfo, MqttClient, MqttClientOptions } from "./Client.ts"
@@ -23,6 +23,28 @@ import type { ConnectionInfo, MqttClient, MqttClientOptions } from "./Client.ts"
 export class MqttSettingsError extends Schema.TaggedError<MqttSettingsError>()("MqttSettingsError", {
   message: Schema.String
 }) {}
+
+/**
+ * The broker password from the variable `mqtt.passwordEnv` names, or undefined when it names none. An unset
+ * variable fails with a message that names it and the file it goes in, instead of Effect's bare config error.
+ * Shared by the publisher and the CLI's broker commands.
+ */
+export const readBrokerPassword = (
+  settings: Pick<MqttSettings, "passwordEnv">
+): Effect.Effect<Redacted.Redacted | undefined, MqttSettingsError> =>
+  Effect.gen(function* () {
+    const name = settings.passwordEnv
+    if (name === undefined) return undefined
+    return yield* Config.Redacted(name).pipe(
+      Effect.catchTag("ConfigError", () =>
+        Effect.fail(
+          new MqttSettingsError({
+            message: `${name} is not set: the config's mqtt.passwordEnv names it. Put the broker password in ot-gateway.env (${name}=...), or in /etc/ot-gateway/gateway.env under systemd.`
+          })
+        )
+      )
+    )
+  })
 
 export interface BrokerAddress {
   readonly tls: boolean
@@ -102,12 +124,12 @@ const translate = <A>(effect: Effect.Effect<A, MqttPublishError>): Effect.Effect
 export const MqttPublisher = (
   settings: MqttSettings,
   options: MqttPublisherOptions = {}
-): Layer.Layer<Publisher, MqttSettingsError | Config.ConfigError> =>
+): Layer.Layer<Publisher, MqttSettingsError> =>
   Layer.effect(
     Publisher,
     Effect.gen(function* () {
       const address = yield* parseBrokerUrl(settings.url)
-      const password = settings.passwordEnv === undefined ? undefined : yield* Config.Redacted(settings.passwordEnv)
+      const password = yield* readBrokerPassword(settings)
       // Once per layer, not per connection: reconnects happen inside the client.
       const passwordWarning = mqttPasswordWarning(settings)
       if (passwordWarning !== undefined) {

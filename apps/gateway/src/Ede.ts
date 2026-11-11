@@ -12,10 +12,10 @@
  * makes nothing writable: writes are set in the config, on purpose.
  */
 import { ObjectType, POINT_TYPES, qudtUnits } from "@ot-gateway/bacnet"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { toCsv } from "./Csv.ts"
 import { slugify } from "./Discover.ts"
-import { parseDelimited, PointsListError } from "./PointsList.ts"
+import { PointsListError, readDelimited } from "./PointsList.ts"
 
 /** A header field as compared: letters and digits only, lower case (`# device obj.-instance` → `deviceobjinstance`). */
 const headerKey = (field: string) => field.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -64,8 +64,13 @@ export const edeToPointsList = Effect.fn("edeToPointsList")(function* (text: str
   const delimiter = [";", "\t", ","].reduce((best, candidate) =>
     headerText.split(candidate).length > headerText.split(best).length ? candidate : best
   )
-  const [header = [], ...records] = parseDelimited(lines.slice(start).join("\n"), delimiter)
-  const columns = header.map(headerKey)
+  const read = readDelimited(lines.slice(start).join("\n"), delimiter)
+  // `start` lines precede the header, so a record on line n of the slice is on line start + n of the file.
+  if (Result.isFailure(read)) {
+    return yield* fail(`EDE line ${start + read.failure.line}: a quote opened here is never closed`)
+  }
+  const [headerRecord, ...records] = read.success
+  const columns = (headerRecord?.fields ?? []).map(headerKey)
   const column = (name: string) => columns.indexOf(name)
   const at = {
     device: column("deviceobjinstance"),
@@ -92,8 +97,9 @@ export const edeToPointsList = Effect.fn("edeToPointsList")(function* (text: str
     readonly unit: string | undefined
   }
   const objects: Array<EdeObject> = []
-  for (const [index, fields] of records.entries()) {
-    const line = start + index + 2
+  for (const record of records) {
+    const line = start + record.line
+    const fields = record.fields
     if ((fields[0] ?? "").trim().startsWith("#")) continue
     const field = (position: number) => (fields[position] ?? "").trim()
     const device = Number(field(at.device))
