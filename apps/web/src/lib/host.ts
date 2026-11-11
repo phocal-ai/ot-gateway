@@ -46,3 +46,23 @@ export const machineProblems = (host: HostStatus, upMs: number): ReadonlyArray<s
     problems.push(`The gateway is busy (${Math.round(host.cpuPercent)} % of a processor core): little room is left.`)
   return problems
 }
+
+/**
+ * The machine in one calm line, for its card while all is fine: "CPU 4 % · 85 MB memory · 52 °C", the temperature
+ * only where the machine has one.
+ */
+export const machineNote = (host: HostStatus) =>
+  [
+    `CPU ${Math.round(host.cpuPercent)} %`,
+    `${formatBytes(host.memoryBytes)} memory`,
+    ...(host.temperatureC === undefined ? [] : [`${Math.round(host.temperatureC)} °C`])
+  ].join(" · ")
+
+/** The power supply as a Raspberry Pi reports it, in words; `undefined` off a Pi. */
+export const powerLabel = (host: HostStatus) => {
+  const conditions = host.throttled?.now
+  if (conditions === undefined) return undefined
+  if (conditions.includes("under_voltage")) return "too weak"
+  if (conditions.length > 0) return `slowed down (${conditions.join(", ").replaceAll("_", " ")})`
+  return "ok"
+}
