@@ -10,7 +10,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { HistoryChart } from "@/components/history-chart"
 import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
-import { isAlarm, pointFreshness } from "@/lib/glance"
+import { alarmWhen, pointFreshness } from "@/lib/glance"
 import { fetchHistory, type GatewayClock, gatewayTime, type PointHistory, type Range, ranges } from "@/lib/history"
 import type { LivePoint } from "@/lib/points"
 import { clockTime, failureLabel, freshness, settle, unitLabel } from "@/lib/status"
@@ -203,7 +203,7 @@ export const PointSheet = ({
         <div className="flex flex-col gap-1">
           <p className={`font-mono text-3xl font-semibold tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}>
             <PointValue
-              alarm={isAlarm(point)}
+              alarm={alarmWhen(point)}
               className="-mx-1"
               key={`${point.device}/${point.id}`}
               now={now}

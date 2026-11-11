@@ -132,6 +132,7 @@ describe("check", () => {
           writable: 0,
           pollIntervalMs: 5000,
           covPoints: ["flow-temperature", "running"],
+          alarmPoints: [],
           reading: "2 by COV where the device supports it, polled every 5000 ms otherwise"
         }
       ])

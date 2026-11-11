@@ -94,8 +94,9 @@ export const describeConfig = (config: GatewayConfig) => {
             ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
             : "simulated"
       const writable = device.points.filter((point) => point.writable).length
+      const alarms = alarmPointIds(device).length
       const reading = readingLabel(device)
-      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
+      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${alarms > 0 ? `, ${alarms} alarm(s)` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
     })
   ].join("\n")
 }
@@ -119,8 +120,13 @@ export const configSummary = (config: GatewayConfig) => {
   }
 }
 
+/** The points of a device marked as alarms (`alarmWhen`), in config order. */
+const alarmPointIds = (device: Device) =>
+  device.points.flatMap((point) => (point.alarmWhen === undefined ? [] : [point.id]))
+
 /**
- * One device in `check --json` and `import --json`: `covPoints` are the points asked for by change of value (BACnet
+ * One device in `check --json` and `import --json`: `alarmPoints` are the points marked as alarms (`alarmWhen`, a
+ * points list's `alarm` column), `covPoints` are the points asked for by change of value (BACnet
  * present values with `cov` on), polled every `pollIntervalMs` while the device does not notify; the rest are polled.
  */
 export const deviceSummary = (device: Device) => ({
@@ -130,6 +136,7 @@ export const deviceSummary = (device: Device) => ({
   writable: device.points.filter((point) => point.writable).length,
   pollIntervalMs: device.pollIntervalMs,
   covPoints: covPointIds(device),
+  alarmPoints: alarmPointIds(device),
   reading: readingLabel(device)
 })
 

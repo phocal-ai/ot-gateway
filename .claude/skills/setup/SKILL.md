@@ -81,9 +81,11 @@ Read `otg points schema --json` once. Then, by what the user has, into one `poin
 - **Modbus datasheets:** for a model the library lacks, write `points.csv` yourself, one row per register. Start with the 10 to 20 registers that matter (energy, power, temperatures, states), not all 300, and say that more can be added later.
   - `table`: `holding` for 4xxxx/FC03, `input` for 3xxxx/FC04, `coil` for 0xxxx/FC01, `discrete` for 1xxxx/FC02.
   - `register`: **0-based.** Datasheets often list 40001-style numbers or 1-based addresses, so 40001 is holding register 0. When the sheet is unclear, say which you assumed; a wrong guess shows up in step 7.
-  - `type`: `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`; a coil or discrete input needs none.
+  - `type`: `int16`, `uint16`, `int32`, `uint32`, `float32`, `int64`, `uint64`, `float64`, or `bool` for a single bit; a coil or discrete input is always `bool`, which is its default, so its `type` can stay empty.
   - `byte_order` (default `ABCD`, high word first): `CDAB` when the sheet says low word first, "word swap" or "little-endian word order" (common on meters). When it doesn't say, leave the default and let step 7 show it.
   - `scale` for registers in tenths and so on; `unit` as the sheet writes it (`kW`, `kWh`, `°C`, `%`).
+  - `point`: the sheet's name for the register ("Active power", "Main breaker tripped"); the id in the topic is made from it. If you write ids (`active-power`), they are shown as "Active power"; a `name` column gives another name.
+  - `alarm`: `on` for an alarm, trip or fault point that is active when the value is true or not 0 ("true = tripped"), `off` for one that is active when it is false or 0 (a normally-closed contact, an "OK" signal). Leave it empty for states that are no alarm (a running compressor). The status page shows an active alarm in red and counts it. EDE files and `discover` leave this column empty: fill it for their alarm points too.
   - Several meters behind one Modbus gateway: one device each, with the gateway's `host` and each meter's own `unit_id`.
   - Several devices of the same model: write a draft profile once (`otg profiles schema --json` gives the format), save it next to the list as `<vendor>-<model>.json`, and give each device's row `profile: ./<vendor>-<model>.json`. Mention that a reviewed profile can go into the library (CONTRIBUTING.md, "Device profiles").
 - **What to send** from question 4: `publish` per row (`aggregate` with `publish_s` 900 for 15 minutes, or `change`).
@@ -120,8 +122,8 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
    To redo the devices from a fixed list, run `init` again with `--force` and the same flags (it keeps `compose.yaml` and `ot-gateway.env`), then import the list again.
 
 4. Show the user a few real values with units, and the status page URL.
-5. Show the user every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) with its value right now, and ask whether that is the state the equipment is in: a breaker that reads `true` (tripped) or an alarm that is on may be real, or the point's polarity may be the other way round. Don't call the setup done until the user has confirmed each one or fixed it.
-6. Stop the gateway before step 8 (`docker stop ot-gateway-test`, which also removes it).
+5. Show the user every boolean point (alarms, faults, trips, states, coils and discrete inputs, BACnet binary objects) with its value right now, and ask whether that is the state the equipment is in: a breaker that reads `true` (tripped) or an alarm that is on may be real, or the point's polarity may be the other way round. For each alarm point, the answer fills its `alarm` column: `on` when the alarm is active at true or 1, `off` when it is active at false or 0; then import the list again (step 7.3). Don't call the setup done until the user has confirmed each one or fixed it.
+6. With Docker Compose, stop the test run before step 8 (`docker stop ot-gateway-test`, which also removes it). With `otg run` (macOS and Windows), the test run is the real run: leave it running and go to step 8's "This machine, for now".
 
 ## 8. Run it for real
 

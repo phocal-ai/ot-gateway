@@ -42,13 +42,16 @@ const scriptedDriver = (values: ReadonlyArray<number | "fail">, deviceId = "test
 }
 
 /** The first retained metadata `runDevice` publishes for the scripted point, parsed. */
-const metaOf = (context: { readonly covPoints?: ReadonlyArray<string>; readonly gateway?: string } = {}) =>
+const metaOf = (
+  context: { readonly covPoints?: ReadonlyArray<string>; readonly gateway?: string } = {},
+  driver: Driver = scriptedDriver([200])
+) =>
   Effect.gen(function* () {
     const { messages, layer } = yield* makeMemoryPublisher
-    const fiber = yield* runDevice(
-      { site: "s", building: "b", pollIntervalMs: 1000, ...context },
-      scriptedDriver([200])
-    ).pipe(Effect.provide(layer), Effect.forkChild)
+    const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, ...context }, driver).pipe(
+      Effect.provide(layer),
+      Effect.forkChild
+    )
     yield* TestClock.adjust("1 millis")
     yield* Fiber.interrupt(fiber)
     const meta = messages.find((message) => message.topic.endsWith("$meta"))
@@ -71,6 +74,14 @@ describe("runDevice", () => {
       const values = messages.slice(1).map((m) => JSON.parse(m.payload).value)
       // 20.0 publishes, 20.2 is inside the 0.5 deadband, 21.0 publishes.
       expect(values).toEqual([20, 21])
+    })
+  )
+
+  it.effect("says when an alarm point's alarm is active", () =>
+    Effect.gen(function* () {
+      const alarm = { ...scriptedDriver([0]), points: [{ ...point, alarmWhen: "off" as const }] }
+      expect(yield* metaOf({}, alarm)).toMatchObject({ name: "Zone temperature", alarmWhen: "off" })
+      expect(yield* metaOf()).not.toHaveProperty("alarmWhen")
     })
   )
 

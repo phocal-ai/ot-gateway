@@ -88,6 +88,7 @@ const metaPayload = (point: AnyPoint, publish: Publish, cov: boolean, gateway: s
     publish,
     ...(cov ? { cov } : {}),
     semantics: point.semantics,
+    ...(point.alarmWhen === undefined ? {} : { alarmWhen: point.alarmWhen }),
     ...(gateway === undefined ? {} : { gateway })
   })
 

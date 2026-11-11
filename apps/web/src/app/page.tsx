@@ -32,7 +32,7 @@ import {
   alarmCount,
   glanceKeys,
   glancePoints,
-  isAlarm,
+  alarmWhen,
   pointFreshness,
   pointsByDevice
 } from "@/lib/glance"
@@ -157,7 +157,7 @@ const DeviceValues = ({
           >
             <span className="max-w-48 truncate text-muted-foreground">{point.name}</span>
             <PointValue
-              alarm={isAlarm(point)}
+              alarm={alarmWhen(point)}
               className="shrink-0 font-mono whitespace-nowrap tabular-nums"
               now={now}
               unit={point.unit}

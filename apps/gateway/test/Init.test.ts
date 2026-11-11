@@ -418,6 +418,7 @@ describe("configSummary", () => {
             writable: 0,
             pollIntervalMs: 2000,
             covPoints: [],
+            alarmPoints: [],
             reading: "every 2000 ms"
           }
         ]

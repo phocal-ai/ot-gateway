@@ -15,7 +15,7 @@
 import { objectTypeNumber } from "@ot-gateway/bacnet"
 import { Result } from "effect"
 import { csvLine, toCsv } from "./Csv.ts"
-import { columnName, detectDelimiter, readDelimited } from "./PointsList.ts"
+import { detectDelimiter, headerColumns, readDelimited } from "./PointsList.ts"
 import { slugify } from "./Slug.ts"
 
 /** U+FEFF, which spreadsheet exports put before the header; spelled out because the character is invisible. */
@@ -112,7 +112,7 @@ export const appendToPointsList = (
       skipped: 0
     })
   }
-  const header = headerRecord.fields.map(columnName)
+  const header = headerColumns(headerRecord.fields)
   if (!header.includes("device") || !header.includes("point")) {
     return Result.fail(
       `its header has no device and point columns (it has ${headerRecord.fields.join(", ")}); is it a points list?`

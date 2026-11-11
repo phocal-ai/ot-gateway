@@ -264,7 +264,9 @@ export const PointInfo = Schema.Struct({
   limits: Schema.optionalKey(Schema.Struct({ min: Schema.Number, max: Schema.Number })),
   scaling: Schema.optionalKey(Schema.Struct({ factor: Schema.Number, offset: Schema.Number })),
   brick: Schema.optionalKey(Schema.String),
-  haystack: Schema.optionalKey(Schema.Array(Schema.String))
+  haystack: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** The point is an alarm, active when its value is on (true, not 0) or off (false, 0), as its config says. */
+  alarmWhen: Schema.optionalKey(Schema.Literals(["on", "off"]))
 })
 export type PointInfo = typeof PointInfo.Type
 

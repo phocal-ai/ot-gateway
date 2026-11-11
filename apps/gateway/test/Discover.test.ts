@@ -405,7 +405,7 @@ describe("draftPointsList", () => {
         ["flow-temperature", "Flow temperature"],
         ["return-temperature", "Return temperature"],
         ["compressor-running", "Compressor running"],
-        ["compressor-running-2", "compressor-running-2"]
+        ["compressor-running-2", "Compressor running 2"]
       ])
     }).pipe(Effect.runSync))
 
