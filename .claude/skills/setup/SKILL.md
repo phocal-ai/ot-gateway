@@ -38,8 +38,8 @@ Skip this if the user says they've seen it. Otherwise:
 
 1. Start `otg demo` in the background: the gateway with a local MQTT test broker and simulated Modbus and BACnet devices, in one process.
 2. Within a few seconds it prints messages like `demo-site/building-a/energy-meter/active-power {"value":…}`. Show three of them, and say what the topic parts are (site, building, device, point).
-3. Mention the status page at http://localhost:8080.
-4. Stop it before going on. It holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway or test bench already running), skip the demo.
+3. Mention the status page at http://localhost:8080. On a machine reached over SSH it is at `http://<machine>:8080` while the demo runs, since the image's demo listens on every interface (the real gateway does not: step 8).
+4. Stop it before going on: with the Docker wrapper `docker stop ot-gateway-demo`; with npx or pnpm, stop the background process you started. Not with `pkill -f`: its pattern can match your own shell. The demo holds UDP ports 47808 and 47809 and TCP ports 1883, 5020 and 8080; if one is taken (a gateway or test bench already running), skip the demo.
 
 ## 3. Questions, one round
 
@@ -68,11 +68,13 @@ Add `--dry-run --json` first to see the config and the files it would write with
 
 It writes `ot-gateway.json`, `compose.yaml` and `ot-gateway.env`, and it never replaces a `compose.yaml` or `ot-gateway.env` that is already there. An existing `ot-gateway.json` is replaced only with `--force`: ask first. Ask the user to put the broker password into `ot-gateway.env` now, and the `OTEL_*` lines there (commented out) if they want telemetry.
 
+Then run `otg broker --json`, the cheapest test of the whole chain. `"ok": false` (exit code 1) means stop and fix the broker before any points work: the URL, TLS (`mqtts://`), the password in `ot-gateway.env` (`MQTT_PASSWORD is not set` means it is empty), or the broker's ACL when a message did not come back under the site's topics.
+
 ## 5. Points: everything becomes the standard points list
 
 Read `otg points schema --json` once. Then, by what the user has:
 
-- **BACnet devices on the network:** `otg discover --points-list points.csv`. Nothing else may hold UDP 47808 (stop the demo or another BACnet tool first). Show a short summary per device (name, instance, point count) and remove the rows the user doesn't need; past about 5 devices or 50 points, ask which to keep. `discover --points-list` fails (exit code 1, no file written) when nothing answered or the file exists already. If nothing answered: check the broadcast address; devices on another subnet need a BBMD (`bacnet.bbmdAddress` in the config); a firewall can drop UDP 47808. With a device's IP (and port, when not 47808) from a device list, `otg discover --address <ip[:port]> --points-list points.csv` asks that device alone.
+- **BACnet devices on the network:** `otg discover --points-list points.csv`. Nothing else may hold UDP 47808 (stop the demo or another BACnet tool first). Show a short summary per device (name, instance, point count) and remove the rows the user doesn't need; past about 5 devices or 50 points, ask which to keep. `discover --points-list` fails (exit code 1, no file written) when nothing answered or the file exists already. If nothing answered: check the broadcast address; devices on another subnet need a BBMD (`bacnet.bbmdAddress` in the config); a firewall can drop UDP 47808. With a device's IP (and port, when not 47808) from a device list, `otg discover --address <ip[:port]> --points-list points.csv` asks that device alone; so do devices on another port or only on loopback (a test bench, the demo's heat pump at `127.0.0.1:47809`), which never answer a broadcast.
 - **An EDE file:** it imports as it is. `otg points from-ede <file> > points.csv` gives a list to trim first; it says how many objects it skipped (schedules, trend logs).
 - **A points list in some other layout** (other column names, an Excel export, several sheets): translate it into `points.csv` with the schema's columns. Save Excel as CSV first; `.xlsx` is not read. Keep the user's device and point names.
 - **A Modbus model in the profile library** (`otg profiles list --json`): one row per device with `profile` set and `point` `*` (or one row per point it needs), plus its `host` and `unit_id`. `otg profiles show <id>` lists its points.
@@ -105,13 +107,13 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 2. After about 15 s, run `otg status --json`. Every device should be ok and its points should have values (a point published as an aggregate gets its first value at the end of its first window). To show what reaches the broker, run `otg watch --seconds 10`.
 3. Diagnose what isn't working, fix `points.csv` or the config, and run again. Repeat until every device is ok or the cause is outside your reach:
 
-   | Symptom                       | Likely cause                                                                                                                                                                                                                                                                       |
-   | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-   | Timeout or connection refused | IP, port, a firewall, or the device only allows one Modbus client: is the BMS already connected?                                                                                                                                                                                   |
-   | Modbus exception 2            | Register off by one or in the wrong table                                                                                                                                                                                                                                          |
-   | Absurd values                 | Scale, signed vs unsigned, or the byte order: a float32 reading like 1.4e-41 or 2.6e+20 where 21.5 belongs, or a counter in the billions, means `byte_order` is wrong (try `CDAB` first)                                                                                           |
-   | BACnet `unknown-object`       | Instance changed since discovery: discover again                                                                                                                                                                                                                                   |
-   | Broker not connected          | URL, TLS (`mqtts://`), the password in `ot-gateway.env` (`MQTT_PASSWORD is not set` means it is empty). `otg broker --json` checks it: `"ok": false` (exit code 1) means a message did not come back, so the broker's ACL blocks publishing or subscribing under the site's topics |
+   | Symptom                       | Likely cause                                                                                                                                                                             |
+   | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | Timeout or connection refused | IP, port, a firewall, or the device only allows one Modbus client: is the BMS already connected?                                                                                         |
+   | Modbus exception 2            | Register off by one or in the wrong table                                                                                                                                                |
+   | Absurd values                 | Scale, signed vs unsigned, or the byte order: a float32 reading like 1.4e-41 or 2.6e+20 where 21.5 belongs, or a counter in the billions, means `byte_order` is wrong (try `CDAB` first) |
+   | BACnet `unknown-object`       | Instance changed since discovery: discover again                                                                                                                                         |
+   | Broker not connected          | What `otg broker --json` checked in step 4 changed since: run it again                                                                                                                   |
 
    To redo the devices from a fixed list, run `init` again with `--force` and the same flags (it keeps `compose.yaml` and `ot-gateway.env`), then import the list again.
 
@@ -124,7 +126,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 - **No Docker** (systemd, from a checkout): with a yes, `sudo packaging/install.sh ot-gateway.json`, then `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env` and `sudo systemctl restart ot-gateway`. Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
 - **This machine, for now:** the one command to start it again is `otg run` in the folder.
 
-The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>`. Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`.
+The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>` (any free local port works). Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`.
 
 ## 9. Wrap up
 
@@ -136,5 +138,5 @@ Five lines at most:
 - where the logs are;
 - one next step, picked from:
   - add the remaining points (edit `points.csv`, import the new rows);
-  - send telemetry to Grafana with the `OTEL_*` variables in `ot-gateway.env` (`observability/README.md`);
+  - send telemetry to Grafana: after a fresh `init` it is off (the `OTEL_*` lines in `ot-gateway.env` are commented out); the user pastes them in, then `docker compose up -d` (`observability/README.md`);
   - make a point writable, with limits (README, "Commands").
