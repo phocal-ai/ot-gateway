@@ -63,7 +63,7 @@ Every read, whatever the point's publish mode, kept on the gateway for the statu
 | `path`          | string | required | The SQLite file, apart from the buffer's. Its directory is created if missing. Put it on persistent storage (`/var/lib/ot-gateway`). |
 | `retentionDays` | 1–30   | 7        | Days of per-minute minimum, maximum and average kept. Every single read is kept for the last day.                                    |
 
-Reads are written in batches every 5 s. Size it at about 40 bytes per read for the last day plus 50 bytes per point and minute: 200 points read every 5 s take about 150 MB for the day of reads and 15 MB per week of minutes. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
+Reads are written in batches every 30 s (sooner on a busy gateway), so a chart can be up to 30 s behind. Size it at about 40 bytes per read for the last day plus 50 bytes per point and minute: 200 points read every 5 s take about 150 MB for the day of reads and 15 MB per week of minutes. A file that cannot be opened leaves the gateway running without history (`ot_gateway_history_disabled` is 1, and the log says why); a corrupt one is moved aside and a new one started.
 
 `GET /api/history?device=heat-pump&point=flow-temp` returns the last hour in about 300 buckets of `{ t, min, max, avg, count }`; `from` and `to` (Unix ms) and `buckets` (at most 2,000) choose another range. Within the last day the buckets come from every read, beyond it from the minutes.
 

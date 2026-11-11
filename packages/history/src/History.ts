@@ -2,9 +2,11 @@
  * The on-device history: every read the pipeline hands over, written in batches to a SQLite file of its own, and
  * read back as chart buckets for the status page.
  *
- * - Reads wait in memory and are written every `flushEveryMs` (5 s) in one transaction, so an SD card sees a few
- *   commits a minute, not one per read. At most `MAX_PENDING` wait: while the file cannot be written (disk full,
- *   say) the oldest are dropped and counted, and the gateway's memory stays bounded.
+ * - Reads wait in memory and are written every `flushEveryMs` (30 s) in one transaction, sooner when half of
+ *   `MAX_PENDING` is waiting. A write rewrites a page per point it touches, so fewer writes spare the SD card; the
+ *   cost is that a chart can be up to 30 s behind, and a crash or power cut loses at most that much of it. At most
+ *   `MAX_PENDING` wait: while the file cannot be written (disk full, say) the oldest are dropped and counted, and the
+ *   gateway's memory stays bounded. A failed write is tried again after the same interval.
  * - Every hour, reads older than a day and rollups older than `retentionDays` are deleted.
  * - A file that cannot be opened (moved aside first when it is corrupt) leaves the gateway running without
  *   history, said once in the log and by `ot_gateway_history_disabled`. History never costs a read or a publish.
@@ -51,6 +53,10 @@ export const MAX_PENDING = 20_000
 const DEFAULT_BUCKETS = 300
 const MAX_BUCKETS = 2_000
 const HOUR_MS = 3_600_000
+/** How often waiting reads are written by default. */
+const DEFAULT_FLUSH_EVERY_MS = 30_000
+/** How often the writer checks whether a write is due. */
+const TICK_MS = 5_000
 
 export interface SeriesQuery {
   readonly device: string
@@ -67,7 +73,7 @@ export interface History {
 }
 
 export interface HistoryOptions {
-  /** How often waiting reads are written (default 5 s). */
+  /** How often waiting reads are written (default 30 s), sooner when half of `MAX_PENDING` is waiting. */
   readonly flushEveryMs?: number
   /**
    * Test only: wraps every store the history opens, the replacements too, so that a test can make a write fail as
@@ -288,8 +294,20 @@ export const openHistory = (
       }
     }).pipe(Semaphore.withPermit(permit))
 
-    const flushEvery = Duration.millis(options.flushEveryMs ?? 5_000)
-    yield* flush.pipe(Effect.repeat(Schedule.spaced(flushEvery)), Effect.delay(flushEvery), Effect.forkScoped)
+    // A write rewrites one page per point it touches, however few rows it holds, so writing less often writes
+    // less to the card. A cheap tick checks whether a write is due: once the interval has passed since the last
+    // attempt (on the monotonic clock, failed attempts too), or sooner when half the cap is waiting, so a busy
+    // gateway drops nothing on a healthy disk. A tick that is not due does no I/O.
+    const flushEveryMs = options.flushEveryMs ?? DEFAULT_FLUSH_EVERY_MS
+    const tickEvery = Duration.millis(Math.min(TICK_MS, flushEveryMs))
+    let attemptedAt = yield* monotonicMillis
+    const tick = Effect.gen(function* () {
+      const now = yield* monotonicMillis
+      if (now - attemptedAt < flushEveryMs && pending.length < MAX_PENDING / 2) return
+      attemptedAt = now
+      yield* flush
+    })
+    yield* tick.pipe(Effect.repeat(Schedule.spaced(tickEvery)), Effect.delay(tickEvery), Effect.forkScoped)
     yield* prune.pipe(
       Effect.repeat(Schedule.spaced(Duration.millis(HOUR_MS))),
       Effect.delay("1 minute"),
