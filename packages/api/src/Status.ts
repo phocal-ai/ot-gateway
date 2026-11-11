@@ -254,6 +254,11 @@ export const PointInfo = Schema.Struct({
    * `on change of value where the device supports it, polled every 5 s otherwise`.
    */
   read: Schema.String,
+  /**
+   * Whether the gateway asks the device to send it on change of value (BACnet COV with `cov` on, a present value):
+   * an old read is then the current value while the device answers, not a stale one. `read` says the same in words.
+   */
+  cov: Schema.Boolean,
   /** How its values go out: `every read`, `on change ≥ 0.5`, `aggregate every 15 min`. */
   publish: Schema.String,
   limits: Schema.optionalKey(Schema.Struct({ min: Schema.Number, max: Schema.Number })),
