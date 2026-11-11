@@ -262,10 +262,14 @@ export const DeviceSheet = ({
                       title={`${point.id}: ${point.name}`}
                     >
                       <span className="min-w-0 truncate">{point.name}</span>
-                      <span
-                        className={`font-mono whitespace-nowrap tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}
-                      >
-                        <PointValue alarm={alarmWhen(point)} now={now} unit={point.unit} value={value} />
+                      <span className="font-mono whitespace-nowrap tabular-nums">
+                        <PointValue
+                          alarm={alarmWhen(point)}
+                          now={now}
+                          stale={read._tag === "stale"}
+                          unit={point.unit}
+                          value={value}
+                        />
                       </span>
                       <span className="col-span-full truncate text-xs text-muted-foreground">
                         {point.id} ·{" "}
@@ -277,7 +281,7 @@ export const DeviceSheet = ({
                           "nothing read yet"
                         ) : (
                           <>
-                            read <PointRead now={now} state={read} />
+                            {read._tag === "stale" ? "last read" : "read"} <PointRead now={now} state={read} />
                           </>
                         )}
                       </span>

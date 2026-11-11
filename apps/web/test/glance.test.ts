@@ -12,6 +12,7 @@ import {
   glancePoints,
   isAlarm,
   pointFreshness,
+  readLabel,
   readsOnChange
 } from "../src/lib/glance.ts"
 
@@ -115,6 +116,20 @@ describe("pointFreshness", () => {
   it("does not dim the reads of a device that is only starting", () => {
     const starting = device({ status: "starting" })
     expect(pointFreshness(point({}), { value: at(now - 60_000), device: starting }, now, false)._tag).toBe("fresh")
+  })
+})
+
+describe("readLabel", () => {
+  const ts = new Date(2026, 10, 11, 15, 58, 4).getTime()
+  const sameDay = new Date(2026, 10, 11, 16, 0, 0).getTime()
+
+  it("says a stale value is the last one read, with its time to the second", () => {
+    expect(readLabel(ts, sameDay, true)).toBe("last read 15:58:04")
+    expect(readLabel(ts, sameDay, false)).toBe("read 15:58:04")
+  })
+
+  it("says when nothing was read", () => {
+    expect(readLabel(undefined, sameDay, true)).toBe("nothing read yet")
   })
 })
 

@@ -156,7 +156,7 @@ const DeviceValues = ({
         const read = pointFreshness(point, { value, device }, now, glance.unreachable)
         return (
           <li
-            className={`flex max-w-full min-w-0 items-baseline gap-1 ${read._tag === "stale" ? "opacity-50" : ""}`}
+            className="flex max-w-full min-w-0 items-baseline gap-1"
             key={point.id}
             title={`${point.id}: ${point.name}`}
           >
@@ -165,6 +165,7 @@ const DeviceValues = ({
               alarm={alarmWhen(point)}
               className="shrink-0 font-mono whitespace-nowrap tabular-nums"
               now={now}
+              stale={read._tag === "stale"}
               unit={point.unit}
               value={value}
             />
