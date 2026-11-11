@@ -410,6 +410,7 @@ export interface HistoryRequest {
   readonly from?: number | undefined
   readonly to?: number | undefined
   readonly buckets?: number | undefined
+  readonly changes?: "true" | "false" | undefined
 }
 
 /** `/api/history`: a configured point's history, the last hour unless the request names a range. */
@@ -435,7 +436,8 @@ export const historyHandler =
         point: request.point,
         from,
         to,
-        ...(request.buckets === undefined ? {} : { buckets: request.buckets })
+        ...(request.buckets === undefined ? {} : { buckets: request.buckets }),
+        ...(request.changes === "true" ? { changes: true } : {})
       })
     })
 type HistorySeriesOf = Effect.Success<ReturnType<History["series"]>>

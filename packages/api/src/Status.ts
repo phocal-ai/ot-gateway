@@ -332,10 +332,19 @@ export const HistoryBucket = Schema.Struct({
 })
 export type HistoryBucket = typeof HistoryBucket.Type
 
+/** A read whose value differs from the read before it: when a switch or an alarm changed. */
+export const HistoryChange = Schema.Struct({ t: Schema.Number, value: Schema.Number })
+export type HistoryChange = typeof HistoryChange.Type
+
+/** How many changes a history answer lists at most; `truncated` says there were more. */
+export const HISTORY_CHANGES_MAX = 200
+
 /**
  * A point's history between `from` and `to` (Unix ms), in buckets of `stepMs`, oldest first; buckets without a
- * read are left out. `resolution` says where it came from: every read
- * (buckets under a minute on a range that starts within the last day) or per-minute rollups (everything else).
+ * read are left out. `resolution` says where it came from: every read (buckets under a minute, or a range of an
+ * hour or less, that starts within the last day) or per-minute rollups (everything else). `changes`, when asked
+ * for and the range starts within the last day: the first read and every read that changed the value, oldest
+ * first, at most `HISTORY_CHANGES_MAX`.
  */
 export const HistorySeries = Schema.Struct({
   device: Schema.String,
@@ -344,7 +353,8 @@ export const HistorySeries = Schema.Struct({
   to: Schema.Number,
   stepMs: Schema.Number,
   resolution: Schema.Literals(["read", "minute"]),
-  buckets: Schema.Array(HistoryBucket)
+  buckets: Schema.Array(HistoryBucket),
+  changes: Schema.optionalKey(Schema.Struct({ list: Schema.Array(HistoryChange), truncated: Schema.Boolean }))
 })
 export type HistorySeries = typeof HistorySeries.Type
 
@@ -605,7 +615,9 @@ export class StatusGroup extends HttpApiGroup.make("status")
         from: Schema.optional(Schema.FiniteFromString),
         to: Schema.optional(Schema.FiniteFromString),
         /** About how many buckets to return (default 300, at most 2,000). */
-        buckets: Schema.optional(Schema.FiniteFromString)
+        buckets: Schema.optional(Schema.FiniteFromString),
+        /** `true`: also list when the value changed, from every read (a switch's or an alarm's times). */
+        changes: Schema.optional(Schema.Literals(["true", "false"]))
       },
       success: HistorySeries,
       error: [HistoryUnavailable, HistoryQueryInvalid]
