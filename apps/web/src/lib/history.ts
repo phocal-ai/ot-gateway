@@ -108,11 +108,40 @@ export const timeTicks = (from: number, to: number, count = 5) => {
   return { ticks, step }
 }
 
-/** A tick's label: the clock time, or the day for day-wide steps. */
+/**
+ * A tick's label: the clock time on the 24-hour clock (14:05) like every other time on the page (`clockTime`), or
+ * the day for day-wide steps; the same words in every locale.
+ */
 export const timeLabel = (at: number, step: number) =>
   step >= 86_400_000
-    ? new Date(at).toLocaleDateString([], { weekday: "short", day: "numeric" })
-    : new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    ? new Date(at).toLocaleDateString("en-US", { weekday: "short", day: "numeric" })
+    : new Date(at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+
+/** A bucket's time for the hover: the weekday and the 24-hour clock time, with seconds for buckets under a minute. */
+export const bucketTime = (at: number, stepMs: number) =>
+  new Date(at).toLocaleString("en-US", {
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    ...(stepMs < 60_000 ? { second: "2-digit" as const } : {})
+  })
+
+/** The shortest time axis: a line that just began still gets a few minutes of room. */
+const MIN_AXIS_MS = 300_000
+
+/**
+ * Where the time axis starts. A gateway that started within the range has no history before it unless an earlier
+ * run left some: when the first bucket is from this run, the axis starts where the gateway started (at most
+ * `MIN_AXIS_MS` before `to`), so five minutes of data fill the chart instead of its right edge. When there is older
+ * history the axis keeps the whole range, so the time the gateway was off stays a gap.
+ */
+export const axisFrom = (series: HistorySeries, startedAt: number | undefined) => {
+  const first = series.buckets[0]
+  if (startedAt === undefined || first === undefined || startedAt <= series.from) return series.from
+  if (first.t < startedAt - series.stepMs) return series.from
+  return Math.max(series.from, Math.min(startedAt, first.t, series.to - MIN_AXIS_MS))
+}
 
 /** The bucket nearest to `at`, for the hover. */
 export const nearest = (buckets: ReadonlyArray<HistoryBucket>, at: number) => {

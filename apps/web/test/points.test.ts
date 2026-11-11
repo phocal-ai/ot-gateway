@@ -13,6 +13,8 @@ import {
   matchesWords,
   noFilter,
   pointKey,
+  pointTitle,
+  titledById,
   withReadings
 } from "../src/lib/points.ts"
 
@@ -125,5 +127,15 @@ describe("matchesWords", () => {
     expect(matchesWords("heat-pump BACnet/IP", "bacnet heat")).toBe(true)
     expect(matchesWords("heat-pump BACnet/IP", "modbus")).toBe(false)
     expect(matchesWords("anything", "")).toBe(true)
+  })
+})
+
+describe("pointTitle", () => {
+  it("is the name people read, the id when there is no name", () => {
+    expect(pointTitle(point({}))).toBe("Supply air temperature")
+    expect(pointTitle(point({ name: "  " }))).toBe("supply-temp")
+    expect(titledById(point({ name: "" }))).toBe(true)
+    expect(titledById(point({ name: "supply-temp" }))).toBe(true)
+    expect(titledById(point({}))).toBe(false)
   })
 })

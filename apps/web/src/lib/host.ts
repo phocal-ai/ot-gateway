@@ -58,6 +58,32 @@ export const machineNote = (host: HostStatus) =>
     ...(host.temperatureC === undefined ? [] : [`${Math.round(host.temperatureC)} °C`])
   ].join(" · ")
 
+/** What the CPU share means: of one core, so a busy start on a machine with several cores reads over 100 %. */
+export const CPU_HINT = "CPU is the gateway's share of one processor core: over 100 % means it used more than one core."
+
+/**
+ * The Machine card: its title, its line and whether it needs a look. Calm while all is fine; the first problem in
+ * its own words otherwise. In its first minute (`WARM_UP_MS`) the gateway is "starting" and its line leaves the CPU
+ * out: opening files and the first reads keep it busy, and "CPU 115 %" then only looks broken.
+ */
+export const machineCard = (host: HostStatus | undefined, upMs: number) => {
+  if (host === undefined) return { title: "–", note: "no sample yet", bad: false }
+  const problems = machineProblems(host, upMs)
+  const [first] = problems
+  if (first !== undefined)
+    return { title: problems.length === 1 ? "1 problem" : `${problems.length} problems`, note: first, bad: true }
+  if (upMs < WARM_UP_MS)
+    return {
+      title: "starting",
+      note: [
+        `${formatBytes(host.memoryBytes)} memory`,
+        ...(host.temperatureC === undefined ? [] : [`${Math.round(host.temperatureC)} °C`])
+      ].join(" · "),
+      bad: false
+    }
+  return { title: "ok", note: machineNote(host), hint: CPU_HINT, bad: false }
+}
+
 /** The power supply as a Raspberry Pi reports it, in words; `undefined` off a Pi. */
 export const powerLabel = (host: HostStatus) => {
   const conditions = host.throttled?.now

@@ -36,7 +36,7 @@ import {
   pointFreshness,
   pointsByDevice
 } from "@/lib/glance"
-import { machineNote, machineProblems, powerLabel } from "@/lib/host"
+import { machineCard, machineProblems, powerLabel } from "@/lib/host"
 import { deviceAddress } from "@/lib/device"
 import {
   deviceEvents,
@@ -56,6 +56,7 @@ import {
   bufferView,
   deviceCounts,
   dropReasons,
+  failingDevices,
   protocolCounts,
   reconnects
 } from "@/lib/overview"
@@ -293,6 +294,7 @@ const OverviewCard = ({
   title,
   note,
   extra,
+  hint,
   bad,
   onOpen,
   cardRef
@@ -301,6 +303,8 @@ const OverviewCard = ({
   readonly title: string
   readonly note: string
   readonly extra?: ReactNode
+  /** The note's tooltip, when it needs explaining; the note itself otherwise (it may be cut off). */
+  readonly hint?: string
   readonly bad: boolean
   readonly onOpen: () => void
   readonly cardRef: (element: HTMLDivElement | null) => void
@@ -326,7 +330,7 @@ const OverviewCard = ({
         </span>
       </div>
       <CardTitle className={`text-2xl tabular-nums ${bad ? "text-destructive" : ""}`}>{title}</CardTitle>
-      <CardDescription className="truncate" title={note}>
+      <CardDescription className="truncate" title={hint ?? note}>
         {note}
       </CardDescription>
       {extra}
@@ -571,15 +575,6 @@ const MachineDetails = ({ status }: { readonly status: GatewayStatus }) => {
   )
 }
 
-/** The Machine card's title and line: calm while all is fine, the first problem in its own words otherwise. */
-const machineCard = (host: HostStatus | undefined, upMs: number) => {
-  if (host === undefined) return { title: "–", note: "no sample yet", bad: false }
-  const problems = machineProblems(host, upMs)
-  const [first] = problems
-  if (first === undefined) return { title: "ok", note: machineNote(host), bad: false }
-  return { title: problems.length === 1 ? "1 problem" : `${problems.length} problems`, note: first, bad: true }
-}
-
 /**
  * The broker, the devices, the buffer and the machine at a glance; each card opens its details in a dialog that
  * grows out of it (a view transition where the browser has them).
@@ -597,6 +592,7 @@ const Overview = ({
   const [morph, setMorph] = useState(false)
   const cards = useRef<Partial<Record<Panel, HTMLDivElement | null>>>({})
   const failing = status.devices.filter((device) => device.status === "failing").length
+  const named = failingDevices(status.devices)
   const ok = status.devices.filter((device) => device.status === "ok").length
   const buffer = bufferView(status.buffer, status.broker.connected, useBufferRate(status))
   const machine = machineCard(status.host, status.now - status.since)
@@ -643,6 +639,29 @@ const Overview = ({
       <OverviewCard
         {...cardProps("devices")}
         bad={failing > 0}
+        extra={
+          named.shown.length === 0 || stale ? null : (
+            // Above the card's stretched button, so each opens its device rather than the card's details.
+            <ul className="relative z-10 flex flex-col gap-0.5 text-sm">
+              {named.shown.map((device) => (
+                <li className="min-w-0 truncate" key={device.id}>
+                  <a
+                    className="text-destructive underline-offset-4 hover:underline"
+                    href={`?${new URLSearchParams({ device: device.id }).toString()}`}
+                    onClick={(event) => {
+                      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+                      event.preventDefault()
+                      onOpenDevice(device.id)
+                    }}
+                  >
+                    <span className="font-mono">{device.id}</span>: {device.why}
+                  </a>
+                </li>
+              ))}
+              {named.more === 0 ? null : <li className="text-muted-foreground">+{formatNumber(named.more)} more</li>}
+            </ul>
+          )
+        }
         label="Devices"
         note={note(
           status.devices.length === 0
@@ -672,6 +691,7 @@ const Overview = ({
       <OverviewCard
         {...cardProps("machine")}
         bad={machine.bad && !stale}
+        {...(machine.hint === undefined || stale ? {} : { hint: machine.hint })}
         label="Machine"
         note={note(machine.note)}
         title={machine.title}
