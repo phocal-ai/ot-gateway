@@ -60,6 +60,9 @@ export const qudtUnits: ReadonlyMap<number, string> = new Map([
   [104, "unit:REV-PER-MIN"]
 ])
 
+/** QUDT to BACnetEngineeringUnits for simulated devices: `qudtUnits` turned around, so the two cannot drift. */
+export const bacnetUnits: ReadonlyMap<string, number> = new Map(Array.from(qudtUnits, ([code, unit]) => [unit, code]))
+
 export interface DescribedObject {
   readonly objectType: PointType
   readonly instance: number

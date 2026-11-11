@@ -4,7 +4,7 @@
  * online and how each device is doing. The MQTT last will replaces it with
  * `offline` when the gateway disappears without saying goodbye.
  */
-import { Effect, Metric, Schedule } from "effect"
+import { Effect, Metric, Queue, Schedule, Semaphore } from "effect"
 import type { DriverError } from "./Errors.ts"
 import type { Slug } from "./Point.ts"
 import { Publisher } from "./Publisher.ts"
@@ -31,18 +31,33 @@ export interface HealthRegistry {
   readonly devices: ReadonlyMap<Slug, DeviceHealth>
   readonly recordSuccess: (device: Slug, timestamp: number) => void
   readonly recordFailure: (device: Slug, reason: HealthReason) => void
+  /**
+   * Call `listener` whenever a device's `status` or `reason` changes (`starting` to `ok`, `ok` to `failing`,
+   * one failure reason to another), not on every successful read. Returns the function that removes it.
+   */
+  readonly onChange: (listener: () => void) => () => void
 }
 
 export const makeHealthRegistry = (deviceIds: ReadonlyArray<Slug>): HealthRegistry => {
   const devices = new Map<Slug, DeviceHealth>(deviceIds.map((id) => [id, { status: "starting" }]))
+  const listeners = new Set<() => void>()
+  const record = (device: Slug, next: DeviceHealth) => {
+    const previous = devices.get(device)
+    devices.set(device, next)
+    if (previous?.status !== next.status || previous.reason !== next.reason) listeners.forEach((listener) => listener())
+  }
   return {
     devices,
-    recordSuccess: (device, timestamp) => {
-      devices.set(device, { status: "ok", lastSuccess: timestamp })
-    },
+    recordSuccess: (device, timestamp) => record(device, { status: "ok", lastSuccess: timestamp }),
     recordFailure: (device, reason) => {
       const lastSuccess = devices.get(device)?.lastSuccess
-      devices.set(device, { status: "failing", reason, ...(lastSuccess === undefined ? {} : { lastSuccess }) })
+      record(device, { status: "failing", reason, ...(lastSuccess === undefined ? {} : { lastSuccess }) })
+    },
+    onChange: (listener) => {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
     }
   }
 }
@@ -106,18 +121,31 @@ export interface HealthReporterOptions {
   readonly intervalMs: number
   /** Renders the current online message. */
   readonly online: Effect.Effect<string>
+  /** Device status changes to publish without waiting for the next interval. */
+  readonly registry?: HealthRegistry
+  /** How long a change waits for others to join it before it is published: the bound on change-driven publishes. */
+  readonly changeWindowMs?: number
 }
+
+/** A status change waits this long for others, so health goes out on change at most about once a second. */
+export const healthChangeWindowMs = 1_000
 
 /**
  * Refresh the retained online message every `intervalMs`, so subscribers see
- * device status change and `ts` advance. The publisher announces the gateway
- * on connect; this keeps the message current between connects. Every failed
- * refresh is counted, and the next interval tries again. Only the first
- * failure of a run is logged, and the recovery after it: a broker outage is
- * two lines, not one per interval.
+ * `ts` advance, and soon after a device's status changes, so the retained
+ * message does not say `starting` for a minute after the devices came up.
+ * Changes within `changeWindowMs` (on the monotonic timer) of the first one go
+ * out in one message, so a flapping device costs at most one publish per
+ * window on top of the heartbeat. The publisher announces the gateway on
+ * connect; this keeps the message current between connects. Every failed
+ * refresh is counted, and the next one tries again. Only the first failure of
+ * a run is logged, and the recovery after it: a broker outage is two lines,
+ * not one per interval.
  */
 export const runHealthReporter = Effect.fn("runHealthReporter")(function* (options: HealthReporterOptions) {
   const publisher = yield* Publisher
+  // One refresh at a time, each rendered once it holds the permit: a later retained message is never older.
+  const oneAtATime = yield* Semaphore.make(1)
   let failing = false
   const refresh = Effect.gen(function* () {
     yield* publisher.publish(options.topic, yield* options.online, { retain: true })
@@ -133,7 +161,23 @@ export const runHealthReporter = Effect.fn("runHealthReporter")(function* (optio
         failing = true
         yield* Effect.logWarning("health publish failed").pipe(Effect.annotateLogs({ error: error.message }))
       })
-    )
+    ),
+    Semaphore.withPermit(oneAtATime)
   )
-  return yield* Effect.sleep(options.intervalMs).pipe(Effect.andThen(refresh), Effect.repeat(Schedule.forever))
+  const heartbeat = Effect.sleep(options.intervalMs).pipe(Effect.andThen(refresh), Effect.repeat(Schedule.forever))
+  const registry = options.registry
+  if (registry === undefined) return yield* heartbeat
+  // Capacity one, sliding: any number of changes before the next publish is one pending signal.
+  const changed = yield* Queue.sliding<void>(1)
+  const onChange = Effect.gen(function* () {
+    yield* Queue.take(changed)
+    yield* Effect.sleep(options.changeWindowMs ?? healthChangeWindowMs)
+    // What changed during the window is in the message about to be rendered.
+    yield* Queue.clear(changed)
+    yield* refresh
+  }).pipe(Effect.repeat(Schedule.forever))
+  return yield* Effect.acquireRelease(
+    Effect.sync(() => registry.onChange(() => Queue.offerUnsafe(changed, undefined))),
+    (unsubscribe) => Effect.sync(unsubscribe)
+  ).pipe(Effect.andThen(Effect.all([heartbeat, onChange], { concurrency: 2, discard: true })), Effect.scoped)
 })
