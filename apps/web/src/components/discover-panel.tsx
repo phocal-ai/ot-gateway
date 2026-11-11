@@ -243,12 +243,21 @@ export const DiscoverPanel = ({
         <Problem outcome={found} />
       ) : (
         <div className="grid gap-2" role="status">
-          <p className="text-sm">
-            {found.value.devices.length === 0
-              ? "No device answered."
-              : `${formatNumber(found.value.devices.length)} device${found.value.devices.length === 1 ? "" : "s"} answered${found.value.more ? ", and more than listed" : ""}:`}
-          </p>
-          {found.value.note === undefined ? null : <p className="text-xs text-muted-foreground">{found.value.note}</p>}
+          {/* Without devices the gateway's note starts with "No device answered" and says what to check. */}
+          {found.value.devices.length === 0 && found.value.note !== undefined ? (
+            <p className="text-sm">{found.value.note}</p>
+          ) : (
+            <>
+              <p className="text-sm">
+                {found.value.devices.length === 0
+                  ? "No device answered."
+                  : `${formatNumber(found.value.devices.length)} device${found.value.devices.length === 1 ? "" : "s"} answered${found.value.more ? ", and more than listed" : ""}:`}
+              </p>
+              {found.value.note === undefined ? null : (
+                <p className="text-xs text-muted-foreground">{found.value.note}</p>
+              )}
+            </>
+          )}
           <ul className="grid gap-1.5">
             {found.value.devices.map((device) => (
               <DeviceRow

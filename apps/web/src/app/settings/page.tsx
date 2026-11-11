@@ -5,13 +5,15 @@
  * this page edit (`/api/config/edit`), the Gateway and Broker cards have an Edit button
  * (components/settings-editor.tsx), and the Devices card adds a Modbus TCP or BACnet/IP device, edits or removes one
  * (components/device-editor.tsx), finds BACnet devices and picks their objects (components/discover-panel.tsx), or
- * adds the devices of an uploaded points list or EDE file (components/import-panel.tsx). Every save writes the config file and the gateway applies it without a restart.
+ * adds the devices of an uploaded points list or EDE file (components/import-panel.tsx). Every save writes the config
+ * file and the gateway applies it without a restart, and while the setup guide runs, the saved note links back to it.
  * When it does not let the page edit, the page says why and what to change.
  *
  * Links open a panel: `?add=modbus-tcp` or `?add=bacnet-ip` (a new device), `?edit=<device id>`, `?find=1`,
  * `?upload=1`, and `?broker=1` opens the Broker card's form.
  */
 import type { ConfigView, EditStatus } from "@ot-gateway/api"
+import Link from "next/link"
 import { useEffect, useRef, useState } from "react"
 import { DeviceEditor } from "@/components/device-editor"
 import { DiscoverPanel } from "@/components/discover-panel"
@@ -22,6 +24,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { type DeviceDraft, type EditableProtocol, isEditableProtocol } from "@/lib/device-editor"
 import type { EditCard } from "@/lib/editor"
+import { guideStarted } from "@/lib/first-run"
 import { fetchEditStatus } from "@/lib/editor-api"
 import { formatNumber } from "@/lib/format"
 import { deviceAddress, deviceColumns, duration, formatSetting, sectionTitle, settingLabel } from "@/lib/settings"
@@ -118,6 +121,15 @@ const SavedNote = ({ saved, card }: { readonly saved: Saved | undefined; readonl
   saved?.card === card ? (
     <p role="status" className="mb-3 rounded-md border border-success/40 px-3 py-2 text-sm">
       {saved.message}
+      {/* Someone setting the gateway up came from the Status tab's guide: lead them back to its next step. */}
+      {guideStarted() ? (
+        <>
+          {" "}
+          <Link className="underline underline-offset-4" href="/">
+            Back to the setup guide
+          </Link>
+        </>
+      ) : null}
     </p>
   ) : null
 
