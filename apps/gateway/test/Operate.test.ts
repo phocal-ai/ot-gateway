@@ -542,7 +542,7 @@ describe("history", () => {
     expect(formatSeries(heatPump, quiet, now, { cov: true })).toEqual([
       "heat-pump/supply-temp (Supply temperature, °C): 1 min buckets from the per-minute rollups",
       "  12:10:00  avg 12.4 °C  min 12.1  max 12.9  (12 reads)",
-      "  12:11:00  no reads for 2 min, until 12:13:00: it comes on change of value, so no change while its device answered",
+      "  12:11:00  no change for 2 min, until 12:13:00 (it comes on change of value)",
       "  12:13:00  3 °C  (1 read)"
     ])
     expect(seriesJson(heatPump, quiet, { cov: true }).gaps).toEqual([
@@ -560,7 +560,7 @@ describe("history", () => {
     // While its device failed, that stretch is the failure's; before it, the point only had nothing new.
     const failures = [{ from: at(12, 11, 30), to: at(12, 13, 0), error: "timed out" }]
     expect(formatSeries(heatPump, quiet, now, { cov: true, failures }).slice(2, 4)).toEqual([
-      "  12:11:00  no reads for 30 s, until 12:11:30: it comes on change of value, so no change while its device answered",
+      "  12:11:00  no change for 30 s, until 12:11:30 (it comes on change of value)",
       "  12:11:30  no reads for 1 min 30 s, until 12:13:00: heat-pump failing: timed out"
     ])
   })
@@ -608,9 +608,7 @@ describe("history", () => {
     ])
     const lines = formatSeries(compressor, quiet, at(18, 37, 0), context)
     expect(lines).toContain("  18:33:07  no reads for 2 min 13 s, until 18:35:20: heat-pump failing: timed out")
-    expect(lines).toContain(
-      "  18:31:43  no reads for 1 min 24 s, until 18:33:07: it comes on change of value, so no change while its device answered"
-    )
+    expect(lines).toContain("  18:31:43  no change for 1 min 24 s, until 18:33:07 (it comes on change of value)")
     // A polled point keeps the whole gap as the failure's.
     expect(seriesJson(power, quiet, { failures }).gaps.find((gap) => gap.emptyFrom === at(18, 32, 0))).toMatchObject({
       from: at(18, 31, 43),

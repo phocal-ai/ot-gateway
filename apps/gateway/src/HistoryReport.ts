@@ -326,18 +326,23 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     const line =
       cause?.kind === "gateway-start"
         ? `no reads until the gateway started at ${localTime(cause.started, now)}`
-        : live
-          ? atEnd
-            ? gap.emptyFrom >= series.to - series.stepMs
-              ? `no read yet in this bucket${failing(cause)}`
-              : `no reads since then${failing(cause)}`
-            : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
-          : // A gateway without live answers wrote its reads every 30 s: a short gap at the end is that.
-            atEnd && gap.emptyFrom >= series.to - FLUSH_MS - series.stepMs
-            ? "not written yet"
-            : atEnd
-              ? `no reads since then (${notYet})${failing(cause)}`
+        : cause?.kind === "no-change"
+          ? // A change-of-value point that kept still: nothing missing, so not "no reads".
+            atEnd
+            ? "no change since then (it comes on change of value)"
+            : `no change for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)} (it comes on change of value)`
+          : live
+            ? atEnd
+              ? gap.emptyFrom >= series.to - series.stepMs
+                ? `no read yet in this bucket${failing(cause)}`
+                : `no reads since then${failing(cause)}`
               : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
+            : // A gateway without live answers wrote its reads every 30 s: a short gap at the end is that.
+              atEnd && gap.emptyFrom >= series.to - FLUSH_MS - series.stepMs
+              ? "not written yet"
+              : atEnd
+                ? `no reads since then (${notYet})${failing(cause)}`
+                : `no reads for ${preciseDuration(gap.to - gap.from)}, until ${localTime(gap.to, now)}${failing(cause)}`
     rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}` })
   }
   return [
