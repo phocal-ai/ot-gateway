@@ -112,7 +112,17 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
         message: `The config is saved, and the gateway is still applying it after ${APPLY_TIMEOUT}. Reload the page in a minute: the events say whether it was applied.`
       })
     }
-    if (Result.isSuccess(applied.value)) return { etag: saved.etag, applied: applied.value.success }
+    if (Result.isSuccess(applied.value)) {
+      const change = applied.value.success
+      // Writes are a decision (VISION.md): the line says which points take commands now, and within what.
+      const writes = change.changes.filter((line) => line.startsWith("write"))
+      if (writes.length > 0) {
+        yield* Effect.logWarning("writes changed from the status page").pipe(
+          Effect.annotateLogs({ writes: writes.join("; ") })
+        )
+      }
+      return { etag: saved.etag, applied: change }
+    }
     const failed = applied.value.failure
     // The previous config runs again: so the file says what runs, it gets the previous text back.
     const restored = yield* Effect.result(store.restore(saved.previous))

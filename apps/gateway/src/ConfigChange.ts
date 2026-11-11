@@ -1,7 +1,7 @@
 /**
  * What a saved config changes against the running one, in short, for the `config-applied` event, the log line and
  * the page: which settings of the gateway and broker sections, which other sections, which devices were added,
- * removed or changed. And what an in-process apply cannot change: the status page's own address (its server keeps
+ * removed or changed, and every point that takes commands now or no longer does (with its limits). And what an in-process apply cannot change: the status page's own address (its server keeps
  * running) and the history (its file stays open), which need a restart.
  */
 import type { ConfigChange } from "@ot-gateway/api"
@@ -30,6 +30,23 @@ const changedKeys = (was: object, is: object) => {
   return [...new Set([...before.keys(), ...after.keys()])].filter((key) => !same(before.get(key), after.get(key)))
 }
 
+/** Every writable point as `device/point`, with its limits in words (` (10 to 30)`, or nothing for a binary one). */
+const writablePoints = (config: GatewayConfig) =>
+  new Map(
+    config.devices.flatMap((device) =>
+      device.points.flatMap((point) =>
+        point.writable
+          ? [
+              [
+                `${device.id}/${point.id}`,
+                point.limits === undefined ? "" : ` (${point.limits.min} to ${point.limits.max})`
+              ] as const
+            ]
+          : []
+      )
+    )
+  )
+
 export const describeConfigChange = (before: GatewayConfig, after: GatewayConfig): ConfigChange => {
   const changes: Array<string> = []
   const restartNeeded: Array<string> = []
@@ -55,6 +72,15 @@ export const describeConfigChange = (before: GatewayConfig, after: GatewayConfig
     const previous = beforeDevices.get(id)
     if (previous !== undefined && !same(previous, device)) changes.push(`device ${id} changed`)
   }
+  // A write is a decision: every point that now takes commands, or no longer does, is named with its limits.
+  const writableBefore = writablePoints(before)
+  const writableAfter = writablePoints(after)
+  for (const [key, limits] of writableAfter) {
+    const was = writableBefore.get(key)
+    if (was === undefined) changes.push(`writes allowed: ${key}${limits}`)
+    else if (was !== limits) changes.push(`write limits changed: ${key}${limits}`)
+  }
+  for (const key of writableBefore.keys()) if (!writableAfter.has(key)) changes.push(`writes turned off: ${key}`)
   const summary = changes.length === 0 ? "nothing to apply" : changes.join("; ")
   return {
     summary: restartNeeded.length === 0 ? summary : `${summary} (${restartNeeded.join(" and ")}: after a restart)`,
