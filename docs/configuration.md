@@ -16,18 +16,18 @@ Durations are milliseconds unless the key says seconds.
 
 The top level of the document.
 
-| Key                | Type         | Default  | Meaning                                                                                                     |
-| ------------------ | ------------ | -------- | ----------------------------------------------------------------------------------------------------------- |
-| `site`             | slug         | required | First topic level.                                                                                          |
-| `building`         | slug         | required | Second topic level.                                                                                         |
-| `id`               | slug         | `main`   | This gateway within the building. Its health topic is `site/building/$gateway/<id>/health`.                 |
-| `healthIntervalMs` | 1000–3600000 | 60000    | How often the retained health message is refreshed.                                                         |
-| `mqtt`             | object       | required | The broker; see [mqtt](#mqtt).                                                                              |
-| `buffer`           | object       | none     | Store-and-forward outbox; see [buffer](#buffer). Without it, values read while the broker is down are lost. |
-| `history`          | object       | none     | Every read kept on the device; see [history](#history). The status page charts it.                          |
-| `status`           | object       | none     | The local status page; see [status](#status). Without it, nothing is served.                                |
-| `bacnet`           | object       | defaults | The gateway's BACnet/IP endpoint, shared by every BACnet device; see [bacnet](#bacnet).                     |
-| `devices`          | array        | required | Modbus TCP, BACnet/IP and simulated devices, ids unique; may be empty.                                      |
+| Key                | Type         | Default  | Meaning                                                                                                       |
+| ------------------ | ------------ | -------- | ------------------------------------------------------------------------------------------------------------- |
+| `site`             | slug         | required | First topic level.                                                                                            |
+| `building`         | slug         | required | Second topic level.                                                                                           |
+| `id`               | slug         | `main`   | This gateway within the building. Its health topic is `site/building/$gateway/<id>/health`.                   |
+| `healthIntervalMs` | 1000–3600000 | 60000    | How often the retained health message is refreshed; a device status change also publishes it within a second. |
+| `mqtt`             | object       | required | The broker; see [mqtt](#mqtt).                                                                                |
+| `buffer`           | object       | none     | Store-and-forward outbox; see [buffer](#buffer). Without it, values read while the broker is down are lost.   |
+| `history`          | object       | none     | Every read kept on the device; see [history](#history). The status page charts it.                            |
+| `status`           | object       | none     | The local status page; see [status](#status). Without it, nothing is served.                                  |
+| `bacnet`           | object       | defaults | The gateway's BACnet/IP endpoint, shared by every BACnet device; see [bacnet](#bacnet).                       |
+| `devices`          | array        | required | Modbus TCP, BACnet/IP and simulated devices, ids unique; may be empty.                                        |
 
 ## mqtt
 

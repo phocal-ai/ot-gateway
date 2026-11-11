@@ -300,7 +300,7 @@ and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The
 
 ## Health on MQTT
 
-The gateway keeps a retained message on `site/building/$gateway/<id>/health`: `online` with every device's status and last successful read, refreshed every `healthIntervalMs`, and `offline` (its MQTT last will) when it stops or loses the broker. Alert on that topic from whatever reads the broker.
+The gateway keeps a retained message on `site/building/$gateway/<id>/health`: `online` with every device's status and last successful read, refreshed every `healthIntervalMs` and within a second of a device changing status (at most one such refresh a second), and `offline` (its MQTT last will) when it stops or loses the broker. Alert on that topic from whatever reads the broker.
 
 The `online` message also carries `host`, the machine's last sample (below): `memoryBytes`, `eventLoopLagMs`, `clockSteps`, and where the machine can tell, `temperatureC`, `throttled` with `throttledWatched` (the conditions the Pi lets the gateway see, below) and `diskFreeBytes`. So a fleet can be watched from the broker alone, without Grafana.
 
