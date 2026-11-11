@@ -14,7 +14,7 @@ import {
   valuesPublished,
   valuesSuppressed
 } from "../src/index.ts"
-import type { AnyPoint, Driver, HealthRegistry, Reading } from "../src/index.ts"
+import type { AnyPoint, DeviceHealth, Driver, HealthRegistry, Reading } from "../src/index.ts"
 
 const point: AnyPoint = {
   id: "zone-temp",
@@ -86,15 +86,17 @@ describe("runDevice", () => {
       const { messages, layer } = yield* makeMemoryPublisher
       const registry = makeHealthRegistry(["test-device"])
       const recorded: Array<string> = []
+      let lastFailure: DeviceHealth | undefined
       const health: HealthRegistry = {
         devices: registry.devices,
         recordSuccess: (device, timestamp) => {
           recorded.push("ok")
           registry.recordSuccess(device, timestamp)
         },
-        recordFailure: (device, reason) => {
-          recorded.push(`failing:${reason}`)
-          registry.recordFailure(device, reason)
+        recordFailure: (device, failure) => {
+          recorded.push(`failing:${failure.reason}`)
+          registry.recordFailure(device, failure)
+          lastFailure = registry.devices.get(device)
         },
         onChange: registry.onChange
       }
@@ -110,6 +112,10 @@ describe("runDevice", () => {
       expect(values).toEqual([30])
       // The first cycle fails after its retries; every later cycle reads fine.
       expect(recorded[0]).toBe("failing:timeout")
+      // While it failed, the registry kept the driver's own words and when it started.
+      expect(lastFailure).toMatchObject({ status: "failing", reason: "timeout", failures: 1 })
+      expect(lastFailure?.failingSince).toEqual(expect.any(Number))
+      expect(lastFailure?.lastError).toEqual(expect.any(String))
       expect(recorded.slice(1).every((entry) => entry === "ok")).toBe(true)
       expect(health.devices.get("test-device")?.status).toBe("ok")
     })

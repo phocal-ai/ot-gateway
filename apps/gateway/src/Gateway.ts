@@ -92,7 +92,15 @@ const openBacnet = Effect.fn("openBacnet")(function* (
   const client = yield* attempt.pipe(
     Effect.tapError((error) =>
       Effect.all([
-        Effect.sync(() => bacnetDevices.forEach((device) => health.recordFailure(device.id, "connection"))),
+        Effect.map(Clock.currentTimeMillis, (at) =>
+          bacnetDevices.forEach((device) =>
+            health.recordFailure(device.id, {
+              reason: "connection",
+              message: `the gateway's BACnet/IP port ${config.bacnet.port} cannot be opened: ${error.message}`,
+              at
+            })
+          )
+        ),
         Effect.logError("could not open the BACnet/IP endpoint, trying again").pipe(
           Effect.annotateLogs({ port: config.bacnet.port, error: error.message })
         )
@@ -145,12 +153,15 @@ const runOne = (
         ),
         Effect.flatMap(run),
         Effect.scoped,
-        Effect.catchTag("DriverError", (error) => {
-          health.recordFailure(device.id, error.reason)
-          return Effect.logError("BACnet device not started").pipe(
-            Effect.annotateLogs({ device: device.id, error: error.message })
-          )
-        })
+        Effect.catchTag("DriverError", (error) =>
+          Effect.gen(function* () {
+            const at = yield* Clock.currentTimeMillis
+            health.recordFailure(device.id, { reason: error.reason, message: error.message, at })
+            yield* Effect.logError("BACnet device not started").pipe(
+              Effect.annotateLogs({ device: device.id, error: error.message })
+            )
+          })
+        )
       )
     }
   }

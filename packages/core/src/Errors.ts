@@ -48,6 +48,32 @@ export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("Pipe
   message: Schema.String
 }) {}
 
+/** A property of a Node system error (`code`, `address`, `port`, `hostname`), when it has one of that type. */
+const field = (error: Error, key: string): string | undefined => {
+  const value: unknown = Reflect.get(error, key)
+  return typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined
+}
+
+/**
+ * A Node system error in words, for the usual connect failures that carry the address they were about:
+ * `connect ECONNREFUSED 127.0.0.1:5020` becomes `connection refused by 127.0.0.1:5020`. Others keep Node's text.
+ */
+const systemErrorText = (error: Error): string | undefined => {
+  const code = field(error, "code")
+  const address = field(error, "address")
+  const port = field(error, "port")
+  const hostname = field(error, "hostname")
+  if (code === "ENOTFOUND" && hostname !== undefined) return `host name ${hostname} not found`
+  if (address === undefined) return undefined
+  const host = address.includes(":") ? `[${address}]` : address
+  const target = port === undefined ? address : `${host}:${port}`
+  if (code === "ECONNREFUSED") return `connection refused by ${target}`
+  if (code === "ETIMEDOUT") return `no answer from ${target}`
+  if (code === "EHOSTUNREACH") return `host ${address} unreachable`
+  if (code === "ENETUNREACH") return `no route to ${address}`
+  return undefined
+}
+
 /**
  * The most specific text in a Node error. Dialing a name with several
  * addresses (`localhost` is `::1` and `127.0.0.1`) fails with an
@@ -55,6 +81,8 @@ export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("Pipe
  */
 const causeText = (cause: unknown): string | undefined => {
   if (!(cause instanceof Error)) return undefined
+  const plain = systemErrorText(cause)
+  if (plain !== undefined) return plain
   if (cause.message !== "") return cause.message
   if (cause instanceof AggregateError) {
     const parts = cause.errors.map(causeText).filter((part) => part !== undefined)
