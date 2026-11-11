@@ -73,7 +73,7 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 4. **Resources in Scope.** Sockets and files are acquired with `Effect.acquireRelease` or scoped layers.
 5. **Config through Schema.** Every config field is defined in `packages/core/src/Config.ts` or `Point.ts`, with defaults set by `withDecodingDefaultKey`. IDs are slugs, so they are always valid topic segments.
 6. **Topics:** `site/building/device/point`, metadata on the retained `.../$meta` topic, health on `site/building/$gateway/<id>/health`.
-7. **Writes are guarded.** Only points with `writable: true`, only through the command guard, always logged.
+7. **Writes are guarded.** Only points with `writable: true`, only through the command guard, always logged. The status page's config editor writes only through the edit guard (`apps/gateway/src/EditGuard.ts`: same origin, the `X-OT-Gateway` header, loopback or `OT_GATEWAY_EDIT_TOKEN`) and never sees a secret.
 8. **Every driver has a simulator**, and tests run without hardware.
 9. **Observable by default.** New behaviour that can fail or stall gets a metric in `packages/core/src/Telemetry.ts` (with a `unit` attribute when it is not a count) or a span, and the dashboard script is updated. Telemetry config is the standard `OTEL_*` env vars only.
 
