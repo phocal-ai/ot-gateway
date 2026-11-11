@@ -128,7 +128,9 @@ export const makeStatusState = (
   config: GatewayConfig,
   health: HealthRegistry,
   since: number,
-  host?: StatusHost
+  host?: StatusHost,
+  /** When this config started: `since`, or the moment a config saved on the page was applied. */
+  configSince = since
 ): StatusState => {
   const prefix = `${config.site}/${config.building}/`
   // The last payload per point, decoded only when someone asks for a snapshot: publishing stays cheap.
@@ -236,6 +238,7 @@ export const makeStatusState = (
           id: config.id,
           since,
           now,
+          configSince,
           broker: {
             url: config.mqtt.url,
             connected,

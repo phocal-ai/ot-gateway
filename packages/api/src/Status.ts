@@ -188,6 +188,11 @@ export const GatewayStatus = Schema.Struct({
   /** Unix ms when the gateway started, and when this snapshot was taken. */
   since: Schema.Number,
   now: Schema.Number,
+  /**
+   * Unix ms when the running config started: the gateway's start, or a later save on the Settings tab. What the page
+   * keeps of the config (`/api/config`, `/api/points`) is current while this stays the same.
+   */
+  configSince: Schema.Number,
   broker: BrokerStatus,
   /** Absent without a `buffer` in the config. */
   buffer: Schema.optionalKey(BufferStatus),

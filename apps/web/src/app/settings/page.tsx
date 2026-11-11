@@ -1,14 +1,21 @@
 "use client"
 
 /**
- * The Settings tab: the gateway's running config, read-only (`/api/config`), every default filled in. The page
- * cannot change it: the config file can, checked with `ot-gateway check` and read again when the gateway restarts.
- * Points are on the Points tab; here each device has its address, interval and point count.
+ * The Settings tab: the gateway's running config (`/api/config`), every default filled in. The Gateway and Broker
+ * cards have an Edit button when the gateway lets this page edit (`/api/config/edit`): the form saves the config
+ * file and the gateway applies it without a restart (components/settings-editor.tsx). When it does not, the page
+ * says why and what to change. Everything else is changed in the config file, checked with `ot-gateway check` and
+ * read again when the gateway restarts. Points are on the Points tab; here each device has its address, interval
+ * and point count.
  */
-import type { ConfigView } from "@ot-gateway/api"
+import type { ConfigView, EditStatus } from "@ot-gateway/api"
 import { useEffect, useState } from "react"
+import { EditForm } from "@/components/settings-editor"
+import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import type { EditCard } from "@/lib/editor"
+import { fetchEditStatus } from "@/lib/editor-api"
 import { formatNumber } from "@/lib/format"
 import { deviceAddress, deviceColumns, duration, formatSetting, sectionTitle, settingLabel } from "@/lib/settings"
 import { fetchConfig, protocolName, settle } from "@/lib/status"
@@ -21,8 +28,8 @@ type ConfigLoad =
   | { readonly _tag: "ok"; readonly config: ConfigView }
   | { readonly _tag: "failed"; readonly message: string }
 
-/** The config, asked for until it comes once. */
-const useConfig = () => {
+/** The config, asked for until it comes once, and again after each `reload` (a save). */
+const useConfig = (reload: number) => {
   const [load, setLoad] = useState<ConfigLoad>({ _tag: "loading" })
   useEffect(() => {
     let cancelled = false
@@ -39,8 +46,23 @@ const useConfig = () => {
       cancelled = true
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [])
+  }, [reload])
   return load
+}
+
+/** Whether this page may edit, asked for once and after each save; undefined until it comes (or if it never does). */
+const useEditStatus = (reload: number) => {
+  const [edit, setEdit] = useState<EditStatus | undefined>(undefined)
+  useEffect(() => {
+    let cancelled = false
+    void settle(fetchEditStatus).then((result) => {
+      if (!cancelled && result._tag === "Success") setEdit(result.success)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [reload])
+  return edit
 }
 
 /** Blocks a config can leave out, and what that means. */
@@ -49,8 +71,15 @@ const offWhenMissing: ReadonlyArray<readonly [string, string]> = [
   ["history", "Off: the point panel shows no history."]
 ]
 
+/** The cards with an Edit button. */
+const editable = (key: string): EditCard | undefined => (key === "gateway" || key === "mqtt" ? key : undefined)
+
 const SettingsPage = () => {
-  const load = useConfig()
+  const [reload, setReload] = useState(0)
+  const load = useConfig(reload)
+  const edit = useEditStatus(reload)
+  const [editing, setEditing] = useState<EditCard | undefined>(undefined)
+  const [saved, setSaved] = useState<string | undefined>(undefined)
   if (load._tag !== "ok")
     return (
       <p className="text-muted-foreground">
@@ -59,33 +88,90 @@ const SettingsPage = () => {
     )
   const { sections, devices } = load.config
   const present = new Set(sections.map((section) => section.key))
+  const closeForm = (message: string | undefined) => {
+    setEditing(undefined)
+    if (message === undefined) return
+    setSaved(message)
+    setReload((count) => count + 1)
+  }
   return (
     <>
-      <p className="max-w-3xl text-sm text-muted-foreground">
-        The settings the gateway runs with, read-only. To change one, edit the config file (
-        <code className="font-mono">ot-gateway.json</code>), check it with{" "}
-        <code className="font-mono">ot-gateway check ot-gateway.json</code> and restart the gateway.
-      </p>
+      <div className="grid max-w-3xl gap-2 text-sm">
+        {edit?.enabled === true ? (
+          <p className="text-muted-foreground">
+            The settings the gateway runs with. Edit changes the gateway and broker settings in{" "}
+            <code className="font-mono break-all">{edit.path}</code> and applies them at once, keeping the previous file
+            as <code className="font-mono">.bak</code>. Devices and everything else are changed in that file, then the
+            gateway is restarted.
+          </p>
+        ) : (
+          <p className="text-muted-foreground">
+            The settings the gateway runs with. To change one, edit the config file (
+            <code className="font-mono">ot-gateway.json</code>), check it with{" "}
+            <code className="font-mono">ot-gateway check ot-gateway.json</code> and restart the gateway.
+          </p>
+        )}
+        {edit !== undefined && !edit.enabled ? (
+          <div className="rounded-md border px-3 py-2">
+            <p>Editing on this page is off: {edit.reason}</p>
+            {edit.fix === undefined ? null : <p className="mt-1 text-muted-foreground">{edit.fix}</p>}
+          </div>
+        ) : null}
+        {saved === undefined ? null : (
+          <p role="status" className="rounded-md border border-success/40 px-3 py-2">
+            {saved}
+          </p>
+        )}
+      </div>
       <div className="grid gap-4 md:grid-cols-2">
-        {sections.map((section) => (
-          <Card key={section.key}>
-            <CardHeader>
-              <CardTitle>{sectionTitle(section.key)}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
-                {section.entries.map((entry) => (
-                  <div className="contents" key={entry.key}>
-                    <dt className="text-muted-foreground" title={entry.key}>
-                      {settingLabel(entry.key)}
-                    </dt>
-                    <dd className="min-w-0 text-right break-words">{formatSetting(entry.key, entry.value)}</dd>
-                  </div>
-                ))}
-              </dl>
-            </CardContent>
-          </Card>
-        ))}
+        {sections.map((section) => {
+          const card = editable(section.key)
+          const canEdit = card !== undefined && edit?.enabled === true && editing === undefined
+          return (
+            <Card key={section.key}>
+              <CardHeader className="flex items-center justify-between gap-2">
+                <CardTitle>{sectionTitle(section.key)}</CardTitle>
+                {canEdit ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="-my-2"
+                    onClick={() => {
+                      setSaved(undefined)
+                      setEditing(card)
+                    }}
+                  >
+                    Edit
+                  </Button>
+                ) : null}
+              </CardHeader>
+              <CardContent>
+                {card !== undefined && editing === card && edit !== undefined ? (
+                  <EditForm card={card} edit={edit} onDone={closeForm} />
+                ) : (
+                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
+                    {section.entries.map((entry) => (
+                      <div className="contents" key={entry.key}>
+                        <dt className="text-muted-foreground" title={entry.key}>
+                          {settingLabel(entry.key)}
+                        </dt>
+                        <dd className="min-w-0 text-right break-words">{formatSetting(entry.key, entry.value)}</dd>
+                      </div>
+                    ))}
+                    {section.key === "mqtt" && edit?.password !== undefined ? (
+                      <div className="contents">
+                        <dt className="text-muted-foreground">Password</dt>
+                        <dd className="min-w-0 text-right break-words">
+                          {edit.password.set ? "set" : "not set"} ({edit.password.variable})
+                        </dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                )}
+              </CardContent>
+            </Card>
+          )
+        })}
         {offWhenMissing
           .filter(([key]) => !present.has(key))
           .map(([key, text]) => (

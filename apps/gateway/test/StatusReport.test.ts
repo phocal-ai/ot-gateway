@@ -26,6 +26,7 @@ const failingGateway: GatewayStatus = {
   id: "main",
   since: at(10, 19, 30),
   now,
+  configSince: at(10, 19, 30),
   broker: {
     url: "mqtt://localhost:1883",
     connected: false,

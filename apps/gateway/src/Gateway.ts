@@ -364,6 +364,8 @@ interface Shared {
   readonly scope: Scope.Scope
   /** Failed by a config's devices fiber when it fails or dies: the gateway stops, as it did before reloads. */
   readonly fatal: Deferred.Deferred<never, DevicesError>
+  /** When the latest config started (Unix ms), for the status page: set by each start. */
+  configSince: number
 }
 
 /** What the devices of a config can fail with (reading telemetry settings from the environment). */
@@ -424,8 +426,17 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
       return onlinePayload(registry, startedAt, now, snapshot === undefined ? undefined : hostHealth(snapshot))
     })
   }
+  // Each start a later time than the one before, even within a millisecond: the page keys what it keeps on it.
+  const configSince = Math.max(yield* Clock.currentTimeMillis, shared.configSince + 1)
+  shared.configSince = configSince
   const status = shared.serving
-    ? makeStatusState(config, registry, startedAt, { latest: latestHost, version: options.version ?? "unknown" })
+    ? makeStatusState(
+        config,
+        registry,
+        startedAt,
+        { latest: latestHost, version: options.version ?? "unknown" },
+        configSince
+      )
     : undefined
   const drivers = makeDriverRegistry()
   const clock = yield* Clock.clockWith(Effect.succeed)
@@ -553,7 +564,8 @@ export const runGateway = Effect.fn("Gateway")(
       history,
       serving: config.status !== undefined,
       scope: yield* Effect.scope,
-      fatal: yield* Deferred.make<never, DevicesError>()
+      fatal: yield* Deferred.make<never, DevicesError>(),
+      configSince: startedAt - 1
     }
     let running: Running = yield* startConfig(config, shared, { requireBuffer: false, awaitBroker: false })
     const status = running.status === undefined ? undefined : switchableStatus(running.status)
