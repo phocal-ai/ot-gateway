@@ -4,12 +4,15 @@
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
 import { describe, expect, it } from "@effect/vitest"
 import type { BacnetDevice, BacnetPoint, Reading } from "@ot-gateway/core"
-import { type Duration, Effect, Fiber, Result, Schedule, Stream } from "effect"
+import { type Duration, Effect, Fiber, Logger, References, Result, Schedule, Stream } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import {
+  AbortReason,
   type Apdu,
   answer,
+  type BacnetClient,
+  BacnetDeviceError,
   batchSizeFor,
   ConfirmedService,
   decodeFrame,
@@ -30,6 +33,7 @@ import {
   toPointValue,
   UnconfirmedService
 } from "../src/index.ts"
+import { deviceConfig as scriptedConfig, points as scriptedPoints, scriptedClient } from "./chaos/scripted.ts"
 
 const loopback = { address: "127.0.0.1", port: 0 }
 
@@ -454,6 +458,79 @@ describe("BACnet change of value", () => {
       const { client, config } = yield* setUp([supplyTemp])
       const driver = yield* makeBacnetDriverFromClient(config, client, { cov: quickCov })
       expect(driver.changes).toBeUndefined()
+    })
+  )
+})
+
+const tooLarge = new BacnetDeviceError({
+  kind: "abort",
+  code: AbortReason.SegmentationNotSupported,
+  message: "aborted: segmentation-not-supported"
+})
+
+/** A scripted device whose answers fit only `limit` points: it aborts a larger ReadPropertyMultiple as too large. */
+const fitsOnly = (limit: number) => {
+  const scripted = scriptedClient()
+  const counts = { requests: 0, aborts: 0 }
+  const client: BacnetClient = {
+    ...scripted.client,
+    readPropertyMultiple: (target, specifications) =>
+      Effect.suspend(() => {
+        counts.requests++
+        const properties = specifications.reduce((sum, specification) => sum + specification.properties.length, 0)
+        if (properties <= limit) return scripted.client.readPropertyMultiple(target, specifications)
+        counts.aborts++
+        return Effect.fail(tooLarge)
+      })
+  }
+  return { client, counts }
+}
+
+/** The batch size of every "reading fewer points" line logged while the layer is provided. */
+const captureShrinks = () => {
+  const sizes: Array<unknown> = []
+  const layer = Logger.layer([
+    Logger.make((options) => {
+      if (String(options.message).startsWith("answer too large for the device")) {
+        sizes.push(options.fiber.getRef(References.CurrentLogAnnotations)["batchSize"])
+      }
+    })
+  ])
+  return { sizes, layer }
+}
+
+describe("BACnet batch size", () => {
+  it.effect("settles on a size the device answers instead of trying a refused one again every few cycles", () =>
+    Effect.gen(function* () {
+      const shrinks = captureShrinks()
+      const { client, counts } = fitsOnly(5)
+      const config = scriptedConfig(scriptedPoints(20), { address: "10.0.0.5" })
+      const driver = yield* makeBacnetDriverFromClient(config, client, { batchSize: 20 })
+      const abortsByCycle: Array<number> = []
+      yield* Effect.gen(function* () {
+        for (let cycle = 0; cycle < 100; cycle++) {
+          expect(yield* driver.readAll).toHaveLength(20)
+          abortsByCycle.push(counts.aborts)
+        }
+      }).pipe(Effect.provide(shrinks.layer))
+      // A few probes while it finds the size, then none: not one more every 11 cycles.
+      expect(counts.aborts).toBeLessThanOrEqual(5)
+      expect(abortsByCycle[99]).toBe(abortsByCycle[49])
+      expect(shrinks.sizes.length).toBeGreaterThan(0)
+      expect(new Set(shrinks.sizes).size).toBe(shrinks.sizes.length)
+    })
+  )
+
+  it.effect("shrinks a batch shorter than the batch size that the device finds too large", () =>
+    Effect.gen(function* () {
+      const { client, counts } = fitsOnly(3)
+      // 1476-byte APDUs: 66 points per request, far more than the device has.
+      const config = scriptedConfig(scriptedPoints(6), { address: "10.0.0.5" })
+      const driver = yield* makeBacnetDriverFromClient(config, client)
+      expect(yield* driver.readAll).toHaveLength(6)
+      const abortsAfterFirst = counts.aborts
+      for (let cycle = 0; cycle < 5; cycle++) expect(yield* driver.readAll).toHaveLength(6)
+      expect(counts.aborts).toBe(abortsAfterFirst)
     })
   )
 })
