@@ -74,8 +74,9 @@ describe("readsOnChange", () => {
   })
 })
 
+const at = (ts: number) => ({ value: 1, ts })
+
 describe("pointFreshness", () => {
-  const at = (ts: number | undefined) => (ts === undefined ? {} : { value: 1, ts })
 
   it("is fresh while read on schedule, and none before the first read", () => {
     expect(pointFreshness(point({}), { value: at(now - 2000), device: device() }, now, false)._tag).toBe("fresh")

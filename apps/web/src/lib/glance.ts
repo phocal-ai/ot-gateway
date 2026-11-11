@@ -14,9 +14,13 @@ import { freshness, lateAfterMs } from "./status"
 export const isAlarm = (point: Pick<PointInfo, "brick" | "haystack">) =>
   (point.brick?.includes("Alarm") ?? false) || (point.haystack ?? []).includes("alarm")
 
-/** An alarm point whose value says the alarm is on: `true`, or a number other than 0 (a flag read as a register). */
+/** Whether an alarm point's value says the alarm is on: `true`, or a number other than 0 (a flag read as a register). */
+export const alarmOn = (value: number | boolean | undefined) =>
+  value === true || (typeof value === "number" && value !== 0)
+
+/** An alarm point that is on. */
 export const alarmActive = (point: Pick<PointInfo, "brick" | "haystack">, value: number | boolean | undefined) =>
-  isAlarm(point) && (value === true || (typeof value === "number" && value !== 0))
+  isAlarm(point) && alarmOn(value)
 
 /**
  * Whether the gateway asks the device to send the point on change of value (BACnet COV) rather than only polling it:
@@ -81,7 +85,8 @@ export const glanceKeys = (
 ): ReadonlyArray<string> => {
   const byDevice = pointsByDevice(points)
   const keys = new Set<string>()
-  for (const device of devices) for (const point of (byDevice.get(device) ?? []).slice(0, max)) keys.add(pointKey(point))
+  for (const device of devices)
+    for (const point of (byDevice.get(device) ?? []).slice(0, max)) keys.add(pointKey(point))
   for (const point of points) if (isAlarm(point)) keys.add(pointKey(point))
   return [...keys]
 }
