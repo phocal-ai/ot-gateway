@@ -1,0 +1,72 @@
+/**
+ * What to check for a failing device: the hint follows the failure class, the driver's words and the protocol.
+ */
+import { describe, expect, it } from "@effect/vitest"
+import { fallbackHint, hintRules, whatToCheck } from "../src/lib/hints.ts"
+
+const mentions = (checks: ReadonlyArray<string>, word: RegExp) => checks.some((check) => word.test(check))
+
+describe("whatToCheck", () => {
+  it("asks whether the device is on, the port right and a firewall in between when the connection is refused", () => {
+    const hint = whatToCheck("modbus-tcp", "connection", "could not connect: connection refused by 127.0.0.1:5999")
+    expect(hint.meaning).toMatch(/nothing accepts a connection/)
+    expect(mentions(hint.checks, /switched on/)).toBe(true)
+    expect(mentions(hint.checks, /port/)).toBe(true)
+    expect(mentions(hint.checks, /firewall/)).toBe(true)
+  })
+
+  it("tells a host name that does not resolve and an address nothing answers at apart", () => {
+    expect(
+      whatToCheck("modbus-tcp", "connection", "could not connect: host name meter.local not found").meaning
+    ).toMatch(/does not resolve/)
+    expect(whatToCheck("modbus-tcp", "connection", "could not connect: host 10.0.0.9 unreachable").meaning).toMatch(
+      /Nothing answers/
+    )
+    expect(whatToCheck("modbus-tcp", "connection", undefined).meaning).toMatch(/cannot connect/)
+  })
+
+  it("points a Modbus timeout at the unit id and a busy device", () => {
+    const hint = whatToCheck("modbus-tcp", "timeout", "no response to 4 item(s) within 3s")
+    expect(hint.meaning).toMatch(/reachable/)
+    expect(mentions(hint.checks, /unit id/)).toBe(true)
+    expect(mentions(hint.checks, /busy/)).toBe(true)
+  })
+
+  it("points a BACnet timeout at the device instance, and an unanswered Who-Is at broadcasts across subnets", () => {
+    expect(
+      mentions(whatToCheck("bacnet-ip", "timeout", "no answer from 10.0.0.5:47808").checks, /device instance/)
+    ).toBe(true)
+    const whoIs = whatToCheck("bacnet-ip", "timeout", "device 2001 did not answer Who-Is; asking again in 30 s")
+    expect(whoIs.meaning).toMatch(/Who-Is/)
+    expect(mentions(whoIs.checks, /subnet/)).toBe(true)
+  })
+
+  it("points a refusal or a bad reply at the register map, data type and word order", () => {
+    const refused = whatToCheck("modbus-tcp", "protocol", "device refused every read (illegal_data_address)")
+    expect(mentions(refused.checks, /register map/)).toBe(true)
+    expect(mentions(refused.checks, /data type/)).toBe(true)
+    const bad = whatToCheck("modbus-tcp", "invalid-response", "short frame")
+    expect(mentions(bad.checks, /word order/)).toBe(true)
+    expect(mentions(whatToCheck("bacnet-ip", "protocol", "unknown-object").checks, /object/)).toBe(true)
+  })
+
+  it("falls back to the gateway's log for a reason it has no hint for", () => {
+    expect(whatToCheck("modbus-tcp", "crashed", "boom")).toBe(fallbackHint)
+    expect(whatToCheck("simulator", "something-new", undefined)).toBe(fallbackHint)
+  })
+
+  it("has a hint for every failure class the gateway reports, on every protocol", () => {
+    const reasons = [
+      "connection",
+      "timeout",
+      "protocol",
+      "invalid-response",
+      "configuration",
+      "not-implemented",
+      "cycle-timeout"
+    ]
+    for (const protocol of ["modbus-tcp", "bacnet-ip", "simulator"] as const)
+      for (const reason of reasons) expect(whatToCheck(protocol, reason, "")).not.toBe(fallbackHint)
+    for (const rule of hintRules) expect(rule.hint.checks.length).toBeGreaterThan(0)
+  })
+})
