@@ -214,10 +214,11 @@ describe("runDevice publish modes", () => {
       expect(values).toEqual([
         // Started at 0.5 s inside [0, 4 s): 1, 2, 3 for a second each, then 4 for half a second.
         {
-          value: 8 / 3.5,
+          // 8 / 3.5 at 15 significant digits: an average keeps its digits, not its binary noise.
+          value: 2.28571428571429,
           min: 1,
           max: 4,
-          avg: 8 / 3.5,
+          avg: 2.28571428571429,
           last: 4,
           count: 4,
           from: 500,

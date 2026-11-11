@@ -2,7 +2,7 @@ import { createServer, type Server, type Socket } from "node:net"
 import { describe, expect, it } from "@effect/vitest"
 import { Config, ConfigProvider, Effect } from "effect"
 import { HttpClient } from "effect/http"
-import { otlpHttpClient, traceSampleRatio, withBudgetDefaults } from "../src/Telemetry.ts"
+import { otlpHttpClient, traceSampleRatio, tracesExported, withBudgetDefaults } from "../src/Telemetry.ts"
 
 const withEnv = (env: Record<string, string>) => Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env)))
 
@@ -30,6 +30,40 @@ describe("traceSampleRatio", () => {
       expect(yield* ratio("7")).toBe(1)
       expect(yield* ratio("-1")).toBe(0)
       expect(yield* traceSampleRatio.pipe(withEnv({ OTEL_TRACES_SAMPLER: "always_off" }))).toBe(0)
+    })
+  )
+})
+
+describe("tracesExported", () => {
+  const endpoint = { OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318" }
+
+  it.effect("is false with no telemetry configured, as on a gateway set up by init", () =>
+    Effect.gen(function* () {
+      expect(yield* tracesExported.pipe(withEnv({}))).toBe(false)
+      expect(yield* tracesExported.pipe(withEnv(endpoint))).toBe(false)
+      expect(yield* tracesExported.pipe(withEnv({ OTEL_TRACES_EXPORTER: "otlp" }))).toBe(false)
+    })
+  )
+
+  it.effect("is true with the otlp exporter and an endpoint, either the shared or the traces one", () =>
+    Effect.gen(function* () {
+      expect(yield* tracesExported.pipe(withEnv({ ...endpoint, OTEL_TRACES_EXPORTER: "otlp" }))).toBe(true)
+      expect(
+        yield* tracesExported.pipe(
+          withEnv({
+            OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: "http://collector:4318/v1/traces",
+            OTEL_TRACES_EXPORTER: "console, OTLP"
+          })
+        )
+      ).toBe(true)
+    })
+  )
+
+  it.effect("is false when the SDK is disabled", () =>
+    Effect.gen(function* () {
+      expect(
+        yield* tracesExported.pipe(withEnv({ ...endpoint, OTEL_TRACES_EXPORTER: "otlp", OTEL_SDK_DISABLED: "true" }))
+      ).toBe(false)
     })
   )
 })

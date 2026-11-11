@@ -38,25 +38,20 @@ import {
 import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Result, Schema } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
+import { basename, dirname, join } from "node:path"
 import { toCsv } from "./Csv.ts"
+import { isEde } from "./Ede.ts"
 import { printJson } from "./Output.ts"
+import { appendToPointsList } from "./PointsListAppend.ts"
+import { slugify } from "./Slug.ts"
+
+export { slugify }
 
 /** How long Who-Is answers are collected. */
 const LISTEN = "3 seconds"
 
 /** Where the operator should take a device's address from. */
 const TRUSTED_SOURCE = "a source you trust (commissioning sheet, device display, DHCP reservation)"
-
-/** A config slug (lowercase, digits, `-` and `_`, at most 64) from a free-text name; empty when nothing is left. */
-export const slugify = (name: string) =>
-  name
-    .normalize("NFKD")
-    .replace(/\p{M}/gu, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "-")
-    .replace(/^[-_]+|-+$/g, "")
-    .slice(0, 64)
-    .replace(/-+$/, "")
 
 /** Object names often repeat the device's ("Heat pump flow temp" on "Heat pump"); the topic has it already. */
 const withoutPrefix = (slug: string, prefix: string) =>
@@ -327,46 +322,90 @@ export const pointColumn = (point: { readonly id: string; readonly name: string 
   return point.id
 }
 
-/** The drafts as a points list (PointsSchema.ts): one row per object, to trim and import. */
-export const draftPointsList = (drafts: ReadonlyArray<Draft>) => {
-  const header = ["device", "point", "unit", "device_instance", "address", "object_type", "object_instance"]
-  const rows = drafts.flatMap((draft) =>
+/** The points list columns discover fills (PointsSchema.ts), in the schema's order. */
+export const draftColumns = ["device", "point", "unit", "device_instance", "address", "object_type", "object_instance"]
+
+/** The drafts as points list rows, fields in the order of `draftColumns`. */
+export const draftRows = (drafts: ReadonlyArray<Draft>) =>
+  drafts.flatMap((draft) =>
     draft.points.map((point) => [
       draft.id,
       pointColumn(point),
       point.unit ?? "",
-      draft.deviceInstance,
+      String(draft.deviceInstance),
       draft.address ?? "",
       point.objectType,
-      point.instance
+      String(point.instance)
     ])
   )
-  return toCsv([header, ...rows])
-}
 
-/** What `discover --points-list` wrote: the file, and how many devices and points are in it. */
+/** The drafts as a points list (PointsSchema.ts): one row per object, to trim and import. */
+export const draftPointsList = (drafts: ReadonlyArray<Draft>) => toCsv([draftColumns, ...draftRows(drafts)])
+
+/**
+ * What `discover --points-list` wrote: the file; the devices and points discovery listed; how many of those points
+ * were added to the file and how many were in it already (`--append` only, 0 otherwise); whether it appended.
+ */
 export interface PointsListWritten {
   readonly path: string
   readonly devices: number
   readonly points: number
+  readonly added: number
+  readonly skipped: number
+  readonly appended: boolean
+}
+
+/**
+ * `text` at `path` in one step: written next to it under a temporary name, then renamed over it, so an
+ * interrupted run leaves the old file or the new one, never half of one. The temporary file goes on failure.
+ */
+const writeAtomically = Effect.fn("writeAtomically")(function* (path: string, text: string) {
+  const fs = yield* FileSystem.FileSystem
+  const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
+  yield* fs.writeFileString(temporary, text).pipe(
+    Effect.andThen(fs.rename(temporary, path)),
+    Effect.onError(() => fs.remove(temporary).pipe(Effect.ignore))
+  )
+})
+
+export interface PointsListOptions extends DiscoverOptions {
+  /** Add to the list at the path when there is one, instead of refusing to touch it. */
+  readonly append?: boolean | undefined
 }
 
 /**
  * `ot-gateway discover --points-list <file>`: the drafts of devices not in the config yet, written as a points
- * list to trim, check and import. An existing file is left alone and none is written when there is nothing in it;
- * both fail, so a script or agent never goes on with a list that is stale or missing.
+ * list to trim, check and import. An existing file is left alone, unless `append` asks to add to it
+ * (PointsListAppend.ts: rows it has already are skipped). None is written when discovery found nothing; that and
+ * an existing file without `append` fail, so a script or agent never goes on with a list that is stale or
+ * missing. The file is replaced in one step, never left half written.
  */
 export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* (
   config: GatewayConfig,
   path: string,
   network?: Pick<Network, "udp">,
-  options: DiscoverOptions = {}
+  options: PointsListOptions = {}
 ) {
   const fs = yield* FileSystem.FileSystem
-  if (yield* fs.exists(path)) {
+  const append = options.append === true
+  // Read before asking the network, so a list that cannot be added to fails without waiting for answers.
+  const existing = (yield* fs.exists(path))
+    ? append
+      ? yield* fs.readFileString(path)
+      : yield* new DiscoverError({
+          message: `${path} exists; add --append to add the devices found to it, give another file name, or move it away first. Nothing was written.`
+        })
+    : undefined
+  if (existing !== undefined && isEde(existing)) {
     return yield* new DiscoverError({
-      message: `${path} exists; give another file name, or move it away first. Nothing was written.`
+      message: `${path} is an EDE file; turn it into a points list first (ot-gateway points from-ede ${path} > points.csv) and add to that. Nothing was written.`
     })
+  }
+  if (existing !== undefined) {
+    const check = appendToPointsList(existing, draftColumns, [])
+    if (Result.isFailure(check)) {
+      return yield* new DiscoverError({ message: `${path}: ${check.failure}. Nothing was written.` })
+    }
   }
   const configured = new Set(config.devices.map((device) => device.id))
   const drafts = yield* discoverDrafts(config, network, options)
@@ -377,11 +416,36 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
     )
   }
   const points = fresh.reduce((total, draft) => total + draft.points.length, 0)
-  if (points === 0) return yield* new DiscoverError({ message: `no points to list; ${path} was not written.` })
-  yield* fs.writeFileString(path, draftPointsList(fresh), { flag: "wx" })
+  if (points === 0) {
+    return yield* new DiscoverError({
+      message: `no points to list; ${path} was ${existing === undefined ? "not written" : "left as it was"}.`
+    })
+  }
+  if (existing === undefined) {
+    yield* writeAtomically(path, draftPointsList(fresh))
+    yield* Console.error(
+      `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ot-gateway import ${path}`
+    )
+    const written: PointsListWritten = {
+      path,
+      devices: fresh.length,
+      points,
+      added: points,
+      skipped: 0,
+      appended: false
+    }
+    return written
+  }
+  const merged = appendToPointsList(existing, draftColumns, draftRows(fresh))
+  if (Result.isFailure(merged)) {
+    return yield* new DiscoverError({ message: `${path}: ${merged.failure}. Nothing was written.` })
+  }
+  const { added, skipped } = merged.success
+  if (added > 0) yield* writeAtomically(path, merged.success.text)
   yield* Console.error(
-    `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ot-gateway import ${path}`
+    `added ${added} point(s), skipped ${skipped} already in the list, to ${path}` +
+      (added > 0 ? `. Delete the rows you do not need, then: ot-gateway import ${path}` : "; it was left as it was")
   )
-  const written: PointsListWritten = { path, devices: fresh.length, points }
+  const written: PointsListWritten = { path, devices: fresh.length, points, added, skipped, appended: true }
   return written
 })

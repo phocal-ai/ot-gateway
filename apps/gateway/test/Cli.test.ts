@@ -9,7 +9,15 @@ import { Effect, FileSystem } from "effect"
 import { TestConsole } from "effect/testing"
 import type { NetworkInterfaceInfo } from "node:os"
 import type { BrokerReport } from "../src/Broker.ts"
-import { brokerOutcome, cliVersion, describeConfig, pointsListOutcome, runCli, toCliArgs } from "../src/Cli.ts"
+import {
+  brokerOutcome,
+  configSummary,
+  describeConfig,
+  pointsListOutcome,
+  runCli,
+  toCliArgs,
+  versionLine
+} from "../src/Cli.ts"
 import {
   demoBanner,
   demoConfig,
@@ -23,16 +31,24 @@ import {
 } from "../src/Demo.ts"
 import { loadConfig } from "../src/LoadConfig.ts"
 
-describe("cliVersion", () => {
-  it("drops a release tag's v, which the CLI prints itself", () => {
-    expect(cliVersion("v0.7.0")).toBe("0.7.0")
-    expect(cliVersion("v0.8.0-rc.1")).toBe("0.8.0-rc.1")
+describe("versionLine", () => {
+  it("prints a release as its tag", () => {
+    expect(versionLine("ot-gateway", "v0.7.0")).toBe("ot-gateway v0.7.0")
+    expect(versionLine("ot-gateway", "v0.8.0-rc.1")).toBe("ot-gateway v0.8.0-rc.1")
+    expect(versionLine("ot-gateway", "0.9.0")).toBe("ot-gateway v0.9.0")
   })
 
-  it("leaves a dev build or a commit as it is", () => {
-    expect(cliVersion("dev")).toBe("dev")
-    expect(cliVersion("c78bb4e09-dirty")).toBe("c78bb4e09-dirty")
+  it("prints a local build or a commit without a v", () => {
+    expect(versionLine("ot-gateway", "dev")).toBe("ot-gateway dev")
+    expect(versionLine("ot-gateway", "c78bb4e09-dirty")).toBe("ot-gateway c78bb4e09-dirty")
   })
+
+  it.effect("is what --version prints: a checkout without a VERSION file is dev, with no v", () =>
+    Effect.gen(function* () {
+      yield* runCli(["--version"])
+      expect(yield* TestConsole.logLines).toEqual(["ot-gateway dev"])
+    }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
 })
 
 describe("toCliArgs", () => {
@@ -76,6 +92,61 @@ const linkLocal: NetworkInterfaceInfo = {
   cidr: "fe80::1/64",
   scopeid: 2
 }
+
+/** A config with one BACnet device of three points (two present values), with `device` merged in. */
+const bacnetConfig = (device: Record<string, unknown>) =>
+  parseConfig(
+    JSON.stringify({
+      site: "s",
+      building: "b",
+      mqtt: { url: "mqtt://broker" },
+      devices: [
+        {
+          protocol: "bacnet-ip",
+          id: "heat-pump",
+          deviceInstance: 2001,
+          address: "127.0.0.1:47809",
+          points: [
+            { id: "flow-temperature", name: "Flow", objectType: "analog-input", instance: 1 },
+            { id: "running", name: "Running", objectType: "binary-input", instance: 2 },
+            { id: "flow-name", name: "Flow name", objectType: "analog-input", instance: 1, property: "object-name" }
+          ],
+          ...device
+        }
+      ]
+    })
+  )
+
+describe("check", () => {
+  it.effect("says which BACnet points are asked for by change of value, with the poll interval as the fallback", () =>
+    Effect.gen(function* () {
+      const config = yield* bacnetConfig({})
+      expect(describeConfig(config)).toContain(
+        "heat-pump: bacnet-ip device 2001 at 127.0.0.1:47809, 3 point(s): 2 by COV where the device supports it, polled every 5000 ms otherwise"
+      )
+      expect(configSummary(config).devices).toEqual([
+        {
+          id: "heat-pump",
+          protocol: "bacnet-ip",
+          points: 3,
+          writable: 0,
+          pollIntervalMs: 5000,
+          covPoints: ["flow-temperature", "running"],
+          reading: "2 by COV where the device supports it, polled every 5000 ms otherwise"
+        }
+      ])
+      const allPushed = yield* bacnetConfig({
+        points: [{ id: "flow", name: "Flow", objectType: "analog-input", instance: 1 }]
+      })
+      expect(describeConfig(allPushed)).toContain(
+        "1 point(s): COV where the device supports it, polled every 5000 ms otherwise"
+      )
+      const polled = yield* bacnetConfig({ cov: false })
+      expect(describeConfig(polled)).toContain("3 point(s), every 5000 ms")
+      expect(configSummary(polled).devices[0]?.covPoints).toEqual([])
+    })
+  )
+})
 
 describe("demo", () => {
   it.effect("runs the example with the outbox in its own directory and the status page where it is asked", () =>
@@ -167,27 +238,56 @@ describe("demo", () => {
 describe("discover --points-list", () => {
   it.effect("prints what it wrote as JSON with --json, and nothing on stdout without", () =>
     Effect.gen(function* () {
-      const written = { path: "points.csv", devices: 2, points: 14 }
+      const written = { path: "points.csv", devices: 2, points: 14, added: 12, skipped: 2, appended: true }
       yield* pointsListOutcome(false)(written)
       expect(yield* TestConsole.logLines).toEqual([])
       yield* pointsListOutcome(true)(written)
       const [line] = yield* TestConsole.logLines
-      expect(JSON.parse(String(line))).toEqual({ ok: true, path: "points.csv", devices: 2, points: 14 })
+      expect(JSON.parse(String(line))).toEqual({
+        ok: true,
+        path: "points.csv",
+        devices: 2,
+        points: 14,
+        added: 12,
+        skipped: 2,
+        appended: true
+      })
     }).pipe(Effect.provide(TestConsole.layer))
   )
 
-  it.effect("fails with {ok: false} when the file exists, before it asks the network", () =>
+  it.effect("fails with {ok: false} when the file exists, before it asks the network, and names --append", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const directory = yield* fs.makeTempDirectoryScoped()
       const path = `${directory}/points.csv`
       yield* fs.writeFileString(path, "kept")
       const error = yield* Effect.flip(runCli(["discover", exampleConfigPath, "--points-list", path, "--json"]))
-      expect(error.message).toContain(`${path} exists`)
+      expect(error.message).toContain(`${path} exists; add --append`)
       const [line] = yield* TestConsole.logLines
       expect(JSON.parse(String(line))).toMatchObject({ ok: false, path: exampleConfigPath })
       expect(yield* fs.readFileString(path)).toBe("kept")
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("with --append, refuses a file that is not a points list before it asks the network", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      yield* fs.writeFileString(path, "kept")
+      const error = yield* Effect.flip(
+        runCli(["discover", exampleConfigPath, "--points-list", path, "--append", "--json"])
+      )
+      expect(error.message).toContain("no device and point columns")
+      expect(yield* fs.readFileString(path)).toBe("kept")
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("refuses --append without --points-list", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(runCli(["discover", exampleConfigPath, "--append"]))
+      expect(error.message).toContain("--append adds to the file --points-list names")
+    }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })
 

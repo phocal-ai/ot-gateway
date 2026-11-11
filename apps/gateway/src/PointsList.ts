@@ -12,7 +12,7 @@
  * checks everything this module does not.
  */
 import { Effect, Result, Schema } from "effect"
-import { slugify } from "./Discover.ts"
+import { slugify } from "./Slug.ts"
 import type { Profile, ProfilePoint } from "./Profile.ts"
 import { closestMatch } from "./Suggest.ts"
 
@@ -32,6 +32,14 @@ export interface UnterminatedQuote {
   readonly records: ReadonlyArray<DelimitedRecord>
 }
 
+/** The separator of a delimited text: whichever of `;`, tab and `,` its first line has most of (`;` before tab before `,` on a tie). */
+export const detectDelimiter = (text: string) => {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? ""
+  return [";", "\t", ","].reduce((best, candidate) =>
+    firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
+  )
+}
+
 /**
  * The records of a delimited text (RFC 4180: quotes, doubled quotes, line breaks inside quotes), each with the line
  * it starts on, empty lines dropped. The separator is the one the first line has most of, unless given. A quote that
@@ -42,12 +50,7 @@ export const readDelimited = (
   separator?: string
 ): Result.Result<ReadonlyArray<DelimitedRecord>, UnterminatedQuote> => {
   const body = text.replace(/^﻿/, "")
-  const firstLine = body.split(/\r?\n/, 1)[0] ?? ""
-  const delimiter =
-    separator ??
-    [";", "\t", ","].reduce((best, candidate) =>
-      firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
-    )
+  const delimiter = separator ?? detectDelimiter(body)
   const records: Array<DelimitedRecord> = []
   let row: Array<string> = []
   let field = ""

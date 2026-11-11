@@ -12,12 +12,14 @@ import {
   defaultFolder,
   type InitFlags,
   initConfig,
+  initNext,
   initTarget,
   isInteractive,
   lanInterfaces,
   nextSteps,
   runInit,
-  simulatedDevice
+  simulatedDevice,
+  sshSession
 } from "../src/Init.ts"
 import { pointsListTemplate } from "../src/PointsSchema.ts"
 
@@ -104,6 +106,67 @@ describe("nextSteps", () => {
       expect(steps.indexOf("ot-gateway import points.csv site.json")).toBeLessThan(steps.indexOf("ot-gateway run"))
       expect(steps).toContain("ot-gateway run site.json")
       expect(steps).toContain("ot-gateway watch site.json")
+    })
+  )
+})
+
+describe("sshSession", () => {
+  it("is undefined outside SSH", () => {
+    expect(sshSession({})).toBeUndefined()
+    expect(sshSession({ SSH_CONNECTION: "", USER: "pi" })).toBeUndefined()
+  })
+
+  it("takes the host from SSH_CONNECTION's server address and the user from USER, else LOGNAME", () => {
+    expect(sshSession({ SSH_CONNECTION: "192.168.1.20 53412 192.168.1.50 22", USER: "pi" })).toEqual({
+      host: "192.168.1.50",
+      user: "pi"
+    })
+    expect(sshSession({ SSH_CONNECTION: "fe80::2 53412 fe80::1 22", LOGNAME: "admin" })).toEqual({
+      host: "fe80::1",
+      user: "admin"
+    })
+  })
+
+  it("leaves out what SSH_CLIENT does not say, and anything unsafe in a command line", () => {
+    expect(sshSession({ SSH_CLIENT: "192.168.1.20 53412 22" })).toEqual({ host: undefined, user: undefined })
+    expect(sshSession({ SSH_CONNECTION: "a 1 $(reboot) 22", USER: "-oProxyCommand=x" })).toEqual({
+      host: undefined,
+      user: undefined
+    })
+  })
+})
+
+describe("initNext over SSH", () => {
+  it.effect("adds the tunnel to the status page after the command that starts it, in text and as steps", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig(answers, [simulatedDevice]))
+      const ssh = { host: "192.168.1.50", user: "pi" }
+      const tunnel = "ssh -L 8080:127.0.0.1:8080 pi@192.168.1.50"
+      const { next } = initNext("site.json", config, { written: [], kept: [] }, ssh)
+      const commands = next.map((step) => step.command)
+      expect(commands.indexOf(tunnel)).toBe(commands.indexOf("ot-gateway run site.json") + 1)
+      expect(next.find((step) => step.command === tunnel)?.description).toContain("http://localhost:8080")
+      const text = nextSteps("site.json", config, { written: [], kept: [] }, ssh)
+      expect(text).toContain(tunnel)
+      expect(nextSteps("site.json", config)).not.toContain("ssh -L")
+    })
+  )
+
+  it.effect("forwards the configured status port, with placeholders for what the environment does not say", () =>
+    Effect.gen(function* () {
+      const config = yield* decode({ ...initConfig(answers, [simulatedDevice]), status: { port: 8181 } })
+      const { next } = initNext("site.json", config, { written: [], kept: [] }, { host: undefined, user: undefined })
+      expect(next.map((step) => step.command)).toContain("ssh -L 8080:127.0.0.1:8181 <user>@<host>")
+    })
+  )
+
+  it.effect("mirrors the text's commands and notes, for --json", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig({ ...answers, login: { username: "u", passwordEnv: "BROKER_PW" } }, []))
+      const { notes, next } = initNext("site.json", config)
+      const text = nextSteps("site.json", config)
+      expect(notes).toEqual(["set BROKER_PW to the broker password before you start the gateway"])
+      for (const step of next) expect(text).toContain(step.command)
     })
   )
 })
@@ -257,7 +320,17 @@ describe("configSummary", () => {
         broker: "mqtt://broker.lan:1883",
         buffer: "./ot-gateway-buffer.sqlite",
         warnings: [],
-        devices: [{ id: "sim-1", protocol: "simulator", points: 2, writable: 0, pollIntervalMs: 2000 }]
+        devices: [
+          {
+            id: "sim-1",
+            protocol: "simulator",
+            points: 2,
+            writable: 0,
+            pollIntervalMs: 2000,
+            covPoints: [],
+            reading: "every 2000 ms"
+          }
+        ]
       })
     })
   )

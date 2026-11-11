@@ -196,7 +196,8 @@ export const throttlingSource = Effect.fnUntraced(function* (
   const detect = Effect.gen(function* () {
     const maskText = yield* readText(mask)
     if (maskText !== undefined && parseThrottled(maskText) !== undefined) {
-      yield* Effect.logInfo("power and thermal conditions from the firmware's mask")
+      // Debug: health's throttledWatched says which conditions are seen, and nobody acts on where they come from.
+      yield* Effect.logDebug("power and thermal conditions from the firmware's mask")
       return {
         kind: "firmware-mask",
         read: yield* latched(parsedFrom(mask, parseThrottled))
@@ -205,7 +206,7 @@ export const throttlingSource = Effect.fnUntraced(function* (
     const sensors = yield* fs.readDirectory(hwmon).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []))
     for (const sensor of sensors) {
       if ((yield* readText(`${hwmon}/${sensor}/name`))?.trim() !== "rpi_volt") continue
-      yield* Effect.logInfo(
+      yield* Effect.logDebug(
         "power conditions from the kernel's rpi_volt sensor: under-voltage only; this kernel does not show throttling"
       )
       return {

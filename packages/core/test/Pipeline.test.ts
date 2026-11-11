@@ -41,6 +41,20 @@ const scriptedDriver = (values: ReadonlyArray<number | "fail">, deviceId = "test
   }
 }
 
+/** The first retained metadata `runDevice` publishes for the scripted point, parsed. */
+const metaOf = (covPoints?: ReadonlyArray<string>) =>
+  Effect.gen(function* () {
+    const { messages, layer } = yield* makeMemoryPublisher
+    const fiber = yield* runDevice(
+      { site: "s", building: "b", pollIntervalMs: 1000, ...(covPoints === undefined ? {} : { covPoints }) },
+      scriptedDriver([200])
+    ).pipe(Effect.provide(layer), Effect.forkChild)
+    yield* TestClock.adjust("1 millis")
+    yield* Fiber.interrupt(fiber)
+    const meta = messages.find((message) => message.topic.endsWith("$meta"))
+    return meta === undefined ? undefined : JSON.parse(meta.payload)
+  })
+
 describe("runDevice", () => {
   it.effect("publishes metadata, then scaled values outside the deadband", () =>
     Effect.gen(function* () {
@@ -57,6 +71,13 @@ describe("runDevice", () => {
       const values = messages.slice(1).map((m) => JSON.parse(m.payload).value)
       // 20.0 publishes, 20.2 is inside the 0.5 deadband, 21.0 publishes.
       expect(values).toEqual([20, 21])
+    })
+  )
+
+  it.effect("marks a point asked for by change of value in its metadata, and only that one", () =>
+    Effect.gen(function* () {
+      expect(yield* metaOf(["zone-temp"])).toMatchObject({ name: "Zone temperature", cov: true })
+      expect(yield* metaOf()).not.toHaveProperty("cov")
     })
   )
 

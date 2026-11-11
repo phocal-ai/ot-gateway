@@ -348,8 +348,67 @@ export const initTarget = Effect.fn("initTarget")(function* (argument: string | 
   return join(folder, folderConfigName)
 })
 
-/** What to do after `init`, for the config it wrote to `path`. */
-export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFiles = { written: [], kept: [] }) => {
+/** The SSH session the CLI runs in, so next steps can say how to reach the status page from the other end. */
+export interface SshSession {
+  /** The address the client connected to, or undefined when the environment does not say. */
+  readonly host: string | undefined
+  readonly user: string | undefined
+}
+
+/** The variables `sshSession` reads; the Docker wrapper passes them into the container. */
+export interface SshEnvironment {
+  readonly SSH_CONNECTION?: string | undefined
+  readonly SSH_CLIENT?: string | undefined
+  readonly USER?: string | undefined
+  readonly LOGNAME?: string | undefined
+}
+
+/** Only what is safe in a printed command line: a host name or an address, a login name. */
+const shellSafe = /^[\w.:%-]{1,253}$/
+
+const safe = (value: string | undefined) =>
+  value !== undefined && shellSafe.test(value) && !value.startsWith("-") ? value : undefined
+
+/**
+ * The SSH session from the environment, or undefined when the CLI does not run over SSH. `SSH_CONNECTION` is
+ * "client-address client-port server-address server-port"; `SSH_CLIENT` has no server address.
+ */
+export const sshSession = (env: SshEnvironment): SshSession | undefined => {
+  const connection = env.SSH_CONNECTION?.trim()
+  const client = env.SSH_CLIENT?.trim()
+  if ((connection === undefined || connection === "") && (client === undefined || client === "")) return undefined
+  const host = safe(connection?.split(/\s+/)[2])
+  const user = safe(env.USER) ?? safe(env.LOGNAME)
+  return { host, user }
+}
+
+/** The tunnel that opens a status page on `port` from the laptop the SSH session came from, as localhost:8080. */
+export const sshTunnel = (session: SshSession, port: number): NextStep => ({
+  command: `ssh -L 8080:127.0.0.1:${port} ${session.user ?? "<user>"}@${session.host ?? "<host>"}`,
+  description: "on your laptop, then open http://localhost:8080 for the status page"
+})
+
+/** One thing to do after `init`: a command and what it is for. */
+export interface NextStep {
+  readonly command: string
+  readonly description: string
+}
+
+const step = (command: string, description: string): NextStep => ({ command, description })
+
+/** What `init` prints after the config: the files, notes, and the next commands, as text and in `--json`. */
+export interface InitNext {
+  readonly notes: ReadonlyArray<string>
+  readonly next: ReadonlyArray<NextStep>
+}
+
+/** What to do after `init`, for the config it wrote to `path`; `ssh` adds the tunnel to the status page. */
+export const initNext = (
+  path: string,
+  config: GatewayConfig,
+  folder: FolderFiles = { written: [], kept: [] },
+  ssh?: SshSession
+): InitNext => {
   const passwordEnv = config.mqtt.passwordEnv
   const envFile = [...folder.written, ...folder.kept].find((file) => file.endsWith("ot-gateway.env"))
   const compose =
@@ -359,41 +418,54 @@ export const nextSteps = (path: string, config: GatewayConfig, folder: FolderFil
     passwordEnv === undefined
       ? []
       : envFile === undefined
-        ? [`  set ${passwordEnv} to the broker password before you start the gateway`]
-        : [`  put the broker password after ${passwordEnv}= in ${envFile}`]
+        ? [`set ${passwordEnv} to the broker password before you start the gateway`]
+        : [`put the broker password after ${passwordEnv}= in ${envFile}`]
   // Commands run from the gateway's folder, where the config's default name needs no argument.
   const folderPath = dirname(path)
   const name = basename(path)
   const argument = name === folderConfigName ? "" : ` ${name}`
   // Without devices there is nothing to start yet: the points list comes first.
-  const devices: ReadonlyArray<readonly [string, string]> =
+  const devices =
     config.devices.length > 0
       ? []
       : [
-          ["ot-gateway points template > points.csv", "start a points list (or discover --points-list for BACnet)"],
-          [`ot-gateway import points.csv${argument}`, "add its devices to the config"]
+          step("ot-gateway points template > points.csv", "start a points list (or discover --points-list for BACnet)"),
+          step(`ot-gateway import points.csv${argument}`, "add its devices to the config")
         ]
-  const commands: ReadonlyArray<readonly [string, string]> = [
-    ...(folderPath === "." ? [] : ([[`cd ${folderPath}`, "the gateway's folder"]] as const)),
+  const next = [
+    ...(folderPath === "." ? [] : [step(`cd ${folderPath}`, "the gateway's folder")]),
     // Before anything is started: a wrong URL, port or password shows here, not later as a stale gateway.
-    [`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`],
+    step(`ot-gateway broker${argument}`, `check that ${config.mqtt.url} answers, with a message there and back`),
     ...devices,
     ...(compose
-      ? ([
-          ["docker compose up -d", "start it in Docker, restarted after a crash or a reboot"],
-          ["ot-gateway status", `one line per device (status page on http://127.0.0.1:${port})`]
-        ] as const)
-      : ([[`ot-gateway run${argument}`, `start the gateway (status page on http://127.0.0.1:${port})`]] as const)),
-    [`ot-gateway check${argument}`, "validate it again after an edit"],
-    [`ot-gateway watch${argument}`, `see what arrives at ${config.mqtt.url}`]
+      ? [
+          step("docker compose up -d", "start it in Docker, restarted after a crash or a reboot"),
+          step("ot-gateway status", `one line per device (status page on http://127.0.0.1:${port})`)
+        ]
+      : [step(`ot-gateway run${argument}`, `start the gateway (status page on http://127.0.0.1:${port})`)]),
+    // Over SSH, 127.0.0.1 is the gateway's machine, not the laptop with the browser.
+    ...(ssh === undefined ? [] : [sshTunnel(ssh, port)]),
+    step(`ot-gateway check${argument}`, "validate it again after an edit"),
+    step(`ot-gateway watch${argument}`, `see what arrives at ${config.mqtt.url}`)
   ]
-  const width = Math.max(...commands.map(([command]) => command.length)) + 2
+  return { notes: password, next }
+}
+
+/** What to do after `init` as text, for the config it wrote to `path`. */
+export const nextSteps = (
+  path: string,
+  config: GatewayConfig,
+  folder: FolderFiles = { written: [], kept: [] },
+  ssh?: SshSession
+) => {
+  const { notes, next } = initNext(path, config, folder, ssh)
+  const width = Math.max(...next.map(({ command }) => command.length)) + 2
   return [
     ...folder.written.map((file) => `wrote ${file}`),
     ...folder.kept.map((file) => `kept ${file} as it is`),
     ...(folder.noCompose === undefined ? [] : [`no compose.yaml: ${folder.noCompose}`]),
-    ...password,
+    ...notes.map((note) => `  ${note}`),
     "next:",
-    ...commands.map(([command, what]) => `  ${command.padEnd(width)}${what}`)
+    ...next.map(({ command, description }) => `  ${command.padEnd(width)}${description}`)
   ].join("\n")
 }

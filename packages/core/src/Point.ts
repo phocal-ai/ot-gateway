@@ -190,6 +190,12 @@ const names = (value: string, name: string, number: number) =>
   value === name || (/^\d+$/.test(value) && Number(value) === number)
 
 /**
+ * Whether a BACnet point reads its object's present value (by name or as 85),
+ * the property the driver subscribes to by change of value.
+ */
+export const isPresentValue = (point: { readonly property: string }) => names(point.property, "present-value", 85)
+
+/**
  * What a BACnet point's present value takes when written: true or false
  * (binary objects, clause 12.6-12.8), a whole number from 1 (multi-state
  * objects, an Unsigned state index, clause 12.18-12.20) or a REAL. Any other
@@ -200,7 +206,7 @@ export const bacnetValueKind = (point: {
   readonly objectType: string
   readonly property: string
 }): "binary" | "multi-state" | "real" => {
-  if (!names(point.property, "present-value", 85)) return "real"
+  if (!isPresentValue(point)) return "real"
   const type = point.objectType
   if (names(type, "binary-input", 3) || names(type, "binary-output", 4) || names(type, "binary-value", 5))
     return "binary"

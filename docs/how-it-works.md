@@ -31,7 +31,7 @@ OT Gateway is the translator in between.
 Follow the heat pump's flow temperature:
 
 1. **Ask.** Every 30 seconds the gateway asks the heat pump for object `analog-input 1`.
-2. **Clean.** The device answers `35.4`. The gateway applies the scaling you set, if any (a meter that reports tenths of a kW, say), and checks the value is a real number.
+2. **Clean.** The device answers `35.4`. The gateway applies the scaling you set, if any (a meter that reports tenths of a kW, say), and checks the value is a real number. A 32-bit float (a BACnet REAL, a Modbus `float32`) goes out as the shortest decimal that is the same float, so `35.4` stays `35.4` rather than `35.400001525878906`, and the arithmetic of scaling adds no digits of its own (`3 × 0.1` is `0.3`, not `0.30000000000000004`).
 3. **Decide what to send.** Reading and sending are set separately. By default each read goes out as it is. A point can also send its latest value once a minute, a summary of each 15 minutes (minimum, maximum and average, for energy reports), or only when it changes (for alarms, states and setpoints). Summaries line up with the clock: a 15-minute window closes at :00, :15, :30 and :45, like the meter's.
 4. **Send.** It publishes on a topic named after where the value comes from:
 

@@ -88,6 +88,17 @@ describe("packaging/ot-gateway", () => {
     expect(runCall(result.log)).not.toContain("--name")
   })
 
+  it("passes the SSH session and the user into the container, by name only", () => {
+    const result = runWrapper(["init"], {
+      FAKE_IMAGE_PRESENT: "1",
+      SSH_CONNECTION: "192.168.1.20 53412 192.168.1.50 22",
+      USER: "pi"
+    })
+    expect(result.status).toBe(0)
+    expect(runCall(result.log)).toContain(" -e SSH_CONNECTION -e USER ")
+    expect(runCall(result.log)).not.toContain("192.168.1.50")
+  })
+
   it("pulls a missing image quietly, retrying twice with a backoff", () => {
     const result = runWrapper(["--version"], { FAKE_PULL_FAILURES: "2" })
     expect(result.status).toBe(0)
@@ -138,6 +149,62 @@ describe("packaging/ot-gateway", () => {
     expect(result.stderr).toBe(
       `ot-gateway: pulling ${image} (about 460 MB)...\not-gateway: could not pull ${image} after 1 attempt: ${error}\n`
     )
+  })
+
+  it.each(["dev", "latest"])("checks a present %s image for a newer one, once, before running it", (tag) => {
+    const moving = `ghcr.io/phocal-ai/ot-gateway:${tag}`
+    const result = runWrapper(["--version"], { FAKE_IMAGE_PRESENT: "1", OT_GATEWAY_TAG: tag })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe("cli output\n")
+    expect(result.stderr).toBe(`ot-gateway: checking for a newer ${moving}...\n`)
+    expect(result.log.filter((line) => !line.startsWith("docker run "))).toEqual([
+      `docker image inspect ${moving}`,
+      `docker pull -q ${moving}`
+    ])
+    expect(runCall(result.log)).toMatch(new RegExp(`-w /work ${moving} --version$`))
+  })
+
+  it("runs the local dev image when the check for a newer one fails, without retrying", () => {
+    const moving = "ghcr.io/phocal-ai/ot-gateway:dev"
+    const result = runWrapper(["--version"], {
+      FAKE_IMAGE_PRESENT: "1",
+      OT_GATEWAY_TAG: "dev",
+      FAKE_PULL_FAILURES: "always"
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe("cli output\n")
+    expect(result.log.filter((line) => line.startsWith("docker pull"))).toHaveLength(1)
+    expect(result.log.some((line) => line.startsWith("sleep"))).toBe(false)
+    expect(result.stderr).toBe(
+      [
+        `ot-gateway: checking for a newer ${moving}...`,
+        "ot-gateway: could not check (net/http: timeout awaiting response headers), running the local image",
+        ""
+      ].join("\n")
+    )
+    expect(runCall(result.log)).toMatch(new RegExp(`-w /work ${moving} --version$`))
+  })
+
+  it("pulls a missing dev image like any other, with retries", () => {
+    const moving = "ghcr.io/phocal-ai/ot-gateway:dev"
+    const result = runWrapper(["--version"], { OT_GATEWAY_TAG: "dev", FAKE_PULL_FAILURES: "1" })
+    expect(result.status).toBe(0)
+    expect(result.log.filter((line) => line.startsWith("docker pull"))).toEqual([
+      `docker pull -q ${moving}`,
+      `docker pull -q ${moving}`
+    ])
+    expect(result.stderr).toBe(
+      `ot-gateway: pulling ${moving} (about 460 MB)...\not-gateway: pull failed, retrying in 2 s\n`
+    )
+  })
+
+  it("never checks a pinned dev-<sha> build for a newer one", () => {
+    const pinned = "ghcr.io/phocal-ai/ot-gateway:dev-0123abc"
+    const result = runWrapper(["--version"], { FAKE_IMAGE_PRESENT: "1", OT_GATEWAY_TAG: "dev-0123abc" })
+    expect(result.status).toBe(0)
+    expect(result.stderr).toBe("")
+    expect(result.log.some((line) => line.startsWith("docker pull"))).toBe(false)
+    expect(runCall(result.log)).toMatch(new RegExp(`-w /work ${pinned} --version$`))
   })
 
   it.each(["demo", "run", "watch"])("names the %s container after the command", (command) => {

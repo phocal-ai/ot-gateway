@@ -59,6 +59,8 @@ export interface DeviceContext {
   readonly publish?: Publish
   /** Where every read is kept on the device, if anywhere. */
   readonly history?: HistorySink
+  /** Points the config asks to receive by change of value (`covPointIds`); their `$meta` says `"cov": true`. */
+  readonly covPoints?: ReadonlyArray<string>
 }
 
 /** Payload of a value: on a read, on a change, or the latest once per interval. */
@@ -68,12 +70,18 @@ export interface ValueMessage {
   readonly ts: number
 }
 
-const metaPayload = (point: AnyPoint, publish: Publish): string =>
+/**
+ * A point's retained metadata. `cov: true` marks a point asked for by change of value: its values come when the
+ * device notifies a change (in `sample` mode each notification is a message, possibly more often than the poll
+ * interval), and by polling while the device does not notify.
+ */
+const metaPayload = (point: AnyPoint, publish: Publish, cov: boolean): string =>
   JSON.stringify({
     name: point.name,
     unit: point.unit,
     writable: point.writable,
     publish,
+    ...(cov ? { cov } : {}),
     semantics: point.semantics
   })
 
@@ -144,6 +152,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   const points = new Map(driver.points.map((p) => [p.id, p] as const))
   const policies = new Map(driver.points.map((p) => [p.id, publishOf(ctx.publish, p)] as const))
   const policyOf = (pointId: string) => policies.get(pointId) ?? everyRead
+  const covPoints = new Set(ctx.covPoints)
   /** Change mode: the last value sent, and when (monotonic), for the deadband and `maxSilenceMs`. */
   const last = new Map<string, PointValue>()
   const lastSentAt = new Map<string, number>()
@@ -237,7 +246,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     Effect.forEach(
       [...unpublishedMeta],
       (point) =>
-        publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id)), { retain: true }).pipe(
+        publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id), covPoints.has(point.id)), {
+          retain: true
+        }).pipe(
           Effect.catchTag("PublishError", skipRefused),
           Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
         ),

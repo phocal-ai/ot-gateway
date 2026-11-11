@@ -15,15 +15,15 @@
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
-import { type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
+import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
-import { Argument, Command, Flag } from "effect/cli"
+import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
+import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
+import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -50,6 +50,29 @@ import { telemetryLayer } from "./Telemetry.ts"
 import { printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
+const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
+
+/** Whether the CLI runs over SSH, and as whom: init's next steps then add the tunnel to the status page. */
+const sshEnvironment = Config.all({
+  SSH_CONNECTION: optionalEnv("SSH_CONNECTION"),
+  SSH_CLIENT: optionalEnv("SSH_CLIENT"),
+  USER: optionalEnv("USER"),
+  LOGNAME: optionalEnv("LOGNAME")
+})
+
+/**
+ * How a device's points are read, as configured: polled every `pollIntervalMs`, or for a BACnet device with `cov`,
+ * by change of value with polling as the fallback. Configuration intent: whether the device sends change-of-value
+ * notifications only the running gateway finds out, and they may come more often than the poll interval.
+ */
+export const readingLabel = (device: Device) => {
+  const cov = covPointIds(device).length
+  const polled = `every ${device.pollIntervalMs} ms`
+  if (cov === 0) return polled
+  const which = cov === device.points.length ? "COV" : `${cov} by COV`
+  return `${which} where the device supports it, polled ${polled} otherwise`
+}
+
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
 export const describeConfig = (config: GatewayConfig) => {
   const passwordWarning = mqttPasswordWarning(config.mqtt)
@@ -67,7 +90,8 @@ export const describeConfig = (config: GatewayConfig) => {
             ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
             : "simulated"
       const writable = device.points.filter((point) => point.writable).length
-      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}, every ${device.pollIntervalMs} ms`
+      const reading = readingLabel(device)
+      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
     })
   ].join("\n")
 }
@@ -86,15 +110,23 @@ export const configSummary = (config: GatewayConfig) => {
       ...(passwordWarning === undefined ? [] : [passwordWarning]),
       ...(config.buffer === undefined ? ["no buffer: values read while the broker is down are lost"] : [])
     ],
-    devices: config.devices.map((device) => ({
-      id: device.id,
-      protocol: device.protocol,
-      points: device.points.length,
-      writable: device.points.filter((point) => point.writable).length,
-      pollIntervalMs: device.pollIntervalMs
-    }))
+    devices: config.devices.map(deviceSummary)
   }
 }
+
+/**
+ * One device in `check --json` and `import --json`: `covPoints` are the points asked for by change of value (BACnet
+ * present values with `cov` on), polled every `pollIntervalMs` while the device does not notify; the rest are polled.
+ */
+export const deviceSummary = (device: Device) => ({
+  id: device.id,
+  protocol: device.protocol,
+  points: device.points.length,
+  writable: device.points.filter((point) => point.writable).length,
+  pollIntervalMs: device.pollIntervalMs,
+  covPoints: covPointIds(device),
+  reading: readingLabel(device)
+})
 
 const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Print the result as JSON, for scripts and agents; a failure too, as {ok: false, error}"),
@@ -167,6 +199,12 @@ const discoverCommand = Command.make(
       Flag.withDescription("Write the devices found as a points list (CSV) to this file, to trim and import"),
       Flag.optional
     ),
+    append: Flag.Boolean("append").pipe(
+      Flag.withDescription(
+        "Add to the --points-list file when it exists (its columns, separator and rows kept; rows it has are skipped)"
+      ),
+      Flag.withDefault(false)
+    ),
     address: Flag.String("address").pipe(
       Flag.withDescription(
         "Ask only the device at this ip or ip:port, instead of a broadcast: one on another subnet or another port"
@@ -176,12 +214,19 @@ const discoverCommand = Command.make(
     json: jsonFlag
   },
   // The draft is JSON already; --json makes a failure JSON too, and what --points-list wrote.
-  ({ config, pointsList, address, json }) =>
-    Effect.flatMap(loadConfig(config), (decoded) => {
-      const options = { address: Option.getOrUndefined(address) }
+  ({ config, pointsList, append, address, json }) =>
+    Effect.gen(function* () {
+      if (append && Option.isNone(pointsList)) {
+        return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
+      }
+      const decoded = yield* loadConfig(config)
+      const options = { address: Option.getOrUndefined(address), append }
       return Option.isSome(pointsList)
-        ? Effect.flatMap(discoverToPointsList(decoded, pointsList.value, undefined, options), pointsListOutcome(json))
-        : discover(decoded, undefined, options)
+        ? yield* Effect.flatMap(
+            discoverToPointsList(decoded, pointsList.value, undefined, options),
+            pointsListOutcome(json)
+          )
+        : yield* discover(decoded, undefined, options)
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
@@ -190,6 +235,10 @@ const discoverCommand = Command.make(
   Command.withExamples([
     { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
     { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
+    {
+      command: "ot-gateway discover --points-list points.csv --append",
+      description: "Add it to a points list you have, rows it has already skipped"
+    },
     {
       command: "ot-gateway discover --address 10.20.3.40:47809",
       description: "Ask one device whose address a device list gives"
@@ -277,14 +326,18 @@ const init = Command.make(
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun })
       const files = { ...folder, written: [config, ...folder.written] }
+      const ssh = sshSession(yield* sshEnvironment)
       if (json) {
+        const { notes, next } = initNext(config, written, files, ssh)
         return yield* printJson({
           ...configSummary(written),
           dryRun: flags.dryRun,
           path: config,
           files: { [flags.dryRun ? "wouldWrite" : "written"]: files.written, kept: files.kept },
           ...(folder.noCompose === undefined ? {} : { noCompose: folder.noCompose }),
-          ...(flags.dryRun ? { config: written } : {})
+          ...(flags.dryRun ? { config: written } : {}),
+          notes,
+          next
         })
       }
       if (flags.dryRun) {
@@ -295,7 +348,7 @@ const init = Command.make(
         )
       }
       yield* Console.log(describeConfig(written))
-      yield* Console.log(nextSteps(config, written, files))
+      yield* Console.log(nextSteps(config, written, files, ssh))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
@@ -332,9 +385,18 @@ const importCommand = Command.make(
   },
   ({ list, config, dryRun, json }) =>
     Effect.gen(function* () {
-      const { added, config: written } = yield* importPointsList(list, config, { dryRun })
+      const { added, decoded, config: written } = yield* importPointsList(list, config, { dryRun })
       const points = added.reduce((total, device) => total + device.points.length, 0)
-      if (json) return yield* printJson({ ok: true, dryRun, path: config, points, devices: added })
+      if (json) {
+        return yield* printJson({
+          ok: true,
+          dryRun,
+          path: config,
+          points,
+          devices: added,
+          summary: decoded.map(deviceSummary)
+        })
+      }
       if (written === undefined) return yield* printJson({ devices: added })
       yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${config}, none writable`)
       yield* Console.log(describeConfig(written))
@@ -629,13 +691,28 @@ const legacyFlags = new Set(["--check", "--discover"])
 /** A config path as the forms before the subcommands took it: a file name with an extension, or a directory. */
 const looksLikePath = (arg: string) => arg.includes("/") || arg.includes("\\") || arg.includes(".")
 
-/** The version as `--version` gets it: the CLI prints `v` before it, and a release tag already starts with one. */
-export const cliVersion = (version: string) => version.replace(/^v(?=\d)/, "")
+/**
+ * What `--version` prints: a release as its tag (`ot-gateway v0.12.0`, with the `v` added to a bare number), and any
+ * other build as it is (`ot-gateway dev`, `ot-gateway c78bb4e09-dirty`). The CLI's own formatter puts a `v` before
+ * every version, which turns a local build into `vdev`.
+ */
+export const versionLine = (name: string, version: string) =>
+  `${name} ${/^\d+\.\d/.test(version) ? `v${version}` : version}`
+
+/** The CLI's output, with `--version` printed by `versionLine`; help and errors as the CLI prints them. */
+const presenter: CliOutput.Presenter = {
+  present: (event) =>
+    event._tag === "Version"
+      ? Console.log(versionLine(event.name, event.version))
+      : CliOutput.defaultPresenter.present(event)
+}
 
 /** Runs the command line for `argv` (without node and the script). */
 export const runCli = (argv: ReadonlyArray<string>) => {
   const args = toCliArgs(argv)
-  const program = Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version: cliVersion(version) })(args))
+  const program = Effect.flatMap(readVersion, (version) => Command.runWith(cli, { version })(args)).pipe(
+    Effect.provideService(CliOutput.Presenter, presenter)
+  )
   // A one-shot command prints its result; the client's info lines (connected, subscribed) would bury it.
   // `--log-level info` brings them back, since the CLI's own setting is applied inside this one.
   return longRunning.has(args[0] ?? "") ? program : Effect.provideService(program, References.MinimumLogLevel, "Warn")
@@ -643,3 +720,6 @@ export const runCli = (argv: ReadonlyArray<string>) => {
 
 /** The commands that run until stopped and log what they do, as the gateway does. */
 const longRunning = new Set(["run", "demo"])
+
+/** Whether `argv` (without node and the script) runs until stopped, the forms from before the subcommands too. */
+export const isLongRunning = (argv: ReadonlyArray<string>) => longRunning.has(toCliArgs(argv)[0] ?? "")

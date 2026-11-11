@@ -3,7 +3,7 @@
  * can live in a file, in a database, or be edited by a web app.
  */
 import { Effect, Schema, SchemaIssue, SchemaTransformation } from "effect"
-import { BacnetPoint, ModbusPoint, SimulatedPoint, Slug } from "./Point.ts"
+import { BacnetPoint, isPresentValue, ModbusPoint, SimulatedPoint, Slug } from "./Point.ts"
 import { Publish, publishOf, windowIntervalMs } from "./Publish.ts"
 
 const pollIntervalMs = Schema.Int.pipe(
@@ -190,6 +190,17 @@ export type SimulatorDevice = typeof SimulatorDevice.Type
 
 export const Device = Schema.Union([ModbusDevice, BacnetDevice, SimulatorDevice])
 export type Device = typeof Device.Type
+
+/**
+ * The points the config asks to receive by change of value: a BACnet device's
+ * present-value points while its `cov` is on. Whether they do depends on the
+ * device, which only the running gateway finds out; the others, and these
+ * while the device does not notify, are polled every `pollIntervalMs`.
+ */
+export const covPointIds = (device: Device): ReadonlyArray<string> =>
+  device.protocol === "bacnet-ip" && device.cov
+    ? device.points.filter((point) => isPresentValue(point)).map((point) => point.id)
+    : []
 
 /** Strings in the MQTT CONNECT packet are length-prefixed: keep them well inside the 65,535-byte limit. */
 const ConnectString = Schema.NonEmptyString.pipe(Schema.check(Schema.isMaxLength(1_024)))
