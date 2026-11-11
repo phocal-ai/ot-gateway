@@ -89,6 +89,18 @@ export const fetchMessages: Effect.Effect<Messages, StatusUnavailable> = gateway
   withinThreeSeconds
 )
 
+/**
+ * The messages per topic from `since` (Unix ms, the gateway's clock) to now, in whole minutes and at most
+ * `MESSAGE_WINDOW_MINUTES` back (`/api/messages/window`): only the topics with a message in it, and `window` says
+ * where the counts start.
+ */
+export const fetchMessagesWindow = (since: number): Effect.Effect<Messages, StatusUnavailable> =>
+  gateway.pipe(
+    Effect.flatMap((client) => client.status.messagesWindow({ query: { since } })),
+    Effect.provide(FetchHttpClient.layer),
+    withinThreeSeconds
+  )
+
 /** Every configured point, for the points page; it changes only when the gateway restarts, so it is asked for once. */
 export const fetchPoints: Effect.Effect<PointCatalog, StatusUnavailable> = gateway.pipe(
   Effect.flatMap((client) => client.status.points()),
@@ -234,6 +246,21 @@ export const duration = (ms: number) => {
 
 /** Since when, as a clock time and how long ago: "12:18:20 (3 min)". */
 export const sinceClock = (at: number, now: number) => `${clockTime(at, now)} (${duration(now - at)})`
+
+/**
+ * Since when a failing device has given no data: "no data since 18:33:03 (3 min)" from its last good read, which is
+ * where its data stopped (a poll or more before the gateway called it failing, `ot-gateway status` says the same);
+ * "failing since …" from when it was marked failing for a device that never answered; undefined without either.
+ */
+export const failingSinceText = (
+  device: { readonly lastSuccess?: number; readonly failingSince?: number },
+  now: number
+) =>
+  device.lastSuccess !== undefined
+    ? `no data since ${sinceClock(device.lastSuccess, now)}`
+    : device.failingSince !== undefined
+      ? `failing since ${sinceClock(device.failingSince, now)}`
+      : undefined
 
 /** "0.4 %", "37 %": how full the buffer is; under 1 % keeps a decimal, so a filling buffer never reads 0 %. */
 export const fillPercent = (rows: number, maxRows: number) => {

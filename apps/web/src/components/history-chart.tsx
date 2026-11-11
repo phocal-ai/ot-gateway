@@ -4,6 +4,8 @@
  * axis. Hovering shows a crosshair and the bucket's time, average, range and reads. A gap where the device did not
  * answer breaks the line instead of bridging it, and a muted band behind the break says why where it is known (the
  * device was failing, the reads came back with a restart of the gateway), also in a line under the chart and on hover.
+ * A point read on change of value has no reads while it keeps still: that is no gap, and its line holds its value as
+ * steps up to its next change (and on to the end while its device answers).
  */
 import type { HistorySeries } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"
@@ -15,6 +17,7 @@ import {
   type Failure,
   gapAt,
   gapSentence,
+  heldUntil,
   nearest,
   segments,
   timeLabel,
@@ -53,7 +56,8 @@ export const HistoryChart = ({
   label,
   startedAt,
   device,
-  failures
+  failures,
+  cov = false
 }: {
   readonly series: HistorySeries
   readonly unit: string | undefined
@@ -65,6 +69,8 @@ export const HistoryChart = ({
   readonly device: string
   /** The device's failures in this run of the gateway (from its events): a gap while it failed says so. */
   readonly failures: ReadonlyArray<Failure>
+  /** The point comes on change of value (`PointInfo.cov`): a stretch without reads while its device answers is no gap. */
+  readonly cov?: boolean
 }) => {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | undefined>(undefined)
@@ -80,8 +86,11 @@ export const HistoryChart = ({
   const y = (value: number) =>
     margin.top + ((yMax - value) / (yMax - yMin || 1)) * (HEIGHT - margin.top - margin.bottom)
   const time = timeTicks(from, to)
-  const runs = segments(buckets, stepMs)
-  const gaps = chartGaps(series, from, { startedAt, failures })
+  const gaps = chartGaps(series, from, { startedAt, failures, cov })
+  // On change of value the line holds across a stretch without reads (only a gap breaks it), as steps; the band of
+  // each bucket's range stays where reads are.
+  const runs = segments(buckets, stepMs, cov ? gaps : undefined)
+  const stepped = boolean || cov
   // The pointer's time is `hover` plus half a step (`hover` is a bucket's start, as `nearest` wants it).
   const hoveredGap = hover === undefined ? undefined : gapAt(gaps, hover + stepMs / 2)
   const hovered = hover === undefined || hoveredGap !== undefined ? undefined : nearest(buckets, hover)
@@ -163,21 +172,33 @@ export const HistoryChart = ({
             </text>
           ))}
           {runs.map((run) => {
-            const top = run.map((bucket) => `${x(bucket.t)},${y(bucket.max)}`)
-            const bottom = run.toReversed().map((bucket) => `${x(bucket.t)},${y(bucket.min)}`)
-            // A state holds until the next bucket, so it is drawn as steps; a measurement as a line.
+            // A state, or a value sent on change, holds until the next bucket, so it is drawn as steps; a measurement
+            // as a line. A value sent on change also holds after the run's last change, up to the next gap or the end.
             const line = run.map((bucket, index) =>
               index === 0
                 ? `M${x(bucket.t)},${y(bucket.avg)}`
-                : boolean
+                : stepped
                   ? `H${x(bucket.t)}V${y(bucket.avg)}`
                   : `L${x(bucket.t)},${y(bucket.avg)}`
             )
+            const held = heldUntil(run, gaps, to, cov)
+            const holds = held !== undefined && x(held - stepMs / 2) > x(run.at(-1)?.t ?? held)
+            if (holds) line.push(`H${Math.min(plotRight, x(held - stepMs / 2))}`)
             return (
               <g key={run[0]?.t}>
-                {boolean ? null : (
-                  <polygon fill="var(--series-1)" fillOpacity={0.14} points={[...top, ...bottom].join(" ")} />
-                )}
+                {boolean
+                  ? null
+                  : segments(run, stepMs).map((part) => (
+                      <polygon
+                        fill="var(--series-1)"
+                        fillOpacity={0.14}
+                        key={part[0]?.t}
+                        points={[
+                          ...part.map((bucket) => `${x(bucket.t)},${y(bucket.max)}`),
+                          ...part.toReversed().map((bucket) => `${x(bucket.t)},${y(bucket.min)}`)
+                        ].join(" ")}
+                      />
+                    ))}
                 <path
                   d={line.join(" ")}
                   fill="none"
@@ -186,7 +207,7 @@ export const HistoryChart = ({
                   strokeLinejoin="round"
                   strokeWidth={2}
                 />
-                {run.length === 1 ? (
+                {run.length === 1 && !holds ? (
                   <circle cx={x(run[0]?.t ?? 0)} cy={y(run[0]?.avg ?? 0)} fill="var(--series-1)" r={3} />
                 ) : null}
               </g>

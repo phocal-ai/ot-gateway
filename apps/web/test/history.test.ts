@@ -8,6 +8,7 @@ import {
   gapAt,
   gapSentence,
   gatewayTime,
+  heldUntil,
   nearest,
   segments,
   timeLabel,
@@ -299,5 +300,61 @@ describe("gapSentence", () => {
     expect(gapSentence({ from: clock(15, 58), to: clock(16, 10) }, "m", clock(16, 10))).toBe("No reads since 15:58")
     const yesterday = new Date(2026, 10, 10, 23, 0).getTime()
     expect(gapSentence({ from: yesterday, to: clock(1, 0) }, "m", clock(16, 0))).toBe("No reads Tue 23:00–01:00")
+  })
+})
+
+describe("a point read on change of value", () => {
+  const step = 10_000
+  const covSeries = (buckets: ReadonlyArray<number>, to = 300_000) => ({
+    device: "heat-pump",
+    point: "supply-temp",
+    from: 0,
+    to,
+    stepMs: step,
+    resolution: "read" as const,
+    buckets: buckets.map((t) => bucket(t))
+  })
+
+  it("has no gap where it kept still while its device answered, and its line goes on across it", () => {
+    const series = covSeries([0, 10_000, 150_000, 160_000])
+    const gaps = chartGaps(series, 0, { cov: true })
+    expect(gaps).toEqual([])
+    expect(segments(series.buckets, step, gaps)).toHaveLength(1)
+    expect(heldUntil(series.buckets, gaps, series.to, true)).toBe(300_000)
+    // The same stretch on a polled point is a gap that breaks the line.
+    expect(chartGaps(series, 0)).toEqual([
+      { from: 20_000, to: 150_000 },
+      { from: 170_000, to: 300_000 }
+    ])
+    expect(heldUntil(series.buckets, chartGaps(series, 0), series.to, false)).toBeUndefined()
+  })
+
+  it("keeps only the failure's part of a quiet stretch, from the last good read to the recovery", () => {
+    const series = covSeries([0, 10_000, 250_000])
+    const failures = [{ from: 108_000, to: 200_000, lastReadAt: 100_000 }]
+    const gaps = chartGaps(series, 0, { cov: true, failures })
+    expect(gaps).toEqual([{ from: 100_000, to: 200_000, cause: { kind: "device-failing" } }])
+    // The failure breaks the line; the quiet stretch after it, to the end, does not.
+    expect(segments(series.buckets, step, gaps)).toHaveLength(2)
+    const [before, after] = segments(series.buckets, step, gaps)
+    // Its value holds up to the failure's last good read, and after the recovery to the end.
+    expect(heldUntil(before ?? [], gaps, series.to, true)).toBe(100_000)
+    expect(heldUntil(after ?? [], gaps, series.to, true)).toBe(300_000)
+  })
+
+  it("holds only up to its last good read while its device still fails", () => {
+    const series = covSeries([0, 10_000])
+    const gaps = chartGaps(series, 0, { cov: true, failures: [{ from: 200_000, lastReadAt: 190_000 }] })
+    expect(gaps).toEqual([{ from: 190_000, to: 300_000, cause: { kind: "device-failing" } }])
+    expect(heldUntil(series.buckets, gaps, series.to, true)).toBe(190_000)
+  })
+
+  it("takes the last good read from the failure or else its recovery", () => {
+    const failing = { ...event(1, 100, "device-failing"), lastReadAt: 90 }
+    const recovered = { ...event(2, 200, "device-recovered"), lastReadAt: 80 }
+    expect(failuresOf([failing, recovered], "energy-meter")).toEqual([{ from: 100, to: 200, lastReadAt: 90 }])
+    expect(failuresOf([event(1, 100, "device-failing"), recovered], "energy-meter")).toEqual([
+      { from: 100, to: 200, lastReadAt: 80 }
+    ])
   })
 })

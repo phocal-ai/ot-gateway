@@ -4,10 +4,11 @@
  * The Messages tab: what the gateway publishes to the broker, the latest message on each topic, as a client
  * subscribed to `site/building/#` receives it. Polls `/api/messages` every two seconds while open (the Status page
  * does not ask for it); the gateway keeps at most 2,000 topics. Search and a kind filter narrow the list, and only
- * the rows on screen are drawn. Read-only.
+ * the rows on screen are drawn. The Messages column counts since the gateway started, or over the last 15 or 60
+ * minutes (`/api/messages/window`, the most the gateway keeps per-minute counts for). Read-only.
  */
 import type { Messages } from "@ot-gateway/api"
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { useGateway, useListCount } from "@/components/gateway-shell"
 import { POLL_MS, statusOf } from "@/components/live"
 import { Badge } from "@/components/ui/badge"
@@ -15,35 +16,53 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatNumber } from "@/lib/format"
-import { countKinds, type MessageFilter, matchesMessage } from "@/lib/messages"
-import { clockTime, fetchMessages, settle, type TopicKind, topicKind } from "@/lib/status"
+import {
+  countKinds,
+  countsNote,
+  type MessageFilter,
+  type MessageRange,
+  matchesMessage,
+  messageRanges,
+  windowSince
+} from "@/lib/messages"
+import { clockTime, fetchMessages, fetchMessagesWindow, settle, type TopicKind, topicKind } from "@/lib/status"
 import { useWindowRows } from "@/lib/virtual"
 
 /** A row's height before the first one is measured (`h-14` and its border). */
 const ROW_HEIGHT = 57
 
-/** The last answer of `fetchMessages`, polled every two seconds while mounted, or undefined before the first. */
-const useMessages = () => {
+/**
+ * The last answer for `range`, polled every two seconds while mounted, or undefined before the first: `fetchMessages`
+ * since the start, else `fetchMessagesWindow` from `range.minutes` before the gateway's time (`gatewayNow`, its last
+ * status). A new range drops the answer for the old one, so its counts are never shown under the new heading.
+ */
+const useMessages = (range: MessageRange, gatewayNow: () => number) => {
   const [messages, setMessages] = useState<Messages | undefined>(undefined)
   const [failed, setFailed] = useState<string | undefined>(undefined)
+  const now = useRef(gatewayNow)
+  now.current = gatewayNow
+  const minutes = range.minutes
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    setMessages(undefined)
     const poll = () =>
-      settle(fetchMessages).then((result) => {
-        if (cancelled) return
-        if (result._tag === "Success") {
-          setMessages(result.success)
-          setFailed(undefined)
-        } else setFailed(result.failure.message)
-        timer = setTimeout(() => void poll(), POLL_MS)
-      })
+      settle(minutes === undefined ? fetchMessages : fetchMessagesWindow(windowSince(minutes, now.current()))).then(
+        (result) => {
+          if (cancelled) return
+          if (result._tag === "Success") {
+            setMessages(result.success)
+            setFailed(undefined)
+          } else setFailed(result.failure.message)
+          timer = setTimeout(() => void poll(), POLL_MS)
+        }
+      )
     void poll()
     return () => {
       cancelled = true
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [])
+  }, [minutes])
   return { messages, failed }
 }
 
@@ -67,7 +86,8 @@ const topicCount = (count: number) => `${formatNumber(count)} ${count === 1 ? "t
 
 const MessagesPage = () => {
   const status = statusOf(useGateway())
-  const { messages: list, failed } = useMessages()
+  const [countRange, setCountRange] = useState<MessageRange>(messageRanges[0])
+  const { messages: list, failed } = useMessages(countRange, () => status?.now ?? Date.now())
   const [filter, setFilter] = useState<MessageFilter>({ query: "", kind: "all" })
   const filtered = filter.query !== "" || filter.kind !== "all"
   const all = list?.messages ?? []
@@ -123,6 +143,26 @@ const MessagesPage = () => {
             </button>
           )}
         </div>
+        <div aria-label="Count messages" className="inline-flex rounded-md border p-0.5" role="group">
+          {messageRanges.map((candidate) => (
+            <button
+              aria-pressed={candidate.id === countRange.id}
+              className={`rounded px-2.5 py-1 text-xs ${
+                candidate.id === countRange.id ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"
+              }`}
+              key={candidate.id}
+              onClick={() => setCountRange(candidate)}
+              title={
+                candidate.minutes === undefined
+                  ? "Messages since the gateway started"
+                  : `Messages in the last ${candidate.minutes} minutes, in whole minutes (at most the last 60)`
+              }
+              type="button"
+            >
+              {candidate.label}
+            </button>
+          ))}
+        </div>
         <Combobox
           className="w-full sm:w-56"
           emptyText="No kind found."
@@ -137,7 +177,13 @@ const MessagesPage = () => {
         <CardContent className="px-0">
           {found.length === 0 ? (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 p-6 text-sm text-muted-foreground">
-              <p>{all.length === 0 ? "Nothing published yet." : "No message matches."}</p>
+              <p>
+                {all.length === 0
+                  ? list.window === undefined
+                    ? "Nothing published yet."
+                    : `Nothing published in the last ${countRange.minutes ?? 0} minutes.`
+                  : "No message matches."}
+              </p>
               {filtered ? (
                 <button
                   className="font-medium text-foreground underline-offset-4 hover:underline"
@@ -154,7 +200,9 @@ const MessagesPage = () => {
                 <TableRow aria-rowindex={1} className="hover:bg-transparent">
                   <TableHead className="pl-4">Topic</TableHead>
                   <TableHead>Latest payload</TableHead>
-                  <TableHead className="hidden text-right sm:table-cell">Messages</TableHead>
+                  <TableHead className="hidden text-right sm:table-cell">
+                    Messages{countRange.minutes === undefined ? "" : ` (${countRange.label})`}
+                  </TableHead>
                   <TableHead className="pr-4 text-right">Sent at</TableHead>
                 </TableRow>
               </TableHeader>
@@ -206,6 +254,7 @@ const MessagesPage = () => {
           )}
         </CardContent>
       </Card>
+      <p className="text-sm text-muted-foreground">{countsNote(list, status?.since)}</p>
       {list.droppedTopics > 0 ? (
         <p className="text-sm text-muted-foreground">
           {formatNumber(list.droppedTopics)} more topics are not shown, and search does not find them: the gateway keeps
