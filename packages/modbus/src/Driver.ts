@@ -224,6 +224,7 @@ export const makeModbusDriver = Effect.fn("makeModbusDriver")(function* (
   const socket = yield* options.network ? options.network.tcp(target) : NodeSocket.makeNet(target)
   const client = yield* makeModbusClient(socket, {
     unitId: device.unitId,
+    endpoint: endpointText(device),
     requestGap: Duration.millis(device.requestGapMs),
     ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
   })
@@ -233,6 +234,10 @@ export const makeModbusDriver = Effect.fn("makeModbusDriver")(function* (
 /** Where a device is reached. Devices with the same endpoint share one connection. */
 export const endpointOf = (device: Pick<ModbusDevice, "host" | "port">): string =>
   `${device.host.toLowerCase()}:${device.port}`
+
+/** `host:port` as an error message names it, an IPv6 host in brackets: `[fd00::5]:502`. */
+export const endpointText = (device: Pick<ModbusDevice, "host" | "port">): string =>
+  device.host.includes(":") ? `[${device.host}]:${device.port}` : `${device.host}:${device.port}`
 
 export type ModbusLinksOptions = Pick<ModbusDriverOptions, "connectTimeout" | "requestTimeout" | "network">
 
@@ -262,6 +267,7 @@ export const makeModbusLinks = Effect.fn("makeModbusLinks")(function* (
     links.set(
       key,
       yield* makeModbusLink(socket, {
+        endpoint: endpointText(first),
         requestGap: Duration.millis(gap),
         ...(options.requestTimeout === undefined ? {} : { requestTimeout: options.requestTimeout })
       })

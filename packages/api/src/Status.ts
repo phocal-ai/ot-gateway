@@ -34,7 +34,8 @@ export const DeviceStatus = Schema.Struct({
   failingSince: Schema.optionalKey(Schema.Number),
   /**
    * The latest failure in one line, from the driver's typed error, while `failing`: `could not connect: connection
-   * refused by 127.0.0.1:5020`, `no response to 4 item(s) within 3s`. It names addresses, never credentials.
+   * refused by 127.0.0.1:5020`, `no reply from 127.0.0.1:5020 unit 1 within 3 s (4 item(s) asked)`. It names
+   * addresses, never credentials.
    * After the device recovers, `/api/events` still has it.
    */
   lastError: Schema.optionalKey(Schema.String),
@@ -46,6 +47,19 @@ export const DeviceStatus = Schema.Struct({
   points: Schema.Array(PointStatus)
 })
 export type DeviceStatus = typeof DeviceStatus.Type
+
+/** A device counts as late once this many poll intervals pass without a read, and never sooner than `LATE_MIN_MS`. */
+const LATE_INTERVALS = 3
+const LATE_MIN_MS = 15_000
+
+/**
+ * Whether an `ok` device is late at `now`: no read for a few poll intervals although the gateway has not marked it
+ * failing (a stalled cycle, before it passes its deadline). The status page and `ot-gateway status` share it.
+ */
+export const isDeviceLate = (device: DeviceStatus, now: number) =>
+  device.status === "ok" &&
+  (device.lastSuccess === undefined ||
+    now - device.lastSuccess > Math.max(LATE_INTERVALS * device.pollIntervalMs, LATE_MIN_MS))
 
 /** One command and what became of it. */
 export const CommandStatus = Schema.Struct({

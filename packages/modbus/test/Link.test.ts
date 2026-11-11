@@ -12,6 +12,7 @@ import { Duration, Effect } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import {
   endpointOf,
+  endpointText,
   FunctionCode,
   makeModbusDriverFromClient,
   makeModbusLink,
@@ -90,6 +91,24 @@ describe("a link shared by several units", () => {
       expect(control.accepted).toBe(1)
     }).pipe(Effect.scoped)
   )
+
+  it.live("says which endpoint and unit did not answer, and within how long", () =>
+    Effect.gen(function* () {
+      const { port, control } = yield* startGateway
+      const link = yield* Effect.flatMap(
+        NodeSocket.makeNet({ host: "127.0.0.1", port, openTimeout: "1 second" }),
+        (socket) => makeModbusLink(socket, { requestTimeout: "200 millis", endpoint: `127.0.0.1:${port}` })
+      )
+      control.silentUnits.add(1)
+      const error = yield* Effect.flip(readPower(link.unit(1)))
+      expect(error.message).toBe(`no reply from 127.0.0.1:${port} unit 1 within 200 ms (1 item(s) asked)`)
+    }).pipe(Effect.scoped)
+  )
+
+  it("names an IPv6 endpoint in brackets", () => {
+    expect(endpointText({ host: "fd00::5", port: 502 })).toBe("[fd00::5]:502")
+    expect(endpointText({ host: "10.0.0.5", port: 502 })).toBe("10.0.0.5:502")
+  })
 
   it.live("keeps the connection when one unit stops answering, and replaces it when every unit has", () =>
     Effect.gen(function* () {
