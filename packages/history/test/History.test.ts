@@ -6,8 +6,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { historyDisabled, historyDropped } from "@ot-gateway/core"
 import { Effect, FileSystem, Metric } from "effect"
+import { SqlError, UnknownError } from "effect/sql/SqlError"
 import { TestClock } from "effect/testing"
-import { MAX_PENDING, openHistory, rollup, stepFor } from "../src/index.ts"
+import { type History, MAX_PENDING, openHistory, rollup, type Store, stepFor } from "../src/index.ts"
 
 const DAY = 86_400_000
 
@@ -16,6 +17,42 @@ const tempPath = Effect.gen(function* () {
   const dir = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-history-" })
   return `${dir}/history.sqlite`
 })
+
+/** SQLite result codes a write can fail with: CORRUPT, and FULL for a disk that is full but not damaged. */
+const SQLITE_CORRUPT = 11
+const SQLITE_FULL = 13
+
+/** Writes fail with `code` while it is set, as `node:sqlite` reports it; every store opened, replacements too. */
+const faultyWrites = () => {
+  const faults: { code: number | undefined } = { code: undefined }
+  const wrapStore = (store: Store): Store => ({
+    ...store,
+    write: (rows) =>
+      faults.code === undefined
+        ? store.write(rows)
+        : Effect.fail(
+            new SqlError({ reason: new UnknownError({ cause: { errcode: faults.code }, message: "injected" }) })
+          )
+  })
+  return { faults, wrapStore }
+}
+
+/**
+ * Wait for a flush that is still running: replacing a file renames it, which is real I/O that `TestClock.adjust`
+ * does not wait for. A read waits for the same permit as the flush, so it returns once the flush is done.
+ */
+const settle = (history: History) =>
+  Effect.ignore(history.series({ device: "settle", point: "settle", from: 0, to: 1 }))
+
+/** The files a corrupt history was moved to, without their WAL companions. */
+const movedAside = (path: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem
+    const names = yield* fs.readDirectory(path.slice(0, path.lastIndexOf("/")))
+    return names.filter(
+      (name) => name.startsWith("history.sqlite.corrupt-") && !name.endsWith("-wal") && !name.endsWith("-shm")
+    )
+  })
 
 describe("rollup and stepFor", () => {
   it("rolls reads up per point and minute", () => {
@@ -148,6 +185,92 @@ describe("openHistory", () => {
       expect(error._tag).toBe("HistoryUnavailable")
       expect(error.message).toContain("keeps no history")
       expect((yield* Metric.value(historyDisabled)).value).toBe(1)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
+describe("a file that goes corrupt while the gateway runs", () => {
+  it.effect("is moved aside, and the reads before and after go to a new file", () =>
+    Effect.gen(function* () {
+      const path = yield* tempPath
+      const { faults, wrapStore } = faultyWrites()
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      faults.code = SQLITE_CORRUPT
+      history.sink.record("d", "p", 1, 0)
+      yield* TestClock.adjust("5 seconds")
+      yield* settle(history)
+      expect(yield* movedAside(path)).toHaveLength(1)
+      faults.code = undefined
+      history.sink.record("d", "p", 2, 1_000)
+      yield* TestClock.adjust("5 seconds")
+      const series = yield* history.series({ device: "d", point: "p", from: 0, to: 2_000, buckets: 1 })
+      expect(series.buckets).toEqual([{ t: 0, min: 1, max: 2, avg: 1.5, count: 2 }])
+      expect((yield* Metric.value(historyDisabled)).value).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("is replaced at most once an hour", () =>
+    Effect.gen(function* () {
+      const path = yield* tempPath
+      const { faults, wrapStore } = faultyWrites()
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      faults.code = SQLITE_CORRUPT
+      history.sink.record("d", "p", 1, 0)
+      yield* TestClock.adjust("5 seconds")
+      yield* settle(history)
+      expect(yield* movedAside(path)).toHaveLength(1)
+      // The new file fails the same way: within the hour the reads wait in memory, and no file is moved.
+      yield* TestClock.adjust("10 minutes")
+      yield* settle(history)
+      expect(yield* movedAside(path)).toHaveLength(1)
+      yield* TestClock.adjust("1 hour")
+      yield* settle(history)
+      expect(yield* movedAside(path)).toHaveLength(2)
+      faults.code = undefined
+      yield* TestClock.adjust("5 seconds")
+      expect((yield* history.series({ device: "d", point: "p", from: 0, to: 1_000 })).buckets).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("turns the history off when no new file can be opened, and keeps nothing in memory", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* tempPath
+      const { faults, wrapStore } = faultyWrites()
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      // A file where the history's directory was: nothing can be moved or created under it, even by root.
+      const dir = path.slice(0, path.lastIndexOf("/"))
+      yield* fs.remove(dir, { recursive: true })
+      yield* fs.writeFileString(dir, "")
+      faults.code = SQLITE_CORRUPT
+      history.sink.record("d", "p", 1, 0)
+      yield* TestClock.adjust("5 seconds")
+      // Waits for the flush that tries to replace the file, as `settle` does.
+      const error = yield* Effect.flip(history.series({ device: "d", point: "p", from: 0, to: 1_000 }))
+      expect(error._tag).toBe("HistoryUnavailable")
+      expect(error.message).toContain("keeps no history")
+      expect((yield* Metric.value(historyDisabled)).value).toBe(1)
+      // Reads are no longer kept: past the cap they would be dropped and counted on the next flush.
+      const droppedBefore = (yield* Metric.value(historyDropped)).count
+      for (let index = 0; index < MAX_PENDING * 2; index++) history.sink.record("d", "p", index, index)
+      yield* TestClock.adjust("5 seconds")
+      expect((yield* Metric.value(historyDropped)).count).toBe(droppedBefore)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("is not confused with a full disk, which moves no file and keeps the reads", () =>
+    Effect.gen(function* () {
+      const path = yield* tempPath
+      const { faults, wrapStore } = faultyWrites()
+      const history = yield* openHistory({ path, retentionDays: 7 }, { wrapStore })
+      faults.code = SQLITE_FULL
+      history.sink.record("d", "p", 1, 0)
+      yield* TestClock.adjust("5 seconds")
+      yield* settle(history)
+      expect(yield* movedAside(path)).toHaveLength(0)
+      faults.code = undefined
+      yield* TestClock.adjust("5 seconds")
+      expect((yield* history.series({ device: "d", point: "p", from: 0, to: 1_000 })).buckets).toHaveLength(1)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

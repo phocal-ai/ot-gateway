@@ -8,6 +8,9 @@
  * - Every hour, reads older than a day and rollups older than `retentionDays` are deleted.
  * - A file that cannot be opened (moved aside first when it is corrupt) leaves the gateway running without
  *   history, said once in the log and by `ot_gateway_history_disabled`. History never costs a read or a publish.
+ * - A file that goes corrupt while running is closed, moved aside and replaced by a new one, which gets the reads
+ *   still waiting; at most once an hour on the monotonic clock, so a failing card does not fill up with copies.
+ *   If no new file can be opened, the history is off until restart, again said once and by the gauge.
  *
  * Retention follows the wall clock, like the data's own timestamps: after NTP steps it forward, older reads go
  * sooner; after it steps back, newer ones stay until the clock catches up.
@@ -21,9 +24,24 @@ import {
   historyDisabled,
   historyDropped,
   historyFailures,
-  historyWritten
+  historyWritten,
+  monotonicMillis
 } from "@ot-gateway/core"
-import { Clock, Context, Duration, Effect, FileSystem, Layer, Metric, Path, Result, Schedule, Scope } from "effect"
+import {
+  Clock,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Metric,
+  Path,
+  Result,
+  Schedule,
+  Scope,
+  Semaphore
+} from "effect"
 import { SqlClient } from "effect/sql"
 import type { SqlError } from "effect/sql/SqlError"
 import { MINUTE_MS, RAW_MS, type Row, historyMigrations, makeStore, type Store } from "./Store.ts"
@@ -51,6 +69,11 @@ export interface History {
 export interface HistoryOptions {
   /** How often waiting reads are written (default 5 s). */
   readonly flushEveryMs?: number
+  /**
+   * Test only: wraps every store the history opens, the replacements too, so that a test can make a write fail as
+   * a corrupt file does. Leave it unset in the gateway.
+   */
+  readonly wrapStore?: (store: Store) => Store
 }
 
 /** SQLITE_CORRUPT (11) or SQLITE_NOTADB (26), read from the `node:sqlite` error. */
@@ -91,33 +114,49 @@ const openStore = (path: string, scope: Scope.Scope) =>
     })
   )
 
-/** The store at `path`, a corrupt file moved aside first; the reason when there is none. */
-const open = Effect.fnUntraced(function* (path: string) {
+/** A store and what closes it, so that it can be replaced before the history's own scope ends. */
+interface Opened {
+  readonly store: Store
+  readonly close: Effect.Effect<void>
+}
+
+/** Rename the file at `path` and its WAL files to `<path>.corrupt-<time>`; returns the new name. */
+const moveAside = Effect.fnUntraced(function* (path: string) {
   const fs = yield* FileSystem.FileSystem
-  const paths = yield* Path.Path
-  const scope = yield* Effect.scope
-  const made = yield* fs.makeDirectory(paths.dirname(path), { recursive: true }).pipe(Effect.result)
-  if (Result.isFailure(made)) return { reason: `cannot create the directory: ${made.failure.message}` } as const
-  const first = yield* openStore(path, yield* Scope.fork(scope)).pipe(Effect.result)
-  if (Result.isSuccess(first)) return { store: first.success } as const
-  if (!first.failure.corrupt) return { reason: first.failure.message } as const
   const stamp = new Date(yield* Clock.currentTimeMillis).toISOString().replace(/[:.]/g, "-")
   const aside = `${path}.corrupt-${stamp}`
   for (const suffix of ["", "-wal", "-shm"]) {
-    const moved = yield* Effect.result(
-      Effect.flatMap(fs.exists(path + suffix), (exists) =>
-        exists ? fs.rename(path + suffix, aside + suffix) : Effect.void
-      )
-    )
-    if (Result.isFailure(moved)) {
-      return { reason: `${first.failure.message}; moving it aside failed: ${moved.failure.message}` } as const
-    }
+    if (yield* fs.exists(path + suffix)) yield* fs.rename(path + suffix, aside + suffix)
+  }
+  return aside
+})
+
+/** Open the file at `path` in a scope of its own, forked from `scope` and closed again when opening fails. */
+const openIn = Effect.fnUntraced(function* (path: string, scope: Scope.Scope) {
+  const own = yield* Scope.fork(scope)
+  const close = Scope.close(own, Exit.void)
+  const store = yield* openStore(path, own).pipe(Effect.tapError(() => close))
+  return { store, close } satisfies Opened
+})
+
+/** The store at `path`, a corrupt file moved aside first; the reason when there is none. */
+const open = Effect.fnUntraced(function* (path: string, scope: Scope.Scope) {
+  const fs = yield* FileSystem.FileSystem
+  const paths = yield* Path.Path
+  const made = yield* fs.makeDirectory(paths.dirname(path), { recursive: true }).pipe(Effect.result)
+  if (Result.isFailure(made)) return { reason: `cannot create the directory: ${made.failure.message}` } as const
+  const first = yield* openIn(path, scope).pipe(Effect.result)
+  if (Result.isSuccess(first)) return { opened: first.success } as const
+  if (!first.failure.corrupt) return { reason: first.failure.message } as const
+  const moved = yield* Effect.result(moveAside(path))
+  if (Result.isFailure(moved)) {
+    return { reason: `${first.failure.message}; moving it aside failed: ${moved.failure.message}` } as const
   }
   yield* Effect.logError("history file was unusable, moved it aside and started a new one").pipe(
-    Effect.annotateLogs({ path, movedTo: aside, error: first.failure.message })
+    Effect.annotateLogs({ path, movedTo: moved.success, error: first.failure.message })
   )
-  const again = yield* openStore(path, yield* Scope.fork(scope)).pipe(Effect.result)
-  return Result.isSuccess(again) ? ({ store: again.success } as const) : ({ reason: again.failure.message } as const)
+  const again = yield* openIn(path, scope).pipe(Effect.result)
+  return Result.isSuccess(again) ? ({ opened: again.success } as const) : ({ reason: again.failure.message } as const)
 })
 
 const unavailable = (message: string) => Effect.fail(new HistoryUnavailable({ message }))
@@ -134,8 +173,11 @@ export const openHistory = (
   options: HistoryOptions = {}
 ): Effect.Effect<History, never, Scope.Scope | FileSystem.FileSystem | Path.Path> =>
   Effect.gen(function* () {
-    const opened = yield* open(settings.path)
-    if (!("store" in opened)) {
+    // Every file this history opens, the replacements too, lives in this scope. It is forked before the final
+    // flush is registered below, so it closes after that flush has written what was waiting.
+    const files = yield* Scope.fork(yield* Effect.scope)
+    const opened = yield* open(settings.path, files)
+    if (!("opened" in opened)) {
       yield* Metric.update(historyDisabled, 1)
       yield* Effect.logError("history not kept: its file could not be opened").pipe(
         Effect.annotateLogs({ path: settings.path, error: opened.reason })
@@ -143,7 +185,15 @@ export const openHistory = (
       return disabled(opened.reason)
     }
     yield* Metric.update(historyDisabled, 0)
-    const store: Store = opened.store
+    const wrap = options.wrapStore ?? ((store: Store) => store)
+    // The open file, replaced as a whole when it goes corrupt; undefined once the history is off. Every statement
+    // on it runs under `permit`, so the flusher, the pruner and a reader never use a store while it is being closed.
+    let current: Opened | undefined = { store: wrap(opened.opened.store), close: opened.opened.close }
+    // Why the history is off, once a corrupt file could not be replaced.
+    let off: string | undefined
+    // When the file was last replaced, on the monotonic clock.
+    let replacedAt: number | undefined
+    const permit = yield* Semaphore.make(1)
     let pending: Array<Row> = []
     let dropped = 0
     let failing = false
@@ -154,15 +204,55 @@ export const openHistory = (
       return rows.slice(rows.length - MAX_PENDING)
     }
 
+    /** No file from now on: nothing is kept, and the gauge and the log say why. */
+    const turnOff = Effect.fnUntraced(function* (reason: string) {
+      current = undefined
+      off = reason
+      pending = []
+      yield* Metric.update(historyDisabled, 1)
+      yield* Effect.logError("history turned off: its corrupt file could not be replaced").pipe(
+        Effect.annotateLogs({ path: settings.path, error: reason })
+      )
+    })
+
+    /**
+     * Close a file that went corrupt while running, move it aside and open a new one; at most once an hour, so a
+     * card that corrupts every file neither fills up with copies nor renames files on every flush. True when the
+     * file was replaced or the history turned off. Runs under `permit`, from the flusher or the pruner only.
+     */
+    const replaceCorrupt = Effect.fnUntraced(function* (target: Opened, error: SqlError) {
+      const now = yield* monotonicMillis
+      if (replacedAt !== undefined && now - replacedAt < HOUR_MS) return false
+      replacedAt = now
+      current = undefined
+      yield* target.close
+      const moved = yield* Effect.result(moveAside(settings.path))
+      if (Result.isFailure(moved)) {
+        yield* turnOff(`${error.message}; moving it aside failed: ${moved.failure.message}`)
+        return true
+      }
+      const reopened = yield* open(settings.path, files)
+      if (!("opened" in reopened)) {
+        yield* turnOff(reopened.reason)
+        return true
+      }
+      current = { store: wrap(reopened.opened.store), close: reopened.opened.close }
+      yield* Effect.logError(
+        "history file went corrupt while the gateway ran, moved it aside and started a new one"
+      ).pipe(Effect.annotateLogs({ path: settings.path, movedTo: moved.success, error: error.message }))
+      return true
+    })
+
     const flush = Effect.gen(function* () {
       if (dropped > 0) {
         yield* Metric.update(historyDropped, dropped)
         dropped = 0
       }
-      if (pending.length === 0) return
+      const target = current
+      if (target === undefined || pending.length === 0) return
       const batch = pending
       pending = []
-      const written = yield* Effect.result(store.write(batch))
+      const written = yield* Effect.result(target.store.write(batch))
       if (Result.isSuccess(written)) {
         yield* Metric.update(historyWritten, batch.length)
         if (failing) {
@@ -172,26 +262,31 @@ export const openHistory = (
         return
       }
       yield* Metric.update(Metric.withAttributes(historyFailures, { operation: "write" }), 1)
-      // Kept for the next try, oldest dropped past the cap: a full disk must not grow the gateway's memory.
+      // Kept for the next try, oldest dropped past the cap: a full disk must not grow the gateway's memory. After
+      // a replacement they go to the new file on the next flush.
       pending = keepAtMost([...batch, ...pending])
+      if (isCorrupt(written.failure) && (yield* replaceCorrupt(target, written.failure))) return
       if (!failing) {
         failing = true
         yield* Effect.logWarning("history cannot write; keeping the latest reads in memory until it can").pipe(
           Effect.annotateLogs({ path: settings.path, error: written.failure.message })
         )
       }
-    })
+    }).pipe(Semaphore.withPermit(permit))
 
     const prune = Effect.gen(function* () {
+      const target = current
+      if (target === undefined) return
       const now = yield* Clock.currentTimeMillis
-      const pruned = yield* Effect.result(store.prune(now - RAW_MS, now - settings.retentionDays * 86_400_000))
+      const pruned = yield* Effect.result(target.store.prune(now - RAW_MS, now - settings.retentionDays * 86_400_000))
       if (Result.isFailure(pruned)) {
         yield* Metric.update(Metric.withAttributes(historyFailures, { operation: "prune" }), 1)
+        if (isCorrupt(pruned.failure) && (yield* replaceCorrupt(target, pruned.failure))) return
         yield* Effect.logWarning("history could not delete old reads").pipe(
           Effect.annotateLogs({ path: settings.path, error: pruned.failure.message })
         )
       }
-    })
+    }).pipe(Semaphore.withPermit(permit))
 
     const flushEvery = Duration.millis(options.flushEveryMs ?? 5_000)
     yield* flush.pipe(Effect.repeat(Schedule.spaced(flushEvery)), Effect.delay(flushEvery), Effect.forkScoped)
@@ -206,6 +301,7 @@ export const openHistory = (
     return {
       sink: {
         record: (device, point, value, ts) => {
+          if (off !== undefined) return
           pending.push({ device, point, ts, value: typeof value === "boolean" ? (value ? 1 : 0) : value })
           if (pending.length > MAX_PENDING + MAX_PENDING / 10) pending = keepAtMost(pending)
         }
@@ -217,12 +313,21 @@ export const openHistory = (
           const raw = query.from >= now - RAW_MS
           const stepMs = stepFor(query.from, query.to, query.buckets ?? DEFAULT_BUCKETS, raw ? 1_000 : MINUTE_MS)
           const from = raw ? query.from : Math.floor(query.from / MINUTE_MS) * MINUTE_MS
-          const rows = yield* store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs }).pipe(
-            Effect.tapError(() => Metric.update(Metric.withAttributes(historyFailures, { operation: "read" }), 1)),
-            Effect.catchTags({
-              SqlError: (error) => unavailable(`history could not be read: ${error.message}`),
-              SchemaError: (error) => unavailable(`history holds rows it cannot read: ${error.message}`)
-            })
+          // A corrupt file only fails this request; the flusher or the pruner replaces it, never a reader.
+          const rows = yield* Effect.gen(function* () {
+            const target = current
+            if (target === undefined) return yield* unavailable(`the gateway keeps no history: ${off ?? "it is off"}`)
+            return yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs }).pipe(
+              Effect.tapError(() => Metric.update(Metric.withAttributes(historyFailures, { operation: "read" }), 1)),
+              Effect.catchTags({
+                SqlError: (error) => unavailable(`history could not be read: ${error.message}`),
+                SchemaError: (error) => unavailable(`history holds rows it cannot read: ${error.message}`)
+              })
+            )
+          }).pipe(
+            Semaphore.withPermit(permit),
+            // The wait for a long write counts too: the status page gets an answer, not a hung request.
+            Effect.timeoutOrElse({ duration: "10 seconds", orElse: () => unavailable("history is busy, try again") })
           )
           return {
             device: query.device,
