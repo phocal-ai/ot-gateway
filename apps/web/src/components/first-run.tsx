@@ -142,7 +142,9 @@ const ValuesStep = ({
                   {point.name}
                   <span className="text-muted-foreground"> · {point.device}</span>
                 </span>
-                <span className={`shrink-0 tabular-nums ${reading?.value === undefined ? "text-muted-foreground" : ""}`}>
+                <span
+                  className={`shrink-0 tabular-nums ${reading?.value === undefined ? "text-muted-foreground" : ""}`}
+                >
                   {reading?.value === undefined
                     ? "waiting…"
                     : `${formatValue(reading.value)}${point.unit === undefined ? "" : ` ${unitLabel(point.unit)}`}`}
