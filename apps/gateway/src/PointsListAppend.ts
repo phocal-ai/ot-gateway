@@ -18,6 +18,9 @@ import { csvLine, toCsv } from "./Csv.ts"
 import { columnName, detectDelimiter, readDelimited } from "./PointsList.ts"
 import { slugify } from "./Slug.ts"
 
+/** U+FEFF, which spreadsheet exports put before the header; spelled out because the character is invisible. */
+const byteOrderMark = String.fromCharCode(0xfeff)
+
 export interface AppendedPointsList {
   /** The whole list, to write in place of the old one. */
   readonly text: string
@@ -53,7 +56,7 @@ const headerEnd = (text: string, separator: string) => {
       content = true
     } else if (!quoted && (char === "\n" || char === "\r")) {
       if (content) return index
-    } else if (char !== separator && char !== "﻿" && char.trim() !== "") content = true
+    } else if (char !== separator && char !== byteOrderMark && char.trim() !== "") content = true
   }
   return text.length
 }
@@ -163,7 +166,7 @@ export const appendToPointsList = (
   }
   if (added.length === 0) return Result.succeed({ text, added: 0, devices: 0, skipped })
 
-  const separator = detectDelimiter(text.replace(/^﻿/, ""))
+  const separator = detectDelimiter(text.startsWith(byteOrderMark) ? text.slice(1) : text)
   const newline = text.includes("\r\n") ? "\r\n" : "\n"
   const end = headerEnd(text, separator)
   const headerText = text.slice(0, end) + (newColumns.length === 0 ? "" : separator + csvLine(newColumns, separator))
