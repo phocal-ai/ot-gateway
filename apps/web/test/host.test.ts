@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { HostStatus } from "@ot-gateway/api"
-import { machineNote, machineProblems, powerLabel } from "../src/lib/host.ts"
+import { CPU_HINT, machineCard, machineNote, machineProblems, powerLabel } from "../src/lib/host.ts"
 
 /** Long past starting up. */
 const up = 3_600_000
@@ -77,6 +77,29 @@ describe("machineNote", () => {
     expect(machineNote(healthy)).toBe("CPU 4 % · 85.0 MB memory · 52 °C")
     const { temperatureC: _temperature, ...cool } = healthy
     expect(machineNote(cool)).toBe("CPU 4 % · 85.0 MB memory")
+  })
+})
+
+describe("machineCard", () => {
+  it("says starting and leaves the CPU out in the first minute", () => {
+    const card = machineCard({ ...healthy, cpuPercent: 115 }, 10_000)
+    expect(card).toMatchObject({ title: "starting", bad: false })
+    expect(card.note).not.toContain("CPU")
+    expect(card.note).toMatch(/memory · 52 °C$/)
+  })
+
+  it("is ok with the CPU, explained as a share of one core, once warmed up", () => {
+    const card = machineCard(healthy, up)
+    expect(card.title).toBe("ok")
+    expect(card.note).toContain("CPU 4 %")
+    expect(card.hint).toBe(CPU_HINT)
+    expect(CPU_HINT).toContain("one processor core")
+  })
+
+  it("leads with a problem, also while starting, and says when there is no sample", () => {
+    const hot = machineCard({ ...healthy, temperatureC: 85 }, 10_000)
+    expect(hot).toMatchObject({ title: "1 problem", bad: true })
+    expect(machineCard(undefined, up)).toEqual({ title: "–", note: "no sample yet", bad: false })
   })
 })
 
