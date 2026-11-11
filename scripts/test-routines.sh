@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Tests the scripts behind the routines that change code (.github/workflows/deps.yml,
 # triage.yml): the Bash guard (.github/scripts/routine-bash-guard.sh), the check on
-# the agent's change (routine-diff-check.sh) and the refusals of the sandbox runner
-# (routine-run.sh). No network, no sudo.
+# the agent's change (routine-diff-check.sh), the test for a manifests-only change
+# (routine-manifests-only.sh), the sandbox's permissions (routine-sandbox-perms.sh)
+# and the refusals of the sandbox runner (routine-run.sh). No network, no sudo.
 #
 #   scripts/test-routines.sh
 set -euo pipefail
@@ -11,6 +12,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 guard="$root/.github/scripts/routine-bash-guard.sh"
 diff_check="$root/.github/scripts/routine-diff-check.sh"
 runner="$root/.github/scripts/routine-run.sh"
+manifests_only="$root/.github/scripts/routine-manifests-only.sh"
+sandbox_perms="$root/.github/scripts/routine-sandbox-perms.sh"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
@@ -146,6 +149,47 @@ ln -s /etc/passwd "$repo/packages/core/link" && git -C "$repo" add -A
 check "a symlink" 1
 git -C "$repo" mv packages/core/package.json .github/package.json
 check "a move into .github" 1
+
+# Whether the change is limited to manifests and the lockfile
+# manifests NAME EXPECTED-OUTPUT EXPECTED-STATUS: runs it on the staged change, then resets it.
+manifests() {
+  local output status=0
+  output=$(cd "$repo" && "$manifests_only" 2>"$work/err") || status=$?
+  [ "$status" = "$3" ] || fail "manifests only, $1: expected exit $3, got $status ($(cat "$work/err"))"
+  [ "$output" = "$2" ] || fail "manifests only, $1: expected '$2', got '$output'"
+  git -C "$repo" reset -q --hard
+  git -C "$repo" clean -qfd
+}
+
+manifests "empty change" "" 1
+echo '{"a":1}' >"$repo/package.json" && echo 'lockfileVersion: 9' >"$repo/pnpm-lock.yaml" && git -C "$repo" add -A
+manifests "the root manifest and the lockfile" true 0
+echo '{"a":1}' >"$repo/packages/core/package.json" && git -C "$repo" add -A
+manifests "a package manifest" true 0
+echo '{"a":1}' >"$repo/packages/core/package.json" && mkdir -p "$repo/packages/core/src" &&
+  echo 'x' >"$repo/packages/core/src/Command.ts" && git -C "$repo" add -A
+manifests "a manifest and source" false 0
+echo 'FROM x' >"$repo/Dockerfile" && git -C "$repo" add -A
+manifests "the Dockerfile" false 0
+mkdir -p "$repo/scripts" && echo 'echo' >"$repo/scripts/x.sh" && git -C "$repo" add -A
+manifests "a script" false 0
+echo '{"a":1}' >"$repo/repos/effect/package.json" && git -C "$repo" add -A
+manifests "a manifest under repos" false 0
+
+# The sandbox's permissions
+tree="$work/tree"
+mkdir -p "$tree/.git" "$tree/.github/scripts" "$tree/.claude" "$tree/packages"
+for file in .git/x .github/scripts/x .claude/x packages/x; do
+  echo x >"$tree/$file"
+  chmod 644 "$tree/$file"
+done
+"$sandbox_perms" "$tree"
+for file in .git/x .github/scripts/x .claude/x; do
+  [ -z "$(find "$tree/$file" -perm -g+w)" ] || fail "sandbox permissions: $file is group-writable"
+  [ -z "$(find "$tree/$file" -perm -o+w)" ] || fail "sandbox permissions: $file is writable by others"
+done
+[ -z "$(find "$tree/.github" -perm -o+w)" ] || fail "sandbox permissions: .github is writable by others"
+[ -n "$(find "$tree/packages/x" -perm -o+w)" ] || fail "sandbox permissions: packages/x is not writable by others"
 
 # The sandbox runner refuses before it reaches sudo
 status=0

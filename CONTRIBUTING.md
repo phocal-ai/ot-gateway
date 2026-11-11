@@ -94,11 +94,11 @@ Three scheduled agents keep the repository maintained. Each runs Claude Code in 
 
 Deps and Triage change code, so they hold no write token while the agent runs:
 
-- The agent edits the checkout and runs tests, builds and package scripts only through `.github/scripts/routine-run.sh`, as a sandbox user without the Claude token, git credentials or sudo.
+- The agent edits the checkout and runs tests, builds and package scripts only through `.github/scripts/routine-run.sh`, as a sandbox user without the Claude token, git credentials or sudo. `.git/`, `.github/` and `.claude/` are read-only for that user (`.github/scripts/routine-sandbox-perms.sh`).
 - Its Bash calls are checked by `.github/scripts/routine-bash-guard.sh`.
 - A second job applies its patch, refuses one that touches `.github/`, `.claude/`, `repos/` or `packaging/install.sh` (`.github/scripts/routine-diff-check.sh`), and pushes and opens the pull request or issue.
 - `scripts/test-routines.sh` tests those scripts, and CI runs it.
 
-The second job pushes and opens pull requests with `ROUTINE_TOKEN`, a fine-grained token limited to this repository (Contents and Pull requests: read and write, one year), so their checks start like a person's. Deps then waits for every check and merges its update into `dev` when all pass, updating the branch first if `dev` moved. A failed check leaves the pull request open. Triage fixes always wait for a person, because they change code. Without `ROUTINE_TOKEN` both fall back to the workflow's own token: GitHub then holds the pull request's CI until a person approves it, and nothing merges on its own.
+The second job pushes and opens pull requests with `ROUTINE_TOKEN`, a fine-grained token limited to this repository (Contents and Pull requests: read and write, one year), so their checks start like a person's. When its update changes only `package.json` files, `pnpm-lock.yaml` and `pnpm-workspace.yaml` (`.github/scripts/routine-manifests-only.sh`), Deps then waits for every check and merges it into `dev` when all pass, updating the branch first if `dev` moved. A failed check leaves the pull request open, and an update that changes any other file waits for a person to review and merge it. Triage fixes always wait for a person, because they change code. Without `ROUTINE_TOKEN` both fall back to the workflow's own token: GitHub then holds the pull request's CI until a person approves it, and nothing merges on its own.
 
 To rotate the token, create a new one with the same permissions under GitHub → Settings → Developer settings → Fine-grained tokens, store it with `pbpaste | gh secret set ROUTINE_TOKEN --repo phocal-ai/ot-gateway`, and delete the old one.
