@@ -78,7 +78,8 @@ else
   set -- "$image:$tag" "$@"
 fi
 
+# SSH_CONNECTION and USER (passed only when set): over SSH, init's next steps name the tunnel to the status page.
 if [ -t 0 ] && [ -t 1 ]; then
-  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$@"
+  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -v "$PWD:/work" -w /work "$@"
 fi
-exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$@"
+exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -v "$PWD:/work" -w /work "$@"

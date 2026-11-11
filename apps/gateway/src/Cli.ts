@@ -23,7 +23,7 @@ import { discover, discoverToPointsList, type PointsListWritten } from "./Discov
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { initTarget, isInteractive, nextSteps, runInit } from "./Init.ts"
+import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
 import { describePointsListSchema, pointsListSchema, pointsListTemplate } from "./PointsSchema.ts"
 import { statusReport } from "./StatusReport.ts"
 import { watch } from "./Watch.ts"
@@ -49,6 +49,16 @@ import {
 import { telemetryLayer } from "./Telemetry.ts"
 import { printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+
+const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
+
+/** Whether the CLI runs over SSH, and as whom: init's next steps then add the tunnel to the status page. */
+const sshEnvironment = Config.all({
+  SSH_CONNECTION: optionalEnv("SSH_CONNECTION"),
+  SSH_CLIENT: optionalEnv("SSH_CLIENT"),
+  USER: optionalEnv("USER"),
+  LOGNAME: optionalEnv("LOGNAME")
+})
 
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
 export const describeConfig = (config: GatewayConfig) => {
@@ -277,14 +287,18 @@ const init = Command.make(
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun })
       const files = { ...folder, written: [config, ...folder.written] }
+      const ssh = sshSession(yield* sshEnvironment)
       if (json) {
+        const { notes, next } = initNext(config, written, files, ssh)
         return yield* printJson({
           ...configSummary(written),
           dryRun: flags.dryRun,
           path: config,
           files: { [flags.dryRun ? "wouldWrite" : "written"]: files.written, kept: files.kept },
           ...(folder.noCompose === undefined ? {} : { noCompose: folder.noCompose }),
-          ...(flags.dryRun ? { config: written } : {})
+          ...(flags.dryRun ? { config: written } : {}),
+          notes,
+          next
         })
       }
       if (flags.dryRun) {
@@ -295,7 +309,7 @@ const init = Command.make(
         )
       }
       yield* Console.log(describeConfig(written))
-      yield* Console.log(nextSteps(config, written, files))
+      yield* Console.log(nextSteps(config, written, files, ssh))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
