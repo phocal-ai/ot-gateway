@@ -51,7 +51,7 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { printJson } from "./Output.ts"
+import { failureLine, printJson } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -97,8 +97,9 @@ export const describeConfig = (config: GatewayConfig) => {
             ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
             : "simulated"
       const writable = device.points.filter((point) => point.writable).length
+      const alarms = alarmPointIds(device).length
       const reading = readingLabel(device)
-      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
+      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${alarms > 0 ? `, ${alarms} alarm(s)` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
     })
   ].join("\n")
 }
@@ -122,8 +123,13 @@ export const configSummary = (config: GatewayConfig) => {
   }
 }
 
+/** The points of a device marked as alarms (`alarmWhen`), in config order. */
+const alarmPointIds = (device: Device) =>
+  device.points.flatMap((point) => (point.alarmWhen === undefined ? [] : [point.id]))
+
 /**
- * One device in `check --json` and `import --json`: `covPoints` are the points asked for by change of value (BACnet
+ * One device in `check --json` and `import --json`: `alarmPoints` are the points marked as alarms (`alarmWhen`, a
+ * points list's `alarm` column), `covPoints` are the points asked for by change of value (BACnet
  * present values with `cov` on), polled every `pollIntervalMs` while the device does not notify; the rest are polled.
  */
 export const deviceSummary = (device: Device) => ({
@@ -133,6 +139,7 @@ export const deviceSummary = (device: Device) => ({
   writable: device.points.filter((point) => point.writable).length,
   pollIntervalMs: device.pollIntervalMs,
   covPoints: covPointIds(device),
+  alarmPoints: alarmPointIds(device),
   reading: readingLabel(device)
 })
 
@@ -281,7 +288,13 @@ const demo = Command.make(
         ? { broker: yield* pickPublicBroker(acceptsConnections), site: yield* randomDemoSite }
         : undefined
       yield* runDemo({ listen: flags.listen, public: remote }, runConfigured)
-    }).pipe(Effect.scoped)
+    }).pipe(
+      Effect.scoped,
+      // Nothing has run yet: one plain line, like a one-shot command's answer, not a log line.
+      Effect.catchTag("DemoPortInUse", (error) =>
+        Console.error(failureLine(error.message)).pipe(Effect.andThen(Effect.sync(() => (process.exitCode = 1))))
+      )
+    )
 ).pipe(
   Command.withDescription("See it work: the gateway with a test MQTT broker and simulated devices, in one process"),
   Command.withExamples([

@@ -13,19 +13,19 @@ export const PointValue = ({
   value,
   unit,
   now,
-  alarm = false,
+  alarm,
   className = ""
 }: {
   readonly value: LastRead | undefined
   readonly unit: string | undefined
   readonly now: number
-  /** The point is an alarm: a value that is on shows as one. */
-  readonly alarm?: boolean
+  /** When the point's alarm is active (lib/glance.ts `alarmWhen`), if it is an alarm: such a value shows as one. */
+  readonly alarm?: "on" | "off" | undefined
   readonly className?: string
 }) => {
   const [firstTs] = useState(value?.ts)
   const changed = value?.ts !== undefined && value.ts !== firstTs
-  const active = alarm && alarmOn(value?.value)
+  const active = alarm !== undefined && alarmOn(value?.value, alarm)
   return (
     <span
       key={value?.ts}

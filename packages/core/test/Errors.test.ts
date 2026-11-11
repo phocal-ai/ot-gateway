@@ -1,7 +1,8 @@
 import { describe, expect, it } from "@effect/vitest"
 import { DatagramSocketClosedError, DatagramSocketError, DatagramSocketOpenError } from "effect/socket/DatagramSocket"
 import { SocketCloseError, SocketError, SocketOpenError, SocketReadError } from "effect/socket/Socket"
-import { describeDatagramSocketError, describeSocketError } from "../src/index.ts"
+import { SocketServerError, SocketServerOpenError } from "effect/socket/SocketServer"
+import { describeDatagramSocketError, describeFailure, describeSocketError } from "../src/index.ts"
 
 /** Node's error for one refused address. */
 const refusedAt = (address: string) =>
@@ -80,5 +81,33 @@ describe("describeDatagramSocketError", () => {
     expect(describeDatagramSocketError(new DatagramSocketError({ reason: new DatagramSocketClosedError() }))).toBe(
       "UDP socket closed"
     )
+  })
+})
+
+/** Node's error for a port another program holds. */
+const inUse = (address: string, port: number) =>
+  system(`bind EADDRINUSE ${address}:${port}`, { code: "EADDRINUSE", address, port })
+
+describe("describeFailure", () => {
+  it("describes a UDP socket that could not bind, whose own message is empty", () => {
+    const error = new DatagramSocketError({
+      reason: new DatagramSocketOpenError({ kind: "AddressInUse", cause: inUse("127.0.0.1", 47_809) })
+    })
+    expect(error.message).toBe("")
+    expect(describeFailure(error)).toBe("could not open the UDP socket: 127.0.0.1:47809 is in use by another program")
+  })
+
+  it("describes a server socket that could not listen, whose own message is a bare Open", () => {
+    const error = new SocketServerError({
+      reason: new SocketServerOpenError({ cause: inUse("127.0.0.1", 1883) })
+    })
+    expect(describeFailure(error)).toBe("could not listen: 127.0.0.1:1883 is in use by another program")
+  })
+
+  it("keeps any other error's message, and names one without a message by its tag and cause", () => {
+    expect(describeFailure(new Error("config not found"))).toBe("config not found")
+    const silent = Object.assign(new Error(""), { _tag: "SomethingFailed", cause: new Error("disk full") })
+    expect(describeFailure(silent)).toBe("SomethingFailed: disk full")
+    expect(describeFailure(new Error(""))).toBe("failed")
   })
 })

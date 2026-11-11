@@ -242,6 +242,8 @@ const subjectOf = (event: GatewayEvent) => {
     case "config-applied":
     case "config-apply-failed":
       return "config"
+    case "gateway-conflict":
+      return event.gateway
   }
 }
 
@@ -271,6 +273,10 @@ const describeEvent = (event: GatewayEvent) => {
       return `applied from the status page: ${withoutControls(event.summary)}`
     case "config-apply-failed":
       return `not applied, the previous config runs again: ${withoutControls(event.error)}`
+    case "gateway-conflict":
+      return event.sameId
+        ? "another gateway with this gateway's id is online: both publish into the same topics"
+        : `another gateway is online with the same device ids (${event.devices.join(", ")}): both publish into the same topics`
   }
 }
 

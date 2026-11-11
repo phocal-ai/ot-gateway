@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "@effect/vitest"
 import { Cause, Console, Effect, Exit, Result } from "effect"
 import { CliError } from "effect/cli"
+import { DatagramSocketError, DatagramSocketOpenError } from "effect/socket/DatagramSocket"
 import { TestConsole } from "effect/testing"
 import { isLongRunning, runCli, toCliArgs } from "../src/Cli.ts"
 import { isUsageError, printJson, reportFailure, ResultConsole, stderrConsole, usageFailure } from "../src/Output.ts"
@@ -121,6 +122,22 @@ describe("failures of one-shot commands", () => {
       const [line = ""] = yield* TestConsole.errorLines
       expect(String(line)).toMatch(/^error: an unexpected failure, a bug in ot-gateway/)
       expect(String(line)).toContain("boom")
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it.effect("print a socket error by its reason, never an empty line", () =>
+    Effect.gen(function* () {
+      const cause = new Error("bind EADDRINUSE 127.0.0.1:47809")
+      const error = new DatagramSocketError({
+        reason: new DatagramSocketOpenError({
+          kind: "AddressInUse",
+          cause: Object.assign(cause, { code: "EADDRINUSE", address: "127.0.0.1", port: 47_809 })
+        })
+      })
+      yield* reportFailure({ json: false, longRunning: false })(Cause.fail(error))
+      expect(yield* TestConsole.errorLines).toEqual([
+        "error: could not open the UDP socket: 127.0.0.1:47809 is in use by another program"
+      ])
     }).pipe(Effect.provide(TestConsole.layer))
   )
 

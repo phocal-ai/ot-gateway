@@ -7,20 +7,38 @@ import type { PointInfo, PointReading } from "@ot-gateway/api"
 import { type LivePoint, pointKey } from "./points"
 import { freshness, lateAfterMs } from "./status"
 
+/** What makes a point an alarm: its config's `alarmWhen`, or its semantics. */
+type AlarmFields = Pick<PointInfo, "brick" | "haystack" | "alarmWhen">
+
 /**
- * Whether a point is an alarm by what its config says it means: a Brick class with `Alarm` in it (`Alarm`,
- * `Smoke_Detection_Alarm`) or the Haystack tag `alarm`. Its value is then a condition someone should see.
+ * When a point's alarm is active, or `undefined` for a point that is no alarm. The config's `alarmWhen` wins (a points
+ * list's `alarm` column); otherwise what the config says it means: a Brick class with `Alarm` in it (`Alarm`,
+ * `Smoke_Detection_Alarm`) or the Haystack tag `alarm`, active when on.
  */
-export const isAlarm = (point: Pick<PointInfo, "brick" | "haystack">) =>
-  (point.brick?.includes("Alarm") ?? false) || (point.haystack ?? []).includes("alarm")
+export const alarmWhen = (point: AlarmFields): "on" | "off" | undefined => {
+  if (point.alarmWhen !== undefined) return point.alarmWhen
+  const bySemantics = (point.brick?.includes("Alarm") ?? false) || (point.haystack ?? []).includes("alarm")
+  return bySemantics ? "on" : undefined
+}
 
-/** Whether an alarm point's value says the alarm is on: `true`, or a number other than 0 (a flag read as a register). */
-export const alarmOn = (value: number | boolean | undefined) =>
-  value === true || (typeof value === "number" && value !== 0)
+/** Whether a point is an alarm: its value is then a condition someone should see. */
+export const isAlarm = (point: AlarmFields) => alarmWhen(point) !== undefined
 
-/** An alarm point that is on. */
-export const alarmActive = (point: Pick<PointInfo, "brick" | "haystack">, value: number | boolean | undefined) =>
-  isAlarm(point) && alarmOn(value)
+/**
+ * Whether an alarm point's value says the alarm is active. `on` (the default): `true`, or a number other than 0 (a
+ * flag read as a register). `off`: `false` or 0, as a normally-closed contact reads on a fault.
+ */
+export const alarmOn = (value: number | boolean | undefined, when: "on" | "off" = "on") => {
+  if (value === undefined) return false
+  const on = value === true || (typeof value === "number" && value !== 0)
+  return when === "on" ? on : !on
+}
+
+/** An alarm point that is active. */
+export const alarmActive = (point: AlarmFields, value: number | boolean | undefined) => {
+  const when = alarmWhen(point)
+  return when !== undefined && alarmOn(value, when)
+}
 
 /**
  * Whether the gateway asks the device to send the point on change of value (BACnet COV) rather than only polling it,

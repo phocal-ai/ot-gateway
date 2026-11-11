@@ -70,10 +70,19 @@ import {
   whoIsMatches
 } from "./Services.ts"
 
-/** No answer arrived, including after the retries. */
+/**
+ * No answer arrived, including after the retries. A request to a device says which address it went to (`peer`) and
+ * how long its last attempt waited (`within`, `3 s`), so the driver can name the device in front of them.
+ */
 export class BacnetTimeout extends Schema.TaggedError<BacnetTimeout>()("BacnetTimeout", {
-  message: Schema.String
+  message: Schema.String,
+  peer: Schema.optionalKey(Schema.String),
+  within: Schema.optionalKey(Schema.String)
 }) {}
+
+/** `3 s`, `2.5 s` or `500 ms`: a wait as a person reads it, the same as the Modbus client's. */
+export const waitText = (millis: number) =>
+  millis < 1000 ? `${Math.round(millis)} ms` : `${Number((millis / 1000).toFixed(1))} s`
 
 /** The device answered with an Error, Reject or Abort PDU instead of a result. */
 export class BacnetDeviceError extends Schema.TaggedError<BacnetDeviceError>()("BacnetDeviceError", {
@@ -87,7 +96,9 @@ export class BacnetDeviceError extends Schema.TaggedError<BacnetDeviceError>()("
 
 /** The UDP socket could not be opened or written. */
 export class BacnetSocketError extends Schema.TaggedError<BacnetSocketError>()("BacnetSocketError", {
-  message: Schema.String
+  message: Schema.String,
+  /** The UDP port could not be bound because another program holds it. */
+  addressInUse: Schema.optionalKey(Schema.Boolean)
 }) {}
 
 /** Every way a request can fail; `BacnetEncodeError` when it carries a value out of range and was never sent. */
@@ -219,7 +230,12 @@ const countConnect = (outcome: "ok" | "failed") =>
   Metric.update(Metric.withAttributes(driverConnects, { device: "$bacnet", outcome }), 1)
 
 const socketError = (error: DatagramSocket.DatagramSocketError) =>
-  new BacnetSocketError({ message: describeDatagramSocketError(error) })
+  new BacnetSocketError({
+    message: describeDatagramSocketError(error),
+    ...(error.reason._tag === "DatagramSocketOpenError" && error.reason.kind === "AddressInUse"
+      ? { addressInUse: true }
+      : {})
+  })
 
 /** Every BACnet network: routers pass a global broadcast on to all of theirs (clause 6.2.2). */
 const GLOBAL_BROADCAST: NetworkAddress = { network: 0xffff, address: new Uint8Array(0) }
@@ -416,7 +432,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
 ) {
   const requestTimeout = options.requestTimeout ?? "3 seconds"
   const retries = options.retries ?? 2
-  const timeoutText = Duration.format(Duration.fromInputUnsafe(requestTimeout))
+  const timeoutText = waitText(Duration.toMillis(Duration.fromInputUnsafe(requestTimeout)))
   // An invoke ID whose request was given up on is not reused for a while, so
   // a late answer to it cannot be taken for the answer to a new request.
   const quarantineMillis = Math.max(10_000, 2 * Duration.toMillis(requestTimeout))
@@ -573,7 +589,9 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
       Effect.timeoutOrElse({
         duration: requestTimeout,
         orElse: () =>
-          Effect.fail(new BacnetSocketError({ message: `could not send within ${timeoutText}, socket not open` }))
+          Effect.fail(
+            new BacnetSocketError({ message: `could not send: the BACnet/IP port did not open within ${timeoutText}` })
+          )
       })
     )
 
@@ -601,7 +619,7 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
   const noFreeInvokeId = () =>
     Effect.fail(
       new BacnetTimeout({
-        message: `no free invoke ID within ${Duration.format(requestDeadline)}, too many requests in flight`
+        message: `too many BACnet requests in flight: this one could not start within ${waitText(Duration.toMillis(requestDeadline))}`
       })
     )
 
@@ -658,18 +676,32 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         const attempt = Effect.gen(function* () {
           const left = deadlineAt - (yield* monotonicMillis)
           const budget = Math.min(requestTimeoutMillis, left)
-          const within =
-            budget === requestTimeoutMillis
-              ? timeoutText
-              : `${Math.max(0, budget)}ms, what was left of its ${Duration.format(requestDeadline)} (waiting for an invoke ID counts)`
-          const timedOut = new BacnetTimeout({ message: `no answer from ${keyOf(target.address)} within ${within}` })
+          const peer = keyOf(target.address)
+          const within = waitText(Math.max(0, budget))
+          const timedOut = Effect.suspend(() =>
+            Effect.fail(new BacnetTimeout({ message: `no reply from ${peer} within ${within}`, peer, within }))
+          ).pipe(
+            // The detail stays out of the error people read: an attempt cut short by the request's deadline.
+            Effect.tapError(() =>
+              budget === requestTimeoutMillis
+                ? Effect.void
+                : Effect.logDebug("BACnet request attempt got what was left of its deadline").pipe(
+                    Effect.annotateLogs({
+                      peer,
+                      budgetMs: Math.max(0, budget),
+                      deadlineMs: Duration.toMillis(requestDeadline),
+                      note: "waiting for an invoke ID counts against the deadline"
+                    })
+                  )
+            )
+          )
           if (budget <= 0) return yield* timedOut
           return yield* writer
             .write({ payload, address: target.address })
             .pipe(
               Effect.mapError(socketError),
               Effect.andThen(Deferred.await(answer)),
-              Effect.timeoutOrElse({ duration: Duration.millis(budget), orElse: () => Effect.fail(timedOut) })
+              Effect.timeoutOrElse({ duration: Duration.millis(budget), orElse: () => timedOut })
             )
         })
         // Resent with the same invoke ID, so a late answer to an earlier attempt still counts (clause 5.4.4.1).

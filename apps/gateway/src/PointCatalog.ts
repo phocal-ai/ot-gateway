@@ -93,7 +93,8 @@ export const pointCatalog = (config: GatewayConfig): PointCatalog => ({
         ...(point.limits === undefined ? {} : { limits: point.limits }),
         ...(point.scaling === undefined ? {} : { scaling: point.scaling }),
         ...(semantics?.brick === undefined ? {} : { brick: semantics.brick }),
-        ...(semantics?.haystack === undefined ? {} : { haystack: semantics.haystack })
+        ...(semantics?.haystack === undefined ? {} : { haystack: semantics.haystack }),
+        ...(point.alarmWhen === undefined ? {} : { alarmWhen: point.alarmWhen })
       }
     })
   })

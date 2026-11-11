@@ -531,7 +531,8 @@ export const initNext = (
     // Over SSH, 127.0.0.1 is the gateway's machine, not the laptop with the browser.
     ...(ssh === undefined ? [] : [sshTunnel(ssh, port)]),
     step(`ot-gateway check${argument}`, "validate it again after an edit"),
-    step(`ot-gateway watch${argument}`, `see what arrives at ${config.mqtt.url}`)
+    // Bounded, so an agent that runs the line as printed gets its answer and its prompt back.
+    step(`ot-gateway watch${argument} --seconds 10`, `ten seconds of what arrives at ${config.mqtt.url}`)
   ]
   return { notes: [...password, ...historyNote(config), ...(dockerDesktop ? [dockerDesktopNote] : [])], next }
 }

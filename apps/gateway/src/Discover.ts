@@ -234,7 +234,37 @@ export interface DiscoverOptions {
    * on another subnet without a BBMD, or on a port other than 47808, whose address a device list gives.
    */
   readonly address?: string | undefined
+  /** The config discover read: for an error that names the key to change there, and the import command it names. */
+  readonly configPath?: string | undefined
 }
+
+/**
+ * The BACnet/IP endpoint discovery asks from. When another program (a running gateway, the demo, a BACnet tool)
+ * holds the configured port, a Who-Is sent to one address (`unicast`) goes out from a free port instead: the device
+ * answers to the port the request came from. A broadcast cannot: devices may answer it on 47808 itself, so the error
+ * says what to do.
+ */
+const openEndpoint = (
+  config: GatewayConfig,
+  network: Pick<Network, "udp"> | undefined,
+  unicast: boolean,
+  configPath: string | undefined
+) =>
+  makeBacnetNetwork(config.bacnet, network).pipe(
+    Effect.catchTag("BacnetSocketError", (error) =>
+      Effect.gen(function* () {
+        if (error.addressInUse !== true) return yield* error
+        const port = `${config.bacnet.bindAddress}:${config.bacnet.port}`
+        if (unicast) {
+          yield* Console.error(`UDP ${port} is in use by another program; asking from a free port instead`)
+          return yield* makeBacnetNetwork({ ...config.bacnet, port: 0 }, network)
+        }
+        return yield* new DiscoverError({
+          message: `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or set "bacnet.port" in ${configPath ?? "the config"} to a free port (devices that answer a broadcast on 47808 are then only found with --address ip[:port])`
+        })
+      })
+    )
+  )
 
 /**
  * The draft `devices` entries for the BACnet devices that answer, with progress and warnings on stderr; through
@@ -246,7 +276,7 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
     if (target !== undefined && Result.isFailure(target)) {
       return yield* new DiscoverError({ message: `--address takes ip or ip:port: ${target.failure}` })
     }
-    const client = yield* makeBacnetNetwork(config.bacnet, network)
+    const client = yield* openEndpoint(config, network, target !== undefined, options.configPath)
     yield* Console.error(`Who-Is to ${options.address ?? config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
     const devices = yield* client.discover({
       within: LISTEN,
@@ -377,8 +407,6 @@ const writeAtomically = Effect.fn("writeAtomically")(function* (path: string, te
 export interface PointsListOptions extends DiscoverOptions {
   /** Add to the list at the path when there is one, instead of refusing to touch it. */
   readonly append?: boolean | undefined
-  /** The config discover read, for the import command it names at the end. */
-  readonly configPath?: string | undefined
 }
 
 /**

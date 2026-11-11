@@ -30,7 +30,16 @@ const config = parseConfig(
             scaling: { factor: 0.1 },
             semantics: { brick: "Electric_Power_Sensor", haystack: ["elec", "power", "sensor"] }
           },
-          { id: "alarm", name: "Alarm", table: "input", address: 7, dataType: "bool", bit: 3, deadband: 0 },
+          {
+            id: "alarm",
+            name: "Alarm",
+            table: "input",
+            address: 7,
+            dataType: "bool",
+            bit: 3,
+            deadband: 0,
+            alarmWhen: "off"
+          },
           { id: "pump", name: "Pump", table: "coil", address: 1, dataType: "bool", writable: true }
         ]
       },
@@ -102,6 +111,8 @@ describe("point catalog", () => {
         "polled every 5 s"
       ])
       expect(points.map((point) => point.cov)).toEqual([false, false, false, true, false])
+      // An alarm point says when it is active, as its config does.
+      expect(points.map((point) => point.alarmWhen)).toEqual([undefined, "off", undefined, undefined, undefined])
       // A point's own deadband or publish wins over its device's.
       expect(points.map((point) => point.publish)).toEqual([
         "aggregate every 15 min",

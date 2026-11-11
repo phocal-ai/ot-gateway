@@ -7,6 +7,7 @@ import {
   activeAlarms,
   alarmActive,
   alarmCount,
+  alarmWhen,
   glanceKeys,
   glancePoints,
   isAlarm,
@@ -64,6 +65,20 @@ describe("isAlarm and alarmActive", () => {
     expect(alarmActive(breaker, 0)).toBe(false)
     expect(alarmActive(breaker, undefined)).toBe(false)
     expect(alarmActive({ brick: "Run_Status" }, true)).toBe(false)
+  })
+
+  it("takes the config's alarmWhen over semantics: off is active when false or 0", () => {
+    expect(isAlarm({ alarmWhen: "on" })).toBe(true)
+    expect(alarmWhen({ alarmWhen: "off", brick: "Alarm" })).toBe("off")
+    expect(alarmWhen({ haystack: ["alarm"] })).toBe("on")
+    expect(alarmWhen({ brick: "Run_Status" })).toBeUndefined()
+    const contact = { alarmWhen: "off" } as const
+    expect(alarmActive(contact, false)).toBe(true)
+    expect(alarmActive(contact, 0)).toBe(true)
+    expect(alarmActive(contact, true)).toBe(false)
+    expect(alarmActive(contact, 1)).toBe(false)
+    expect(alarmActive(contact, undefined)).toBe(false)
+    expect(alarmActive({ alarmWhen: "on" }, true)).toBe(true)
   })
 })
 

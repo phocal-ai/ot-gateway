@@ -12,7 +12,7 @@ import { ON_CHANGE_HINT, PointRead, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
 import { formatNumber } from "@/lib/format"
 import { eventSentence, eventTone } from "@/lib/events"
-import { isAlarm, pointFreshness } from "@/lib/glance"
+import { alarmWhen, pointFreshness } from "@/lib/glance"
 import { whatToCheck } from "@ot-gateway/api"
 import { filterToSearch, pointKey } from "@/lib/points"
 import { clockTime, every, failureLabel, freshness, protocolName, sinceClock } from "@/lib/status"
@@ -257,7 +257,7 @@ export const DeviceSheet = ({
                       <span
                         className={`font-mono whitespace-nowrap tabular-nums ${read._tag === "stale" ? "opacity-50" : ""}`}
                       >
-                        <PointValue alarm={isAlarm(point)} now={now} unit={point.unit} value={value} />
+                        <PointValue alarm={alarmWhen(point)} now={now} unit={point.unit} value={value} />
                       </span>
                       <span className="col-span-full truncate text-xs text-muted-foreground">
                         {point.id} ·{" "}

@@ -35,6 +35,13 @@ export const Semantics = Schema.Struct({
 })
 export type Semantics = typeof Semantics.Type
 
+/**
+ * When an alarm point's alarm is active: `on` when its value is true or a number other than 0 (a trip flag, a fault
+ * bit), `off` when it is false or 0 (a normally-closed contact that opens on a fault, an "OK" signal that drops).
+ */
+export const AlarmWhen = Schema.Literals(["on", "off"])
+export type AlarmWhen = typeof AlarmWhen.Type
+
 /** Linear scaling applied to raw values: `value = raw * factor + offset`. */
 export const Scaling = Schema.Struct({
   /** Not 0, which would publish `offset` whatever the device reads. */
@@ -73,7 +80,12 @@ export const PointFields = {
   /** How this point's values go out, instead of its device's `publish` (see `Publish.ts`). */
   publish: Schema.optionalKey(Publish),
   scaling: Schema.optionalKey(Scaling),
-  semantics: Schema.optionalKey(Semantics)
+  semantics: Schema.optionalKey(Semantics),
+  /**
+   * The point is an alarm, active when its value is on or off (`AlarmWhen`): published on `$meta`, and shown as an
+   * alarm on the status page whatever its semantics say.
+   */
+  alarmWhen: Schema.optionalKey(AlarmWhen)
 } as const
 
 /** Value types a register-based protocol can decode. */
@@ -273,4 +285,5 @@ export interface AnyPoint {
   readonly publish?: Publish
   readonly scaling?: Scaling
   readonly semantics?: Semantics
+  readonly alarmWhen?: AlarmWhen
 }

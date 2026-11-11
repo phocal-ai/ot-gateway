@@ -190,9 +190,18 @@ const run = Effect.fnUntraced(
   function* (
     hosts: ReadonlyArray<{ readonly ip: string; readonly instance: number; readonly port?: number }>,
     devices: ReadonlyArray<unknown> = [],
-    options: DiscoverOptions = {}
+    options: DiscoverOptions = {},
+    /** Another program on the discovering host already holds its BACnet port. */
+    portTaken = false
   ) {
     const network = makeMemoryNetwork()
+    if (portTaken) {
+      // Acquiring the reader binds the port, for as long as the run's scope.
+      yield* Effect.flatMap(
+        network.host("10.0.0.1").udp({ address: "0.0.0.0", port: 47_808 }),
+        (socket) => socket.reader
+      )
+    }
     yield* Effect.forEach(hosts, ({ ip, instance, port }) =>
       Effect.flatMap(network.host(ip).udp({ address: ip, port: port ?? 47_808 }), (socket) =>
         serveSimulatedDevice(socket, ahu(instance))
@@ -341,6 +350,22 @@ describe("discover --address", () => {
     })
   )
 
+  it.effect("asks from a free port when another program holds the BACnet port", () =>
+    Effect.gen(function* () {
+      const { draft, errors } = yield* run(twoPorts, [], { address: "10.0.2.2:47809" }, true)
+      expect(draft).toMatchObject({ devices: [{ id: "ventilation-2", deviceInstance: 2002 }] })
+      expect(errors[0]).toBe("UDP 0.0.0.0:47808 is in use by another program; asking from a free port instead")
+    })
+  )
+
+  it.effect("says to stop the other program or set bacnet.port when a broadcast finds the port taken", () =>
+    Effect.gen(function* () {
+      const error = yield* run(twoPorts, [], { configPath: "site/ot-gateway.json" }, true).pipe(Effect.flip)
+      expect(error.message).toContain("the BACnet/IP port 0.0.0.0:47808 is in use by another program")
+      expect(error.message).toContain('set "bacnet.port" in site/ot-gateway.json')
+    })
+  )
+
   it.effect("refuses an address that is not ip or ip:port", () =>
     Effect.gen(function* () {
       const config = yield* parseConfig(
@@ -405,7 +430,7 @@ describe("draftPointsList", () => {
         ["flow-temperature", "Flow temperature"],
         ["return-temperature", "Return temperature"],
         ["compressor-running", "Compressor running"],
-        ["compressor-running-2", "compressor-running-2"]
+        ["compressor-running-2", "Compressor running 2"]
       ])
     }).pipe(Effect.runSync))
 

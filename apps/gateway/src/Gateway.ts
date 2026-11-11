@@ -57,6 +57,7 @@ import { type ConfigFileSource, makeConfigEditor } from "./ConfigEditor.ts"
 import { type CommandRouting, makeCommandRouting } from "./Commands.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
 import { historyHandler, makeStatusState, serveStatus, type StatusState, switchableStatus } from "./Status.ts"
@@ -153,6 +154,7 @@ const runOne = (
   const ctx = {
     site: config.site,
     building: config.building,
+    gateway: config.id,
     pollIntervalMs: device.pollIntervalMs,
     cycleTimeoutMs: cycleTimeoutMs(device),
     ...(device.publish === undefined ? {} : { publish: device.publish }),
@@ -259,6 +261,7 @@ const northbound = (
   routing: CommandRouting | undefined,
   status: StatusState | undefined,
   staleMeta: StaleMetaCleaner,
+  otherGateways: OtherGatewaysCheck,
   events: GatewayEventsShape,
   start: StartWatch
 ) => {
@@ -309,14 +312,16 @@ const northbound = (
         start.brokerError = failure.error
       }),
     ...(options.network === undefined ? {} : { network: options.network }),
-    subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions],
-    // A `$meta` topic is never a command topic (`.../$set`), so each message has one taker.
+    subscriptions: [...commandSubscriptions, ...staleMeta.subscriptions, otherGateways.subscription],
+    // `$meta`, health and command (`.../$set`) topics end differently, so each message has one taker.
     onMessage: (message) =>
       message.topic.endsWith("/$meta")
         ? staleMeta.onMessage(message)
-        : routing === undefined
-          ? Effect.void
-          : routing.onMessage(message)
+        : message.topic.endsWith("/health")
+          ? otherGateways.onMessage(message)
+          : routing === undefined
+            ? Effect.void
+            : routing.onMessage(message)
   })
   // What reached the broker, per topic, for the messages view: straight or from the buffer, the broker's own answer.
   const mqtt =
@@ -486,6 +491,9 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
     routing: writable ? yield* makeCommandRouting(config, guard.handle) : undefined
   }
   const staleMeta = yield* makeStaleMetaCleaner(config)
+  const otherGateways = makeOtherGatewaysCheck(config, startedAt, (overlap) =>
+    events.gatewayConflict(overlap.gateway, overlap.devices, overlap.sameId)
+  )
   // Every read goes to the history and to the status page, whichever are on.
   const sinks = [shared.history?.sink, status?.reads].filter((sink) => sink !== undefined)
   const reads: HistorySink | undefined =
@@ -517,6 +525,7 @@ const startConfig = Effect.fn("Gateway.startConfig")(function* (
         commands.routing,
         status,
         staleMeta,
+        otherGateways,
         events,
         start
       )
