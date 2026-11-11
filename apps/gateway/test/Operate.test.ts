@@ -345,7 +345,7 @@ describe("history", () => {
     expect(formatSeries(power, running, now, { since: at(12, 13, 0) })).toEqual([
       "energy-meter/active-power (Active power, kW): 1 min buckets from the per-minute rollups",
       "  12:10:00  avg 12.4 kW  min 12.1  max 12.9  (12 reads)",
-      "  12:11:00  the gateway was not running (started 12:13:00)",
+      "  12:11:00  no reads until the gateway started at 12:13:00",
       "  12:13:00  3 kW  (1 read)",
       "  12:14:00  no reads for 1 min, until 12:15:00",
       "  12:15:00  4 kW  (1 read)  so far"
@@ -365,10 +365,10 @@ describe("history", () => {
     buckets: [{ t: at(12, 18, 30), min: 4, max: 5, avg: 4.5, count: 7 }]
   }
 
-  it("says the gateway was not running before its start, and labels the start's bucket with the start", () => {
+  it("ends a gap at the gateway's start without claiming why, and labels the start's bucket with the start", () => {
     expect(formatSeries(power, justStarted, now, { since: started })).toEqual([
       "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
-      "  12:09:30  the gateway was not running (started 12:18:55)",
+      "  12:09:30  no reads until the gateway started at 12:18:55",
       "  12:18:55  avg 4.5 kW  min 4  max 5  (7 reads)"
     ])
     expect(seriesJson(power, justStarted, { since: started }).gaps).toEqual([
@@ -377,7 +377,7 @@ describe("history", () => {
         to: started,
         emptyFrom: at(12, 9, 30),
         emptyTo: at(12, 18, 30),
-        cause: { kind: "gateway-not-running", started }
+        cause: { kind: "gateway-start", started }
       }
     ])
     expect(formatSeries(power, { ...justStarted, buckets: [] }, now, { since: started }).at(-1)).toBe(
