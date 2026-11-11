@@ -1,6 +1,6 @@
 # OT Gateway — Vision
 
-As of 2026-11-08. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
+As of 2026-11-11. The living version of this document, with diagrams, is kept alongside the project; this file is the copy that ships with the code.
 
 ## Elevator pitch
 
@@ -27,6 +27,8 @@ Getting data out of a building or a plant is still harder than it should be. Fie
 ## Vision statement
 
 **OT Gateway makes OT data boring, in the best sense: predictable, observable and correct, from the field bus to the broker, at every site, for a fraction of the usual cost.**
+
+The goal behind every decision: **the easiest way to get data out of field protocols and into standard MQTT.** "Easiest" is measured, not claimed: a from-scratch setup on the target hardware, recorded step by step, is repeated for each release, and what cost time is what gets fixed next (see "Experience: people and agents").
 
 An operator with many sites should be able to put the same small gateway into every plant room or control cabinet, next to the controllers already there, and trust it to run unattended for months in its own network segment. A technician, with an AI agent, should get a site from nothing to its first values in minutes. When something goes wrong, the gateway should say exactly what, where and since when, to the person and to their agent. A developer should be able to add a protocol driver without understanding the whole codebase, and test it against a simulated device on a laptop.
 
@@ -70,7 +72,8 @@ Typical use cases:
 **Goals**
 
 - Modbus TCP first, then BACnet/IP, both implemented in-house on Effect
-- MQTT 5 northbound with an in-house client and `site/building/device/point` topics
+- MQTT 5 northbound (3.1.1 where the broker needs it) with an in-house client and `site/building/device/point` topics
+- A documented, versioned MQTT contract: the topics, the value payload, the retained `$meta` and health messages and the command topics, each with a JSON Schema the CLI prints, so a consumer or an agent knows what arrives without reading the code
 - Polling and BACnet change-of-value in; per point, scaling, and a publish mode out: each read, the latest per interval, clock-aligned aggregates (min, max, time-weighted average) or on change with a deadband
 - Command write-back from MQTT with safety controls
 - Store-and-forward in SQLite during outages
@@ -133,6 +136,37 @@ npx ot-gateway status           # one line per device
 - **With AI.** The agent translates the user's list into the standard one and checks it with `npx ot-gateway import --dry-run` until it is clean, then `init` writes the folder and `docker compose up -d` starts it. The prompt to paste is short (read `npx ot-gateway points schema`, translate, check, start) and works in any agent that runs commands; the `/setup` skill is the fuller version for Claude Code, and an MCP server later offers the same commands as tools.
 - **Writes stay a decision.** No list, profile or AI makes a point writable: that is set in the config, on purpose.
 
+## Experience: people and agents
+
+Most setups will be done by a person together with an AI agent, often over SSH on a headless box in a plant room. The agent's loop is always the same: read what the CLI says the format is, run a command, read its JSON, fix, run again. The experience is as good as that loop is short, and as good as what arrives at the broker is unsurprising.
+
+### What two recorded setups showed
+
+On 2026-11-11 a Raspberry Pi was wiped and set up from scratch twice, by an agent following `/setup`, against simulated devices, and every command was recorded with its output and time. Both runs went from an empty machine to a gateway under Compose with every device ok in about 7 minutes, with about 2 minutes of that spent in commands. Nothing in the product failed outright; the time and the risk sat in the edges:
+
+- **The network during setup.** A registry timeout and a resolver that failed for a few seconds each broke the first command. Everything the setup downloads now retries, or should.
+- **Things that work but surprise.** A health message that said `starting` for a minute after the devices were up, a status page that refused a tunnel on another local port, a demo that could not be stopped by name, discovered points without units or readable names. Each was fixed after the first run; none would have shown up in a test that only checks success.
+- **Values as the device meant them.** A float32 register published with float64 noise (`50.130001068115234` for 50.13), and change-of-value notifications that publish more often than the poll interval the user chose. Both are correct by some definition and wrong to the person reading the broker.
+- **Glue the agent had to write.** Combining a discovered list with hand-written rows took a shell script; an error was printed as a log line with a timestamp and a fiber id.
+
+### Principles
+
+1. **One loop, short.** Every command answers in a couple of seconds, says what it did, and names the next command, in its text and in its JSON. An agent should never need `awk` to move data between two of our commands.
+2. **Say why the data looks the way it does.** Rates, units, names and rounding follow what the user chose and what the device sent; where the gateway adds anything (change-of-value, aggregation, a scaled value), `check`, the status page and `$meta` say so.
+3. **The broker is the product.** What a consumer sees on the broker is the contract: topics, payloads, metadata and health are documented and versioned, values carry the precision the device has, and nothing changes shape between releases without a version.
+4. **Hostile networks are normal, also during setup.** Every download, pull and connection in the setup path retries with a short backoff and says, in one line, what it is waiting for.
+5. **Headless first.** The target is a box without a screen: every URL the CLI prints works from the laptop the person is sitting at, through the tunnel it names.
+6. **Measure it on the hardware.** Each release is set up from scratch on a Pi, recorded, and its findings become the next fixes. Unreleased builds reach the Pi through a preview image, so a fix is tried where it matters before it ships.
+
+### Next
+
+- The MQTT contract as JSON Schemas, printed by the CLI and checked in CI against what the simulators publish.
+- Values published at the device's precision; change-of-value and its rate shown in `check` and on the status page.
+- `discover` adding to an existing points list, so one list stays the single source.
+- Every `--json` result carrying the next commands, and CLI errors printed as errors, not log lines.
+- A `dev` preview image published from every merge, for testing on hardware.
+- After v1.0, the MCP server: the same commands as tools, plus a running gateway's status, values and history, for agents that do not run a shell.
+
 ## Positioning
 
 OT Gateway aims at the gap between visual flow tools on one side and closed vendor gateways and industrial controllers on the other: code-first, typed and testable, yet usable from a config file, and set up and debugged with an AI agent.
@@ -150,33 +184,40 @@ OT Gateway aims at the gap between visual flow tools on one side and closed vend
 
 Modbus TCP to MQTT shipped end to end first, because it is the simplest protocol and proves the core. BACnet followed once the core was reliable. Write-back came after the read paths had run unattended.
 
-| Version              | Focus                                                                                           | Status  |
-| -------------------- | ----------------------------------------------------------------------------------------------- | ------- |
-| v0.1 Foundation      | Core + Schema, Modbus TCP, MQTT publish                                                         | Shipped |
-| v0.2 Reliability     | Buffering, health topics, simulators + CI                                                       | Shipped |
-| v0.3 BACnet/IP       | Discovery, ReadProperty, COV subscribe                                                          | Shipped |
-| v0.4 Write-back      | MQTT commands, range limits, BACnet priority; brought forward: status page, packaging, `/setup` | Shipped |
-| v0.5 Field hardening | Modbus field quirks, shared connections, host telemetry, the Pi test plan                       | Shipped |
-| v0.6 OT Gateway      | Renamed from Plenum, Pi power monitoring, install from a blank SD card, security audit fixes    | Shipped |
-| v1.0 Production      | Project and docs site, a measured 15-minute first run, a first real building                    | Next    |
+| Version              | Focus                                                                                            | Status  |
+| -------------------- | ------------------------------------------------------------------------------------------------ | ------- |
+| v0.1 Foundation      | Core + Schema, Modbus TCP, MQTT publish                                                          | Shipped |
+| v0.2 Reliability     | Buffering, health topics, simulators + CI                                                        | Shipped |
+| v0.3 BACnet/IP       | Discovery, ReadProperty, COV subscribe                                                           | Shipped |
+| v0.4 Write-back      | MQTT commands, range limits, BACnet priority; brought forward: status page, packaging, `/setup`  | Shipped |
+| v0.5 Field hardening | Modbus field quirks, shared connections, host telemetry, the Pi test plan                        | Shipped |
+| v0.6 OT Gateway      | Renamed from Plenum, Pi power monitoring, install from a blank SD card, security audit fixes     | Shipped |
+| v0.7 CLI             | The `ot-gateway` CLI: a one-command demo, `init`, `import`, `watch`, `status`                    | Shipped |
+| v0.8 Setup input     | The CLI on npm, points list, EDE import, device profiles, the Compose folder, a history of reads | Shipped |
+| v0.9 Brokers         | MQTT 3.1.1 next to 5, `broker` and `publish` commands, `discover --address`, setup without Node  | Shipped |
+| v0.10 Install        | An installed `ot-gateway` command for Docker hosts, the bundled image, a cheaper hot path        | Shipped |
+| v0.11 Status page    | Points, Messages and Settings tabs; cards open their details                                     | Shipped |
+| v0.12 Audit fixes    | Fixes from a code audit: aggregate windows, BACnet batching, command bounds, MQTT edge cases     | Shipped |
+| v1.0 Production      | The MQTT contract, a measured first run on every release, a first real building                  | Next    |
 
-### Where we are (2026-11-05)
+### Where we are (2026-11-11)
 
-A Raspberry Pi has run the gateway for 12 hours in real time against simulated devices with injected broker and device faults, with no errors, flat memory and no data loss. Every v1.0 feature in the original plan exists: the status page, the container image and systemd unit, and the `/setup` quickstart. What is missing is proof outside the lab, and a way for people to find and evaluate the project without reading the repo.
+A Raspberry Pi has run the gateway for 12 hours in real time against simulated devices with injected broker and device faults, with no errors, flat memory and no data loss. The project site is live, the CLI is on npm and in the image, and an agent sets up a wiped Pi with `/setup` in about 7 minutes (see "Experience: people and agents"). What is missing is proof outside the lab: a real building, and a first run measured by someone who did not build the gateway.
 
 ### The path to v1.0, in order
 
-1. **Project and docs site.** A static site, hosted on Vercel, that explains what OT Gateway does, how it works, how to set it up with an AI agent and who it is for. The docs pages are rendered from `docs/*.md` and the README rather than copied, so `ConfigDocs.test.ts` keeps guarding the configuration reference.
-2. **One CLI** (see "Setup: one CLI, one points list"), one step at a time:
+1. **Project and docs site** (done). A static site, hosted on Vercel, that explains what OT Gateway does, how it works, how to set it up with an AI agent and who it is for. The docs pages are rendered from `docs/*.md` and the README rather than copied, so `ConfigDocs.test.ts` keeps guarding the configuration reference.
+2. **One CLI** (done; see "Setup: one CLI, one points list"), one step at a time:
    1. the `ot-gateway` npm package, published from CI on each release;
    2. the folder layout for Docker Compose (#98), and `init` writing `compose.yaml` and `ot-gateway.env` next to the config;
    3. `points schema` and `points template`, `--json` output and flags for every question, and `discover` writing a points list;
    4. EDE import;
    5. device profiles, then a reviewed profile library;
    6. `/setup` and the "Set it up with AI" prompt rewritten on top of the CLI, without a clone.
-3. **A measured first run.** Time the path from "I found the site" to "Modbus readings in MQTT" on a fresh Pi and on a laptop, and fix what costs the most time: `/setup`, the messages from `--check` and `--discover`, the install steps and the status page. The success criterion is 15 minutes; the measurement says where the minutes go.
-4. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays read-only and on `127.0.0.1` by default.
-5. **A first real site** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
+3. **A measured first run** (on a Pi with an agent: about 7 minutes, twice; on a laptop and by a newcomer: still to do). Time the path from "I found the site" to "Modbus readings in MQTT", record every step, and fix what costs the most time. The success criterion is 15 minutes; the measurement says where the minutes go. It is repeated for every release.
+4. **The MQTT contract.** Topics, payloads, `$meta`, health and commands as versioned JSON Schemas the CLI prints, values at the device's precision, and the rate a user chose visible where they look.
+5. **Status page UX.** Answer the on-site questions first: is it working, what is broken, since when, and what to do about it. The page stays read-only and on `127.0.0.1` by default.
+6. **A first real site** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
 
 After v1.0: an MCP server, so an agent can use the CLI's commands and read a running gateway's status, values and history as tools, the Next.js configuration app, a Brick or 223P exporter generated from the config, and loading the config from a database.
 
