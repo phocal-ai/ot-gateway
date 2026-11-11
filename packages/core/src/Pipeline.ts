@@ -42,6 +42,11 @@ import { metaTopic, pointTopic } from "./Topic.ts"
 export interface DeviceContext {
   readonly site: Slug
   readonly building: Slug
+  /**
+   * The gateway that runs the device (its config `id`), named in each `$meta` so a gateway only ever clears metadata
+   * it published itself.
+   */
+  readonly gateway?: Slug
   readonly pollIntervalMs: number
   /**
    * Share of polling cycles exported as traces, from 0 to 1 (default 1).
@@ -75,14 +80,15 @@ export interface ValueMessage {
  * device notifies a change (in `sample` mode each notification is a message, possibly more often than the poll
  * interval), and by polling while the device does not notify.
  */
-const metaPayload = (point: AnyPoint, publish: Publish, cov: boolean): string =>
+const metaPayload = (point: AnyPoint, publish: Publish, cov: boolean, gateway: string | undefined): string =>
   JSON.stringify({
     name: point.name,
     unit: point.unit,
     writable: point.writable,
     publish,
     ...(cov ? { cov } : {}),
-    semantics: point.semantics
+    semantics: point.semantics,
+    ...(gateway === undefined ? {} : { gateway })
   })
 
 /** A value to publish now, and what to remember once the broker took it. */
@@ -251,9 +257,13 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     Effect.forEach(
       [...unpublishedMeta],
       (point) =>
-        publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id), covPoints.has(point.id)), {
-          retain: true
-        }).pipe(
+        publishPoint(
+          metaTopic(topicFor(point.id)),
+          metaPayload(point, policyOf(point.id), covPoints.has(point.id), ctx.gateway),
+          {
+            retain: true
+          }
+        ).pipe(
           Effect.catchTag("PublishError", skipRefused),
           Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
         ),

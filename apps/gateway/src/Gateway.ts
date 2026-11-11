@@ -129,6 +129,7 @@ const runOne = (
   const ctx = {
     site: config.site,
     building: config.building,
+    gateway: config.id,
     pollIntervalMs: device.pollIntervalMs,
     cycleTimeoutMs: cycleTimeoutMs(device),
     ...(device.publish === undefined ? {} : { publish: device.publish }),
