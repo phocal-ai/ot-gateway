@@ -4,7 +4,7 @@
  * with 1 when a device is failing or the broker is not connected; `events` is what changed lately, one line each.
  * Times are local clock times on this machine; durations are the gateway's own.
  */
-import { type EventLog, type GatewayEvent, type GatewayStatus, OtGatewayApi } from "@ot-gateway/api"
+import { type EventLog, type GatewayEvent, type GatewayStatus, isDeviceLate, OtGatewayApi } from "@ot-gateway/api"
 import { Console, Effect, Schema } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -36,21 +36,35 @@ export const failingHint = [
   "  The gateway's log (in its folder): docker compose logs gateway --since 10m"
 ]
 
-/** Whether everything works: no device failing and the broker connected. A device still starting is fine. */
-export const isHealthy = (status: GatewayStatus) =>
-  status.broker.connected && status.devices.every((device) => device.status !== "failing")
+/** The broker is away and it is not just the start: the connection was lost, or a dial failed or was refused. */
+export const brokerAway = (broker: GatewayStatus["broker"]) =>
+  !broker.connected && (broker.disconnectedSince !== undefined || broker.failedConnects > 0 || broker.connects > 0)
+
+/** A device's state as `status` shows it: the gateway's, or `late` for an `ok` device not read lately. */
+const deviceStateName = (device: GatewayStatus["devices"][number], now: number) =>
+  isDeviceLate(device, now) ? "late" : device.status
 
 /** What is wrong, in one line, for the exit code's message; undefined when nothing is. */
 export const unhealthySummary = (status: GatewayStatus) => {
-  const failing = status.devices.filter((device) => device.status === "failing").length
+  const count = (state: string) =>
+    status.devices.filter((device) => deviceStateName(device, status.now) === state).length
+  const failing = count("failing")
+  const late = count("late")
   const problems = [
     ...(failing > 0 ? [`${failing} of ${status.devices.length} device(s) failing`] : []),
-    ...(status.broker.connected ? [] : ["broker not connected"])
+    ...(late > 0 ? [`${late} of ${status.devices.length} device(s) late`] : []),
+    ...(brokerAway(status.broker) ? ["broker not connected"] : [])
   ]
   return problems.length === 0 ? undefined : problems.join(", ")
 }
 
-/** `failing since 12:18:20 (1 min): <why>`, or `read 3 s ago` for a device that works. */
+/**
+ * Whether everything works: no device failing or late, and the broker connected or still making its first
+ * connect. A gateway that has just started (devices `starting`, no failed connect yet) is fine.
+ */
+export const isHealthy = (status: GatewayStatus) => unhealthySummary(status) === undefined
+
+/** `failing since 12:18:20 (1 min): <why>`, `read 3 s ago`, or for a late device how long it has had no read. */
 const deviceState = (device: GatewayStatus["devices"][number], now: number) => {
   if (device.status === "failing") {
     const why = withoutControls(device.lastError ?? device.reason ?? "no reason given")
@@ -58,15 +72,22 @@ const deviceState = (device: GatewayStatus["devices"][number], now: number) => {
       ? `failing: ${why}`
       : `failing since ${localTime(device.failingSince, now)} (${ago(now - device.failingSince)}): ${why}`
   }
-  return device.lastSuccess === undefined ? "no read yet" : `read ${ago(now - device.lastSuccess)} ago`
+  if (device.lastSuccess === undefined) return "no read yet"
+  return isDeviceLate(device, now)
+    ? `no read for ${ago(now - device.lastSuccess)}, though not failing: a polling cycle is stuck`
+    : `read ${ago(now - device.lastSuccess)} ago`
 }
 
-/** `connected since 12:00:01, 3 failed connects`, or `NOT CONNECTED since 12:18:20 (1 min): <why>`. */
-const brokerState = (broker: GatewayStatus["broker"], now: number) => {
+/**
+ * `connected since 12:00:01, 3 failed connects`, `NOT CONNECTED since 12:18:20 (1 min): <why>`, or
+ * `connecting (started 2 s ago)` while the first connect is under way.
+ */
+const brokerState = (broker: GatewayStatus["broker"], now: number, started: number) => {
   const failed = broker.failedConnects > 0 ? `, ${broker.failedConnects} failed connect(s) since start` : ""
   if (broker.connected) {
     return `${broker.connectedAt === undefined ? "connected" : `connected since ${localTime(broker.connectedAt, now)}`}${failed}`
   }
+  if (!brokerAway(broker)) return `connecting (started ${ago(now - started)} ago)`
   const since =
     broker.disconnectedSince === undefined
       ? ""
@@ -79,19 +100,20 @@ const brokerState = (broker: GatewayStatus["broker"], now: number) => {
 export const formatStatus = (status: GatewayStatus) => {
   const width = Math.max(0, ...status.devices.map((device) => device.id.length))
   const failing = status.devices.filter((device) => device.status === "failing").length
+  const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)} (since ${localTime(status.since, status.now)})`,
-    `  broker ${status.broker.url}: ${brokerState(status.broker, status.now)}`,
+    `  broker ${status.broker.url}: ${brokerState(status.broker, status.now, status.since)}`,
     ...(status.buffer === undefined
       ? []
       : [
           `  buffer: ${status.buffer.rows} of ${status.buffer.maxRows} message(s) waiting` +
             (status.buffer.dropped > 0 ? `, ${status.buffer.dropped} DROPPED since start` : "")
         ]),
-    `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}`,
+    `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}${late > 0 ? `, ${late} late` : ""}`,
     ...status.devices.map(
       (device) =>
-        `    ${device.id.padEnd(width)}  ${device.status.padEnd(8)} ${device.protocol}, ${device.pointCount} point(s), ${deviceState(device, status.now)}`
+        `    ${device.id.padEnd(width)}  ${deviceStateName(device, status.now).padEnd(8)} ${device.protocol}, ${device.pointCount} point(s), ${deviceState(device, status.now)}`
     ),
     ...(isHealthy(status) ? [] : ["", ...failingHint])
   ].join("\n")

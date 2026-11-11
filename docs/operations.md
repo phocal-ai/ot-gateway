@@ -310,7 +310,7 @@ s/b gateway main, up 2 h (since 10:19:30)
     energy-meter   failing  modbus-tcp, 4 point(s), failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020
 ```
 
-It exits with 1 while a device is failing or the broker is not connected (a device still `starting` is fine), so a script or an agent can tell from the exit code alone. `--json` prints `/api/status` with `ok: true` or `false` in front. In `/api/status`, a failing device has `failingSince`, `lastError` and `failures` (failed polling cycles in a row); the broker has `disconnectedSince` and `lastError` while it is away, `connects` (successful connects) and `failedConnects` (dials that failed or were refused) since start.
+It exits with 1 while a device is `failing` or `late` (`ok`, but no read for three poll intervals and at least 15 s: a stuck polling cycle, as on the status page), or while the broker is not connected after a connection was lost or a connect failed or was refused. A gateway that has just started is fine: devices `starting`, and the broker line says `connecting (started 2 s ago)` until the first connect succeeds or fails. So a script or an agent can tell from the exit code alone. `--json` prints `/api/status` with `ok: true` or `false` in front. In `/api/status`, a failing device has `failingSince`, `lastError` and `failures` (failed polling cycles in a row); the broker has `disconnectedSince` and `lastError` while it is away, `connects` (successful connects) and `failedConnects` (dials that failed or were refused) since start.
 
 `ot-gateway events` prints what changed, oldest first, in this machine's clock time:
 

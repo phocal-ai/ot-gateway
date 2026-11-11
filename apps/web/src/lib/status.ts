@@ -6,6 +6,7 @@ import {
   type ConfigView,
   type DeviceStatus,
   type GatewayStatus,
+  isDeviceLate,
   type Messages,
   OtGatewayApi,
   type PointCatalog,
@@ -141,10 +142,6 @@ export const formatValue = (value: number | boolean | undefined) => {
   return Math.abs(value) >= 1000 || Number.isInteger(value) ? formatNumber(value) : formatNumber(value, 2)
 }
 
-/** A device counts as late once this many poll intervals pass without a read, and never sooner than `LATE_MIN_MS`. */
-const LATE_INTERVALS = 3
-const LATE_MIN_MS = 15_000
-
 /**
  * How fresh a device is, as a state rather than a counting number: `live` while it is read on schedule, `late`
  * when no read came for a few intervals although the gateway has not marked it failing (a stalled cycle), and
@@ -160,10 +157,7 @@ export const freshness = (device: DeviceStatus, now: number): Freshness => {
   if (device.status === "failing")
     return { _tag: "failing", reason: device.reason ?? "failing", lastSuccess: device.lastSuccess }
   if (device.status === "starting") return { _tag: "starting" }
-  const lateAfter = Math.max(LATE_INTERVALS * device.pollIntervalMs, LATE_MIN_MS)
-  return device.lastSuccess !== undefined && now - device.lastSuccess <= lateAfter
-    ? { _tag: "live" }
-    : { _tag: "late", lastSuccess: device.lastSuccess }
+  return isDeviceLate(device, now) ? { _tag: "late", lastSuccess: device.lastSuccess } : { _tag: "live" }
 }
 
 /** The gateway's failure reasons (`DriverError`'s, and the pipeline's `cycle-timeout`) in words. */

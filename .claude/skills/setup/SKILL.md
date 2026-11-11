@@ -104,7 +104,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 ## 7. First run: values must flow
 
 1. Start the gateway in the background from the folder. With Docker Compose: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise `otg run`. Either reads `ot-gateway.env` from the folder.
-2. After about 15 s, run `otg status --json`. Every device should be ok (`ok: true`; the command exits with 1 while a device fails or the broker is not connected, and a failing device carries `failingSince` and `lastError`) and its points should have values (a point published as an aggregate gets its first value at the end of its first window). To show what reaches the broker, run `otg watch --seconds 10`.
+2. After about 15 s, run `otg status --json`. Every device should be ok (`ok: true`; the command exits with 1 while a device fails or is late, or the broker was lost or a connect failed, but not while the gateway is still starting; and a failing device carries `failingSince` and `lastError`) and its points should have values (a point published as an aggregate gets its first value at the end of its first window). To show what reaches the broker, run `otg watch --seconds 10`.
 3. Diagnose what isn't working, fix `points.csv` or the config, and run again. Repeat until every device is ok or the cause is outside your reach:
 
    | Symptom                       | Likely cause                                                                                                                                                                             |
