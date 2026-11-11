@@ -23,10 +23,10 @@ export const alarmActive = (point: Pick<PointInfo, "brick" | "haystack">, value:
   isAlarm(point) && alarmOn(value)
 
 /**
- * Whether the gateway asks the device to send the point on change of value (BACnet COV) rather than only polling it:
- * the catalog's `read` says so in words (apps/gateway/src/PointCatalog.ts).
+ * Whether the gateway asks the device to send the point on change of value (BACnet COV) rather than only polling it,
+ * as the catalog's `cov` says (apps/gateway/src/PointCatalog.ts).
  */
-export const readsOnChange = (point: Pick<PointInfo, "read">) => point.read.startsWith("on change of value")
+export const readsOnChange = (point: Pick<PointInfo, "cov">) => point.cov
 
 /**
  * How current a point's last read is, for dimming it and saying when it came:
@@ -44,7 +44,7 @@ export type PointFreshness =
   | { readonly _tag: "stale"; readonly ts: number }
 
 export const pointFreshness = (
-  point: Pick<PointInfo, "read">,
+  point: Pick<PointInfo, "cov">,
   live: LivePoint,
   now: number,
   unreachable: boolean

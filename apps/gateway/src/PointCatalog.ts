@@ -88,6 +88,7 @@ export const pointCatalog = (config: GatewayConfig): PointCatalog => ({
         topic: pointTopic({ site: config.site, building: config.building, device: device.id, point: point.id }),
         source,
         read: readLabel(device, cov, point),
+        cov: cov.has(point.id),
         publish: publishLabel(publishOf(device.publish, point)),
         ...(point.limits === undefined ? {} : { limits: point.limits }),
         ...(point.scaling === undefined ? {} : { scaling: point.scaling }),
