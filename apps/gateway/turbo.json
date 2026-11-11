@@ -9,6 +9,9 @@
         "../../VERSION",
         "../../examples/**",
         "../../packaging/compose.yaml",
+        "../../packaging/ot-gateway",
+        "../../docs/operations.md",
+        "../../docs/raspberry-pi-testing.md",
         "../../profiles/**"
       ]
     }
