@@ -174,8 +174,12 @@ export const failuresOf = (events: ReadonlyArray<GatewayEvent>, device: string):
   return failures
 }
 
-/** Why a stretch of the chart has no reads, when the page knows: the gateway was not running, or the device failed. */
-export type GapCause = { readonly kind: "gateway-not-running" } | { readonly kind: "device-failing" }
+/**
+ * Why a stretch of the chart has no reads, as far as the page knows: the device failed (this run's events say so), or
+ * the stretch ends where the gateway restarted at `at`. The page does not know when the run before stopped, nor why
+ * reads stopped before that, so a restart says only that the reads came back with it.
+ */
+export type GapCause = { readonly kind: "gateway-restart"; readonly at: number } | { readonly kind: "device-failing" }
 
 /**
  * A stretch of the time axis without reads, `[from, to)` in Unix ms: from the last read before it to the first read
@@ -190,9 +194,12 @@ export interface ChartGap {
 
 /**
  * The stretches of `[from, series.to)` without reads that break the line (more than two steps, as `segments`), each
- * with its cause: before `startedAt` the gateway was not running; after it, a failure of the device that overlaps
- * the stretch. Nothing before `from`: an axis that starts where the gateway started (`axisFrom`) already says so in
- * its note, so that gets no band.
+ * with its cause where it is known. After `startedAt`: a failure of the device that overlaps the stretch. A stretch
+ * that ends at `startedAt` (within a step, as bucket edges fall) or spans it: up to the start, that the gateway
+ * restarted then; the rest after the start is a stretch of its own when it breaks the line, else part of this one.
+ * A stretch that ends earlier, inside an older run: no cause, as the page has no events from it. Nothing before
+ * `from`: an axis that starts where the gateway started (`axisFrom`) already says so in its note, so that gets no
+ * band.
  */
 export const chartGaps = (
   series: HistorySeries,
@@ -236,11 +243,10 @@ export const chartGaps = (
   }
   return holes.flatMap((hole): ReadonlyArray<ChartGap> => {
     if (startedAt === undefined || startedAt <= hole.from) return [failed(hole)]
-    if (startedAt >= hole.to) return [{ ...hole, cause: { kind: "gateway-not-running" } }]
-    return [
-      { from: hole.from, to: startedAt, cause: { kind: "gateway-not-running" } },
-      ...(hole.to - startedAt > 2 * stepMs ? [failed({ from: startedAt, to: hole.to })] : [])
-    ]
+    const restart: GapCause = { kind: "gateway-restart", at: startedAt }
+    if (hole.to <= startedAt) return [hole.to >= startedAt - stepMs ? { ...hole, cause: restart } : hole]
+    if (hole.to - startedAt <= 2 * stepMs) return [{ ...hole, cause: restart }]
+    return [{ from: hole.from, to: startedAt, cause: restart }, failed({ from: startedAt, to: hole.to })]
   })
 }
 
@@ -263,8 +269,8 @@ const gapTime = (at: number, now: number, seconds: boolean) => {
 
 /**
  * A gap in words, for the line under the chart and the hover: "No reads 15:58–16:00: energy-meter not answering";
- * "No reads since 15:58" while it lasts (it reaches the end of the range); "the gateway was not running" before it
- * started.
+ * "No reads since 15:58" while it lasts (it reaches the end of the range); "No reads 15:40–15:58, until the gateway
+ * restarted at 15:58" for one that ends at the gateway's start.
  */
 export const gapSentence = (gap: ChartGap, device: string, to: number) => {
   const seconds = gap.to - gap.from < 120_000
@@ -275,8 +281,8 @@ export const gapSentence = (gap: ChartGap, device: string, to: number) => {
   const why =
     gap.cause?.kind === "device-failing"
       ? `: ${device} not answering`
-      : gap.cause?.kind === "gateway-not-running"
-        ? ": the gateway was not running"
+      : gap.cause?.kind === "gateway-restart"
+        ? `, until the gateway restarted at ${gapTime(gap.cause.at, to, seconds)}`
         : ""
   return `No reads ${when}${why}`
 }

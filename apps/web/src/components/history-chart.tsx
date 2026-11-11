@@ -2,8 +2,8 @@
 /**
  * One point's history: the average as a line, the range of its reads in each bucket as a band behind it, on one
  * axis. Hovering shows a crosshair and the bucket's time, average, range and reads. A gap where the device did not
- * answer breaks the line instead of bridging it, and a muted band behind the break says why (the device was failing,
- * the gateway was not running), also in a line under the chart and on hover.
+ * answer breaks the line instead of bridging it, and a muted band behind the break says why where it is known (the
+ * device was failing, the reads came back with a restart of the gateway), also in a line under the chart and on hover.
  */
 import type { HistorySeries } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"

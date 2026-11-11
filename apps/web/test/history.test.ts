@@ -177,14 +177,42 @@ describe("chartGaps", () => {
     expect(gaps).toEqual([{ from: 200_000, to: 300_000, cause: { kind: "device-failing" } }])
   })
 
-  it("splits a gap at the gateway's start when older history is on the axis", () => {
+  it("splits a gap at the gateway's start when older history is on the axis, claiming only the restart", () => {
     const gaps = chartGaps(series([...every(0, 50_000), ...every(200_000, 300_000)]), 0, {
       startedAt: 120_000,
       failures: [{ from: 125_000, to: 195_000 }]
     })
     expect(gaps).toEqual([
-      { from: 50_000, to: 120_000, cause: { kind: "gateway-not-running" } },
+      { from: 50_000, to: 120_000, cause: { kind: "gateway-restart", at: 120_000 } },
       { from: 120_000, to: 200_000, cause: { kind: "device-failing" } }
+    ])
+  })
+
+  it("gives a gap that ends where the gateway restarted the restart, not a whole span of not running", () => {
+    // The device stopped answering at 100 s in the previous run; the gateway restarted at 220 s and read at once.
+    const exact = {
+      ...series([]),
+      buckets: [
+        ...every(0, 100_000).map((t) => ({ ...bucket(t), first: t + 1_000, last: t + 1_000 })),
+        ...every(220_000, 300_000).map((t) => ({ ...bucket(t), first: t + 500, last: t + 500 }))
+      ]
+    }
+    expect(chartGaps(exact, 0, { startedAt: 220_200 })).toEqual([
+      { from: 91_000, to: 220_500, cause: { kind: "gateway-restart", at: 220_200 } }
+    ])
+    // Without read times, the next bucket starts a little before the start: still the restart.
+    expect(chartGaps(series([...every(0, 100_000), ...every(220_000, 300_000)]), 0, { startedAt: 224_000 })).toEqual([
+      { from: 100_000, to: 220_000, cause: { kind: "gateway-restart", at: 224_000 } }
+    ])
+  })
+
+  it("gives no cause to a gap inside an older run: the page has no events from it", () => {
+    const gaps = chartGaps(series([...every(0, 50_000), ...every(100_000, 150_000), ...every(250_000, 300_000)]), 0, {
+      startedAt: 250_000
+    })
+    expect(gaps).toEqual([
+      { from: 50_000, to: 100_000 },
+      { from: 150_000, to: 250_000, cause: { kind: "gateway-restart", at: 250_000 } }
     ])
   })
 
@@ -237,8 +265,12 @@ describe("gapSentence", () => {
     const gap = { from: clock(15, 58), to: clock(16, 0), cause: { kind: "device-failing" } as const }
     expect(gapSentence(gap, "energy-meter", clock(16, 10))).toBe("No reads 15:58–16:00: energy-meter not answering")
     expect(
-      gapSentence({ from: clock(9, 0), to: clock(9, 30), cause: { kind: "gateway-not-running" } }, "m", clock(16, 0))
-    ).toBe("No reads 09:00–09:30: the gateway was not running")
+      gapSentence(
+        { from: clock(9, 0), to: clock(9, 30), cause: { kind: "gateway-restart", at: clock(9, 30) } },
+        "m",
+        clock(16, 0)
+      )
+    ).toBe("No reads 09:00–09:30, until the gateway restarted at 09:30")
     expect(gapSentence({ from: clock(15, 0), to: clock(15, 5) }, "m", clock(16, 0))).toBe("No reads 15:00–15:05")
   })
 
@@ -247,6 +279,14 @@ describe("gapSentence", () => {
     const first = new Date(2026, 10, 11, 15, 59, 41).getTime()
     expect(gapSentence({ from: last, to: first, cause: { kind: "device-failing" } }, "m", clock(16, 10))).toBe(
       "No reads 15:58:13–15:59:41: m not answering"
+    )
+  })
+
+  it("gives the restart to the second for a short gap", () => {
+    const from = new Date(2026, 10, 11, 18, 6, 22).getTime()
+    const at = new Date(2026, 10, 11, 18, 7, 40).getTime()
+    expect(gapSentence({ from, to: at, cause: { kind: "gateway-restart", at } }, "m", clock(18, 10))).toBe(
+      "No reads 18:06:22–18:07:40, until the gateway restarted at 18:07:40"
     )
   })
 
