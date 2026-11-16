@@ -13,6 +13,6 @@
   },
   "dependencies": {
     "@ot-gateway/core": "workspace:*",
-    "effect": "4.1.2"
+    "effect": "4.1.4"
   }
 }
