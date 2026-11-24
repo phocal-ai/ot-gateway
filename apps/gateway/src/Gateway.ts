@@ -60,6 +60,7 @@ import { type AlarmTracker, makeAlarmTracker } from "./Alarms.ts"
 import { type CounterTracker, makeCounterTracker } from "./Counters.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { GatewayLogs, gatewayLogsLayer, knownSecrets } from "./LogRing.ts"
 import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways.ts"
 import { makeSetupTools } from "./SetupTools.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
@@ -672,6 +673,8 @@ export const runGateway = Effect.fn("Gateway")(
     const startedAt = yield* Clock.currentTimeMillis
     const events = yield* GatewayEvents
     events.started(options.version ?? "unknown", config.devices.length)
+    const logs = yield* GatewayLogs
+    logs.addSecrets(yield* knownSecrets(config))
     const host =
       options.host === undefined
         ? undefined
@@ -709,6 +712,8 @@ export const runGateway = Effect.fn("Gateway")(
       const change = describeConfigChange(previous.config, next)
       yield* Effect.annotateCurrentSpan({ changes: change.summary })
       if (change.changes.length === 0) return change
+      // A new broker password is a secret from now on, before anything can log it.
+      logs.addSecrets(yield* knownSecrets(next))
       yield* Scope.close(previous.scope, Exit.void)
       // A changed broker must answer before the config counts as applied; an unchanged one may be away for now.
       const awaitBroker = JSON.stringify(previous.config.mqtt) !== JSON.stringify(next.mqtt)
@@ -791,5 +796,6 @@ export const runGateway = Effect.fn("Gateway")(
     return yield* Effect.raceFirst(Deferred.await(shared.fatal), applyLoop)
   },
   Effect.scoped,
-  Effect.provide(gatewayEventsLayer())
+  // Every fiber the gateway starts logs into the ring too, next to stdout (`ot-gateway logs`, `/api/logs`).
+  Effect.provide(Layer.mergeAll(gatewayEventsLayer(), gatewayLogsLayer()))
 )

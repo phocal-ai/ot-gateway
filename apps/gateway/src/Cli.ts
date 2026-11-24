@@ -14,11 +14,12 @@
  *   ot-gateway events [config]      what changed lately: devices failing and recovering, the broker lost and back
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
  *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started (--since: the last minutes)
+ *   ot-gateway logs [config]        the running gateway's recent log lines: warnings and errors, and info
  *
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
  * that is the path of a JSON file, which is a config meant for `--config` (with `--retain` it would otherwise stay
- * on the broker). `status`, `events`, `history` and `messages` take `--config` too, the same as the positional; without
+ * on the broker). `status`, `events`, `history`, `messages` and `logs` take `--config` too, the same as the positional; without
  * either and without `./ot-gateway.json`, they say on stderr which address they ask instead.
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
@@ -45,6 +46,7 @@ import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./Statu
 import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
+import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
 import {
   BrokerCommandError,
@@ -992,6 +994,60 @@ const messagesCommand = Command.make(
   ])
 )
 
+const logsCommand = Command.make(
+  "logs",
+  {
+    config: targetConfig,
+    configFlag: targetConfigFlag,
+    url: urlFlag,
+    level: Flag.Literals("level", ["info", "warn", "error"]).pipe(
+      Flag.withDescription("The least severe level to print: info (everything kept), warn or error"),
+      Flag.withDefault("info")
+    ),
+    since: Flag.String("since").pipe(
+      Flag.withDescription(
+        "How far back: 30s, 10m, 2h, 1d, or all (the gateway keeps its latest 300 warnings and errors and 200 info lines, in memory since it started)"
+      ),
+      Flag.filter(
+        (since) => parseSince(since) !== undefined,
+        (since) => `--since takes 30s, 10m, 2h, 1d or all, not ${since}`
+      ),
+      Flag.withDefault("1h")
+    ),
+    follow: Flag.Boolean("follow").pipe(
+      Flag.withAlias("f"),
+      Flag.withDescription("Then print each new line as it comes, until Ctrl-C (or --seconds)"),
+      Flag.withDefault(false)
+    ),
+    seconds: secondsFlag("With --follow, stop after this many seconds instead of at Ctrl-C, for scripts and agents"),
+    json: jsonFlag
+  },
+  ({ config, configFlag, url, level, since, follow, seconds, json }) =>
+    targetFrom(config, configFlag, url).pipe(
+      Effect.flatMap((target) =>
+        logsReport(target, {
+          since,
+          sinceMs: parseSince(since) ?? Number.POSITIVE_INFINITY,
+          level,
+          json,
+          follow: follow || seconds !== undefined,
+          seconds
+        })
+      ),
+      jsonFailure(json, { url: url ?? null, path: config ?? configFlag ?? null })
+    )
+).pipe(
+  Command.withDescription(
+    "The running gateway's recent log lines, oldest first, from the ring it keeps in memory: the warnings and errors behind status and events (a decode problem, a refused write, a config that did not apply), without docker logs. Secrets are redacted, long lines cut"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway logs", description: "The last hour" },
+    { command: "ot-gateway logs --level warn --since 10m", description: "Warnings and errors of the last 10 minutes" },
+    { command: "ot-gateway logs --follow", description: "The last hour, then each new line as it comes" },
+    { command: "ot-gateway logs --since all --json", description: "Everything it keeps, as JSON" }
+  ])
+)
+
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
@@ -1007,7 +1063,9 @@ export const rootDescription = [
   "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
   "    messages [<device/point>] --json how many messages went out per topic since start (--since 10m: lately), and reached the broker",
-  "  status, events, history and messages ask the gateway of ./ot-gateway.json (or the config named, or --config) at its status port."
+  "    logs --level warn --since 1h     the gateway's recent warnings and errors in detail, without docker logs (--follow, --json)",
+  "  status, events, history, messages and logs ask the gateway of ./ot-gateway.json (or the config named, or --config) at its status port.",
+  "  Their --json gives each time as Unix ms and as <key>Local, this machine's local time with its UTC offset (timeZone names the zone)."
 ].join("\n")
 
 export const cli = Command.make("ot-gateway").pipe(
@@ -1027,7 +1085,8 @@ export const cli = Command.make("ot-gateway").pipe(
     status,
     eventsCommand,
     historyCommand,
-    messagesCommand
+    messagesCommand,
+    logsCommand
   ])
 )
 
@@ -1046,7 +1105,8 @@ const subcommands = new Set([
   "status",
   "events",
   "history",
-  "messages"
+  "messages",
+  "logs"
 ])
 
 /**

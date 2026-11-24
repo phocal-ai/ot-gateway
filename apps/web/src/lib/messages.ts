@@ -90,5 +90,7 @@ export const totalsNote = (messages: ReadonlyArray<MessageStatus>, buffer?: { re
     ...(totals.other > 0 ? [`${formatNumber(totals.other)} other`] : [])
   ].join(", ")
   const shortfall = shortfallWords(totals, buffer, formatNumber).map((words) => `; ${words}`)
-  return `${plural(totals.all, "message", "messages")} on ${plural(messages.length, "topic", "topics")}: ${kinds}; ${formatNumber(totals.delivered)} reached the broker${shortfall.join("")}.`
+  // The page comes from the gateway it reads, so `delivered` is there; only a gateway before v0.13 left it out.
+  const reached = totals.delivered === undefined ? "" : `; ${formatNumber(totals.delivered)} reached the broker`
+  return `${plural(totals.all, "message", "messages")} on ${plural(messages.length, "topic", "topics")}: ${kinds}${reached}${shortfall.join("")}.`
 }

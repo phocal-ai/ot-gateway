@@ -121,7 +121,7 @@ describe("status", () => {
       "                   check: Is the device switched on and its Modbus TCP server (or its network module) enabled?",
       "",
       "  What changed and when: ot-gateway events",
-      "  The gateway's log (in its folder): docker compose logs gateway --since 10m"
+      "  Its warnings and errors: ot-gateway logs --level warn (the whole log, in its folder: docker compose logs gateway --since 10m)"
     ])
   })
 

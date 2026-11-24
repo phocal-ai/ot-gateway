@@ -4,9 +4,10 @@
  * types, so the gateway encodes and the browser decodes the same contract.
  * Commands are not here on purpose: they go through MQTT and the command guard.
  */
-import { Schema } from "effect"
+import { Effect, Schema, SchemaGetter } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api"
 import { ConfigEditGroup } from "./Editor.ts"
+import { LogsGroup } from "./Logs.ts"
 import { SetupGroup } from "./Setup.ts"
 import { preciseDuration } from "./SharedCause.ts"
 
@@ -139,9 +140,10 @@ export const MessageStatus = Schema.Struct({
   count: Schema.Number,
   /**
    * Of those, and of ones the buffer kept from before a restart, how many reached the broker: QoS 1 acknowledged by
-   * it, QoS 0 written to its connection.
+   * it, QoS 0 written to its connection. Absent from a gateway before v0.13, which did not count it: how many reached
+   * the broker is then not known.
    */
-  delivered: Schema.Number,
+  delivered: Schema.optionalKey(Schema.Number),
   /**
    * Of `count`, retained messages (health, `$meta`) not sent because the broker was away. They are never buffered:
    * the gateway sends the latest again when it reconnects, so nothing is missing. Absent from an older gateway.
@@ -264,7 +266,7 @@ export type AlarmStatus = typeof AlarmStatus.Type
 /** The window the alarm counts (`raised`) and the alarm events' rate limit look back over: 15 minutes. */
 export const ALARM_WINDOW_MS = 15 * 60_000
 
-export const GatewayStatus = Schema.Struct({
+const gatewayStatusFields = {
   site: Schema.String,
   building: Schema.String,
   id: Schema.String,
@@ -279,14 +281,33 @@ export const GatewayStatus = Schema.Struct({
   broker: BrokerStatus,
   /** Absent without a `buffer` in the config. */
   buffer: Schema.optionalKey(BufferStatus),
-  /** Absent until the host monitor's first sample. */
+  /**
+   * Absent until the host monitor's first sample, taken as the gateway starts. Its `version` is the gateway's: the CLI
+   * reads it to tell an older gateway (`gatewayRelease`).
+   */
   host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),
   /** Every alarm point of the config (`effectiveAlarmWhen`), in config order, also with `points=none`. */
   alarms: Schema.optionalKey(Schema.Array(AlarmStatus)),
   /** The most recent commands, newest first. */
   commands: Schema.Array(CommandStatus)
-})
+}
+
+/**
+ * The gateway's status. A gateway sends every field; one of the previous minor release (v0.12) sends no
+ * `configSince`, which then reads as `since`: it could not change its config while running, so its config started
+ * with it. The CLI reads gateways one release older (docs/operations.md); `apps/gateway/test/fixtures/v0.12.0` keeps
+ * their answers.
+ */
+export const GatewayStatus = Schema.Struct({
+  ...gatewayStatusFields,
+  configSince: Schema.optionalKey(Schema.Number)
+}).pipe(
+  Schema.decodeTo(Schema.toType(Schema.Struct(gatewayStatusFields)), {
+    decode: SchemaGetter.transform((status) => ({ ...status, configSince: status.configSince ?? status.since })),
+    encode: SchemaGetter.passthroughSupertype()
+  })
+)
 export type GatewayStatus = typeof GatewayStatus.Type
 
 /** One point's last read, by its key: absent `value` and `ts` mean nothing read since the gateway started. */
@@ -352,9 +373,9 @@ export interface MessageTotals {
   /** Command results and any other topic. */
   readonly other: number
   readonly all: number
-  /** Reached the broker. */
-  readonly delivered: number
-  /** Taken on, not at the broker yet: in the buffer (or dropped by it), or on its way. */
+  /** Reached the broker; undefined when a topic's count of it is not known (a gateway before v0.13). */
+  readonly delivered: number | undefined
+  /** Taken on, not at the broker yet: in the buffer (or dropped by it), or on its way. 0 when not known. */
   readonly waiting: number
   /** Retained messages not sent while the broker was away; the latest goes out again on reconnect. */
   readonly notSent: number
@@ -362,12 +383,16 @@ export interface MessageTotals {
   readonly lost: number
 }
 
-/** What became of one topic's messages that did not reach the broker (`MessageStatus`'s fields, filled in). */
+/**
+ * What became of one topic's messages that did not reach the broker (`MessageStatus`'s fields, filled in). Without
+ * `delivered` (a gateway before v0.13) nothing is known to be waiting.
+ */
 export const messageShortfall = (message: MessageStatus) => {
   const notSent = message.notSent ?? 0
   const lost = message.lost ?? 0
   // Rows the buffer kept from before a restart can make `delivered` more than this run published.
-  return { waiting: Math.max(0, message.count - message.delivered - notSent - lost), notSent, lost }
+  const waiting = message.delivered === undefined ? 0 : Math.max(0, message.count - message.delivered - notSent - lost)
+  return { waiting, notSent, lost }
 }
 
 /** The totals of `messages` (`count` and `delivered` per topic), for `ot-gateway messages` and the Messages tab. */
@@ -376,7 +401,7 @@ export const messageTotals = (messages: ReadonlyArray<MessageStatus>): MessageTo
   let meta = 0
   let health = 0
   let other = 0
-  let delivered = 0
+  let delivered: number | undefined = 0
   let waiting = 0
   let notSent = 0
   let lost = 0
@@ -386,7 +411,7 @@ export const messageTotals = (messages: ReadonlyArray<MessageStatus>): MessageTo
     else if (kind === "metadata") meta += message.count
     else if (kind === "health") health += message.count
     else other += message.count
-    delivered += message.delivered
+    delivered = delivered === undefined || message.delivered === undefined ? undefined : delivered + message.delivered
     const shortfall = messageShortfall(message)
     waiting += shortfall.waiting
     notSent += shortfall.notSent
@@ -445,14 +470,15 @@ export const PointInfo = Schema.Struct({
   source: Schema.String,
   /**
    * How the gateway gets its values, as configured: `polled every 5 s`, or for a BACnet present value with `cov` on,
-   * `on change of value where the device supports it, polled every 5 s otherwise`.
+   * `on change of value where the device supports it, polled every 5 s otherwise`. Absent from a gateway before v0.13.
    */
-  read: Schema.String,
+  read: Schema.optionalKey(Schema.String),
   /**
    * Whether the gateway asks the device to send it on change of value (BACnet COV with `cov` on, a present value):
    * an old read is then the current value while the device answers, not a stale one. `read` says the same in words.
+   * A gateway before v0.13 does not say: then `false`, so a stretch without reads shows as a gap rather than hiding one.
    */
-  cov: Schema.Boolean,
+  cov: Schema.Boolean.pipe(Schema.withDecodingDefaultKey(Effect.succeed(false))),
   /** How its values go out: `every read`, `on change ≥ 0.5`, `aggregate every 15 min`. */
   publish: Schema.String,
   limits: Schema.optionalKey(Schema.Struct({ min: Schema.Number, max: Schema.Number })),
@@ -961,4 +987,8 @@ export class StatusGroup extends HttpApiGroup.make("status")
     })
   ) {}
 
-export class OtGatewayApi extends HttpApi.make("ot-gateway").add(StatusGroup).add(ConfigEditGroup).add(SetupGroup) {}
+export class OtGatewayApi extends HttpApi.make("ot-gateway")
+  .add(StatusGroup)
+  .add(ConfigEditGroup)
+  .add(SetupGroup)
+  .add(LogsGroup) {}
