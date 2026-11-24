@@ -26,8 +26,7 @@ import { Effect, Result, Schema } from "effect"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import { printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { localTime, printResult } from "./Output.ts"
-import { servesEvents } from "./GatewayRelease.ts"
-import { askGateway, fetchGatewayEvents, fetchGatewayStatus } from "./StatusReport.ts"
+import { askGateway, fetchGatewayEvents, fetchGatewayStatus, gatewayServesEvents } from "./StatusReport.ts"
 import { closestMatch } from "./Suggest.ts"
 import { withoutControls } from "./Discover.ts"
 
@@ -484,7 +483,7 @@ export const historyReport = Effect.fn("historyReport")(function* (
   ])
   // Why a device had no reads: its failures in this run, from the events the gateway keeps.
   // A gateway before v0.13 keeps no events: its gaps then go without a cause.
-  const failures = servesEvents(status)
+  const failures = (yield* gatewayServesEvents(target.url, status))
     ? failuresOf(yield* fetchGatewayEvents(target.url))
     : new Map<string, ReadonlyArray<Failure>>()
   const range = { from: status.now - options.sinceMs, to: status.now }

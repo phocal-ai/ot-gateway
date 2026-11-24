@@ -162,6 +162,26 @@ describe("the CLI against a v0.12.0 gateway", () => {
   )
 
   it.live(
+    "one that names no version yet (before its first host sample) is asked whether it keeps events",
+    () =>
+      Effect.gen(function* () {
+        const served = yield* serveFixtures((path, body) =>
+          path === "/api/status"
+            ? Object.fromEntries(Object.entries(body ?? {}).filter(([key]) => key !== "host"))
+            : body
+        )
+        const { recent } = yield* fetchStatusFor(target(served.url))
+        expect(recent).toBeUndefined()
+        const events = yield* Effect.flip(eventsReport(target(served.url), { since: "1h", sinceMs: 3_600_000 }))
+        expect(events._tag).toBe("GatewayTooOld")
+        expect(events.message).toMatch(
+          /^the gateway at \S+ serves no events, so it runs a release before v0\.13\.0, and the CLI is \S+: events needs a gateway of v0\.13\.0 or later/
+        )
+      }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer])),
+    20_000
+  )
+
+  it.live(
     "messages counts what was sent, and says it does not know what reached the broker",
     () =>
       Effect.gen(function* () {

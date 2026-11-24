@@ -198,7 +198,9 @@ export const hintRules: ReadonlyArray<Rule> = [
 /** When no rule matches: the gateway's log has the rest. */
 export const fallbackHint: Hint = {
   meaning: "The gateway cannot read the device.",
-  checks: ["The gateway's log has the details: docker compose logs gateway --since 10m"]
+  checks: [
+    "The gateway's warnings have the details: ot-gateway logs --level warn --since 10m (or, in its folder, docker compose logs gateway --since 10m)"
+  ]
 }
 
 /** What the gateway knows about a failure besides its words: whether the device worked, whether others failed too. */
