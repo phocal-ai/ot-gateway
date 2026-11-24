@@ -112,7 +112,13 @@ export const eventSentence = (event: PageEvent, names?: PointNames, now: number 
     case "counter-jumped":
       return `${alarmSubject(event.device, event.point, names)} ${counterChange(event)}`
     case "gateway-started":
-      return `Gateway started (${event.version}, ${event.devices} ${event.devices === 1 ? "device" : "devices"})`
+      return `Gateway started (${event.version}, ${event.devices} ${event.devices === 1 ? "device" : "devices"})${
+        event.previousRun === undefined
+          ? ""
+          : event.previousRun.stopped === undefined
+            ? `; the run before (started ${clockTime(event.previousRun.started, now)}) did not stop cleanly: a crash, a power cut or the OOM killer`
+            : `; the run before stopped cleanly at ${clockTime(event.previousRun.stopped, now)}`
+      }`
     case "device-failing":
       return `${event.device} stopped answering: ${event.error === "" ? event.reason : plainError(event.error)}${
         event.lastReadAt === undefined ? "" : `, last read ${clockTime(event.lastReadAt, now)}`

@@ -633,7 +633,13 @@ export const GatewayStartedEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("gateway-started"),
   version: Schema.String,
-  devices: Schema.Number
+  devices: Schema.Number,
+  /**
+   * How the run before ended, when the gateway can tell (it keeps `ot-gateway-run.json` next to its outbox or
+   * history): `started` Unix ms, and `stopped` after a clean stop (SIGTERM, Ctrl-C). Without `stopped` it ended
+   * some other way: a crash, the power pulled, the kernel's OOM killer.
+   */
+  previousRun: Schema.optionalKey(Schema.Struct({ started: Schema.Number, stopped: Schema.optionalKey(Schema.Number) }))
 })
 
 /**

@@ -651,8 +651,9 @@ export const serveStatus = (
       })
     )
     if (hasWeb && (yield* webBuildStale(fs, webRoot))) {
-      yield* Effect.logWarning(
-        "the status page's build is older than its sources; run pnpm --filter @ot-gateway/web build (pnpm gateway does it)"
+      // Only in a checkout, and nothing wrong with the gateway: info, so an agent reading warnings is not sent after it.
+      yield* Effect.logInfo(
+        "the status page's build is older than its sources (a checkout only; the gateway and its API are unaffected): pnpm demo and pnpm gateway rebuild it, or pnpm --filter @ot-gateway/web build"
       ).pipe(Effect.annotateLogs({ web: webRoot }))
     }
     return yield* Layer.launch(server)

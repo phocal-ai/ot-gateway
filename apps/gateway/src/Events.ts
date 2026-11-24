@@ -9,6 +9,7 @@
  * Value events (an energy counter that went back or jumped, `Counters.ts`) share the ring and its ids, and are
  * answered apart, as `valueEvents`, so a client that knows only the gateway's events keeps decoding the answer.
  */
+import type { PreviousRun } from "./PreviousRun.ts"
 import type { EventLog, GatewayEvent, ValueEvent } from "@ot-gateway/api"
 import type { HealthChange, Slug } from "@ot-gateway/core"
 import { Clock, Context, Effect, Layer } from "effect"
@@ -40,8 +41,8 @@ export interface EventQuery {
 }
 
 export interface GatewayEventsShape {
-  /** The process started, with this version and this many configured devices. */
-  readonly started: (version: string, devices: number) => void
+  /** The process started, with this version and this many configured devices, and how the run before ended. */
+  readonly started: (version: string, devices: number, previousRun?: PreviousRun) => void
   /** A device's health changed (the health registry's listener): ok or starting to failing, failing to ok. */
   readonly deviceChanged: (change: HealthChange) => void
   /** Connected to the broker, with the messages waiting in the buffer then (undefined without a buffer). */
@@ -105,7 +106,8 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
   }
 
   return {
-    started: (version, devices) => record({ type: "gateway-started", version, devices }),
+    started: (version, devices, previousRun) =>
+      record({ type: "gateway-started", version, devices, ...(previousRun === undefined ? {} : { previousRun }) }),
     deviceChanged: ({ device, previous, next }) => {
       if (previous.status === "ok" || next.status === "ok") answered.add(device)
       if (next.status === "failing" && previous.status !== "failing") {
