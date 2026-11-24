@@ -45,6 +45,24 @@ export const localTime = (at: number | Date, now: number | Date = at) => {
   return `${moment.getFullYear()}-${twoDigits(moment.getMonth() + 1)}-${twoDigits(moment.getDate())} ${time}`
 }
 
+/**
+ * A moment in this machine's time zone, as `--json` gives it next to the Unix ms: ISO 8601 with milliseconds and
+ * the UTC offset of that moment (`2026-11-24T14:21:03.109+01:00`, `+00:00` rather than `Z`). The same clock as
+ * `localTime`, so the JSON and the lines agree.
+ */
+export const localIsoTime = (at: number | Date) => {
+  const moment = new Date(at)
+  const offset = -moment.getTimezoneOffset()
+  const sign = offset < 0 ? "-" : "+"
+  const offsetText = `${sign}${twoDigits(Math.floor(Math.abs(offset) / 60))}:${twoDigits(Math.abs(offset) % 60)}`
+  const date = `${String(moment.getFullYear()).padStart(4, "0")}-${twoDigits(moment.getMonth() + 1)}-${twoDigits(moment.getDate())}`
+  const time = `${twoDigits(moment.getHours())}:${twoDigits(moment.getMinutes())}:${twoDigits(moment.getSeconds())}`
+  return `${date}T${time}.${String(moment.getMilliseconds()).padStart(3, "0")}${offsetText}`
+}
+
+/** The IANA name of this machine's time zone (`Europe/Vienna`), the one `localTime` and `localIsoTime` use. */
+export const localTimeZone = () => Intl.DateTimeFormat().resolvedOptions().timeZone
+
 /** The `Console` of `--json` mode: what it is asked to print goes to stderr; the rest is `base`'s own. */
 export const stderrConsole = (base: Console.Console): Console.Console => ({
   assert: (condition, ...args) => base.assert(condition, ...args),

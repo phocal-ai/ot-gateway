@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { spawnSync } from "node:child_process"
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -37,7 +37,7 @@ const fakeDocker = [
   "    for last; do :; done",
   '    if [ -n "${FAKE_RUNNING:-}" ] && [ "$last" = "$FAKE_RUNNING" ]; then echo true; else exit 1; fi',
   "    ;;",
-  '  run) echo "cli output" ;;',
+  '  run) echo "TZ=${TZ:-}" >> "$FAKE_DIR/env"; echo "cli output" ;;',
   "  *) exit 0 ;;",
   "esac",
   ""
@@ -72,7 +72,9 @@ const runWrapper = (args: ReadonlyArray<string>, env: Record<string, string>) =>
     }
   })
   const log = readFileSync(join(directory, "log"), "utf8").trim().split("\n")
-  return { status: result.status, stdout: result.stdout, stderr: result.stderr, log }
+  const envFile = join(directory, "env")
+  const passed = existsSync(envFile) ? readFileSync(envFile, "utf8").trim() : undefined
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr, log, env: passed }
 }
 
 const runCall = (log: ReadonlyArray<string>) => log.find((line) => line.startsWith("docker run "))
@@ -97,6 +99,13 @@ describe("packaging/ot-gateway", () => {
     expect(result.status).toBe(0)
     expect(runCall(result.log)).toContain(" -e SSH_CONNECTION -e USER ")
     expect(runCall(result.log)).not.toContain("192.168.1.50")
+  })
+
+  it("passes the time zone into the container by name, an explicit TZ winning", () => {
+    const result = runWrapper(["status"], { FAKE_IMAGE_PRESENT: "1", TZ: "America/St_Johns" })
+    expect(result.status).toBe(0)
+    expect(runCall(result.log)).toContain(" -e TZ ")
+    expect(result.env).toBe("TZ=America/St_Johns")
   })
 
   it("resolves the config's relative paths in the current folder, not in the image's data volume", () => {

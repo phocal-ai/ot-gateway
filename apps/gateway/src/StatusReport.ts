@@ -51,7 +51,8 @@ import {
   versionName
 } from "./GatewayRelease.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
-import { localTime, printJson, printResult } from "./Output.ts"
+import { jsonLineWithLocalTimes, printJsonWithLocalTimes } from "./JsonTimes.ts"
+import { localTime, printResult } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 /** Something answered at the gateway's address, in a form this CLI cannot read: most likely another release. */
@@ -661,7 +662,7 @@ export class AlarmActive extends Schema.TaggedError<AlarmActive>()("AlarmActive"
  */
 export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: boolean } = {}) =>
   Effect.fnUntraced(function* (status: GatewayStatus, recent?: RecentIncidents) {
-    yield* json ? printJson(statusJson(status, recent)) : Console.log(formatStatus(status, recent))
+    yield* json ? printJsonWithLocalTimes(statusJson(status, recent)) : Console.log(formatStatus(status, recent))
     const summary = unhealthySummary(status)
     if (summary !== undefined) return yield* new GatewayUnhealthy({ message: summary })
     const active = activeAlarms(status)
@@ -913,6 +914,28 @@ export const eventJson = (event: AnyEvent, advice: ReadonlyMap<number, EventAdvi
   }
 }
 
+/**
+ * What `events --json` prints: `{ok, gateway, now, gatewayStarted, from, capacity, dropped, events}`, the events
+ * as `eventJson` gives them. The window's events cover from `from`: the window's start, or the gateway's start
+ * (`started`) when that is later.
+ */
+export const eventsJson = (
+  gateway: { readonly site: string; readonly building: string; readonly id: string },
+  log: EventLog,
+  started: number,
+  sinceMs: number,
+  events: ReadonlyArray<ReturnType<typeof eventJson>>
+) => ({
+  ok: true,
+  gateway,
+  now: log.now,
+  gatewayStarted: started,
+  from: Math.max(log.now - sinceMs, started),
+  capacity: log.capacity,
+  dropped: log.dropped,
+  events
+})
+
 export interface EventsOptions {
   readonly since: string
   readonly sinceMs: number
@@ -941,20 +964,10 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
   const advice = adviseEvents(allEvents(log), deviceOf, context.brokerHost)
   const events = eventsWithin(log, options.sinceMs).map((event) => eventJson(event, advice))
   if (options.json === true && options.follow !== true) {
-    return yield* printJson({
-      ok: true,
-      gateway,
-      now: log.now,
-      // The window's events cover from `from`: the window's start, or the gateway's start when that is later.
-      gatewayStarted: status.since,
-      from: Math.max(log.now - options.sinceMs, status.since),
-      capacity: log.capacity,
-      dropped: log.dropped,
-      events
-    })
+    return yield* printJsonWithLocalTimes(eventsJson(gateway, log, status.since, options.sinceMs, events))
   }
   if (options.json === true) {
-    for (const event of events) yield* printResult(JSON.stringify(event))
+    for (const event of events) yield* printResult(jsonLineWithLocalTimes(event))
   } else {
     const window =
       options.follow === true
@@ -1013,7 +1026,7 @@ export const followEvents = Effect.fn("followEvents")(function* <R>(
       const hint = found?.hint
       yield* printResult(
         json
-          ? JSON.stringify(eventJson(event, new Map(hint === undefined ? [] : [[event.id, { hint }]])))
+          ? jsonLineWithLocalTimes(eventJson(event, new Map(hint === undefined ? [] : [[event.id, { hint }]])))
           : [
               eventLine(event, answer.now),
               ...adviceLines(
