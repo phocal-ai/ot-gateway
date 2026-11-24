@@ -165,6 +165,9 @@ describe("demo", () => {
       expect(banner).toContain("energy-meter (Modbus TCP)")
       expect(banner).toContain("init to describe your own building")
       expect(describeConfig(config)).toContain("config ok: demo-site/building-a")
+      expect(describeConfig(config)).toContain(
+        "\n  status page on port 8080 at every address of this machine (http://localhost:8080 here)\n"
+      )
     }).pipe(Effect.provide(NodeServices.layer))
   )
 

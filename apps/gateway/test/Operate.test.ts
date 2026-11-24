@@ -20,7 +20,7 @@ import {
   selectPoints,
   seriesJson
 } from "../src/HistoryReport.ts"
-import { messagesReport } from "../src/MessagesReport.ts"
+import { failingDeviceLines, messagesReport } from "../src/MessagesReport.ts"
 import { localIsoTime, localTime } from "../src/Output.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
 import {
@@ -398,6 +398,11 @@ describe("history", () => {
     ])
     expect(formatSeries(power, { ...justStarted, buckets: [] }, now, { since: started }).at(-1)).toBe(
       "  no reads in this range before the gateway started at 12:18:55"
+    )
+    // Failing since its start: the time before the start and the failure are two things, each with its time.
+    const failures = [{ from: started + 1_000, error: "device refused every read (gateway_target_failed_to_respond)" }]
+    expect(formatSeries(power, { ...justStarted, buckets: [] }, now, { since: started, failures }).at(-1)).toBe(
+      "  no reads in this range: none before the gateway started at 12:18:55, and since 12:18:56 energy-meter is failing: device refused every read (gateway_target_failed_to_respond)"
     )
   })
 
@@ -883,4 +888,22 @@ describe("against a running status page", () => {
     // A real server and several HTTP round trips: a slow CI runner took over 5 s once.
     20_000
   )
+})
+
+describe("failingDeviceLines", () => {
+  it("names each failing device under the topics, the selected ones only, as sending no values", () => {
+    const checkedAt = Date.UTC(2026, 10, 24, 15, 50)
+    const failingSince = checkedAt - 8 * 60_000
+    const status = {
+      now: checkedAt,
+      devices: [
+        { id: "energy-meter", status: "failing" as const, failingSince },
+        { id: "heat-pump", status: "ok" as const }
+      ]
+    }
+    expect(failingDeviceLines(status, [])).toEqual([
+      `  (energy-meter sends no values: failing since ${localTime(failingSince, checkedAt)}; ot-gateway status says why)`
+    ])
+    expect(failingDeviceLines(status, [{ device: "heat-pump" }])).toEqual([])
+  })
 })

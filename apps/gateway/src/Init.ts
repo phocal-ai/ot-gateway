@@ -82,6 +82,8 @@ export interface InitFlags {
   readonly dryRun?: boolean | undefined
   /** `false` leaves the history out of the config (`--no-history`). */
   readonly history?: boolean | undefined
+  /** The status page's port, when 8080 is taken (`--status-port`). */
+  readonly statusPort?: number | undefined
 }
 
 /** A flag's value that its question would not accept, or a config in the way without `--force`. */
@@ -95,7 +97,7 @@ export class InitError extends Schema.TaggedError<InitError>()("InitError", { me
 export const initConfig = (
   answers: InitAnswers,
   devices: ReadonlyArray<InitDevice>,
-  options: { readonly history?: boolean | undefined } = {}
+  options: { readonly history?: boolean | undefined; readonly statusPort?: number | undefined } = {}
 ) => ({
   site: answers.site,
   building: answers.building,
@@ -106,7 +108,7 @@ export const initConfig = (
   },
   buffer: { path: "./ot-gateway-buffer.sqlite" },
   ...(options.history === false ? {} : { history: { path: "./ot-gateway-history.sqlite" } }),
-  status: {},
+  status: options.statusPort === undefined ? {} : { port: options.statusPort },
   ...(answers.broadcastAddress === undefined ? {} : { bacnet: { broadcastAddress: answers.broadcastAddress } }),
   devices
 })
@@ -330,7 +332,7 @@ export const runInit = Effect.fn("runInit")(function* (
     beforeDevices.broadcastAddress === undefined && !devices.every(located)
       ? yield* network(beforeDevices)
       : beforeDevices
-  const text = `${JSON.stringify(initConfig(withNetwork, devices, { history: flags.history }), null, 2)}\n`
+  const text = `${JSON.stringify(initConfig(withNetwork, devices, { history: flags.history, statusPort: flags.statusPort }), null, 2)}\n`
   const config = yield* parseConfig(text)
   if (flags.dryRun === true) return config
   // Made only now, so a cancelled init leaves no empty folder behind.

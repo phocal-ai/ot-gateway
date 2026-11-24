@@ -73,6 +73,28 @@ const reachedText = (delivered: number | undefined) =>
   delivered === undefined ? "" : `, ${delivered} reached the broker`
 
 /** Under the totals of a gateway before v0.13: why they do not say what reached the broker. */
+/**
+ * Under the topics: each failing device, which sends no values while it fails (its `$meta` and the health go on), so
+ * a count that "reached the broker" is not read as every value flowing. Only the selected devices, when selected.
+ */
+export const failingDeviceLines = (
+  status: {
+    readonly now: number
+    readonly devices: ReadonlyArray<Pick<GatewayStatus["devices"][number], "id" | "status" | "failingSince">>
+  },
+  selections: ReadonlyArray<PointSelection>
+) =>
+  status.devices
+    .filter(
+      (device) =>
+        device.status === "failing" &&
+        (selections.length === 0 || selections.some((selection) => selection.device === device.id))
+    )
+    .map(
+      (device) =>
+        `  (${device.id} sends no values: failing${device.failingSince === undefined ? "" : ` since ${localTime(device.failingSince, status.now)}`}; ot-gateway status says why)`
+    )
+
 export const NOT_COUNTED_LINE = `  (this gateway does not count what reached the broker: upgrade it to v${EVENTS_RELEASE.join(".")} or later for that)`
 
 /**
@@ -203,6 +225,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
             formatTotals(totals, status.buffer),
             ...(totals.delivered === undefined ? [NOT_COUNTED_LINE] : [])
           ]),
+      ...failingDeviceLines(status, selections),
       ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
         ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]

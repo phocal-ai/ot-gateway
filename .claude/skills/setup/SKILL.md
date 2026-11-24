@@ -11,7 +11,7 @@ Say in one line what is about to happen, then start with step 1. Keep the user p
 
 Everything goes through the `ot-gateway` command. Call it `otg` below:
 
-- in a checkout of the ot-gateway repository: `pnpm ot-gateway` (after `pnpm install`). It always runs from the repository root, whatever folder you are in, so give every command the config's absolute path (`pnpm ot-gateway broker /home/me/site-1/ot-gateway.json`) and the points list's too; without it, a command looks for `ot-gateway.json` in the repository root. The outbox, the history and `ot-gateway.env` are found next to the config;
+- in a checkout of the ot-gateway repository: `pnpm -s ot-gateway` (after `pnpm install`; `-s` keeps pnpm from printing its own command line, so `--json` is all that stdout holds). It always runs from the repository root, whatever folder you are in, so give every command the config's absolute path (`pnpm ot-gateway broker /home/me/site-1/ot-gateway.json`) and the points list's too; without it, a command looks for `ot-gateway.json` in the repository root. The outbox, the history and `ot-gateway.env` are found next to the config;
 - anywhere else with Node: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`);
 - with Docker and no Node (a Raspberry Pi, most edge boxes): `~/.local/bin/ot-gateway`, from that folder. It runs the CLI from the image at the gateway's version and leaves out `-t` when there is no terminal. Install it once, no sudo:
   `mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway`. Use the full path: a command over SSH does not read the login profile that puts `~/.local/bin` on the PATH.
@@ -59,7 +59,7 @@ Run `init` with flags so it asks nothing (without a terminal it never asks anywa
 otg init . --yes --site site-1 --building building-a --broker mqtts://broker.example:8883 --username gateway --devices none
 ```
 
-Add `--dry-run --json` first to see the config and the files it would write without writing anything.
+Add `--dry-run --json` first to see the config and the files it would write without writing anything. When another program has port 8080 (the demo, another gateway), add `--status-port <port>`: the config, `init`'s link and `check` then name that port.
 
 - Leave out `--username` for a broker without a login.
 - For BACnet, add `--broadcast <address>` when the machine has more than one network: the broadcast address of the building network's interface (`ip -4 -o addr show scope global` gives `brd 192.168.1.255`; on macOS, `ifconfig | grep broadcast`). Ask if it's unclear which interface that is.
@@ -108,7 +108,7 @@ Run `otg check --json` and fix every error it reports (each has its path) until 
 
 ## 7. First run: values must flow
 
-1. Start the gateway in the background from the folder. With Docker Compose on Linux: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise (and always on macOS and Windows, step 1) `otg run`. Either reads `ot-gateway.env` from the folder.
+1. Start the gateway in the background from the folder. With Docker Compose on Linux: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise (and always on macOS and Windows, step 1) `otg run`, and note its process id (`$!` after `&`) to stop it afterwards with `kill <pid>` (a clean stop: it logs `OT Gateway stopping` and closes the outbox). Either reads `ot-gateway.env` from the folder.
 2. Run `otg watch --seconds 10` in the folder (it waits those ten seconds and shows what reaches the broker meanwhile), then `otg status --json` (it asks the gateway of `ot-gateway.json` at its status port). Every device should be ok (`ok: true`; the command exits with 1 while a device fails or is late, or the broker was lost or a connect failed, but not while the gateway is still starting; and a failing device carries `failingSince`, `lastError` and `hints`, what to check first; an active alarm does not change the exit code, `alarmsActive` counts them, and `otg status --fail-on-alarm` exits with 1 while one is active, for a script that acts on alarms) and its points should have values (a point published as an aggregate gets its first value at the end of its first window). In what `watch` printed, a retained message marked `from gateway …` or `not in this config` is left over from another gateway or an older config: clear it with `otg publish <topic> --retain` once the user agrees. When a device failed and came back, `otg events --since 1h --json` says when, why and what to check; `otg history <device>/<point>` what a point did, and when a boolean point switched.
 3. Diagnose what isn't working, fix `points.csv` or the config, and run again. Repeat until every device is ok or the cause is outside your reach:
 

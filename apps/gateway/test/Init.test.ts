@@ -51,6 +51,9 @@ describe("initConfig", () => {
       expect(simulated.buffer?.path).toBe("./ot-gateway-buffer.sqlite")
       expect(simulated.history?.path).toBe("./ot-gateway-history.sqlite")
       expect((yield* decode(initConfig(answers, [], { history: false }))).history).toBeUndefined()
+      const otherPort = yield* decode(initConfig(answers, [], { statusPort: 8091 }))
+      expect(otherPort.status?.port).toBe(8091)
+      expect(initNext("ot-gateway.json", otherPort).url).toBe("http://127.0.0.1:8091")
 
       const empty = yield* decode(initConfig(answers, []))
       expect(empty.devices).toEqual([])

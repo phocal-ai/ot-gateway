@@ -216,19 +216,43 @@ const isFloat = (type: DataType) => type === "float32" || type === "float64"
 
 /**
  * The reading the example row takes, at the widest width read (64, 32 or 16 bits), falling back to a narrower one
- * when nothing there reads sensibly. A float that reads sensibly wins: a wrong word or byte order turns a float into
- * NaN, dust or something astronomical, while an integer read as a float almost always does the same. Floats keep
- * the order of preference ABCD, CDAB, BADC, DCBA (the default first, a swapped word next, as devices do). Integers
- * are read in ABCD or CDAB only, and the smallest magnitude wins: a word in the wrong half multiplies by 65536.
- * Unsigned wins a tie, since a counter is more common than a negative value. A guess, which the output says.
+ * when nothing there reads sensibly. In this order:
+ * 1. A float in ABCD, then CDAB, that reads sensibly: the default order and a swapped word, as devices do; a wrong
+ *    type or order turns a float into NaN, dust or something astronomical.
+ * 2. With the first register 0 (or the last, the words swapped), an unsigned integer with that zero as its high
+ *    word: a counter still small, where a byte-swapped float can read as a plausible but wrong number.
+ * 3. A float with swapped bytes (BADC, DCBA) that reads sensibly.
+ * 4. The integer in ABCD or CDAB with the smallest magnitude: a word in the wrong half multiplies by 65536.
+ *    Unsigned wins a tie, since a counter is more common than a negative value.
+ * A guess, which the output says.
  */
-export const suggest = (interpretations: ReadonlyArray<Interpretation>, count: number): Interpretation | undefined => {
-  const widths = ([4, 2, 1] as const).filter((width) => width <= count)
+export const suggest = (
+  interpretations: ReadonlyArray<Interpretation>,
+  registers: ReadonlyArray<number>
+): Interpretation | undefined => {
+  const widths = ([4, 2, 1] as const).filter((width) => width <= registers.length)
   for (const width of widths) {
     const atWidth = interpretations.filter(
       (each) => registerWidth(each.type) === width && each.flag === undefined && typeof each.value === "number"
     )
-    const float = atWidth.find((each) => isFloat(each.type))
+    const floats = atWidth.filter((each) => isFloat(each.type))
+    const wordOrderFloat =
+      floats.find((each) => each.byteOrder === "ABCD") ?? floats.find((each) => each.byteOrder === "CDAB")
+    if (wordOrderFloat !== undefined) return wordOrderFloat
+    const words = registers.slice(0, width)
+    const counterOrder =
+      width > 1 && words.some((word) => word !== 0)
+        ? words[0] === 0
+          ? "ABCD"
+          : words[width - 1] === 0
+            ? "CDAB"
+            : undefined
+        : undefined
+    const counter = atWidth.find(
+      (each) => !isFloat(each.type) && each.type.startsWith("u") && each.byteOrder === counterOrder
+    )
+    if (counter !== undefined) return counter
+    const float = floats[0]
     if (float !== undefined) return float
     const integers = atWidth.filter(
       (each) => !isFloat(each.type) && (each.byteOrder === "ABCD" || (width > 1 && each.byteOrder === "CDAB"))
@@ -312,7 +336,7 @@ export const probe = Effect.fn("probe")(function* (request: ProbeRequest, option
     .readRegisters(functionCodeOf[request.table], request.address, request.count)
     .pipe(Effect.catchTags(describe), within)
   const interpretations = interpretRegisters(request.table, request.address, registers)
-  const suggestion = suggest(interpretations, registers.length)
+  const suggestion = suggest(interpretations, registers)
   const report: ProbeReport = {
     ...base,
     registers,

@@ -123,7 +123,7 @@ pnpm ot-gateway status    # every device: ok, or failing with the reason
 pnpm ot-gateway watch     # every message, as it reaches your broker
 ```
 
-Or open the status page at <http://localhost:8080>. A device that stays `failing` says why: `connection` (wrong address or port, a firewall, or another program holds the device's only connection), `timeout` (it connected but does not answer: often a wrong unit ID), `protocol` (the device refused the request: often a wrong register). [Troubleshooting](troubleshooting.md) goes from each reason to its fix.
+Or open the status page at <http://localhost:8080>. A device that stays `failing` says why: `connection` (wrong address or port, a firewall, or another program holds the device's only connection), `timeout` (it connected but does not answer: often a wrong unit ID), `protocol` (the device refused the request: often a wrong register, or, with `gateway_target_failed_to_respond`, a wrong unit ID behind a Modbus gateway). [Troubleshooting](troubleshooting.md) goes from each reason to its fix.
 
 ## Then keep it running
 
