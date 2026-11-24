@@ -77,7 +77,7 @@ export const ago = roughDuration
 /** Where to look next when something is failing: the gateway's own timeline, then its log. */
 export const failingHint = [
   "  What changed and when: ot-gateway events",
-  "  The gateway's log (in its folder): docker compose logs gateway --since 10m"
+  "  Its warnings and errors: ot-gateway logs --level warn (the whole log, in its folder: docker compose logs gateway --since 10m)"
 ]
 
 /** The broker is away and it is not just the start: the connection was lost, or a dial failed or was refused. */
