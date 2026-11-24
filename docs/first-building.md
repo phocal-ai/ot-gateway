@@ -59,6 +59,17 @@ pnpm ot-gateway import points.csv              # adds the devices to ot-gateway.
 
 Rows with the same `device` are one device. Optional columns: `port` (502), `unit_id` (1), `table` (`holding`, `input`, `coil` or `discrete`; a coil or discrete input is always `bool`, its default, so its `type` can stay empty), `alarm` (`on` for an alarm active when the value is true or not 0, like "Breaker tripped"; `off` for one active when it is false or 0, like a normally-closed contact; EDE files and `discover` leave it empty), `name` (the name to show when `point` is an id such as `active-power`, which is otherwise shown as "Active power"), `deadband`, `offset`, and `publish` (`sample`, `aggregate` or `change`) with `publish_s` (send the latest value, or an aggregate, every so many seconds: `900` for 15 minutes). BACnet points can go in the same list with `device_instance`, `object_type` and `object_instance` instead of `host`, `register` and `type`. Units such as `kW`, `kWh`, `°C` and `%` become their QUDT names, which go out in each point's `$meta`; `import` lists each unit once with the name it becomes, and says which it kept as written. `register` is 0-based, as in the config: a data sheet's 40101 is usually holding register 100. A mistake names its line, and nothing is written until the whole list makes a valid config. [`examples/points.csv`](../examples/points.csv) has an energy meter, a PV inverter and a heat pump. `ot-gateway points schema` prints every column with its allowed values (`--json` for scripts and agents, `--brief --json` for one short line per column); `import` names the columns it does not know and ignores them.
 
+### Not sure of a register's type or byte order?
+
+Read it once and see every way it can be read:
+
+```bash
+pnpm ot-gateway probe 192.168.1.50 100                # holding registers 100 and 101 of unit 1
+pnpm ot-gateway probe 192.168.1.50 0 --table input --count 4 --unit-id 2   # 64-bit types too, another unit
+```
+
+It prints the registers in hex and decimal, then each type (`int16` to `float64`) in each byte order with its value, as a point with those settings would publish it before `scale`. NaN, infinite and implausible values (a float of `1.4e-41` or `2.6e+20`, the mark of a wrong word order) are marked, and the likeliest reading is pointed out, with a points list row to copy. Pick the line whose value matches the data sheet or the device's display, and write its `type` and `byte_order`. `probe` only reads, one request, and never writes; the address is 0-based as the list's `register`, and a refusal names the Modbus exception (`illegal data address` for a register the device does not have). `--json` gives the same for scripts and agents. Some devices take one Modbus TCP connection at a time: while a gateway polls one, `probe` may be refused or time out, so probe before adding the device, or stop the gateway for a moment.
+
 ### Meters with a profile
 
 For a device model in the [profile library](../profiles), one row is enough: name the profile, and `*` takes all its points (or put one point's name in `point`, one row each):

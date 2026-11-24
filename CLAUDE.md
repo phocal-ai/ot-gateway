@@ -26,6 +26,7 @@ pnpm ot-gateway points schema              # the points list's columns (--json; 
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
+pnpm ot-gateway probe 127.0.0.1:5020 100   # read Modbus registers once (read-only): every type and byte order they read as, a points list row
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
 pnpm ot-gateway status                     # the running gateway of ./ot-gateway.json (or a config named): its devices, one line each, what to check (exit 1 when one fails)
 pnpm ot-gateway events --since 1h          # what broke, since when and why, and when it came back (/api/events; --follow for what comes)
