@@ -19,7 +19,7 @@ export const PointStatus = Schema.Struct({
   value: Schema.optionalKey(Schema.Union([Schema.Number, Schema.Boolean])),
   /** Unix ms of the reading, from the gateway's wall clock. */
   ts: Schema.optionalKey(Schema.Number),
-  /** The point is an alarm, active when its value is on or off (its config's `alarmWhen`). */
+  /** The point is an alarm, active when its value is on or off (`effectiveAlarmWhen`: `alarmWhen`, else semantics). */
   alarmWhen: Schema.optionalKey(Schema.Literals(["on", "off"])),
   /** For an alarm point that has been read: whether its alarm is active now. */
   alarmActive: Schema.optionalKey(Schema.Boolean)
@@ -219,7 +219,8 @@ export const AlarmPattern = Schema.Struct({
 export type AlarmPattern = typeof AlarmPattern.Type
 
 /**
- * An alarm point (one with `alarmWhen`) as the gateway sees it now. `raised` counts how often its alarm became active
+ * An alarm point (`effectiveAlarmWhen`: one with `alarmWhen`, or semantics that say alarm) as the gateway sees it now.
+ * `alarmWhen` is its effective polarity. `raised` counts how often its alarm became active
  * in the last `ALARM_WINDOW_MS` (15 min), so a contact that toggles shows up even while it happens to be off.
  */
 export const AlarmStatus = Schema.Struct({
@@ -260,7 +261,7 @@ export const GatewayStatus = Schema.Struct({
   /** Absent until the host monitor's first sample. */
   host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),
-  /** Every alarm point of the config (`alarmWhen`), in config order, also with `points=none`. */
+  /** Every alarm point of the config (`effectiveAlarmWhen`), in config order, also with `points=none`. */
   alarms: Schema.optionalKey(Schema.Array(AlarmStatus)),
   /** The most recent commands, newest first. */
   commands: Schema.Array(CommandStatus)
@@ -387,7 +388,10 @@ export const PointInfo = Schema.Struct({
   scaling: Schema.optionalKey(Schema.Struct({ factor: Schema.Number, offset: Schema.Number })),
   brick: Schema.optionalKey(Schema.String),
   haystack: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** The point is an alarm, active when its value is on (true, not 0) or off (false, 0), as its config says. */
+  /**
+   * The config's `alarmWhen`, as written: on (true, not 0) or off (false, 0). Whether the point is an alarm also
+   * depends on `brick` and `haystack`: ask `effectiveAlarmWhen`.
+   */
   alarmWhen: Schema.optionalKey(Schema.Literals(["on", "off"]))
 })
 export type PointInfo = typeof PointInfo.Type
