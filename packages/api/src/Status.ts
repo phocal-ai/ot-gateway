@@ -578,15 +578,16 @@ export const BrokerDisconnectedEvent = Schema.Struct({
 })
 
 /**
- * The gateway connected to its broker. After an outage, `downMs` says how long it lasted and `buffered` how many
- * messages waited in the store-and-forward buffer at the moment of the reconnect (absent without a buffer). Values
- * read while the backlog goes out queue behind it, so more can reach the broker from the buffer than `buffered`
- * says: `buffer-drained` has that number.
+ * The gateway connected to its broker. After an outage, `downMs` says how long it lasted, `retries` how many dials
+ * failed during it (absent from older gateways) and `buffered` how many messages waited in the store-and-forward
+ * buffer at the moment of the reconnect (absent without a buffer). Values read while the backlog goes out queue
+ * behind it, so more can reach the broker from the buffer than `buffered` says: `buffer-drained` has that number.
  */
 export const BrokerConnectedEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("broker-connected"),
   downMs: Schema.optionalKey(Schema.Number),
+  retries: Schema.optionalKey(Schema.Number),
   buffered: Schema.optionalKey(Schema.Number)
 })
 

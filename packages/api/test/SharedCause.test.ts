@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest"
-import { commonHost, preciseDuration, roughDuration, SHARED_CAUSE_WINDOW_MS, sharedCauses } from "../src/SharedCause.ts"
+import {
+  brokerHostOf,
+  commonHost,
+  isLoopback,
+  preciseDuration,
+  roughDuration,
+  sameHost,
+  SHARED_CAUSE_WINDOW_MS,
+  sharedCauses
+} from "../src/SharedCause.ts"
+
+/** Every device on this machine, as a bench or a demo runs them. */
+const onLoopback = () => "127.0.0.1"
 
 describe("sharedCauses", () => {
   it("groups two devices that failed within the window, with one line for both", () => {
@@ -61,6 +73,55 @@ describe("sharedCauses", () => {
     )
     expect(apart).not.toHaveProperty("host")
     expect(commonHost(["meter-a", "nowhere"], (device) => hosts.get(device))).toBeUndefined()
+  })
+
+  it("adds a broker on the devices' host that went away with them, loopback in any spelling", () => {
+    const failures = [
+      { id: 2, device: "energy-meter", at: 3_000 },
+      { id: 3, device: "heat-pump", at: 6_000 }
+    ]
+    const [withBroker] = sharedCauses(failures, onLoopback, {
+      host: brokerHostOf("mqtt://localhost:1883"),
+      disconnects: [{ id: 1, at: 0 }]
+    })
+    expect(withBroker).toEqual({
+      ids: [2, 3],
+      devices: ["energy-meter", "heat-pump"],
+      host: "127.0.0.1",
+      broker: 1,
+      line: "2 devices (energy-meter, heat-pump) and the broker stopped answering within 6 s of each other, all on 127.0.0.1: likely the host itself, its power or its network link"
+    })
+    // A broker elsewhere, or one lost long before, is no part of it.
+    for (const broker of [
+      { host: brokerHostOf("mqtt://10.0.0.9:1883"), disconnects: [{ id: 1, at: 0 }] },
+      { host: "localhost", disconnects: [{ id: 1, at: 3_000 - SHARED_CAUSE_WINDOW_MS - 1 }] }
+    ]) {
+      const [without] = sharedCauses(failures, onLoopback, broker)
+      expect(without).not.toHaveProperty("broker")
+      expect(without?.line).toMatch(/^2 devices \(energy-meter, heat-pump\) stopped answering within 3 s/)
+    }
+    // Without one host for the devices, the broker is not said to share it.
+    expect(
+      sharedCauses(failures, () => undefined, { host: "localhost", disconnects: [{ id: 1, at: 0 }] })[0]
+    ).not.toHaveProperty("broker")
+  })
+})
+
+describe("sameHost", () => {
+  it("takes every loopback spelling for this machine, and other hosts by name", () => {
+    expect(sameHost("localhost", "127.0.0.1")).toBe(true)
+    expect(sameHost("::1", "127.0.0.1")).toBe(true)
+    expect(sameHost("[::1]", "LOCALHOST")).toBe(true)
+    expect(sameHost("127.0.1.1", "localhost")).toBe(true)
+    expect(sameHost("10.0.0.5", "10.0.0.5")).toBe(true)
+    expect(sameHost("10.0.0.5", "127.0.0.1")).toBe(false)
+    expect(isLoopback("broker.local")).toBe(false)
+  })
+
+  it("reads the broker's host from its URL", () => {
+    expect(brokerHostOf("mqtt://localhost:1883")).toBe("localhost")
+    expect(brokerHostOf("mqtts://[::1]:8883")).toBe("::1")
+    expect(brokerHostOf("not a url")).toBeUndefined()
   })
 })
 

@@ -22,6 +22,17 @@ describe("waveformValue", () => {
     expect(waveformValue(ramp, 30_000)).toBeCloseTo(20)
     expect(waveformValue(ramp, 60_000)).toBeCloseTo(10)
   })
+  it("keeps three decimals, as a device reports them, not a double's float noise", () => {
+    const inverter = { ...base, min: 0, max: 8 }
+    for (let timeMs = 0; timeMs < 60_000; timeMs += 777) {
+      for (const waveform of ["sine", "ramp"] as const) {
+        const value = waveformValue({ ...inverter, waveform }, timeMs)
+        expect(String(value).split(".")[1]?.length ?? 0).toBeLessThanOrEqual(3)
+      }
+    }
+    // 8 * (0.5 + 0.5 * sin(2π * 4 / 60)) is 5.62694…, published as 5.627.
+    expect(waveformValue(inverter, 4_000)).toBe(5.627)
+  })
   it("constant stays at min", () => {
     expect(waveformValue({ ...base, waveform: "constant" }, 12_345)).toBe(10)
   })

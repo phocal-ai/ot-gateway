@@ -1,6 +1,6 @@
 /** `status` and `events`: what they print, in local clock time, and the exit code `status` gives. */
 import { describe, expect, it } from "@effect/vitest"
-import type { EventLog, GatewayStatus, Protocol } from "@ot-gateway/api"
+import type { DeviceStatus, EventLog, GatewayStatus, Protocol } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { TestConsole } from "effect/testing"
 import { localTime } from "../src/Output.ts"
@@ -11,9 +11,11 @@ import {
   eventsWithin,
   formatEvents,
   formatStatus,
+  intervalText,
   isHealthy,
   parseSince,
   recentIncidents,
+  sharedCause,
   statusJson,
   statusOutcome,
   unhealthySummary
@@ -101,14 +103,21 @@ describe("status", () => {
     expect(ago(-500)).toBe("0 s")
   })
 
+  it("says how often a device is read, as the page does", () => {
+    expect(intervalText(5_000)).toBe("5 s")
+    expect(intervalText(1_500)).toBe("1.5 s")
+    expect(intervalText(500)).toBe("500 ms")
+    expect(intervalText(60_000)).toBe("1 min")
+  })
+
   it("prints the gateway, its broker and one aligned line per device, with since when and why it fails", () => {
     expect(formatStatus(failingGateway).split("\n")).toEqual([
       "s/b gateway main, up 2 h (since 10:19:30)",
       "  broker mqtt://localhost:1883: NOT CONNECTED since 12:18:00 (90 s): could not connect: connection refused by 127.0.0.1:1883, 4 failed connect(s) since start",
       "  buffer: 42 of 1000 message(s) waiting, 3 DROPPED since start",
       "  2 device(s), 1 failing",
-      "    ventilation-1  ok       simulator, 0 point(s), read 2 s ago",
-      "    energy-meter   failing  modbus-tcp, 4 point(s), failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020",
+      "    ventilation-1  ok       simulator, 0 point(s) every 2 s, read 2 s ago",
+      "    energy-meter   failing  modbus-tcp, 4 point(s) every 5 s, failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020",
       "                   check: Is the device switched on and its Modbus TCP server (or its network module) enabled?",
       "",
       "  What changed and when: ot-gateway events",
@@ -119,7 +128,7 @@ describe("status", () => {
   it("says since when the broker is connected, and ends without a hint when all is well", () => {
     const lines = formatStatus(healthyGateway).split("\n")
     expect(lines[1]).toBe("  broker mqtt://localhost:1883: connected since 10:19:31, 2 failed connect(s) since start")
-    expect(lines.at(-1)).toBe("    ventilation-1  ok       simulator, 0 point(s), read 2 s ago")
+    expect(lines.at(-1)).toBe("    ventilation-1  ok       simulator, 0 point(s) every 2 s, read 2 s ago")
     expect(isHealthy(healthyGateway)).toBe(true)
     expect(unhealthySummary(healthyGateway)).toBeUndefined()
   })
@@ -149,7 +158,7 @@ describe("status", () => {
     Effect.gen(function* () {
       const lines = formatStatus(startingGateway).split("\n")
       expect(lines[1]).toBe("  broker mqtt://localhost:1883: connecting (started 2 s ago)")
-      expect(lines.at(-1)).toBe("    energy-meter   starting modbus-tcp, 4 point(s), no read yet")
+      expect(lines.at(-1)).toBe("    energy-meter   starting modbus-tcp, 4 point(s) every 5 s, no read yet")
       yield* statusOutcome(true)(startingGateway)
       const [report] = (yield* TestConsole.logLines).map((line): unknown => JSON.parse(String(line)))
       expect(report).toMatchObject({ ok: true, broker: { connected: false, failedConnects: 0 } })
@@ -173,7 +182,7 @@ describe("status", () => {
     }
     expect(formatStatus(late).split("\n").slice(3, 5)).toEqual([
       "  1 device(s), 1 late",
-      "    ventilation-1  late     simulator, 0 point(s), no read for 40 s, though not failing: a polling cycle is stuck"
+      "    ventilation-1  late     simulator, 0 point(s) every 2 s, no read for 40 s, though not failing: a polling cycle is stuck"
     ])
     expect(unhealthySummary(late)).toBe("1 of 1 device(s) late")
   })
@@ -468,6 +477,7 @@ describe("status after an outage, and its alarms", () => {
       from: at(12, 10, 0),
       to: at(12, 13, 0),
       brokerOutages: 1,
+      brokerOutageSpans: [{ from: at(12, 10, 5) }],
       outages: [
         { device: "energy-meter", detectedAt: at(12, 10, 0) },
         { device: "pv", detectedAt: at(12, 12, 30) },
@@ -515,7 +525,7 @@ describe("status after an outage, and its alarms", () => {
         "    pump/trip   off since 12:19:00, raised 7 time(s) in the last 15 min (flapping, on 30 s, off 30 s, 6 time(s) in 6 min: its changes are counted, not listed, until it keeps still for 5 min)",
         "                check: A fixed on/off rhythm like this usually points to the input's wiring or contact, or a device cycling, more than a real trip.",
         "  2 device(s) failed in the last 15 min (12:10:00–12:13:00: energy-meter, pv), see ot-gateway events",
-        "  broker connection lost 1 time(s) in the last 15 min, see ot-gateway events"
+        "  broker connection lost once in the last 15 min (since 12:10:05), see ot-gateway events"
       ])
       expect(statusJson(withAlarms, recentIncidents(recentLog))).toMatchObject({
         ok: true,
@@ -535,6 +545,8 @@ describe("status after an outage, and its alarms", () => {
 
 /** Two Modbus devices behind one gateway or one IP: the same host. */
 const onOneHost = () => ({ protocol: "modbus-tcp" as const, host: "10.0.1.20" })
+/** Every device on this machine, as `pnpm bench` serves them. */
+const onLoopback = () => ({ protocol: "modbus-tcp" as const, host: "127.0.0.1" })
 
 describe("outages as the data saw them, counters and a shared host", () => {
   // The walk's outage: last read 12:10:00, called failing 12:10:08, answering again 12:12:20.
@@ -690,5 +702,86 @@ describe("outages as the data saw them, counters and a shared host", () => {
       "                   check: Others on 10.0.1.20 failed with it: check the host itself, its power and its network link before its config."
     )
     expect(lines.at(-1)).toContain("both on 10.0.1.20: likely the host itself, its power or its network link")
+  })
+})
+
+/** A Modbus device on this machine, failing since `failingSince`. */
+const failingOn = (id: string, failingSince: number): DeviceStatus => ({
+  id,
+  protocol: "modbus-tcp",
+  status: "failing",
+  pollIntervalMs: 5000,
+  reason: "timeout",
+  failingSince,
+  host: "127.0.0.1",
+  pointCount: 3,
+  points: []
+})
+
+describe("one outage of devices and broker on this machine", () => {
+  const outage: EventLog = {
+    now,
+    capacity: 500,
+    dropped: 0,
+    events: [
+      { id: 1, at: at(12, 0, 0), type: "gateway-started", version: "1.0.0", devices: 2 },
+      { id: 2, at: at(12, 15, 35), type: "broker-disconnected", error: "connection closed by the peer" },
+      { id: 3, at: at(12, 15, 36), type: "device-failing", device: "energy-meter", reason: "timeout", error: "" },
+      { id: 4, at: at(12, 15, 41), type: "device-failing", device: "heat-pump", reason: "timeout", error: "" },
+      { id: 5, at: at(12, 17, 43), type: "broker-connected", downMs: 128_000, retries: 14 }
+    ]
+  }
+
+  it("names the broker with the devices when it sits on their host, loopback in any spelling", () => {
+    const lines = formatEvents(outage, Number.POSITIVE_INFINITY, "all", onLoopback, { brokerHost: "localhost" })
+    expect(lines).toContain(
+      "2 devices (energy-meter, heat-pump) and the broker stopped answering within 6 s of each other, all on 127.0.0.1: likely the host itself, its power or its network link"
+    )
+    // A broker elsewhere is not part of it.
+    expect(formatEvents(outage, Number.POSITIVE_INFINITY, "all", onLoopback, { brokerHost: "10.0.0.9" })).toContain(
+      "2 devices (energy-meter, heat-pump) stopped answering within 5 s of each other, both on 127.0.0.1"
+    )
+    expect(adviseEvents(outage.events, onLoopback, "::1").get(3)?.sharedCause).toContain("and the broker")
+  })
+
+  it("says so in status while both are away", () => {
+    const devices = [failingOn("energy-meter", at(12, 18, 20)), failingOn("heat-pump", at(12, 18, 22))]
+    const broker = { ...failingGateway.broker, disconnectedSince: at(12, 18, 15) }
+    expect(sharedCause(devices, broker)).toBe(
+      "all 2 devices and the broker stopped answering within 7 s of each other, all on 127.0.0.1: likely the host itself, its power or its network link"
+    )
+    expect(sharedCause(devices)).toContain("all 2 devices stopped answering within 2 s of each other, both on")
+    expect(formatStatus({ ...failingGateway, broker, devices })).toContain("all 2 devices and the broker")
+  })
+
+  it("reads the failed connects as the outage's retries, one problem, not two", () => {
+    const recent = recentIncidents(outage)
+    expect(recent.brokerOutageSpans).toEqual([
+      { from: at(12, 15, 35), to: at(12, 17, 43), downMs: 128_000, retries: 14 }
+    ])
+    const back: GatewayStatus = {
+      ...healthyGateway,
+      broker: { ...healthyGateway.broker, connectedAt: at(12, 17, 43), connects: 2, failedConnects: 14 }
+    }
+    const lines = formatStatus(back, recent).split("\n")
+    expect(lines[1]).toBe("  broker mqtt://localhost:1883: connected since 12:17:43")
+    expect(lines).toContain(
+      "  broker connection lost once in the last 15 min (12:15:35–12:17:43, 2 min 8 s, 14 retries), see ot-gateway events"
+    )
+    // Failed connects the outages listed do not cover are still counted on the broker's line.
+    const more = { ...back, broker: { ...back.broker, failedConnects: 20 } }
+    expect(formatStatus(more, recent).split("\n")[1]).toBe(
+      "  broker mqtt://localhost:1883: connected since 12:17:43, 20 failed connect(s) since start"
+    )
+  })
+
+  it("says when the window reaches back past the gateway's start", () => {
+    const started = at(12, 11, 30)
+    const lines = formatEvents(outage, 20 * 60_000, "20m", onLoopback, { started }).split("\n")
+    expect(lines[0]).toBe("the gateway started at 12:11:30: nothing is known before that")
+    expect(formatEvents(outage, 5 * 60_000, "5m", onLoopback, { started })).not.toContain("gateway started at")
+    expect(formatEvents({ ...outage, events: [] }, 20 * 60_000, "20m", onLoopback, { started })).toBe(
+      "the gateway started at 12:11:30: nothing is known before that\nno events in the last 20m"
+    )
   })
 })
