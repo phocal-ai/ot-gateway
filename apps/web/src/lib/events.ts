@@ -3,6 +3,7 @@
  * asking only for the ones after the last it has. Pure, so it is tested without a browser.
  */
 import {
+  type BrokerOutages,
   COUNTER_RATE_FACTOR,
   counterShareText,
   drainedParts,
@@ -242,15 +243,25 @@ export const hostsOf = (
 
 const failuresIn = (events: ReadonlyArray<PageEvent>) => events.filter((event) => event.type === "device-failing")
 
+/** The broker as the shared causes weigh it: its host (`brokerHostOf` of its URL) and when the gateway lost it. */
+const brokerIn = (events: ReadonlyArray<PageEvent>, brokerHost: string | undefined): BrokerOutages => ({
+  host: brokerHost,
+  disconnects: events.filter((event) => event.type === "broker-disconnected")
+})
+
 /**
  * The shared-cause line ("2 devices (boiler, meter) stopped answering within 6 s of each other: likely a shared
- * cause …", or "…, both on 10.0.1.20: likely the host itself …" when `hostOf` puts them all on one host) by the id
- * of the newest failure of its group, which a newest-first list shows first: the same groups and words as
- * `ot-gateway events`.
+ * cause …", or "…, both on 10.0.1.20: likely the host itself …" when `hostOf` puts them all on one host, and "… and
+ * the broker …" when the broker at `brokerHost` sits on that host and went away with them) by the id of the newest
+ * failure of its group, which a newest-first list shows first: the same groups and words as `ot-gateway events`.
  */
-export const sharedCauseNotes = (events: ReadonlyArray<PageEvent>, hostOf?: HostOf): ReadonlyMap<number, string> =>
+export const sharedCauseNotes = (
+  events: ReadonlyArray<PageEvent>,
+  hostOf?: HostOf,
+  brokerHost?: string
+): ReadonlyMap<number, string> =>
   new Map(
-    sharedCauses(failuresIn(events), hostOf).flatMap((shared) => {
+    sharedCauses(failuresIn(events), hostOf, brokerIn(events, brokerHost)).flatMap((shared) => {
       const newest = shared.ids.at(-1)
       return newest === undefined ? [] : [[newest, shared.line] as const]
     })
@@ -266,11 +277,18 @@ export interface SharedFailure {
  * What the hints know about a device's failure from the events: whether its latest `device-failing` is one of several
  * that stopped answering together, on one host when they share it, and that group's line for the device sheet.
  */
-export const sharedFailure = (events: ReadonlyArray<PageEvent>, device: string, hostOf?: HostOf): SharedFailure => {
+export const sharedFailure = (
+  events: ReadonlyArray<PageEvent>,
+  device: string,
+  hostOf?: HostOf,
+  brokerHost?: string
+): SharedFailure => {
   const failures = failuresIn(events)
   const latest = failures.findLast((event) => event.device === device)
   const group =
-    latest === undefined ? undefined : sharedCauses(failures, hostOf).find((shared) => shared.ids.includes(latest.id))
+    latest === undefined
+      ? undefined
+      : sharedCauses(failures, hostOf, brokerIn(events, brokerHost)).find((shared) => shared.ids.includes(latest.id))
   if (group === undefined) return { context: {} }
   return {
     context: { sharedCause: true, ...(group.host === undefined ? {} : { sharedHost: group.host }) },

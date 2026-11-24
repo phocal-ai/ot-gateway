@@ -14,7 +14,14 @@
  * only once it is late or failing. The page renders when data arrives and
  * at no other time.
  */
-import type { DeviceStatus, GatewayStatus, HostStatus, PointInfo, PointReading } from "@ot-gateway/api"
+import {
+  brokerHostOf,
+  type DeviceStatus,
+  type GatewayStatus,
+  type HostStatus,
+  type PointInfo,
+  type PointReading
+} from "@ot-gateway/api"
 import Link from "next/link"
 import { useSearchParams } from "next/navigation"
 import { type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react"
@@ -937,7 +944,8 @@ const RecentEvents = ({
   const events = known?.since === status.since ? known.events : []
   const happened = events.some(isIncident)
   const hostOf = useMemo(() => hostsOf(status.devices), [status.devices])
-  const shared = useMemo(() => sharedCauseNotes(events, hostOf), [events, hostOf])
+  const brokerHost = brokerHostOf(status.broker.url)
+  const shared = useMemo(() => sharedCauseNotes(events, hostOf, brokerHost), [events, hostOf, brokerHost])
   const open = () => {
     const transition = morphFrom(card.current)
     setMorph(transition.morph)
@@ -1095,7 +1103,7 @@ const StatusView = () => {
           events={known?.since === status.since ? deviceEvents(known.events, device.id) : []}
           shared={
             known?.since === status.since
-              ? sharedFailure(known.events, device.id, hostsOf(status.devices))
+              ? sharedFailure(known.events, device.id, hostsOf(status.devices), brokerHostOf(status.broker.url))
               : { context: {} }
           }
           morph={morph}

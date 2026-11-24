@@ -5,7 +5,7 @@
  * `--url` asks elsewhere; the config, when one was named, still says which gateway is expected.
  */
 import type { GatewayConfig, StatusSettings } from "@ot-gateway/core"
-import { Effect, FileSystem, Schema } from "effect"
+import { Console, Effect, FileSystem, Schema } from "effect"
 import { defaultConfigPath } from "./Import.ts"
 import { loadConfig } from "./LoadConfig.ts"
 
@@ -31,6 +31,23 @@ export class NoStatusPage extends Schema.TaggedError<NoStatusPage>()("NoStatusPa
   path: Schema.String,
   message: Schema.String
 }) {}
+
+/** The config was named twice, as an argument and as `--config`, and the two differ. */
+export class TwoConfigs extends Schema.TaggedError<TwoConfigs>()("TwoConfigs", {
+  message: Schema.String
+}) {}
+
+/**
+ * The config `status`, `events`, `history` and `messages` were given: the positional argument or `--config`, which
+ * mean the same; naming two different ones is a mistake.
+ */
+export const chooseConfig = (
+  positional: string | undefined,
+  flag: string | undefined
+): Effect.Effect<string | undefined, TwoConfigs> =>
+  positional !== undefined && flag !== undefined && positional !== flag
+    ? Effect.fail(new TwoConfigs({ message: `two configs: ${positional} and --config ${flag}; name one` }))
+    : Effect.succeed(positional ?? flag)
 
 /** Another gateway than the config's answered: its report would describe the wrong building. */
 export class GatewayMismatch extends Schema.TaggedError<GatewayMismatch>()("GatewayMismatch", {
@@ -61,7 +78,8 @@ export const targetOf = (path: string, config: GatewayConfig, url: string | unde
 
 /**
  * The gateway to ask: `config` when named; else `--url` alone when given; else `ot-gateway.json` in this folder
- * when there is one; else `DEFAULT_STATUS_URL`, with nobody expected.
+ * when there is one; else `DEFAULT_STATUS_URL`, with nobody expected, and a line on stderr says so: the help says
+ * these commands ask the gateway of `./ot-gateway.json`, so asking elsewhere without one is not left unsaid.
  */
 export const resolveTarget = Effect.fn("resolveTarget")(function* (options: {
   readonly config?: string | undefined
@@ -71,7 +89,10 @@ export const resolveTarget = Effect.fn("resolveTarget")(function* (options: {
   if (options.config === undefined) {
     if (options.url !== undefined) return { url: options.url } satisfies GatewayTarget
     const here = yield* fs.exists(defaultConfigPath).pipe(Effect.orElseSucceed(() => false))
-    if (!here) return { url: DEFAULT_STATUS_URL } satisfies GatewayTarget
+    if (!here) {
+      yield* Console.error(`no ./${defaultConfigPath}: asking ${DEFAULT_STATUS_URL}`)
+      return { url: DEFAULT_STATUS_URL } satisfies GatewayTarget
+    }
   }
   const path = options.config ?? defaultConfigPath
   const config = yield* loadConfig(path)

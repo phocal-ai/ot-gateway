@@ -38,6 +38,61 @@ export const sharedCauseLine = (who: string, spreadMs: number, host?: string, co
     ? `${who} stopped answering within ${roughDuration(spreadMs)} of each other: likely a shared cause (power, a switch, the gateway's own network)`
     : `${who} stopped answering within ${roughDuration(spreadMs)} of each other, ${count === 2 ? "both" : "all"} on ${host}: likely the host itself, its power or its network link`
 
+/** `host` without IPv6 brackets, in lower case: `[::1]` and `::1` are one host, as `LocalHost` and `localhost`. */
+const bareHost = (host: string) =>
+  host
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, "$1")
+
+/** Whether `host` is this machine's loopback: `localhost` (and `*.localhost`), 127.0.0.0/8 or `::1`. */
+export const isLoopback = (host: string) => {
+  const bare = bareHost(host)
+  return (
+    bare === "localhost" ||
+    bare.endsWith(".localhost") ||
+    /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(bare) ||
+    bare === "::1" ||
+    bare === "0:0:0:0:0:0:0:1"
+  )
+}
+
+/** Whether two hosts are the same machine: equal names, or both loopback (`localhost`, `127.0.0.1`, `::1`). */
+export const sameHost = (left: string, right: string) =>
+  bareHost(left) === bareHost(right) || (isLoopback(left) && isLoopback(right))
+
+/** The host of a broker URL (`mqtt://localhost:1883` is `localhost`); undefined when it does not parse. */
+export const brokerHostOf = (url: string): string | undefined => {
+  if (!URL.canParse(url)) return undefined
+  const host = bareHost(new URL(url).hostname)
+  return host === "" ? undefined : host
+}
+
+/**
+ * The broker as `sharedCauses` weighs it: its host (from `brokerHostOf`), and when the gateway lost it (the
+ * `broker-disconnected` events, id and Unix ms). A broker on the devices' host that went away with them is part of
+ * the same cause.
+ */
+export interface BrokerOutages {
+  readonly host: string | undefined
+  readonly disconnects: ReadonlyArray<{ readonly id: number; readonly at: number }>
+}
+
+/**
+ * The time the broker went away with devices that started failing at `first`, when it sits on their `host`: within
+ * `SHARED_CAUSE_WINDOW_MS` of the first of them, either way, as a broker drops at once and a device is called failing
+ * only after its timeouts. Undefined when it did not, or sits elsewhere.
+ */
+export const brokerWith = <A extends { readonly at: number }>(
+  first: number,
+  host: string | undefined,
+  brokerHost: string | undefined,
+  disconnects: ReadonlyArray<A>
+): A | undefined =>
+  host === undefined || brokerHost === undefined || !sameHost(host, brokerHost)
+    ? undefined
+    : disconnects.find((disconnect) => Math.abs(disconnect.at - first) <= SHARED_CAUSE_WINDOW_MS)
+
 /** The one host all of `devices` sit on, by `hostOf`; undefined when one has none or they differ. */
 export const commonHost = (
   devices: ReadonlyArray<string>,
@@ -61,20 +116,27 @@ export interface SharedCause {
   readonly ids: ReadonlyArray<number>
   /** Each device once, in the order it failed. */
   readonly devices: ReadonlyArray<string>
-  /** `2 devices (boiler, meter) stopped answering within 6 s of each other: …`. */
+  /**
+   * `2 devices (boiler, meter) stopped answering within 6 s of each other: …`, or `2 devices (…) and the broker …,
+   * all on 127.0.0.1: …` when the broker sits on their host and went away with them.
+   */
   readonly line: string
   /** The one host every device of the group sits on, when `hostOf` knows it. */
   readonly host?: string
+  /** The `broker-disconnected` event's id, when the broker sits on the devices' host and went away with them. */
+  readonly broker?: number
 }
 
 /**
  * The shared causes among `failures` (oldest first): consecutive failures within `SHARED_CAUSE_WINDOW_MS` of the
  * first of a group form it, and a group of one device (that failed twice, say) is none. With `hostOf`, a group whose
- * devices all sit on one host says so.
+ * devices all sit on one host says so; with `broker`, a broker on that same host (loopback in every spelling is one
+ * host) that went away within the window joins the group's line.
  */
 export const sharedCauses = (
   failures: ReadonlyArray<DeviceFailure>,
-  hostOf: (device: string) => string | undefined = () => undefined
+  hostOf: (device: string) => string | undefined = () => undefined,
+  broker?: BrokerOutages
 ): ReadonlyArray<SharedCause> => {
   const found: Array<SharedCause> = []
   let index = 0
@@ -90,13 +152,17 @@ export const sharedCauses = (
     const group = failures.slice(index, end)
     const devices = [...new Set(group.map((failure) => failure.device))]
     if (devices.length >= 2) {
-      const spread = (group.at(-1)?.at ?? first.at) - first.at
       const host = commonHost(devices, hostOf)
+      const lost = brokerWith(first.at, host, broker?.host, broker?.disconnects ?? [])
+      const times = [...group.map((failure) => failure.at), ...(lost === undefined ? [] : [lost.at])]
+      const spread = Math.max(...times) - Math.min(...times)
+      const who = `${devices.length} devices (${devices.join(", ")})${lost === undefined ? "" : " and the broker"}`
       found.push({
         ids: group.map((failure) => failure.id),
         devices,
-        line: sharedCauseLine(`${devices.length} devices (${devices.join(", ")})`, spread, host, devices.length),
-        ...(host === undefined ? {} : { host })
+        line: sharedCauseLine(who, spread, host, devices.length + (lost === undefined ? 0 : 1)),
+        ...(host === undefined ? {} : { host }),
+        ...(lost === undefined ? {} : { broker: lost.id })
       })
     }
     index = end

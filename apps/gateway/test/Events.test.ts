@@ -78,7 +78,7 @@ describe("GatewayEvents", () => {
       const events = yield* GatewayEvents
       events.brokerConnected(0)
       yield* TestClock.adjust("1 minute")
-      events.brokerDisconnected("connection closed by the peer")
+      events.brokerDisconnected("connection closed by the peer", true)
       for (let redial = 0; redial < 20; redial++) {
         yield* TestClock.adjust("15 seconds")
         events.brokerDisconnected("could not connect: connection refused by 10.0.0.5:1883")
@@ -87,7 +87,8 @@ describe("GatewayEvents", () => {
       const { events: kept } = yield* events.log()
       expect(kept.map((event) => event.type)).toEqual(["broker-connected", "broker-disconnected", "broker-connected"])
       expect(kept[1]).toMatchObject({ error: "connection closed by the peer", at: 60_000 })
-      expect(kept[2]).toMatchObject({ downMs: 300_000, buffered: 1_204 })
+      // The redials that failed are the outage's retries, not a second problem.
+      expect(kept[2]).toMatchObject({ downMs: 300_000, retries: 20, buffered: 1_204 })
     }).pipe(Effect.provide(gatewayEventsLayer()))
   )
 

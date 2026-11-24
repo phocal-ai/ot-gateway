@@ -146,9 +146,13 @@ describe("the gateway to ask", () => {
       expect(named.url).toBe("http://127.0.0.1:18080")
       expect(named).toMatchObject({ expected: { site: "plant-1" } })
       // The tests run in apps/gateway, which has no ot-gateway.json.
+      expect(yield* TestConsole.errorLines).toEqual([])
       expect(yield* resolveTarget({})).toEqual({ url: DEFAULT_STATUS_URL })
+      // The help says these commands ask the gateway of ./ot-gateway.json: asking elsewhere is said, on stderr.
+      expect(yield* TestConsole.errorLines).toEqual([`no ./ot-gateway.json: asking ${DEFAULT_STATUS_URL}`])
       expect(yield* resolveTarget({ url: "http://pi:8080" })).toEqual({ url: "http://pi:8080" })
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+      expect(yield* TestConsole.errorLines).toHaveLength(1)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 
   it.effect("refuses another gateway than the config's, naming both, and takes any without a config", () =>

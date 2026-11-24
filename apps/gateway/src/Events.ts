@@ -46,8 +46,11 @@ export interface GatewayEventsShape {
   readonly deviceChanged: (change: HealthChange) => void
   /** Connected to the broker, with the messages waiting in the buffer then (undefined without a buffer). */
   readonly brokerConnected: (buffered: number | undefined) => void
-  /** The broker connection was lost or a dial failed. Only the first of an outage is an event. */
-  readonly brokerDisconnected: (error: string) => void
+  /**
+   * The broker connection was lost (`lost`) or a dial failed. Only the first of an outage is an event; the dials that
+   * fail during it are counted, and the `broker-connected` that ends it says how many (`retries`).
+   */
+  readonly brokerDisconnected: (error: string, lost?: boolean) => void
   /**
    * The buffer delivered its backlog, when known: `delivered` messages since the broker came back, the `buffered`
    * ones waiting then and the `queued` ones stored behind them.
@@ -93,6 +96,8 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
   const answered = new Set<Slug>()
   /** Since when the broker has been away, on the monotonic clock; undefined while connected or before the first dial. */
   let brokerDownSince: number | undefined
+  /** Dials that failed during the broker outage under way. */
+  let brokerRetries = 0
 
   const record = (event: EventInput) => {
     total++
@@ -136,14 +141,18 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
     },
     brokerConnected: (buffered) => {
       const downMs = brokerDownSince === undefined ? undefined : monotonicMs() - brokerDownSince
+      const retries = downMs === undefined ? undefined : brokerRetries
       brokerDownSince = undefined
+      brokerRetries = 0
       record({
         type: "broker-connected",
         ...(downMs === undefined ? {} : { downMs }),
+        ...(retries === undefined ? {} : { retries }),
         ...(buffered === undefined ? {} : { buffered })
       })
     },
-    brokerDisconnected: (error) => {
+    brokerDisconnected: (error, lost = false) => {
+      if (!lost) brokerRetries++
       if (brokerDownSince !== undefined) return
       brokerDownSince = monotonicMs()
       record({ type: "broker-disconnected", error })

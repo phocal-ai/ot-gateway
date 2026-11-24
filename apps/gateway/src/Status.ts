@@ -329,7 +329,8 @@ export const makeStatusState = (
                       writable: point.writable,
                       ...(point.unit === undefined ? {} : { unit: point.unit }),
                       ...(last === undefined ? {} : { value: last.value, ts: last.ts }),
-                      ...(point.alarmWhen === undefined ? {} : { alarmWhen: point.alarmWhen }),
+                      // The tracker's polarity: `alarmWhen`, or the semantics' (pointAlarmWhen in Alarms.ts).
+                      ...(alarm === undefined ? {} : { alarmWhen: alarm.alarmWhen }),
                       ...(alarm?.active === undefined ? {} : { alarmActive: alarm.active })
                     }
                   })

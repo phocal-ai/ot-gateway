@@ -3,40 +3,34 @@
  * unchanged (a COV point), and which few points a device row on the Status tab shows. Pure, so it is tested without
  * a browser.
  */
-import type { DeviceStatus, PointInfo, PointReading } from "@ot-gateway/api"
+import {
+  type AlarmFields,
+  type AlarmPolarity,
+  type DeviceStatus,
+  effectiveAlarmWhen,
+  isAlarmActive,
+  type PointInfo,
+  type PointReading
+} from "@ot-gateway/api"
 import { type LivePoint, pointKey } from "./points"
 import { clockTime, freshness, lateAfterMs } from "./status"
 
-/** What makes a point an alarm: its config's `alarmWhen`, or its semantics. */
-type AlarmFields = Pick<PointInfo, "brick" | "haystack" | "alarmWhen">
-
 /**
- * When a point's alarm is active, or `undefined` for a point that is no alarm. The config's `alarmWhen` wins (a points
- * list's `alarm` column); otherwise what the config says it means: a Brick class with `Alarm` in it (`Alarm`,
- * `Smoke_Detection_Alarm`) or the Haystack tag `alarm`, active when on.
+ * When a point's alarm is active, or `undefined` for a point that is no alarm: the gateway's own rule
+ * (`effectiveAlarmWhen` in @ot-gateway/api), so the page and `ot-gateway status` agree on which points are alarms.
  */
-export const alarmWhen = (point: AlarmFields): "on" | "off" | undefined => {
-  if (point.alarmWhen !== undefined) return point.alarmWhen
-  const bySemantics = (point.brick?.includes("Alarm") ?? false) || (point.haystack ?? []).includes("alarm")
-  return bySemantics ? "on" : undefined
-}
+export const alarmWhen = (point: AlarmFields): AlarmPolarity | undefined => effectiveAlarmWhen(point)
 
 /** Whether a point is an alarm: its value is then a condition someone should see. */
-export const isAlarm = (point: AlarmFields) => alarmWhen(point) !== undefined
+export const isAlarm = (point: AlarmFields) => effectiveAlarmWhen(point) !== undefined
 
-/**
- * Whether an alarm point's value says the alarm is active. `on` (the default): `true`, or a number other than 0 (a
- * flag read as a register). `off`: `false` or 0, as a normally-closed contact reads on a fault.
- */
-export const alarmOn = (value: number | boolean | undefined, when: "on" | "off" = "on") => {
-  if (value === undefined) return false
-  const on = value === true || (typeof value === "number" && value !== 0)
-  return when === "on" ? on : !on
-}
+/** Whether an alarm point's value says the alarm is active (`isAlarmActive`), never before its first read. */
+export const alarmOn = (value: number | boolean | undefined, when: AlarmPolarity = "on") =>
+  value !== undefined && isAlarmActive(when, value)
 
 /** An alarm point that is active. */
 export const alarmActive = (point: AlarmFields, value: number | boolean | undefined) => {
-  const when = alarmWhen(point)
+  const when = effectiveAlarmWhen(point)
   return when !== undefined && alarmOn(value, when)
 }
 

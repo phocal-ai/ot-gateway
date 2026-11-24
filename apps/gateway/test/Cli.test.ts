@@ -366,4 +366,21 @@ describe("the config argument", () => {
       yield* refuseConfigAsPayload(`${dir}/missing.json`)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
+
+  it.effect("takes the config of status, events, history and messages as the argument or as --config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const dir = yield* fs.makeTempDirectoryScoped()
+      const missing = `${dir}/missing.json`
+      for (const command of [["status"], ["events"], ["history", "meter/power"], ["messages"]]) {
+        // The config is read either way: a missing one is named, not passed over for the default address.
+        const viaFlag = yield* Effect.flip(runCli([...command, "--config", missing]))
+        expect(viaFlag.message).toContain(missing)
+        const viaArgument = yield* Effect.flip(runCli([...command, missing]))
+        expect(viaArgument.message).toBe(viaFlag.message)
+        const twice = yield* Effect.flip(runCli([...command, missing, "--config", `${dir}/other.json`]))
+        expect(twice.message).toBe(`two configs: ${missing} and --config ${dir}/other.json; name one`)
+      }
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
 })
