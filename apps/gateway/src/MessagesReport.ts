@@ -4,9 +4,10 @@
  * `--since 10m` they cover the last minutes (`/api/messages/window`), as far back as the gateway keeps a count per
  * topic per minute (`MESSAGE_WINDOW_MINUTES`, an hour), in whole minutes. A point's `$meta` line shows its publish
  * mode, from the point catalog, instead of the JSON cut at 80 characters; `--json` has the whole payload and
- * `publish` on the point's topics.
+ * `publish` on the point's topics. A last line adds up the topics listed: values, `$meta`, health and all, and how
+ * many of them reached the broker (`totals` in `--json`).
  */
-import { MESSAGE_WINDOW_MINUTES, type MessageStatus } from "@ot-gateway/api"
+import { MESSAGE_WINDOW_MINUTES, type MessageStatus, type MessageTotals, messageTotals } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
@@ -69,6 +70,21 @@ export const formatMessages = (
   })
 }
 
+/**
+ * The topics listed added up: `  total  4 sent (3 values, 1 $meta, 0 health), 2 reached the broker (2 waiting or
+ * lost)`, with command results and other topics named only when there are some.
+ */
+export const formatTotals = (totals: MessageTotals) => {
+  const lost = totals.all - totals.delivered
+  const kinds = [
+    `${totals.values} value(s)`,
+    `${totals.meta} $meta`,
+    `${totals.health} health`,
+    ...(totals.other > 0 ? [`${totals.other} other`] : [])
+  ].join(", ")
+  return `  total: ${totals.all} sent (${kinds}), ${totals.delivered} reached the broker${lost > 0 ? ` (${lost} waiting or lost)` : ""}`
+}
+
 export interface MessagesOptions {
   readonly json?: boolean
   /** `--since` as typed (`10m`) and in ms, at most `MESSAGE_WINDOW_MINUTES`: the counts of that window only. */
@@ -100,6 +116,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const modes: PublishModes = new Map(catalog.points.map((point) => [point.topic, point.publish]))
   const prefix = `${status.site}/${status.building}/`
   const messages = selectMessages(answer.messages, prefix, selections)
+  const totals = messageTotals(messages)
   const gateway = { site: status.site, building: status.building, id: status.id }
   if (options.json === true) {
     return yield* printJson({
@@ -109,6 +126,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
       since: status.since,
       ...(answer.window === undefined ? {} : { window: answer.window }),
       droppedTopics: answer.droppedTopics,
+      totals,
       messages: messages.map((message) => {
         const mode = publishModeOf(message.topic, modes)
         return mode === undefined ? message : { ...message, publish: mode }
@@ -138,7 +156,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
                 ? "  nothing published yet"
                 : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
-        : formatMessages(messages, prefix, status.now, modes)),
+        : [...formatMessages(messages, prefix, status.now, modes), formatTotals(totals)]),
       ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
         ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]

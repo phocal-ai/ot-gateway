@@ -368,11 +368,18 @@ describe("history", () => {
     buckets: [{ t: at(12, 18, 30), min: 4, max: 5, avg: 4.5, count: 7 }]
   }
 
-  it("ends a gap at the gateway's start without claiming why, and labels the start's bucket with the start", () => {
+  it("ends a gap at the gateway's start without claiming why, and labels the start's bucket with its own start", () => {
     expect(formatSeries(power, justStarted, now, { since: started })).toEqual([
       "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
       "  12:09:30  no reads until the gateway started at 12:18:55",
-      "  12:18:55  avg 4.5 kW  min 4  max 5  (7 reads)"
+      "  12:18:30  avg 4.5 kW  min 4  max 5  (7 reads)"
+    ])
+    // A range that begins in the start's bucket has no gap to say it: the start gets a line of its own after it.
+    const fromStart = { ...justStarted, from: at(12, 18, 30) }
+    expect(formatSeries(power, fromStart, now, { since: started })).toEqual([
+      "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
+      "  12:18:30  avg 4.5 kW  min 4  max 5  (7 reads)",
+      "  12:18:55  the gateway started, inside the bucket above"
     ])
     expect(seriesJson(power, justStarted, { since: started }).gaps).toEqual([
       {
@@ -499,6 +506,62 @@ describe("history", () => {
         "  15:58:04  no reads for 2 min 5 s, until 16:00:09: energy-meter failing: no response within 3s"
       )
     }
+  })
+
+  // The meter down from 19:41:20 to 19:42:53 (93 s), read every 5 s: both minutes have reads, so no bucket is empty.
+  const shortDown = at(19, 41, 20)
+  const shortBack = at(19, 42, 53)
+  const shortOutage: HistorySeries = {
+    device: "energy-meter",
+    point: "active-power",
+    from: at(19, 40, 0),
+    to: at(19, 44, 0),
+    stepMs: 60_000,
+    resolution: "read",
+    live: true,
+    buckets: [
+      { t: at(19, 40, 0), min: 1, max: 1, avg: 1, count: 12, first: at(19, 40, 0), last: at(19, 40, 55) },
+      { t: at(19, 41, 0), min: 1, max: 1, avg: 1, count: 5, first: at(19, 41, 0), last: shortDown },
+      { t: at(19, 42, 0), min: 1, max: 1, avg: 1, count: 2, first: shortBack, last: at(19, 42, 58) },
+      { t: at(19, 43, 0), min: 1, max: 1, avg: 1, count: 12, first: at(19, 43, 3), last: at(19, 43, 58) }
+    ]
+  }
+  const shortFailure = [{ from: at(19, 41, 35), to: shortBack, error: "timed out", lastReadAt: shortDown }]
+
+  it("finds a gap between two buckets that both have reads, when the reads are more than a few polls apart", () => {
+    const context = { failures: shortFailure, readGapMs: 30_000 }
+    expect(seriesJson(power, shortOutage, context).gaps).toEqual([
+      {
+        from: shortDown,
+        to: shortBack,
+        emptyFrom: at(19, 42, 0),
+        emptyTo: at(19, 42, 0),
+        cause: { kind: "device-failing", since: at(19, 41, 35), error: "timed out" }
+      }
+    ])
+    expect(formatSeries(power, shortOutage, at(19, 44, 0), context)).toEqual([
+      "energy-meter/active-power (Active power, kW): 1 min buckets from every read",
+      "  19:40:00  avg 1 kW  min 1  max 1  (12 reads)",
+      "  19:41:00  avg 1 kW  min 1  max 1  (5 reads)",
+      "  19:41:20  no reads for 1 min 33 s, until 19:42:53: energy-meter failing: timed out",
+      "  19:42:00  avg 1 kW  min 1  max 1  (2 reads)",
+      "  19:43:00  avg 1 kW  min 1  max 1  (12 reads)"
+    ])
+    // Without the poll interval, or with reads closer than the threshold, there is none.
+    expect(seriesJson(power, shortOutage, { failures: shortFailure }).gaps).toEqual([])
+    expect(seriesJson(power, shortOutage, { failures: shortFailure, readGapMs: 120_000 }).gaps).toEqual([])
+  })
+
+  it("calls such a gap of a point on change of value an outage only where a failure overlaps it", () => {
+    const quiet = { cov: true, readGapMs: 30_000 }
+    expect(seriesJson(power, shortOutage, quiet).gaps).toEqual([])
+    expect(seriesJson(power, shortOutage, { ...quiet, failures: shortFailure }).gaps).toEqual([
+      expect.objectContaining({
+        from: shortDown,
+        to: shortBack,
+        cause: expect.objectContaining({ kind: "device-failing" })
+      })
+    ])
   })
 
   it("keeps a gap at the bucket edges when the gateway says nothing of when the reads came", () => {
@@ -763,6 +826,10 @@ describe("against a running status page", () => {
         expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
         // Its publish mode, from the point catalog, instead of the JSON cut short; and why the counts run since start.
         expect(report[2]).toMatch(/retained {2}publish: every read$/)
+        // The topics listed, added up.
+        expect(report[3]).toBe(
+          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (2 waiting or lost)"
+        )
         expect(report.at(-1)).toBe("  (since the gateway started; --since 10m counts the last minutes, up to 60m back)")
         // The last minutes only, over the window endpoint: the same counts here, all sent within this minute.
         yield* messagesReport(target, [{ device: "energy-meter", point: "active-power" }], {
@@ -772,16 +839,21 @@ describe("against a running status page", () => {
         const recent = String((yield* TestConsole.logLines).at(-1)).split("\n")
         expect(recent[0]).toMatch(/: messages per topic in the last 5m, since it started at /)
         expect(recent[1]).toMatch(/3 sent, 2 reached the broker/)
-        expect(recent).toHaveLength(3)
+        expect(recent[3]).toBe(
+          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (2 waiting or lost)"
+        )
+        expect(recent).toHaveLength(4)
         yield* messagesReport(target, [], { json: true, since: "5m", sinceMs: 300_000 })
         expect(JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")).toMatchObject({
-          window: { from: expect.any(Number), to: expect.any(Number) }
+          window: { from: expect.any(Number), to: expect.any(Number) },
+          totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2 }
         })
         yield* messagesReport(target, [], { json: true })
         const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
         expect(json).toMatchObject({
           ok: true,
           since: expect.any(Number),
+          totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2 },
           messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
         })
         yield* Fiber.interrupt(server)

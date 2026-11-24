@@ -280,14 +280,5 @@ export const formatBytes = (bytes: number) => {
   return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
 }
 
-/** What a topic under `site/building/` carries, by its shape (README, "Topics"). */
-export type TopicKind = "value" | "metadata" | "health" | "command result" | "other"
-
-export const topicKind = (topic: string): TopicKind => {
-  const parts = topic.split("/")
-  if (parts[2] === "$gateway" && parts[4] === "health") return "health"
-  if (parts.length === 4) return "value"
-  if (parts.length === 5 && parts[4] === "$meta") return "metadata"
-  if (parts.length === 6 && parts[4] === "$set" && parts[5] === "result") return "command result"
-  return "other"
-}
+/** What a topic under `site/building/` carries, by its shape (README, "Topics"); shared with `ot-gateway messages`. */
+export { type TopicKind, topicKind } from "@ot-gateway/api"

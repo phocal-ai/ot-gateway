@@ -433,13 +433,15 @@ describe("events", () => {
           point: "breaker",
           value: false,
           activeMs: 0,
-          afterOutage: true
+          afterOutage: true,
+          unknownMs: 93_000
         }
       ]
     }
     expect(formatEvents(answeredAgain, Number.POSITIVE_INFINITY, "all").split("\n")).toEqual([
-      "12:00:00  meter/breaker  alarm active when meter answered again (value true)",
-      "12:05:00  meter/breaker  alarm off when meter answered again (value false)"
+      // From a gateway that does not say how long the state was unknown.
+      "12:00:00  meter/breaker  alarm active when meter answered again (value true), unknown while its device had no data",
+      "12:05:00  meter/breaker  alarm off when meter answered again (value false), unknown during the 1 min 33 s without data"
     ])
   })
 })
@@ -637,6 +639,41 @@ describe("outages as the data saw them, counters and a shared host", () => {
     expect(formatEvents(jumped, Number.POSITIVE_INFINITY, "all")).toBe(
       "12:12:25  energy-meter/energy-total  counter jumped from 4270 to 12000 kWh in 2 min 25 s, more than 10× its fastest rise of the last hour (3.6 kWh/h): meter reset or replaced, or another device answering at its address?"
     )
+  })
+
+  it("says how much a counter rose against its reading when the gateway did not know its pace yet", () => {
+    const early: EventLog = {
+      ...outageLog,
+      events: [],
+      valueEvents: [
+        {
+          id: 1,
+          at: at(12, 12, 25),
+          type: "counter-jumped",
+          device: "energy-meter",
+          point: "energy-total",
+          unit: "KiloW-HR",
+          from: 12_055,
+          to: 24_936,
+          elapsedMs: 93_000
+        },
+        {
+          id: 2,
+          at: at(12, 13, 0),
+          type: "counter-jumped",
+          device: "energy-meter",
+          point: "energy-total",
+          unit: "KiloW-HR",
+          from: 24_936,
+          to: 30_000,
+          elapsedMs: 60_000
+        }
+      ]
+    }
+    expect(formatEvents(early, Number.POSITIVE_INFINITY, "all").split("\n")).toEqual([
+      "12:12:25  energy-meter/energy-total  counter jumped from 12055 to 24936 kWh: rose by 12881 kWh in 1 min 33 s, 1.1× its reading: meter reset or replaced, or another device answering at its address?",
+      "12:13:00  energy-meter/energy-total  counter jumped from 24936 to 30000 kWh: rose by 5064 kWh in 1 min, 20 % of its reading: meter reset or replaced, or another device answering at its address?"
+    ])
   })
 
   it("names the host two failing devices share, as the likelier cause than a switch", () => {

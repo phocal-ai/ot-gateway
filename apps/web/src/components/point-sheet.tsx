@@ -5,7 +5,7 @@
  * without closing it; Esc or a click beside it closes it. The list opens and closes it inside a view transition, in
  * which the panel (`point-sheet`) slides in and out.
  */
-import type { PointInfo } from "@ot-gateway/api"
+import { type PointInfo, readGapMs } from "@ot-gateway/api"
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useGatewayEvents } from "@/components/gateway-shell"
 import { HistoryChart } from "@/components/history-chart"
@@ -298,6 +298,7 @@ export const PointSheet = ({
                 cov={point.cov}
                 failures={failures}
                 label={pointTitle(point)}
+                readGapMs={device === undefined ? undefined : readGapMs(device.pollIntervalMs)}
                 startedAt={since}
                 series={history.series.series}
                 unit={point.unit}

@@ -15,6 +15,16 @@
  *   last hour; a counter is judged only once it has `COUNTER_MIN_RATES` such rates over at least 5 minutes. Across
  *   an outage the rule holds as it is: two minutes without reads allow ten times two minutes at the fastest rate.
  *   A jump does not count towards the fastest rate, so it cannot hide the next one.
+ * - **jumped before its pace is known**: until a counter is judged as above (the first 5 minutes after the gateway
+ *   starts or a point is added, or longer while its device fails), a rise within `COUNTER_EARLY_MAX_MS` (an hour) of
+ *   more than `COUNTER_EARLY_SHARE` (10 %) of the reading before it is a jump, when that reading is at least
+ *   `COUNTER_EARLY_MIN_READING_KWH` (100 kWh) and the rise is more than the minimum step. A reading is everything the
+ *   meter counted since it was installed: to add a tenth of it within an hour, the meter must have counted for less
+ *   than ten hours at that pace, so it was installed or reset today, which is worth a look anyway. A meter that is
+ *   that new reads little: the reading floor keeps one near 0 (a few kWh, where an hour of use is a large share) from
+ *   being flagged. After an hour without a read nothing is judged this way, as a young meter may have counted that
+ *   much. A daily counter (`today`, `daily`) is never judged this way: its reading is today's use, not the meter's
+ *   life. The event has no `usualPerHour` then. The rise counts towards no rate either.
  *
  * One event per episode: after an event, a point's further implausible reads are counted, not listed, until it has
  * read plausibly for `COUNTER_EPISODE_MS` (15 min). All counters together list at most `COUNTER_EVENTS_PER_GATEWAY`
@@ -23,7 +33,7 @@
  * Memory is fixed per counter point (two 60-slot arrays); a read of a point that is no counter costs one map lookup.
  * Durations run on the monotonic clock (NTP steps the wall clock of a Pi).
  */
-import { COUNTER_RATE_FACTOR, energyUnitInKwh } from "@ot-gateway/api"
+import { COUNTER_EARLY_SHARE, COUNTER_RATE_FACTOR, energyUnitInKwh } from "@ot-gateway/api"
 import { counterImplausible, type GatewayConfig, type HistorySink } from "@ot-gateway/core"
 import { type Clock, type Context, Effect, Metric } from "effect"
 import { makeWindowCount } from "./Alarms.ts"
@@ -42,6 +52,12 @@ export const COUNTER_MIN_INTERVAL_MS = 1000
 /** The smallest jump, in kWh and as a share of the reading. */
 export const COUNTER_MIN_STEP_KWH = 1
 export const COUNTER_MIN_STEP_SHARE = 0.001
+
+/** Before a counter is judged: the smallest reading, in kWh, whose rise by `COUNTER_EARLY_SHARE` is a jump. */
+export const COUNTER_EARLY_MIN_READING_KWH = 100
+
+/** Before a counter is judged: a rise over a longer time than this is not judged by its share of the reading. */
+export const COUNTER_EARLY_MAX_MS = 3_600_000
 
 /** After an event, a point's implausible reads are counted, not listed, until it reads plausibly this long. */
 export const COUNTER_EPISODE_MS = 15 * 60_000
@@ -177,6 +193,19 @@ export const makeCounterTracker = (clock: Clock.Clock, record: (event: ValueEven
             { type: "counter-jumped", ...subject, elapsedMs: elapsed, usualPerHour: highest * HOUR_MS },
             now
           )
+          return
+        }
+        // Before its pace is known: a rise that is a large share of a reading no new meter has.
+        const reading = Math.abs(last.value)
+        if (
+          !judged &&
+          !state.daily &&
+          elapsed <= COUNTER_EARLY_MAX_MS &&
+          reading >= COUNTER_EARLY_MIN_READING_KWH / state.perUnitKwh &&
+          rise > COUNTER_EARLY_SHARE * reading &&
+          rise > minimumStep
+        ) {
+          implausible(state, { type: "counter-jumped", ...subject, elapsedMs: elapsed }, now)
           return
         }
         state.rates.add(now, rise / elapsed)

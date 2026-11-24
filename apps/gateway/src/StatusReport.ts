@@ -14,6 +14,7 @@ import {
   type AlarmStatus,
   commonHost,
   COUNTER_RATE_FACTOR,
+  counterShareText,
   type DeviceStatus,
   type EventLog,
   flappingAlarmHint,
@@ -29,6 +30,7 @@ import {
   sharedCauseLine,
   sharedCauses,
   unitLabel,
+  unknownStateText,
   type ValueEvent,
   whatToCheck
 } from "@ot-gateway/api"
@@ -273,8 +275,11 @@ export const counterText = (event: ValueEvent) => {
   if (event.type === "counter-went-back")
     return `counter went back from ${counterStep(event)}: meter reset or replaced?`
   const unit = unitLabel(event.unit)
-  const usual = `${numberText(event.usualPerHour)}${unit === "" ? "" : ` ${unit}`}/h`
-  return `counter jumped from ${counterStep(event)} in ${preciseDuration(event.elapsedMs)}, more than ${COUNTER_RATE_FACTOR}× its fastest rise of the last hour (${usual}): meter reset or replaced, or another device answering at its address?`
+  const withUnit = (value: number) => `${numberText(value)}${unit === "" ? "" : ` ${unit}`}`
+  // Before the gateway knew the counter's pace: how much it rose, against the reading itself.
+  if (event.usualPerHour === undefined)
+    return `counter jumped from ${counterStep(event)}: rose by ${withUnit(event.to - event.from)} in ${preciseDuration(event.elapsedMs)}, ${counterShareText(event.from, event.to)}: meter reset or replaced, or another device answering at its address?`
+  return `counter jumped from ${counterStep(event)} in ${preciseDuration(event.elapsedMs)}, more than ${COUNTER_RATE_FACTOR}× its fastest rise of the last hour (${withUnit(event.usualPerHour)}/h): meter reset or replaced, or another device answering at its address?`
 }
 
 /**
@@ -630,11 +635,11 @@ const describeEvent = (event: AnyEvent, now: number) => {
       return event.first === true
         ? `alarm active at its first read (value ${valueText(event.value)})`
         : event.afterOutage === true
-          ? `alarm active when ${event.device} answered again (value ${valueText(event.value)})`
+          ? `alarm active when ${event.device} answered again (value ${valueText(event.value)}), ${unknownStateText(event.unknownMs)}`
           : `alarm raised (value ${valueText(event.value)})`
     case "alarm-cleared":
       return event.afterOutage === true
-        ? `alarm off when ${event.device} answered again (value ${valueText(event.value)})`
+        ? `alarm off when ${event.device} answered again (value ${valueText(event.value)}), ${unknownStateText(event.unknownMs)}`
         : `alarm cleared after ${preciseDuration(event.activeMs)} (value ${valueText(event.value)})`
     case "alarm-flapping":
       return `alarm raised ${event.raised} times in the last ${ago(ALARM_WINDOW_MS)}: flapping${event.pattern === undefined ? "" : ` (${patternText(event.pattern)})`}, so its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)}`

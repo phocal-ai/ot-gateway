@@ -293,6 +293,8 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     seenUntil: number
   ) => {
     const activeMs = seenUntil - state.changedAt
+    // From its last read before the outage to this one: what the state was then is not known.
+    const unknownMs = Math.max(0, now - seenUntil)
     state.active = active
     state.since = ts
     state.changedAt = now
@@ -300,14 +302,15 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
     activeCount += active ? 1 : -1
     updateGauge()
     const event: AlarmEventInput = active
-      ? { type: "alarm-raised", device: state.device, point: state.point, value, afterOutage: true }
+      ? { type: "alarm-raised", device: state.device, point: state.point, value, afterOutage: true, unknownMs }
       : {
           type: "alarm-cleared",
           device: state.device,
           point: state.point,
           value,
           activeMs: Math.max(0, activeMs),
-          afterOutage: true
+          afterOutage: true,
+          unknownMs
         }
     list(state, event, now, false)
   }

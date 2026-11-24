@@ -4,6 +4,7 @@
  */
 import {
   COUNTER_RATE_FACTOR,
+  counterShareText,
   type EventLog,
   type FailureContext,
   flappingAlarmHint,
@@ -11,6 +12,7 @@ import {
   preciseDuration,
   sharedCauses,
   unitLabel,
+  unknownStateText,
   type ValueEvent
 } from "@ot-gateway/api"
 import { formatNumber } from "./format"
@@ -86,8 +88,11 @@ const counterStep = (event: ValueEvent) => {
 export const counterChange = (event: ValueEvent) => {
   if (event.type === "counter-went-back") return `went back from ${counterStep(event)}: meter reset or replaced?`
   const unit = unitLabel(event.unit)
-  const usual = `${formatNumber(event.usualPerHour)}${unit === "" ? "" : ` ${unit}`}/h`
-  return `jumped from ${counterStep(event)} in ${preciseDuration(event.elapsedMs)}, more than ${COUNTER_RATE_FACTOR}× its fastest rise of the last hour (${usual}): meter reset or replaced, or another device answering at its address?`
+  const withUnit = (value: number) => `${formatNumber(value)}${unit === "" ? "" : ` ${unit}`}`
+  // Before the gateway knew the counter's pace: how much it rose, against the reading itself.
+  if (event.usualPerHour === undefined)
+    return `jumped from ${counterStep(event)}: rose by ${withUnit(event.to - event.from)} in ${preciseDuration(event.elapsedMs)}, ${counterShareText(event.from, event.to)}: meter reset or replaced, or another device answering at its address?`
+  return `jumped from ${counterStep(event)} in ${preciseDuration(event.elapsedMs)}, more than ${COUNTER_RATE_FACTOR}× its fastest rise of the last hour (${withUnit(event.usualPerHour)}/h): meter reset or replaced, or another device answering at its address?`
 }
 
 /** The point sheet's note on a counter event of its own point: "At 18:35:23 the counter went back from …". */
@@ -142,13 +147,13 @@ export const eventSentence = (event: PageEvent, names?: PointNames, now: number 
         event.first === true
           ? "Alarm active at its first read"
           : event.afterOutage === true
-            ? `Alarm active when ${event.device} answered again`
+            ? `Alarm active when ${event.device} answered again (${unknownStateText(event.unknownMs)})`
             : "Alarm raised"
       }: ${alarmSubject(event.device, event.point, names)}`
     case "alarm-cleared":
       return `${
         event.afterOutage === true
-          ? `Alarm off when ${event.device} answered again`
+          ? `Alarm off when ${event.device} answered again (${unknownStateText(event.unknownMs)})`
           : `Alarm cleared after ${duration(event.activeMs)}`
       }: ${alarmSubject(event.device, event.point, names)}`
     case "alarm-flapping":
