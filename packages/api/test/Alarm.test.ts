@@ -6,6 +6,7 @@ describe("effectiveAlarmWhen", () => {
   it("makes a point an alarm by its Brick class or its Haystack tag, active when on", () => {
     expect(effectiveAlarmWhen({ brick: "Alarm" })).toBe("on")
     expect(effectiveAlarmWhen({ brick: "Smoke_Detection_Alarm" })).toBe("on")
+    expect(effectiveAlarmWhen({ brick: "Alarm_Delay_Parameter" })).toBeUndefined()
     expect(effectiveAlarmWhen({ haystack: ["elec", "breaker", "alarm"] })).toBe("on")
   })
 

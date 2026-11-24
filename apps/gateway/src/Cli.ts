@@ -144,7 +144,7 @@ const alarmPointIds = (device: Device) =>
 
 /**
  * One device in `check --json` and `import --json`: `alarmPoints` are the alarm points (`alarmWhen`, a points list's
- * `alarm` column, or a Brick class with `Alarm` in it or the Haystack tag `alarm`), `covPoints` are the points asked for by change of value (BACnet
+ * `alarm` column, or a Brick class `Alarm` or `*_Alarm` or the Haystack tag `alarm`), `covPoints` are the points asked for by change of value (BACnet
  * present values with `cov` on), polled every `pollIntervalMs` while the device does not notify; the rest are polled.
  */
 export const deviceSummary = (device: Device) => ({

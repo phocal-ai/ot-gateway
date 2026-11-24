@@ -16,12 +16,16 @@ export interface AlarmFields {
 
 /**
  * When a point's alarm is active, or `undefined` for a point that is no alarm. The config's `alarmWhen` wins (a points
- * list's `alarm` column); otherwise what the config says the point means: a Brick class with `Alarm` in it (`Alarm`,
- * `Smoke_Detection_Alarm`) or the Haystack tag `alarm` make it an alarm, active when on.
+ * list's `alarm` column); otherwise what the config says the point means: the Brick class `Alarm` or one of its
+ * subclasses, whose names end in `_Alarm` (`Smoke_Detection_Alarm`), or the Haystack tag `alarm` make it an alarm,
+ * active when on. A class that only mentions alarms (`Alarm_Delay_Parameter`, a setting) is none.
  */
 export const effectiveAlarmWhen = (point: AlarmFields): AlarmPolarity | undefined => {
   if (point.alarmWhen !== undefined) return point.alarmWhen
-  const bySemantics = (point.brick?.includes("Alarm") ?? false) || (point.haystack?.includes("alarm") ?? false)
+  const brick = point.brick
+  const bySemantics =
+    (brick !== undefined && (brick === "Alarm" || brick.endsWith("_Alarm"))) ||
+    (point.haystack?.includes("alarm") ?? false)
   return bySemantics ? "on" : undefined
 }
 

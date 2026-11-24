@@ -1,6 +1,6 @@
 /**
  * Alarm points: the points a config marks with `alarmWhen` (a points list's `alarm` column), and the points its
- * semantics call alarms (a Brick class with `Alarm` in it, the Haystack tag `alarm`; active when on). That is
+ * semantics call alarms (the Brick class `Alarm` or one ending in `_Alarm`, the Haystack tag `alarm`; active when on). That is
  * `effectiveAlarmWhen` from @ot-gateway/api, the rule the status page uses too, so the page, `/api/status` and
  * `ot-gateway status` agree on which points are alarms. Every read of one goes through here, and a change of its
  * alarm (raised, cleared) becomes an event in the events ring (`/api/events`, `ot-gateway events`), a count in
