@@ -1,0 +1,141 @@
+{
+  "messages": [
+    {
+      "topic": "demo-site/building-a/$gateway/main/health",
+      "payload": "{\"status\":\"online\",\"since\":1795530496071,\"ts\":1795530736091,\"devices\":{\"pv-inverter\":{\"status\":\"ok\",\"lastSuccess\":1795530734435},\"energy-meter\":{\"status\":\"ok\",\"lastSuccess\":1795530731329},\"heat-pump\":{\"status\":\"ok\",\"lastSuccess\":1795530731243}},\"host\":{\"memoryBytes\":148946944,\"eventLoopLagMs\":15,\"clockSteps\":0,\"diskFreeBytes\":123143471104}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530736091,
+      "count": 4
+    },
+    {
+      "topic": "demo-site/building-a/energy-meter/active-power",
+      "payload": "{\"value\":59.459999084472656,\"ts\":1795530776365,\"unit\":\"unit:KiloW\"}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530776366,
+      "count": 57
+    },
+    {
+      "topic": "demo-site/building-a/energy-meter/active-power/$meta",
+      "payload": "{\"name\":\"Energy meter active power\",\"unit\":\"unit:KiloW\",\"writable\":false,\"publish\":{\"mode\":\"sample\"},\"semantics\":{\"brick\":\"Active_Power_Sensor\",\"haystack\":[\"elec\",\"power\",\"active\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496084,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/energy-meter/breaker-tripped",
+      "payload": "{\"value\":false,\"ts\":1795530776365}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530776366,
+      "count": 57
+    },
+    {
+      "topic": "demo-site/building-a/energy-meter/breaker-tripped/$meta",
+      "payload": "{\"name\":\"Main breaker tripped\",\"writable\":false,\"publish\":{\"mode\":\"sample\"},\"semantics\":{\"brick\":\"Alarm\",\"haystack\":[\"elec\",\"breaker\",\"alarm\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496084,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/energy-meter/energy",
+      "payload": "{\"value\":17205,\"ts\":1795530776365,\"unit\":\"unit:KiloW-HR\"}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530776366,
+      "count": 57
+    },
+    {
+      "topic": "demo-site/building-a/energy-meter/energy/$meta",
+      "payload": "{\"name\":\"Energy meter energy counter\",\"unit\":\"unit:KiloW-HR\",\"writable\":false,\"publish\":{\"mode\":\"sample\"},\"semantics\":{\"brick\":\"Energy_Sensor\",\"haystack\":[\"elec\",\"energy\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496084,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/heat-pump/compressor-running",
+      "payload": "{\"value\":true,\"ts\":1795530750345}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530750346,
+      "count": 13
+    },
+    {
+      "topic": "demo-site/building-a/heat-pump/compressor-running/$meta",
+      "payload": "{\"name\":\"Heat pump compressor running\",\"writable\":false,\"publish\":{\"mode\":\"sample\"},\"semantics\":{\"brick\":\"Run_Status\",\"haystack\":[\"compressor\",\"run\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496086,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/heat-pump/flow-temp",
+      "payload": "{\"value\":32.75,\"ts\":1795530779368,\"unit\":\"unit:DEG_C\"}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530779368,
+      "count": 211
+    },
+    {
+      "topic": "demo-site/building-a/heat-pump/flow-temp/$meta",
+      "payload": "{\"name\":\"Heat pump flow temperature\",\"unit\":\"unit:DEG_C\",\"writable\":false,\"publish\":{\"mode\":\"change\",\"deadband\":0.2},\"semantics\":{\"brick\":\"Leaving_Hot_Water_Temperature_Sensor\",\"haystack\":[\"leaving\",\"hot\",\"water\",\"temp\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496086,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/heat-pump/return-temp",
+      "payload": "{\"value\":26.33,\"ts\":1795530779369,\"unit\":\"unit:DEG_C\"}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530779369,
+      "count": 226
+    },
+    {
+      "topic": "demo-site/building-a/heat-pump/return-temp/$meta",
+      "payload": "{\"name\":\"Heat pump return temperature\",\"unit\":\"unit:DEG_C\",\"writable\":false,\"publish\":{\"mode\":\"change\",\"deadband\":0.2},\"semantics\":{\"brick\":\"Entering_Hot_Water_Temperature_Sensor\",\"haystack\":[\"entering\",\"hot\",\"water\",\"temp\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496086,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/pv-inverter/ac-power",
+      "payload": "{\"value\":3.364334829536359,\"ts\":1795530778476,\"unit\":\"unit:KiloW\"}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530778476,
+      "count": 133
+    },
+    {
+      "topic": "demo-site/building-a/pv-inverter/ac-power/$meta",
+      "payload": "{\"name\":\"PV inverter AC power\",\"unit\":\"unit:KiloW\",\"writable\":false,\"publish\":{\"mode\":\"change\",\"deadband\":0.1},\"semantics\":{\"brick\":\"Active_Power_Sensor\",\"haystack\":[\"pv\",\"elec\",\"power\",\"active\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496084,
+      "count": 1
+    },
+    {
+      "topic": "demo-site/building-a/pv-inverter/energy-today",
+      "payload": "{\"value\":19.492000023523964,\"ts\":1795530778476,\"unit\":\"unit:KiloW-HR\"}",
+      "truncated": false,
+      "retained": false,
+      "at": 1795530778477,
+      "count": 142
+    },
+    {
+      "topic": "demo-site/building-a/pv-inverter/energy-today/$meta",
+      "payload": "{\"name\":\"PV inverter energy today\",\"unit\":\"unit:KiloW-HR\",\"writable\":false,\"publish\":{\"mode\":\"sample\"},\"semantics\":{\"brick\":\"Energy_Sensor\",\"haystack\":[\"pv\",\"elec\",\"energy\",\"sensor\"]}}",
+      "truncated": false,
+      "retained": true,
+      "at": 1795530496084,
+      "count": 1
+    }
+  ],
+  "droppedTopics": 0
+}

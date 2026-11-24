@@ -1,0 +1,6 @@
+{
+  "readings": [
+    { "device": "energy-meter", "point": "active-power", "value": 59.459999084472656, "ts": 1795530776365 },
+    { "device": "pv-inverter", "point": "ac-power", "value": 3.364334829536359, "ts": 1795530778476 }
+  ]
+}

@@ -1,0 +1,139 @@
+{
+  "site": "demo-site",
+  "building": "building-a",
+  "id": "main",
+  "since": 1795530496071,
+  "now": 1795530779573,
+  "broker": {
+    "url": "mqtt://localhost:1883",
+    "connected": true,
+    "connectedAt": 1795530496088,
+    "connection": {
+      "protocolVersion": "5",
+      "maximumQoS": 1,
+      "retainAvailable": true,
+      "keepAliveSeconds": 30,
+      "receiveMaximum": 1000
+    },
+    "connects": 1,
+    "failedConnects": 0,
+    "published": 896,
+    "publishFailures": 0
+  },
+  "buffer": {
+    "path": "/data/ot-gateway-buffer.sqlite",
+    "rows": 0,
+    "maxRows": 1000000,
+    "dropped": 0,
+    "written": 0,
+    "delivered": 0,
+    "droppedBy": { "overflow": 0, "rejected": 0, "unreadable": 0, "undeliverable": 0, "lost": 0 },
+    "failures": 0,
+    "disabled": false
+  },
+  "host": {
+    "version": "v0.12.0",
+    "node": "24.15.0",
+    "memoryBytes": 149225472,
+    "heapBytes": 43725448,
+    "cpuPercent": 0.5,
+    "eventLoopLagMs": { "p99": 4, "max": 16 },
+    "clockSteps": 0,
+    "diskFreeBytes": 123130789888
+  },
+  "devices": [
+    {
+      "id": "pv-inverter",
+      "protocol": "simulator",
+      "status": "ok",
+      "pollIntervalMs": 2000,
+      "lastSuccess": 1795530778476,
+      "pointCount": 2,
+      "points": [
+        {
+          "id": "ac-power",
+          "name": "PV inverter AC power",
+          "unit": "unit:KiloW",
+          "writable": false,
+          "value": 3.364334829536359,
+          "ts": 1795530778476
+        },
+        {
+          "id": "energy-today",
+          "name": "PV inverter energy today",
+          "unit": "unit:KiloW-HR",
+          "writable": false,
+          "value": 19.492000023523964,
+          "ts": 1795530778476
+        }
+      ]
+    },
+    {
+      "id": "energy-meter",
+      "protocol": "modbus-tcp",
+      "status": "ok",
+      "pollIntervalMs": 5000,
+      "lastSuccess": 1795530776365,
+      "pointCount": 3,
+      "points": [
+        {
+          "id": "active-power",
+          "name": "Energy meter active power",
+          "unit": "unit:KiloW",
+          "writable": false,
+          "value": 59.459999084472656,
+          "ts": 1795530776365
+        },
+        {
+          "id": "energy",
+          "name": "Energy meter energy counter",
+          "unit": "unit:KiloW-HR",
+          "writable": false,
+          "value": 17205,
+          "ts": 1795530776365
+        },
+        {
+          "id": "breaker-tripped",
+          "name": "Main breaker tripped",
+          "writable": false,
+          "value": false,
+          "ts": 1795530776365
+        }
+      ]
+    },
+    {
+      "id": "heat-pump",
+      "protocol": "bacnet-ip",
+      "status": "ok",
+      "pollIntervalMs": 5000,
+      "lastSuccess": 1795530776264,
+      "pointCount": 3,
+      "points": [
+        {
+          "id": "flow-temp",
+          "name": "Heat pump flow temperature",
+          "unit": "unit:DEG_C",
+          "writable": false,
+          "value": 32.75,
+          "ts": 1795530779368
+        },
+        {
+          "id": "return-temp",
+          "name": "Heat pump return temperature",
+          "unit": "unit:DEG_C",
+          "writable": false,
+          "value": 26.33,
+          "ts": 1795530779369
+        },
+        {
+          "id": "compressor-running",
+          "name": "Heat pump compressor running",
+          "writable": false,
+          "value": true,
+          "ts": 1795530750345
+        }
+      ]
+    }
+  ],
+  "commands": []
+}

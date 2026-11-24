@@ -26,6 +26,7 @@ import { Effect, Result, Schema } from "effect"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import { printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { localTime, printResult } from "./Output.ts"
+import { servesEvents } from "./GatewayRelease.ts"
 import { askGateway, fetchGatewayEvents, fetchGatewayStatus } from "./StatusReport.ts"
 import { closestMatch } from "./Suggest.ts"
 import { withoutControls } from "./Discover.ts"
@@ -482,7 +483,10 @@ export const historyReport = Effect.fn("historyReport")(function* (
     ...(status.alarms ?? []).map((alarm) => `${alarm.device}/${alarm.point}`)
   ])
   // Why a device had no reads: its failures in this run, from the events the gateway keeps.
-  const failures = failuresOf(yield* fetchGatewayEvents(target.url))
+  // A gateway before v0.13 keeps no events: its gaps then go without a cause.
+  const failures = servesEvents(status)
+    ? failuresOf(yield* fetchGatewayEvents(target.url))
+    : new Map<string, ReadonlyArray<Failure>>()
   const range = { from: status.now - options.sinceMs, to: status.now }
   const buckets = options.buckets ?? DEFAULT_TEXT_BUCKETS
   const answers = yield* Effect.forEach(

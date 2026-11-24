@@ -879,7 +879,7 @@ describe("against a running status page", () => {
           messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
         })
         yield* Fiber.interrupt(server)
-      }).pipe(Effect.provide(TestConsole.layer)),
+      }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer])),
     // A real server and several HTTP round trips: a slow CI runner took over 5 s once.
     20_000
   )

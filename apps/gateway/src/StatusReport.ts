@@ -23,6 +23,7 @@ import {
   flappingAlarmHint,
   type GatewayEvent,
   type GatewayStatus,
+  type ValuesQueryInvalid,
   type Hint,
   isDeviceLate,
   OtGatewayApi,
@@ -37,13 +38,28 @@ import {
   type ValueEvent,
   whatToCheck
 } from "@ot-gateway/api"
-import { Console, type Duration, Effect, Schema } from "effect"
-import { FetchHttpClient } from "effect/http"
+import { Console, type Duration, Effect, type FileSystem, Schema } from "effect"
+import { FetchHttpClient, HttpClient, type HttpClientError } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { withoutControls } from "./Discover.ts"
+import {
+  EVENTS_RELEASE,
+  gatewayVersionOf,
+  GatewayTooOld,
+  servesEvents,
+  tooOldMessage,
+  versionName
+} from "./GatewayRelease.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import { jsonLineWithLocalTimes, printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { localTime, printResult } from "./Output.ts"
+import { readVersion } from "./Version.ts"
+
+/** Something answered at the gateway's address, in a form this CLI cannot read: most likely another release. */
+export class GatewayAnswerUnreadable extends Schema.TaggedError<GatewayAnswerUnreadable>()("GatewayAnswerUnreadable", {
+  url: Schema.String,
+  message: Schema.String
+}) {}
 
 export class GatewayUnreachable extends Schema.TaggedError<GatewayUnreachable>()("GatewayUnreachable", {
   url: Schema.String,
@@ -520,9 +536,14 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
     ...(shared === undefined ? [] : [`  ${shared}`]),
     ...alarmLines(status.alarms ?? [], status.now),
     ...(recent === undefined ? [] : recentLines(recent, status.now)),
+    ...(servesEvents(status) ? [] : [noEventsLine(status)]),
     ...(isHealthy(status) ? [] : ["", ...failingHint])
   ].join("\n")
 }
+
+/** Under the report of a gateway before v0.13, which keeps no events: why nothing recent is listed. */
+const noEventsLine = (status: Pick<GatewayStatus, "host">) =>
+  `  (this gateway runs ${versionName(gatewayVersionOf(status) ?? "an older release")}, which keeps no events: upgrade it to v${EVENTS_RELEASE.join(".")} or later to see what failed lately)`
 
 const unreachableAdvice =
   "Is the gateway running (ot-gateway run, or ot-gateway demo), with a status block in its config? Name its config, or pass --url for a page elsewhere."
@@ -530,18 +551,33 @@ const unreachableAdvice =
 const gatewayClient = (url: string) => HttpApiClient.make(OtGatewayApi, { baseUrl: url })
 
 /** A call to the gateway at `url` through the page's typed client, within three seconds. */
-export const askGateway = <A, E extends { readonly message: string }>(
+export const askGateway = <A>(
   url: string,
-  ask: (client: Effect.Success<ReturnType<typeof gatewayClient>>) => Effect.Effect<A, E>
-) =>
+  ask: (
+    client: Effect.Success<ReturnType<typeof gatewayClient>>
+  ) => Effect.Effect<A, HttpClientError.HttpClientError | Schema.SchemaError | ValuesQueryInvalid>
+): Effect.Effect<A, GatewayUnreachable | GatewayAnswerUnreadable, FileSystem.FileSystem> =>
   gatewayClient(url).pipe(
     Effect.flatMap(ask),
     Effect.provide(FetchHttpClient.layer),
-    // Unreachable, a timeout or an answer that does not decode: the same advice for each.
-    Effect.mapError(
-      (error) =>
-        new GatewayUnreachable({ url, message: `no gateway status at ${url} (${error.message}). ${unreachableAdvice}` })
-    ),
+    Effect.catchTags({
+      // Nothing answered, or not over HTTP: the gateway is not there.
+      HttpClientError: (error) =>
+        error.reason._tag === "TransportError" ||
+        error.reason._tag === "EncodeError" ||
+        error.reason._tag === "InvalidUrlError"
+          ? Effect.fail(
+              new GatewayUnreachable({
+                url,
+                message: `no gateway status at ${url} (${error.message}). ${unreachableAdvice}`
+              })
+            )
+          : unreadableAnswer(url, error.message),
+      // It answered, in a form this CLI does not read: another release, most likely.
+      SchemaError: (error) => unreadableAnswer(url, error.message),
+      // More points asked for than one request may name: the CLI asks in chunks, so a gateway with a lower limit.
+      ValuesQueryInvalid: (error) => unreadableAnswer(url, error.message)
+    }),
     Effect.timeoutOrElse({
       duration: "3 seconds",
       orElse: () =>
@@ -550,6 +586,56 @@ export const askGateway = <A, E extends { readonly message: string }>(
         )
     })
   )
+
+/** Just the version from a status answer of any release: `host.version`. */
+const VersionProbe = Schema.Struct({ host: Schema.Struct({ version: Schema.String }) })
+
+/**
+ * Something answered at `url` that this CLI cannot read: says which release the gateway runs when its status says
+ * (asked again, read for its version alone), and the CLI's, with the two ways out.
+ */
+const unreadableAnswer = Effect.fnUntraced(function* (
+  url: string,
+  detail: string
+): Effect.fn.Return<never, GatewayAnswerUnreadable, FileSystem.FileSystem> {
+  const cliVersion = versionName(yield* readVersion)
+  // A schema's issue spans lines (`Missing key\n  at ["configSince"]`): one line in an error message.
+  const reason = detail.replace(/\s+/g, " ")
+  // Only for the message: a gateway that does not say its version is named "another release".
+  const gatewayVersion = yield* HttpClient.get(`${url}/api/status?points=none`).pipe(
+    Effect.flatMap((response) => response.json),
+    Effect.flatMap(Schema.decodeUnknownEffect(VersionProbe)),
+    Effect.map((status) => versionName(status.host.version)),
+    Effect.provide(FetchHttpClient.layer),
+    Effect.timeout("2 seconds"),
+    Effect.orElseSucceed(() => undefined)
+  )
+  return yield* new GatewayAnswerUnreadable({
+    url,
+    message:
+      gatewayVersion === undefined
+        ? `the gateway at ${url} answers in a form this CLI (${cliVersion}) cannot read (${reason}). It may run another release: upgrade the gateway, or run the CLI at the gateway's version`
+        : `this gateway runs ${gatewayVersion}, the CLI is ${cliVersion}, and the CLI cannot read its answer (${reason}). Upgrade the gateway, or run the CLI at ${gatewayVersion}`
+  })
+})
+
+/**
+ * Fails with `GatewayTooOld` when the gateway of `status` serves no `/api/events` and `/api/messages/window` (before
+ * v0.13), naming both versions: `what` is the command that needs them.
+ */
+export const requireEvents = Effect.fnUntraced(function* (
+  target: GatewayTarget,
+  status: Pick<GatewayStatus, "host">,
+  what: string
+) {
+  const gatewayVersion = gatewayVersionOf(status)
+  if (gatewayVersion === undefined || servesEvents(status)) return
+  const cliVersion = yield* readVersion
+  return yield* new GatewayTooOld({
+    url: target.url,
+    message: tooOldMessage({ gatewayVersion, cliVersion, what, release: EVENTS_RELEASE })
+  })
+})
 
 /** The status from the gateway at `url`, within three seconds; `"none"` without each point's value. */
 export const fetchGatewayStatus = (url: string, points: "all" | "none" = "all") =>
@@ -621,6 +707,8 @@ export const fetchStatusFor = Effect.fnUntraced(function* (
 ) {
   const status = yield* fetchGatewayStatus(target.url, options.json === true ? "all" : "none")
   yield* checkIdentity(target, status)
+  // A gateway of the previous release serves no events: its report goes without what failed lately.
+  if (!servesEvents(status)) return { status, recent: undefined }
   const log = yield* fetchGatewayEvents(target.url)
   return { status, recent: recentIncidents(log) }
 })
@@ -868,6 +956,7 @@ export const FOLLOW_INTERVAL: Duration.Input = "2 seconds"
 export const eventsReport = Effect.fn("eventsReport")(function* (target: GatewayTarget, options: EventsOptions) {
   const status = yield* fetchGatewayStatus(target.url, "none")
   yield* checkIdentity(target, status)
+  yield* requireEvents(target, status, "events")
   const log = yield* fetchGatewayEvents(target.url)
   const gateway = { site: status.site, building: status.building, id: status.id }
   const deviceOf = devicesOf(status)
@@ -903,8 +992,8 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
  * interrupted. A gateway that stops answering is said once (on stderr), and once more when it is back; one that
  * restarted counts its ids from 1 again, which the gateway answers with everything it keeps, and that is said too.
  */
-export const followEvents = Effect.fn("followEvents")(function* (
-  fetchAfter: (after: number) => Effect.Effect<EventLog, GatewayUnreachable>,
+export const followEvents = Effect.fn("followEvents")(function* <R>(
+  fetchAfter: (after: number) => Effect.Effect<EventLog, GatewayUnreachable | GatewayAnswerUnreadable, R>,
   lastId: number,
   options: { readonly json: boolean; readonly deviceOf?: (device: string) => DeviceInfo | undefined }
 ) {
