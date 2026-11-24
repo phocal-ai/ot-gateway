@@ -26,6 +26,7 @@
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, CliOutput, Command, Flag } from "effect/cli"
+import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
@@ -137,13 +138,13 @@ export const configSummary = (config: GatewayConfig) => {
   }
 }
 
-/** The points of a device marked as alarms (`alarmWhen`), in config order. */
+/** The alarm points of a device (`alarmWhen`, or semantics that say alarm: `pointAlarmWhen`), in config order. */
 const alarmPointIds = (device: Device) =>
-  device.points.flatMap((point) => (point.alarmWhen === undefined ? [] : [point.id]))
+  device.points.flatMap((point) => (pointAlarmWhen(point) === undefined ? [] : [point.id]))
 
 /**
- * One device in `check --json` and `import --json`: `alarmPoints` are the points marked as alarms (`alarmWhen`, a
- * points list's `alarm` column), `covPoints` are the points asked for by change of value (BACnet
+ * One device in `check --json` and `import --json`: `alarmPoints` are the alarm points (`alarmWhen`, a points list's
+ * `alarm` column, or a Brick class with `Alarm` in it or the Haystack tag `alarm`), `covPoints` are the points asked for by change of value (BACnet
  * present values with `cov` on), polled every `pollIntervalMs` while the device does not notify; the rest are polled.
  */
 export const deviceSummary = (device: Device) => ({

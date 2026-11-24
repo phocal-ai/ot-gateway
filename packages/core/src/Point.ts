@@ -82,8 +82,9 @@ export const PointFields = {
   scaling: Schema.optionalKey(Scaling),
   semantics: Schema.optionalKey(Semantics),
   /**
-   * The point is an alarm, active when its value is on or off (`AlarmWhen`): published on `$meta`, and shown as an
-   * alarm on the status page whatever its semantics say.
+   * The point is an alarm, active when its value is on or off (`AlarmWhen`): published on `$meta`, and it wins over
+   * its semantics. Without it, semantics that say alarm make the point one, active when on (`effectiveAlarmWhen` in
+   * @ot-gateway/api, the gateway's and the status page's one rule).
    */
   alarmWhen: Schema.optionalKey(AlarmWhen)
 } as const

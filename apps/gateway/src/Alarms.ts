@@ -1,10 +1,14 @@
 /**
- * Alarm points: the points a config marks with `alarmWhen` (a points list's `alarm` column). Every read of one goes
- * through here, and a change of its alarm (raised, cleared) becomes an event in the events ring (`/api/events`,
- * `ot-gateway events`), a count in `ot_gateway_alarm_changes` and the state `/api/status` reports per alarm point.
+ * Alarm points: the points a config marks with `alarmWhen` (a points list's `alarm` column), and the points its
+ * semantics call alarms (a Brick class with `Alarm` in it, the Haystack tag `alarm`; active when on). That is
+ * `effectiveAlarmWhen` from @ot-gateway/api, the rule the status page uses too, so the page, `/api/status` and
+ * `ot-gateway status` agree on which points are alarms. Every read of one goes through here, and a change of its
+ * alarm (raised, cleared) becomes an event in the events ring (`/api/events`, `ot-gateway events`), a count in
+ * `ot_gateway_alarm_changes` and the state `/api/status` reports per alarm point.
  *
  * Changes, not states (`.claude/rules/edge.md`, budget): a read that leaves the alarm as it was costs two map
- * lookups and a look at the monotonic clock, nothing else. A read of a point that is no alarm costs one.
+ * lookups and a look at the monotonic clock, nothing else. A read of a point that is no alarm costs one. Which
+ * points are alarms, and their polarity, is resolved once per config in `configure`, never per read.
  *
  * A contact that chatters must not flood the 500-event ring, so the events are rate-limited, and nothing is lost
  * from the counts:
@@ -29,11 +33,19 @@
  * Windows and durations run on the monotonic clock (NTP steps the wall clock of a Pi); `since` is the read's own
  * wall-clock time, as every timestamp the gateway shows.
  */
-import { ALARM_SETTLE_MS, ALARM_WINDOW_MS, type AlarmPattern, type AlarmStatus } from "@ot-gateway/api"
+import {
+  ALARM_SETTLE_MS,
+  ALARM_WINDOW_MS,
+  type AlarmPattern,
+  type AlarmPolarity,
+  type AlarmStatus,
+  effectiveAlarmWhen,
+  isAlarmActive
+} from "@ot-gateway/api"
 import {
   alarmChanges,
   alarmsActive,
-  type AlarmWhen,
+  type AnyPoint,
   type GatewayConfig,
   type HealthChange,
   type HistorySink,
@@ -150,7 +162,8 @@ type ChangeRing = ReturnType<typeof makeChangeRing>
 interface AlarmPoint {
   readonly device: string
   readonly point: string
-  readonly alarmWhen: AlarmWhen
+  /** Its effective polarity (`pointAlarmWhen`), resolved once per config. */
+  readonly alarmWhen: AlarmPolarity
   /** Undefined before the first read. */
   active: boolean | undefined
   /** Wall-clock ms of the read that brought the current state. */
@@ -172,16 +185,21 @@ interface AlarmPoint {
   unlisted: number
 }
 
-/** Whether `value` makes the alarm of a point with `alarmWhen` active: on is true or not 0, off is false or 0. */
-export const isAlarmActive = (alarmWhen: AlarmWhen, value: PointValue) =>
-  alarmWhen === "on" ? value === true || (typeof value === "number" && value !== 0) : value === false || value === 0
+/**
+ * When a config point's alarm is active, or `undefined` for a point that is no alarm: its `alarmWhen`, else its
+ * semantics (`effectiveAlarmWhen`, the status page's rule as well).
+ */
+export const pointAlarmWhen = (point: AnyPoint): AlarmPolarity | undefined =>
+  effectiveAlarmWhen({ alarmWhen: point.alarmWhen, brick: point.semantics?.brick, haystack: point.semantics?.haystack })
+
+export { isAlarmActive }
 
 export interface AlarmTracker {
   /** Every read of every point; only alarm points do anything. */
   readonly sink: HistorySink
   /**
    * The alarm points of `config` from now on, with the metric attributes of the calling context. A point that keeps
-   * its `alarmWhen` keeps its state, so a config applied from the page does not raise its active alarms again.
+   * its polarity (`pointAlarmWhen`) keeps its state, so a config applied from the page does not raise its active alarms again.
    */
   readonly configure: (config: GatewayConfig) => Effect.Effect<void>
   /** Whether the running config has alarm points: without, the reads need not come here at all. */
@@ -369,15 +387,16 @@ export const makeAlarmTracker = (clock: Clock.Clock, record: (event: AlarmEventI
         const all: Array<AlarmPoint> = []
         for (const device of config.devices) {
           for (const point of device.points) {
-            if (point.alarmWhen === undefined) continue
+            const alarmWhen = pointAlarmWhen(point)
+            if (alarmWhen === undefined) continue
             const kept = previous.get(device.id)?.get(point.id)
             const state: AlarmPoint =
-              kept !== undefined && kept.alarmWhen === point.alarmWhen
+              kept !== undefined && kept.alarmWhen === alarmWhen
                 ? kept
                 : {
                     device: device.id,
                     point: point.id,
-                    alarmWhen: point.alarmWhen,
+                    alarmWhen,
                     active: undefined,
                     since: undefined,
                     changedAt: 0,
