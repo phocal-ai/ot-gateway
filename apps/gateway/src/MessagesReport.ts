@@ -19,6 +19,7 @@ import {
 import { Effect } from "effect"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
+import { EVENTS_RELEASE } from "./GatewayRelease.ts"
 import type { PointSelection } from "./HistoryReport.ts"
 import { localTime, printJson, printResult } from "./Output.ts"
 import { ago, askGateway, fetchGatewayStatus, requireEvents } from "./StatusReport.ts"
@@ -69,8 +70,7 @@ const reachedText = (delivered: number | undefined) =>
   delivered === undefined ? "" : `, ${delivered} reached the broker`
 
 /** Under the totals of a gateway before v0.13: why they do not say what reached the broker. */
-export const NOT_COUNTED_LINE =
-  "  (this gateway does not count what reached the broker: upgrade it to v0.13.0 or later for that)"
+export const NOT_COUNTED_LINE = `  (this gateway does not count what reached the broker: upgrade it to v${EVENTS_RELEASE.join(".")} or later for that)`
 
 /**
  * One line per topic, aligned: the topic below the site and building, the counts, when the last went, its payload;
