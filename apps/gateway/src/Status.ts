@@ -34,6 +34,7 @@ import type { SetupTools } from "./SetupTools.ts"
 import { configView } from "./ConfigView.ts"
 import { isLoopbackAddress, isReadOnlyMethod, writeRefusal } from "./EditGuard.ts"
 import { GatewayEvents } from "./Events.ts"
+import { GatewayLogs, makeGatewayLogs } from "./LogRing.ts"
 import type { HostSnapshot } from "./Host.ts"
 import { makeMessageMinutes } from "./MessageWindow.ts"
 import { pointCatalog } from "./PointCatalog.ts"
@@ -558,6 +559,8 @@ export const serveStatus = (
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem
     const events = yield* GatewayEvents
+    // A server without the gateway's ring (a test) answers with an empty one.
+    const logs = Option.getOrElse(yield* Effect.serviceOption(GatewayLogs), () => makeGatewayLogs())
     const webRoot = settings.webRoot ?? defaultWebRoot
     const hasWeb = yield* fs.exists(`${webRoot}/index.html`).pipe(Effect.orElseSucceed(() => false))
     const api = HttpApiBuilder.layer(OtGatewayApi).pipe(
@@ -572,6 +575,11 @@ export const serveStatus = (
             .handle("points", () => state.points)
             .handle("config", () => state.config)
             .handle("history", ({ query }) => history(query))
+        )
+      ),
+      Layer.provide(
+        HttpApiBuilder.group(OtGatewayApi, "logs", (handlers) =>
+          handlers.handle("logs", ({ query }) => logs.page(query))
         )
       ),
       Layer.provide(
