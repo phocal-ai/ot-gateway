@@ -33,6 +33,7 @@ export const TIME_KEYS: ReadonlySet<string> = new Set([
   "recoveredAt",
   "since",
   "started",
+  "stopped",
   "t",
   "to",
   "ts"

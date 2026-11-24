@@ -298,14 +298,16 @@ const changeLines = (series: HistorySeries, now: number) => {
   ]
 }
 
+/** A bucket that runs past the end of the range is still filling: the current minute, or the newest read bucket. */
+const isFilling = (bucket: HistoryBucket, series: HistorySeries) => bucket.t + series.stepMs > series.to
+
 /** The lines of one point's series: a heading, then a bucket or a gap per line, oldest first. */
 export const formatSeries = (point: PointInfo, series: HistorySeries, now: number, context: SeriesContext = {}) => {
   const unit = unitLabel(point.unit)
   const withUnit = (value: number) => (unit === "" ? number(value) : `${number(value)} ${unit}`)
   const source = series.resolution === "read" ? "from every read" : "from the per-minute rollups"
   const rows: Array<{ readonly t: number; readonly line: string }> = series.buckets.map((bucket) => {
-    // A minute rollup that runs past the end of the range is the current minute, still filling.
-    const soFar = bucket.t + series.stepMs > series.to ? "  so far" : ""
+    const soFar = isFilling(bucket, series) ? "  so far" : ""
     const values =
       context.boolean === true
         ? switchBucket(bucket)
@@ -329,7 +331,9 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     const failure = gaps.find((gap) => gap.cause?.kind === "device-failing")?.cause
     const why =
       start?.kind === "gateway-start"
-        ? ` before the gateway started at ${localTime(start.started, now)}${failing(failure)}`
+        ? failure?.kind === "device-failing"
+          ? `: none before the gateway started at ${localTime(start.started, now)}, and since ${localTime(failure.since, now)} ${point.device} is failing: ${withoutControls(failure.error)}`
+          : ` before the gateway started at ${localTime(start.started, now)}`
         : failing(failure)
     const quiet = context.cov === true && failure === undefined && start === undefined
     return [
@@ -390,6 +394,8 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
  */
 export const seriesJson = (point: PointInfo, series: HistorySeries, context: SeriesContext = {}) => ({
   ...series,
+  // The bucket still filling, as the text's `so far`: one that reaches past the end of the range.
+  buckets: series.buckets.map((bucket) => (isFilling(bucket, series) ? { ...bucket, soFar: true } : bucket)),
   name: point.name,
   ...(context.boolean === true ? { boolean: true } : {}),
   ...(point.unit === undefined ? {} : { unit: point.unit, unitLabel: unitLabel(point.unit) }),

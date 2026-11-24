@@ -47,6 +47,7 @@ import {
   Layer,
   Metric,
   Option,
+  Path,
   Queue,
   Result,
   Schedule,
@@ -60,6 +61,7 @@ import { type AlarmTracker, makeAlarmTracker } from "./Alarms.ts"
 import { type CounterTracker, makeCounterTracker } from "./Counters.ts"
 import { gatewayEventsLayer, GatewayEvents, type GatewayEventsShape } from "./Events.ts"
 import { keepRunning } from "./KeepRunning.ts"
+import { runFilePath, trackRun } from "./PreviousRun.ts"
 import { GatewayLogs, gatewayLogsLayer, knownSecrets } from "./LogRing.ts"
 import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways.ts"
 import { makeSetupTools } from "./SetupTools.ts"
@@ -672,7 +674,9 @@ export const runGateway = Effect.fn("Gateway")(
   function* (config: GatewayConfig, options: GatewayOptions = {}) {
     const startedAt = yield* Clock.currentTimeMillis
     const events = yield* GatewayEvents
-    events.started(options.version ?? "unknown", config.devices.length)
+    const runFile = runFilePath(config, yield* Path.Path)
+    const previousRun = runFile === undefined ? Option.none() : yield* trackRun(runFile, startedAt)
+    events.started(options.version ?? "unknown", config.devices.length, Option.getOrUndefined(previousRun))
     const logs = yield* GatewayLogs
     logs.addSecrets(yield* knownSecrets(config))
     const host =
@@ -793,6 +797,12 @@ export const runGateway = Effect.fn("Gateway")(
         setup
       ).pipe(Effect.forkScoped)
     }
+    // A stop (SIGTERM from Docker, Ctrl-C) interrupts the gateway: say so, so a clean stop is told from a crash.
+    yield* Effect.addFinalizer((exit) =>
+      Exit.hasInterrupts(exit)
+        ? Effect.log("OT Gateway stopping: closing the connections, the outbox and the history")
+        : Effect.void
+    )
     return yield* Effect.raceFirst(Deferred.await(shared.fatal), applyLoop)
   },
   Effect.scoped,

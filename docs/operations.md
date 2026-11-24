@@ -26,7 +26,7 @@ The first line installs the command, without `sudo` ([`packaging/ot-gateway`](..
 Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.13.1/packaging/compose.yaml
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.13.2/packaging/compose.yaml
 ```
 
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
@@ -50,7 +50,7 @@ Without Compose, the same as one command, from the same folder:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v "$PWD:/etc/ot-gateway" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.13.1 /etc/ot-gateway/ot-gateway.json
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.13.2 /etc/ot-gateway/ot-gateway.json
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -176,7 +176,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/config/file -H 'Origin: http://127.0.0.
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.13.1
+git fetch --tags && git checkout v0.13.2
 ```
 
 ```bash
@@ -192,7 +192,7 @@ Read the release notes for config changes first. If the new version refuses the 
 With Docker Compose, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
-sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.13.1/' compose.yaml && docker compose up -d
+sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.13.2/' compose.yaml && docker compose up -d
 ```
 
 ### From a `compose.yaml` that mounts the config file (v0.12.0 and earlier)
@@ -233,11 +233,11 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.13.1/packaging/compose.yaml && docker compose create
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.13.2/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
-docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.13.1 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.13.2 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
 ```
 
 ```bash
@@ -282,14 +282,14 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.13.1 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.13.2 --check /etc/ot-gateway/gateway.json
 ```
 
 Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.13.1 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.13.2 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -304,7 +304,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.13.1
+git fetch --tags && git checkout v0.13.2
 ```
 
 ```bash
@@ -406,7 +406,7 @@ An active alarm does not make `status` exit with 1: the exit code is about the g
 
 It exits with 1 while a device is `failing` or `late` (`ok`, but no read for three poll intervals and at least 15 s: a stuck polling cycle, as on the status page), or while the broker is not connected after a connection was lost or a connect failed or was refused. A gateway that has just started is fine: devices `starting`, and the broker line says `connecting (started 2 s ago)` until the first connect succeeds or fails. So a script or an agent can tell from the exit code alone. `--json` prints `/api/status` with `ok: true` or `false` and `alarmsActive` (how many alarm points are active now; `ok` does not count them) in front, each failing device with `hints`: `{meaning, checks}`, the checks most likely first, and `recent`: `{windowMs, failedDevices, from?, to?, brokerOutages, brokerOutageSpans?, outages?, counters?}` (`brokerOutageSpans`: `[{from, to?, downMs?, retries?}]`; `outages`: `[{device, lastReadAt?, detectedAt, recoveredAt?, noDataMs?}]`; `counters`: the counter events below). A device in `/api/status` has `host`, the host it is read at. In `/api/status`, a failing device has `failingSince`, `lastError` and `failures` (failed polling cycles in a row); `lastSuccess` is when the reads of the device's last successful polling cycle came back, and it stays while the device fails. A point's `ts` can be newer than `lastSuccess`: a change-of-value notification or a pushed value arrives between cycles. The broker has `disconnectedSince` and `lastError` while it is away, `connects` (successful connects) and `failedConnects` (dials that failed or were refused) since start. The broker line leaves `failedConnects` out when the outages listed below account for all of them (`retries` on their `broker-connected` events).
 
-`ot-gateway events` prints what changed, oldest first, in this machine's clock time, after the gateway's name. When `--since` reaches back past the gateway's start, a first line says so, `the gateway started at 14:12:02: nothing is known before that`, and `--json` has `gatewayStarted` and `from` (where the events it lists can begin: the window's start, or the gateway's when that is later):
+`ot-gateway events` prints what changed, oldest first, in this machine's clock time, after the gateway's name. The gateway's start also says how the run before it ended: `the run before stopped cleanly at 03:12:40` (a `docker compose down`, an upgrade, Ctrl-C), or `the run before (started 01:00:02) did not stop cleanly: a crash, a power cut or the OOM killer` (`previousRun` in `--json`, without `stopped` for the second). The gateway keeps this in `ot-gateway-run.json` next to its outbox (or its history), two small writes per run; a gateway with neither cannot tell. When `--since` reaches back past the gateway's start, a first line says so, `the gateway started at 14:12:02: nothing is known before that`, and `--json` has `gatewayStarted` and `from` (where the events it lists can begin: the window's start, or the gateway's when that is later):
 
 ```
 plant-1/hall-a gateway main at http://127.0.0.1:8080
@@ -434,16 +434,19 @@ An energy counter (a point in Wh, kWh, MWh, GWh or J) only rises. When a read is
 
 `--since 10m|2h|1d|all` sets how far back (default `1h`), `--json` gives `{ok, gateway, now, capacity, dropped, events}`, the counter events among them. `--follow` (`-f`) then prints each new event as it comes, asking every 2 s, until Ctrl-C or for `--seconds N`; with `--json` it prints one event per line (NDJSON). It says on stderr when the gateway stops answering and when it is back, and when the gateway restarted. The events are the gateway started, a device failing (with its reason and error) and ok again (with how long it was down), the broker lost (once per outage, with the error) and connected (with how long it was away and how many messages waited in the buffer at that moment), the buffer drained (with how many messages went from it to the broker since the broker came back, and how that adds up: the ones waiting at the reconnect, as its event said, plus the values queued behind them while they went out, less any the buffer dropped meanwhile; the status page says the same: `Buffer emptied: 1,266 values from it reached the broker, the 1,204 waiting at the reconnect and 62 read meanwhile`), and an alarm point raised (`first: true` when it was already active at its first read) or cleared (with how long it was active). An alarm point whose device stopped answering is not known to be off: when the device answers again, a value that differs from the last one before the outage is `alarm-raised` or `alarm-cleared` with `afterOutage: true` and `unknownMs`, how long its state was not seen (`alarm active when energy-meter answered again (value true), unknown during the 1 min 33 s without data`; the status page: `Alarm off when energy-meter answered again (unknown during the 1 min 33 s without data)`), the change happened at some time during the outage. Such a change is not counted as a raise or in the metrics, and the outage's time is left out of the alarm's on and off times. An alarm that chatters lists at most 6 changes in 15 minutes; then one `alarm-flapping` event says so, its changes are counted instead of listed, and `alarm-settled` comes once it has kept still for 5 minutes, with how many changes were counted. Both carry `pattern`, how it switched over its last 16 changes (`{onMs, offMs, raised, overMs}`: on and off on average, raised how often over how long), which the text gives as `on 30 s, off 30 s, 6 time(s) in 6 min`; `status` shows it for a point while it flaps. All alarm points together list at most 60 events in 15 minutes, so a building full of chattering contacts cannot push the device failures out of the 500 events kept. Every alarm change is counted in `ot_gateway_alarm_changes` (by `transition`, `raised` or `cleared`), and `ot_gateway_alarms_active` is how many are active. The gateway keeps the latest 500 in memory, so they start over on a restart, and serves them as `GET /api/events` (`?after=<id>` for the ones after an event already seen, every one when the gateway has not given that id yet because it restarted; `?since=<ms epoch>` for those at or after a time). Durations are measured on the monotonic clock, so a clock step does not bend them. For more, read the log: `ot-gateway logs --level warn` (below), or `docker compose logs gateway --since 10m` in the gateway's folder.
 
-`ot-gateway history <device>/<point>` prints what a point did lately, from the gateway's history (`history` in the config; [The history](#the-history)): the last 10 minutes in about 10 buckets unless `--since 30s|10m|2h|1d` and `--buckets N` say otherwise, the range ending at the gateway's own clock. A device alone gives all of its points, and several are comma-separated (`meter/power,meter/energy`). Each bucket is a line in local time with the average and its unit, the minimum, the maximum and the number of reads; a stretch without reads is a line of its own: `no reads until the gateway started at 14:44:26` for the stretch before this run's start (why reads stopped in an earlier run, the history alone cannot tell), however the buckets fall, and, while the device was failing in this run, its error from the events (`no reads for 2 min 5 s, until 14:48:01: energy-meter failing: connection refused`). A point read by change of value (BACnet COV, `cov` in `/api/points`) arrives only when it changes, so a stretch without a read while its device answered is a stretch without a change, and says so: it is no change, not missing reads (`no change for 12 min, until 14:40:00 (it comes on change of value)`). A gap of such a point that a device failure overlaps is split: from the device's last good read to its recovery it is the failure's (`no reads for 2 min 13 s, until 18:35:20: heat-pump failing: …`), before and after it is no change. A gap runs from the last read before it to the first read after it, to the second, whatever the bucket width. Two buckets that both have reads hide a short outage between them (93 s across a minute boundary leaves both minutes with reads), so reads more than three poll intervals and 30 s apart from one bucket's last read to the next one's first are a gap too, with the same causes (`19:41:20  no reads for 1 min 33 s, until 19:42:53: energy-meter failing: …`); for a point read by change of value only where a device failure overlaps it. An outage inside one bucket stays hidden, as a bucket keeps only its first and last read: `--buckets` or a shorter `--since` makes them finer. Every bucket is labelled with its start, a whole multiple of its width; the gateway's start is the `no reads until the gateway started at …` line, or, when the range begins in the bucket it fell in, a line of its own after that bucket (`14:44:26  the gateway started, inside the bucket above`). Buckets fall on whole multiples of their width (15 s buckets at :00, :15, :30, :45), so two runs a few seconds apart give the same buckets; the first bucket can begin up to one width before the range asked for. The gateway's answer holds every read up to its `now`, the ones not yet written to its file too (`live: true` in `/api/history`), so the newest bucket is complete; a gateway from before this answered from its file alone and printed `not written yet` for its newest half minute. `--json` gives each gap a `cause` when it is known: `{kind: "gateway-start", started}`, `{kind: "device-failing", since, error}` or, for a point read by change of value, `{kind: "no-change"}`. The heading says whether the buckets come from every read (buckets finer than a minute, or a range of an hour or less, that starts within the last day: so the default 10 minutes end at now) or from the per-minute rollups, where the current minute is marked `so far`:
+`ot-gateway history <device>/<point>` prints what a point did lately, from the gateway's history (`history` in the config; [The history](#the-history)): the last 10 minutes in about 10 buckets unless `--since 30s|10m|2h|1d` and `--buckets N` say otherwise, the range ending at the gateway's own clock. A device alone gives all of its points, and several are comma-separated (`meter/power,meter/energy`). Each bucket is a line in local time with the average and its unit, the minimum, the maximum and the number of reads; a stretch without reads is a line of its own: `no reads until the gateway started at 14:44:26` for the stretch before this run's start (why reads stopped in an earlier run, the history alone cannot tell), however the buckets fall, and, while the device was failing in this run, its error from the events (`no reads for 2 min 5 s, until 14:48:01: energy-meter failing: connection refused`). A point read by change of value (BACnet COV, `cov` in `/api/points`) arrives only when it changes, so a stretch without a read while its device answered is a stretch without a change, and says so: it is no change, not missing reads (`no change for 12 min, until 14:40:00 (it comes on change of value)`). A gap of such a point that a device failure overlaps is split: from the device's last good read to its recovery it is the failure's (`no reads for 2 min 13 s, until 18:35:20: heat-pump failing: …`), before and after it is no change. A gap runs from the last read before it to the first read after it, to the second, whatever the bucket width. Two buckets that both have reads hide a short outage between them (93 s across a minute boundary leaves both minutes with reads), so reads more than three poll intervals and 30 s apart from one bucket's last read to the next one's first are a gap too, with the same causes (`19:41:20  no reads for 1 min 33 s, until 19:42:53: energy-meter failing: …`); for a point read by change of value only where a device failure overlaps it. An outage inside one bucket stays hidden, as a bucket keeps only its first and last read: `--buckets` or a shorter `--since` makes them finer. Every bucket is labelled with its start, a whole multiple of its width; the gateway's start is the `no reads until the gateway started at …` line, or, when the range begins in the bucket it fell in, a line of its own after that bucket (`14:44:26  the gateway started, inside the bucket above`). Buckets fall on whole multiples of their width (15 s buckets at :00, :15, :30, :45), so two runs a few seconds apart give the same buckets; the first bucket can begin up to one width before the range asked for. The gateway's answer holds every read up to its `now`, the ones not yet written to its file too (`live: true` in `/api/history`), so the newest bucket is complete; a gateway from before this answered from its file alone and printed `not written yet` for its newest half minute. `--json` gives each gap a `cause` when it is known: `{kind: "gateway-start", started}`, `{kind: "device-failing", since, error}` or, for a point read by change of value, `{kind: "no-change"}`. The heading says whether the buckets come from every read (buckets finer than a minute, or a range of an hour or less, that starts within the last day: so the default 10 minutes end at now) or from the per-minute rollups. The newest bucket, when it reaches past the end of the range, is still filling and is marked `so far` (`soFar: true` in `--json`):
 
 ```
-plant-1/hall-a gateway main at http://127.0.0.1:8080: the last 2m, until 13:26:18
+plant-1/hall-a gateway main at http://127.0.0.1:8080: the last 2m, until 18:06:53
 
-pv-inverter/ac-power (PV inverter AC power, kW): 15 s buckets from every read
-  13:24:18  no reads for 1 min 15 s, until 13:25:33
-  13:25:33  avg 0.193 kW  min 0.021  max 0.53  (5 reads)
-  13:25:48  avg 2.53 kW  min 0.545  max 4.855  (7 reads)
-  13:26:03  avg 6.339 kW  min 5.651  max 6.992  (3 reads)
+pv-inverter/ac-power (PV inverter AC power, kW): 12 s buckets from every read
+  18:04:48  no reads until the gateway started at 18:05:57
+  18:05:48  avg 3.398 kW  min 2.984  max 3.812  (2 reads)
+  18:06:00  avg 6.379 kW  min 4.649  max 7.746  (6 reads)
+  18:06:12  avg 7.486 kW  min 6.485  max 7.993  (6 reads)
+  18:06:24  avg 3.76 kW  min 1.779  max 5.777  (6 reads)
+  18:06:36  avg 0.366 kW  min 0.009  max 1.135  (6 reads)
+  18:06:48  avg 0.698 kW  min 0.464  max 0.932  (2 reads)  so far
 ```
 
 A switch or an alarm (a point whose value is true or false) reads as on or off per bucket instead of an average, followed by when it changed, from every read (within the last day; the text lists the first 20, `--json` up to 200):

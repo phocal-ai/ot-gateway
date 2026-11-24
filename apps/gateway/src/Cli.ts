@@ -15,6 +15,7 @@
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
  *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started (--since: the last minutes)
  *   ot-gateway logs [config]        the running gateway's recent log lines: warnings and errors, and info
+ *   ot-gateway probe <host[:port]> <register>  read Modbus registers once and show every type and byte order they read as
  *
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
@@ -48,6 +49,7 @@ import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
+import { defaultCount, formatProbeReport, parseEndpoint, probe, ProbeError, probeJson, probeTables } from "./Probe.ts"
 import {
   BrokerCommandError,
   type BrokerReport,
@@ -107,6 +109,11 @@ export const describeConfig = (config: GatewayConfig) => {
     ...(config.history === undefined
       ? []
       : [`  history ${config.history.path}, per-minute values for ${config.history.retentionDays} days`]),
+    config.status === undefined
+      ? "  no status page"
+      : config.status.bindAddress === "0.0.0.0"
+        ? `  status page on port ${config.status.port} at every address of this machine (http://localhost:${config.status.port} here)`
+        : `  status page http://${config.status.bindAddress}:${config.status.port}`,
     ...config.devices.map((device) => {
       const where =
         device.protocol === "modbus-tcp"
@@ -355,6 +362,11 @@ const init = Command.make(
       Flag.withDefault(false)
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false)),
+    statusPort: Flag.Int("status-port").pipe(
+      Flag.withDescription("The status page's port (default 8080), when another program has 8080"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
     history: Flag.Boolean("history").pipe(
       Flag.withDescription(
         "Keep every read on the gateway for the status page's charts and /api/history (on; --no-history leaves it out)"
@@ -1048,6 +1060,86 @@ const logsCommand = Command.make(
   ])
 )
 
+const probeCommand = Command.make(
+  "probe",
+  {
+    device: Argument.String("device").pipe(
+      Argument.withDescription(
+        "The device's host or host:port, as the points list's host and port (port 502 when left out)"
+      )
+    ),
+    register: Argument.Int("register").pipe(
+      Argument.withDescription(
+        "The 0-based address, as the points list's register column: a datasheet's 40101 is usually holding register 100"
+      )
+    ),
+    unitId: Flag.Int("unit-id").pipe(
+      Flag.withAlias("u"),
+      Flag.withDescription("The Modbus unit (slave) id, as the points list's unit_id column"),
+      Flag.withDefault(1)
+    ),
+    table: Flag.Literals("table", probeTables).pipe(
+      Flag.withAlias("t"),
+      Flag.withDescription("The register table, as the points list's table column"),
+      Flag.withDefault("holding")
+    ),
+    count: Flag.Int("count").pipe(
+      Flag.withAlias("n"),
+      Flag.withDescription(
+        "How many registers (or bits) to read: 2 by default, enough for 32-bit types (1 for coil and discrete); 4 adds the 64-bit ones"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    json: jsonFlag
+  },
+  ({ device, register, unitId, table, count, json }) =>
+    Effect.gen(function* () {
+      const endpoint = parseEndpoint(device)
+      if (endpoint === undefined) {
+        return yield* new ProbeError({
+          reason: "usage",
+          message: `${device} is not a host or host:port (192.168.1.50, 192.168.1.50:5020, [fd00::5]:502)`
+        })
+      }
+      const report = yield* probe({
+        ...endpoint,
+        unitId,
+        table,
+        address: register,
+        count: count ?? defaultCount(table)
+      })
+      yield* json ? printJson(probeJson(report)) : printResult(formatProbeReport(report))
+    }).pipe(
+      Effect.tapError((error) =>
+        json
+          ? printJson({
+              ok: false,
+              device,
+              reason: error.reason,
+              ...(error.exceptionCode === undefined ? {} : { exceptionCode: error.exceptionCode }),
+              error: error.message
+            })
+          : Effect.void
+      )
+    )
+).pipe(
+  Command.withDescription(
+    "Read Modbus registers once and show every type and byte order they read as, with a points list row to copy; read-only, it never writes"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway probe 192.168.1.50 100", description: "Holding registers 100 and 101 of unit 1" },
+    {
+      command: "ot-gateway probe 192.168.1.50:5020 0 --table input --count 4",
+      description: "Input registers 0 to 3, 64-bit types too"
+    },
+    {
+      command: "ot-gateway probe 192.168.1.60 342 --unit-id 2 --json",
+      description: "A meter behind a Modbus gateway, as JSON"
+    }
+  ])
+)
+
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
@@ -1064,6 +1156,7 @@ export const rootDescription = [
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
   "    messages [<device/point>] --json how many messages went out per topic since start (--since 10m: lately), and reached the broker",
   "    logs --level warn --since 1h     the gateway's recent warnings and errors in detail, without docker logs (--follow, --json)",
+  "    probe <host> <register> --json   read Modbus registers once: every type and byte order, to pick the points list's type and byte_order",
   "  status, events, history, messages and logs ask the gateway of ./ot-gateway.json (or the config named, or --config) at its status port.",
   "  Their --json gives each time as Unix ms and as <key>Local, this machine's local time with its UTC offset (timeZone names the zone)."
 ].join("\n")
@@ -1086,7 +1179,8 @@ export const cli = Command.make("ot-gateway").pipe(
     eventsCommand,
     historyCommand,
     messagesCommand,
-    logsCommand
+    logsCommand,
+    probeCommand
   ])
 )
 
@@ -1106,7 +1200,8 @@ const subcommands = new Set([
   "events",
   "history",
   "messages",
-  "logs"
+  "logs",
+  "probe"
 ])
 
 /**

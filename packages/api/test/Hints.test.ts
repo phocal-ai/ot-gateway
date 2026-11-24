@@ -32,6 +32,18 @@ describe("whatToCheck", () => {
     expect(mentions(hint.checks, /busy/)).toBe(true)
   })
 
+  it("points Modbus exceptions 10 and 11 from a Modbus gateway at the unit id, not at the registers", () => {
+    const target = whatToCheck("modbus-tcp", "protocol", "device refused every read (gateway_target_failed_to_respond)")
+    expect(target.meaning).toMatch(/exception 11/)
+    expect(target.checks[0]).toMatch(/unit id/)
+    expect(mentions(target.checks, /register/)).toBe(false)
+    const path = whatToCheck("modbus-tcp", "protocol", "device refused every read (gateway_path_unavailable)")
+    expect(path.meaning).toMatch(/exception 10/)
+    expect(whatToCheck("modbus-tcp", "protocol", "device refused every read (illegal_data_address)").checks[0]).toMatch(
+      /register addresses/
+    )
+  })
+
   it("points a BACnet timeout at the device instance, and an unanswered Who-Is at broadcasts across subnets", () => {
     expect(
       mentions(whatToCheck("bacnet-ip", "timeout", "no answer from 10.0.0.5:47808").checks, /device instance/)

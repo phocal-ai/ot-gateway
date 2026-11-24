@@ -784,7 +784,13 @@ const describeEvent = (event: AnyEvent, now: number) => {
     case "counter-jumped":
       return counterText(event)
     case "gateway-started":
-      return `started (${event.version}, ${event.devices} device(s))`
+      return `started (${event.version}, ${event.devices} device(s))${
+        event.previousRun === undefined
+          ? ""
+          : event.previousRun.stopped === undefined
+            ? `; the run before (started ${localTime(event.previousRun.started, now)}) did not stop cleanly: a crash, a power cut or the OOM killer`
+            : `; the run before stopped cleanly at ${localTime(event.previousRun.stopped, now)}`
+      }`
     case "device-failing":
       return `failing: ${withoutControls(event.error === "" ? event.reason : event.error)}${event.lastReadAt === undefined ? "" : ` (last read ${localTime(event.lastReadAt, now)})`}`
     case "device-recovered":
