@@ -359,6 +359,11 @@ describe("history", () => {
       "  12:14:00  no reads for 1 min, until 12:15:00",
       "  12:15:00  4 kW  (1 read)  so far"
     ])
+    // --json marks the same bucket, and only it.
+    expect(seriesJson(power, running).buckets.map((bucket) => "soFar" in bucket)).toEqual([
+      ...series.buckets.map(() => false),
+      true
+    ])
   })
 
   // A gateway up 35 s: its start falls inside a bucket, which begins before it.
