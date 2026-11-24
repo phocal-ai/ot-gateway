@@ -366,7 +366,7 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     rows.push({ t: gap.from, line: `${localTime(gap.from, now)}  ${line}` })
   }
   // A start inside the range that no gap ends (the range began in the bucket it fell in): a line of its own after that
-  // bucket.s, in time order, so the bucket.s label is its start and still no line hides when the gateway began.
+  // bucket, in time order, so the bucket's label is its start and still no line hides when the gateway began.
   const since = context.since
   if (
     since !== undefined &&

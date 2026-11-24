@@ -751,7 +751,7 @@ export const COUNTER_RATE_FACTOR = 10
 export const COUNTER_EARLY_SHARE = 0.1
 
 /**
- * How much a jump without a known pace rose, against the reading before it: "half its reading", "1.1× its reading",
+ * How much a jump without a known pace rose, against the reading before it: "50 % of its reading", "1.1× its reading",
  * "12 % of its reading". The CLI and the status page say it alike.
  */
 export const counterShareText = (from: number, to: number) => {
