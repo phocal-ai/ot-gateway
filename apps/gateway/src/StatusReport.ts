@@ -628,13 +628,33 @@ export const requireEvents = Effect.fnUntraced(function* (
   status: Pick<GatewayStatus, "host">,
   what: string
 ) {
-  const gatewayVersion = gatewayVersionOf(status)
-  if (gatewayVersion === undefined || servesEvents(status)) return
+  if (yield* gatewayServesEvents(target.url, status)) return
   const cliVersion = yield* readVersion
+  const gatewayVersion = gatewayVersionOf(status)
   return yield* new GatewayTooOld({
     url: target.url,
-    message: tooOldMessage({ gatewayVersion, cliVersion, what, release: EVENTS_RELEASE })
+    message:
+      gatewayVersion === undefined
+        ? `the gateway at ${target.url} serves no events, so it runs a release before v${EVENTS_RELEASE.join(".")}, and the CLI is ${versionName(cliVersion)}: ${what} needs a gateway of v${EVENTS_RELEASE.join(".")} or later. Upgrade the gateway, or run the CLI at the gateway's version`
+        : tooOldMessage({ gatewayVersion, cliVersion, what, release: EVENTS_RELEASE })
   })
+})
+
+/**
+ * Whether the gateway of `status` serves `/api/events` (and `/api/messages/window`): by its version, or, when it names
+ * none yet (its status before the host monitor's first sample, seconds after it starts), by asking. An older gateway
+ * answers 404, or its status page as HTML; when the question itself fails, the request that follows says why.
+ */
+export const gatewayServesEvents = Effect.fnUntraced(function* (url: string, status: Pick<GatewayStatus, "host">) {
+  if (gatewayVersionOf(status) !== undefined) return servesEvents(status)
+  return yield* HttpClient.get(`${url}/api/events?after=${Number.MAX_SAFE_INTEGER}`).pipe(
+    Effect.map(
+      (response) => response.status === 200 && (response.headers["content-type"] ?? "").includes("application/json")
+    ),
+    Effect.provide(FetchHttpClient.layer),
+    Effect.timeout("2 seconds"),
+    Effect.orElseSucceed(() => true)
+  )
 })
 
 /** The status from the gateway at `url`, within three seconds; `"none"` without each point's value. */
@@ -708,7 +728,7 @@ export const fetchStatusFor = Effect.fnUntraced(function* (
   const status = yield* fetchGatewayStatus(target.url, options.json === true ? "all" : "none")
   yield* checkIdentity(target, status)
   // A gateway of the previous release serves no events: its report goes without what failed lately.
-  if (!servesEvents(status)) return { status, recent: undefined }
+  if (!(yield* gatewayServesEvents(target.url, status))) return { status, recent: undefined }
   const log = yield* fetchGatewayEvents(target.url)
   return { status, recent: recentIncidents(log) }
 })
