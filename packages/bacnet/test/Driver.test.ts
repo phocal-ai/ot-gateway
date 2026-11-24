@@ -307,10 +307,8 @@ describe("BACnet driver over UDP", () => {
       expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
         _tag: "DriverError",
         reason: "timeout",
-        // The last attempt gets 150 ms, or what is left of the request's 300 ms when the first ran late.
-        message: expect.stringMatching(
-          /^no answer from 127\.0\.0\.1:\d+ within (150ms$|\d+ms, what was left of its 300ms)/
-        )
+        // The last attempt gets 150 ms, or what is left of the request's deadline when an earlier one ran late.
+        message: expect.stringMatching(/^no reply from device \d+ at 127\.0\.0\.1:\d+ within \d+ ms$/)
       })
     })
   )
@@ -410,14 +408,15 @@ describe("BACnet change of value", () => {
     })
   )
 
-  it.live("still reads one point per cycle when every point is pushed", () =>
+  it.live("returns no polled copy of a point that is pushed, when every point is", () =>
     Effect.gen(function* () {
       const { client, config } = yield* setUp([supplyTemp])
       const driver = yield* makeBacnetDriverFromClient({ ...config, cov: true }, client, { cov: quickCov })
       yield* driver.readAll
       const { pushed } = yield* collectPushes(driver.changes)
       yield* eventually(() => pushed.length === 1)
-      expect((yield* driver.readAll).map((reading) => reading.pointId)).toEqual(["supply-temp"])
+      // The point comes by COV; a polled copy of it would go out a second time each cycle.
+      expect(yield* driver.readAll).toEqual([])
     })
   )
 

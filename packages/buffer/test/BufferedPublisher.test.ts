@@ -16,7 +16,7 @@ import {
 } from "@ot-gateway/core"
 import { Context, Effect, Exit, FileSystem, Layer, Metric, Scope, Tracer } from "effect"
 import { SqlClient } from "effect/sql"
-import { BufferedPublisher } from "../src/index.ts"
+import { BufferedPublisher, type BufferedPublisherOptions } from "../src/index.ts"
 
 /** A broker stand-in: up or down, optionally refusing one topic. */
 const makeBroker = () => {
@@ -36,8 +36,14 @@ const makeBroker = () => {
 }
 
 /** A buffered publisher over `broker`, in `scope`, on `path`. */
-const openBuffer = (path: string, broker: ReturnType<typeof makeBroker>, scope: Scope.Scope, maxRows = 1000) =>
-  BufferedPublisher({ path, maxRows }, { retryDelay: "20 millis" }).pipe(
+const openBuffer = (
+  path: string,
+  broker: ReturnType<typeof makeBroker>,
+  scope: Scope.Scope,
+  maxRows = 1000,
+  options: BufferedPublisherOptions = {}
+) =>
+  BufferedPublisher({ path, maxRows }, { retryDelay: "20 millis", ...options }).pipe(
     Layer.provide(broker.layer),
     Layer.provide(NodeServices.layer),
     (layer) => Layer.buildWithScope(layer, scope),
@@ -96,6 +102,24 @@ describe("BufferedPublisher", () => {
       const after = yield* Metric.value(Metric.withAttributes(bufferRows, { test: "outage" }))
       expect(after.value).toBe(0)
     }).pipe(withMetricAttributes({ test: "outage" }))
+  )
+
+  it.live("says when the backlog is out, once per outage", () =>
+    Effect.gen(function* () {
+      const broker = makeBroker()
+      let drained = 0
+      const publisher = yield* openBuffer(yield* tempDatabase, broker, yield* Effect.scope, 1000, {
+        onDrained: Effect.sync(() => drained++)
+      })
+      yield* publisher.publish("t", "through")
+      broker.state.up = false
+      yield* publisher.publish("t", "1")
+      yield* publisher.publish("t", "2")
+      expect(drained).toBe(0)
+      broker.state.up = true
+      yield* eventually(() => drained === 1)
+      expect(broker.state.delivered).toEqual(["through", "1", "2"])
+    })
   )
 
   it.live("counts what waits under the buffer's own attributes, whichever device stored it", () =>

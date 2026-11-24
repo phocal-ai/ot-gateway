@@ -111,6 +111,14 @@ describe("decodeValue", () => {
   ] as const)("reads float32 21.5 sent as %s", (order, registers) => {
     expect(decodeValue(registers, "float32", order)).toBe(21.5)
   })
+  it.each([
+    [6.73, [0x40d7, 0x5c29]],
+    [50.13, [0x4248, 0x851f]]
+  ] as const)("reads float32 %s as that decimal, not the float64 its bits are", (value, registers) => {
+    // As a float64 these bits are 6.730000019073486 and 50.130001068115234.
+    expect(decodeValue(registers, "float32")).toBe(value)
+    expect(encodeValue(value, "float32")).toEqual(registers)
+  })
   it("only byte-swaps a single register (a word order means nothing in one word)", () => {
     expect(decodeValue([0x1234], "uint16", "CDAB")).toBe(0x1234)
     expect(decodeValue([0x3412], "uint16", "BADC")).toBe(0x1234)

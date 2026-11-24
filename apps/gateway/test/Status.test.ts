@@ -10,6 +10,7 @@ import {
   bufferDropped,
   bufferWritten,
   makeHealthRegistry,
+  makeMemoryNetwork,
   mqttConnects,
   parseConfig,
   publishFailures,
@@ -17,14 +18,18 @@ import {
   withMetricAttributes
 } from "@ot-gateway/core"
 import { openHistory } from "@ot-gateway/history"
-import { Effect, FileSystem, Fiber, Metric } from "effect"
+import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
+import { TestClock } from "effect/testing"
+import { runGateway } from "../src/Gateway.ts"
+import { Clock, Effect, FileSystem, Fiber, Layer, Metric, Schedule } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
 import { get } from "node:http"
 import { createServer } from "node:net"
 import type { HostSnapshot } from "../src/Host.ts"
 import { configView } from "../src/ConfigView.ts"
-import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
+import { historyHandler, makeStatusState, serveStatus, webBuildStale } from "../src/Status.ts"
+import { GatewayEvents, gatewayEventsLayer, makeGatewayEvents } from "../src/Events.ts"
 
 const config = parseConfig(
   JSON.stringify({
@@ -54,6 +59,17 @@ const config = parseConfig(
   })
 )
 
+/**
+ * `ask` again every 50 ms until `done` accepts its answer, for 5 s at most: a server that is still starting, or a
+ * history that has not flushed yet under load, is waited for rather than slept past.
+ */
+const eventually = <A, E, R>(ask: Effect.Effect<A, E, R>, done: (answer: A) => boolean) =>
+  ask.pipe(
+    Effect.filterOrFail(done),
+    Effect.retry({ schedule: Schedule.spaced("50 millis") }),
+    Effect.timeout("5 seconds")
+  )
+
 /** The status code of GET /api/status with the Host header set to `host`. */
 const statusCodeFor = (port: number, host: string) =>
   Effect.promise(
@@ -63,6 +79,30 @@ const statusCodeFor = (port: number, host: string) =>
           response.resume()
           resolve(response.statusCode ?? 0)
         })
+        request.on("error", reject)
+      })
+  )
+
+/** GET /api/status with the Host header set to `host`, or sent without one. */
+const responseFor = (port: number, host: string | undefined) =>
+  Effect.promise(
+    () =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const request = get(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/api/status",
+            setHost: false,
+            headers: host === undefined ? {} : { host }
+          },
+          (response) => {
+            let body = ""
+            response.setEncoding("utf8")
+            response.on("data", (chunk: string) => (body += chunk))
+            response.on("end", () => resolve({ status: response.statusCode ?? 0, body }))
+          }
+        )
         request.on("error", reject)
       })
   )
@@ -115,6 +155,62 @@ describe("status", () => {
         published: 15,
         publishFailures: 4
       })
+    })
+  )
+
+  it.effect("says since when the broker is away and why, from the first failure of an outage until it is back", () =>
+    Effect.gen(function* () {
+      const parsed = yield* parseConfig(
+        JSON.stringify({ site: "away-site", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const state = makeStatusState(parsed, makeHealthRegistry([]), 100)
+      // Never connected: away since the gateway started.
+      state.recordBrokerFailure(150, "could not connect: connection refused by 10.0.0.5:1883")
+      expect((yield* state.snapshot("none")).broker).toMatchObject({
+        connected: false,
+        disconnectedSince: 100,
+        lastError: "could not connect: connection refused by 10.0.0.5:1883"
+      })
+      const connection = {
+        protocolVersion: "5",
+        maximumQoS: 1,
+        retainAvailable: true,
+        keepAliveSeconds: 30,
+        receiveMaximum: 100
+      } as const
+      state.recordBrokerConnection(200, connection)
+      expect((yield* state.snapshot("none")).broker).not.toHaveProperty("disconnectedSince")
+      // Lost later: away since then, whatever the redials say after.
+      state.recordBrokerFailure(300, "connection closed by the peer")
+      state.recordBrokerFailure(315, "could not connect: connection refused by 10.0.0.5:1883")
+      expect((yield* state.snapshot("none")).broker).toMatchObject({
+        disconnectedSince: 300,
+        lastError: "could not connect: connection refused by 10.0.0.5:1883"
+      })
+    })
+  )
+
+  it.effect("shows since when a device fails, why in the driver's words, and how many cycles in a row", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      const health = makeHealthRegistry(["meter"])
+      const state = makeStatusState(parsed, health, 0)
+      health.recordSuccess("meter", 1_000)
+      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 item(s) within 3s", at: 2_000 })
+      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 item(s) within 3s", at: 7_000 })
+      const [device] = (yield* state.snapshot("none")).devices
+      expect(device).toMatchObject({
+        status: "failing",
+        reason: "timeout",
+        failingSince: 2_000,
+        lastError: "no response to 2 item(s) within 3s",
+        failures: 2,
+        lastSuccess: 1_000
+      })
+      health.recordSuccess("meter", 8_000)
+      const [recovered] = (yield* state.snapshot("none")).devices
+      expect(recovered).not.toHaveProperty("failingSince")
+      expect(recovered).not.toHaveProperty("lastError")
     })
   )
 
@@ -210,6 +306,7 @@ describe("status", () => {
           status: "ok",
           pollIntervalMs: 5000,
           lastSuccess: 1_000,
+          host: "10.0.1.1",
           pointCount: 2,
           points: [
             { id: "power", name: "Power", unit: "unit:KiloW", writable: false, value: 12.5, ts: 900 },
@@ -256,44 +353,65 @@ describe("status", () => {
     })
   )
 
-  it.effect("keeps the latest message per topic under the site and building, sorted, with retain and a count", () =>
-    Effect.gen(function* () {
-      const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
-      state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: true, at: 10 })
-      state.recordPublish("s/b/meter/power", '{"value":1,"ts":11}', { retained: false, at: 11 })
-      state.recordPublish("s/b/meter/power", '{"value":2,"ts":12}', { retained: false, at: 12 })
-      state.recordPublish("s/b/$gateway/main/health", '{"status":"online"}', { retained: true, at: 13 })
-      state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}', { retained: false, at: 14 })
-      expect(yield* state.messages).toEqual({
-        messages: [
-          {
-            topic: "s/b/$gateway/main/health",
-            payload: '{"status":"online"}',
-            truncated: false,
-            retained: true,
-            at: 13,
-            count: 1
-          },
-          {
-            topic: "s/b/meter/power",
-            payload: '{"value":2,"ts":12}',
-            truncated: false,
-            retained: false,
-            at: 12,
-            count: 2
-          },
-          {
-            topic: "s/b/meter/power/$meta",
-            payload: '{"name":"Power"}',
-            truncated: false,
-            retained: true,
-            at: 10,
-            count: 1
-          }
-        ],
-        droppedTopics: 0
+  it.effect(
+    "keeps the latest message per topic under the site and building, sorted, with retain, a count and how many reached the broker",
+    () =>
+      Effect.gen(function* () {
+        const state = makeStatusState(yield* config, makeHealthRegistry(["meter"]), 500)
+        state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: true, at: 10 })
+        state.recordDelivered("s/b/meter/power/$meta")
+        state.recordPublish("s/b/meter/power", '{"value":1,"ts":11}', { retained: false, at: 11 })
+        // The broker is down: the second value waits in the buffer, so one of two reached the broker.
+        state.recordDelivered("s/b/meter/power")
+        state.recordPublish("s/b/meter/power", '{"value":2,"ts":12}', { retained: false, at: 12 })
+        // A topic it keeps nothing for (another site's) is not counted, and nothing is added for it.
+        state.recordDelivered("other/site/meter/power")
+        state.recordPublish("s/b/$gateway/main/health", '{"status":"online"}', { retained: true, at: 13 })
+        // The broker is away for the health message (retained: not buffered) and refused a value: not sent, lost.
+        state.recordUnsent("s/b/$gateway/main/health", "notSent")
+        state.recordPublish("s/b/meter/power", '{"value":3,"ts":13}', { retained: false, at: 13 })
+        state.recordUnsent("s/b/meter/power", "lost")
+        state.recordUnsent("other/site/meter/power", "lost")
+        state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}', { retained: false, at: 14 })
+        expect(yield* state.messages).toEqual({
+          messages: [
+            {
+              topic: "s/b/$gateway/main/health",
+              payload: '{"status":"online"}',
+              truncated: false,
+              retained: true,
+              at: 13,
+              count: 1,
+              delivered: 0,
+              notSent: 1,
+              lost: 0
+            },
+            {
+              topic: "s/b/meter/power",
+              payload: '{"value":3,"ts":13}',
+              truncated: false,
+              retained: false,
+              at: 13,
+              count: 3,
+              delivered: 1,
+              notSent: 0,
+              lost: 1
+            },
+            {
+              topic: "s/b/meter/power/$meta",
+              payload: '{"name":"Power"}',
+              truncated: false,
+              retained: true,
+              at: 10,
+              count: 1,
+              delivered: 1,
+              notSent: 0,
+              lost: 0
+            }
+          ],
+          droppedTopics: 0
+        })
       })
-    })
   )
 
   it.effect("shows a point's last read before anything is published, and prefers it to what was", () =>
@@ -315,6 +433,50 @@ describe("status", () => {
       state.recordPublish("s/b/meter/old/$meta", '{"name":"Old"}', { retained: true, at: 10 })
       state.recordPublish("s/b/meter/old/$meta", "", { retained: true, at: 11 })
       expect((yield* state.messages).messages).toEqual([])
+    })
+  )
+
+  it.effect("counts the messages of the last minutes per topic, in whole minutes, for --since", () =>
+    Effect.gen(function* () {
+      let monotonic = 0
+      const state = makeStatusState(
+        yield* config,
+        makeHealthRegistry(["meter"]),
+        0,
+        undefined,
+        0,
+        undefined,
+        () => monotonic
+      )
+      // Ten minutes ago: a value and its $meta; then a value a minute for the last five minutes, one not delivered.
+      state.recordPublish("s/b/meter/power/$meta", '{"name":"Power"}', { retained: true, at: 0 })
+      state.recordDelivered("s/b/meter/power/$meta")
+      state.recordPublish("s/b/meter/power", '{"value":1,"ts":0}', { retained: false, at: 0 })
+      state.recordDelivered("s/b/meter/power")
+      for (let minute = 5; minute < 10; minute++) {
+        monotonic = minute * 60_000 + 30_000
+        state.recordPublish("s/b/meter/power", `{"value":${minute},"ts":0}`, { retained: false, at: monotonic })
+        if (minute < 9) state.recordDelivered("s/b/meter/power")
+        else state.recordUnsent("s/b/meter/power", "lost")
+      }
+      yield* TestClock.setTime(monotonic)
+      // The last 4 minutes and a half: the minute it starts in counts whole, so five values.
+      const window = yield* state.messagesWindow(monotonic - 270_000)
+      expect(window.messages).toEqual([
+        expect.objectContaining({
+          topic: "s/b/meter/power",
+          count: 5,
+          delivered: 4,
+          notSent: 0,
+          lost: 1,
+          payload: '{"value":9,"ts":0}'
+        })
+      ])
+      expect(window.window).toEqual({ from: 5 * 60_000, to: monotonic })
+      // Since the start: everything, with the window cut to the hour it keeps.
+      expect((yield* state.messagesWindow(-10 * 3_600_000)).messages.map((message) => message.count)).toEqual([6, 1])
+      // The counts since start are unchanged by it.
+      expect((yield* state.messages).messages.map((message) => message.count)).toEqual([6, 1])
     })
   )
 
@@ -381,12 +543,31 @@ describe("status", () => {
       const port = yield* freePort
       const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
       state.recordPublish("s/b/meter/power", '{"value":3,"ts":700}', { retained: false, at: 1 })
+      const ring = yield* Effect.map(Clock.clockWith(Effect.succeed), (clock) => makeGatewayEvents(clock, 3))
+      ring.started("v1", 1)
+      ring.brokerDisconnected("connection closed by the peer")
+      ring.brokerConnected(12)
+      ring.bufferDrained({ delivered: 14, buffered: 12, queued: 2 })
       const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
-        Effect.provide(NodeServices.layer),
+        Effect.provide([NodeServices.layer, Layer.succeed(GatewayEvents, ring)]),
         Effect.forkChild
       )
       yield* Effect.sleep("300 millis")
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
+      // The ring holds 3: the start was let go, and `after` gives what is newer than an id.
+      const log = yield* client.status.events({ query: {} })
+      expect(log.events.map((event) => event.type)).toEqual([
+        "broker-disconnected",
+        "broker-connected",
+        "buffer-drained"
+      ])
+      expect(log).toMatchObject({ capacity: 3, dropped: 1 })
+      expect(log.events[1]).toMatchObject({ id: 3, buffered: 12 })
+      const newer = yield* client.status.events({ query: { after: 3 } })
+      expect(newer.events.map((event) => event.id)).toEqual([4])
+      expect(newer.events[0]).toMatchObject({ type: "buffer-drained", delivered: 14, buffered: 12, queued: 2 })
+      const future = yield* client.status.events({ query: { since: Date.now() + 60_000 } })
+      expect(future.events).toEqual([])
       const status = yield* client.status.status({ query: {} })
       expect(status.devices[0]?.points[0]?.value).toBe(3)
       expect((yield* client.status.status({ query: { points: "none" } })).devices[0]?.points).toEqual([])
@@ -411,6 +592,42 @@ describe("status", () => {
     }).pipe(Effect.provide(FetchHttpClient.layer))
   )
 
+  it.live("on loopback, answers a loopback host name on any port, and refuses other names", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      const port = yield* freePort
+      const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
+      const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
+        Effect.provide([NodeServices.layer, gatewayEventsLayer()]),
+        Effect.forkChild
+      )
+      yield* Effect.sleep("300 millis")
+      // An SSH tunnel from another local port keeps the loopback name but not the port.
+      for (const host of ["127.0.0.1:18080", "localhost:3000", "[::1]:9", "localhost"]) {
+        expect([host, (yield* responseFor(port, host)).status]).toEqual([host, 200])
+      }
+      const misdirected =
+        `Misdirected request: open the status page as http://127.0.0.1:${port} or ` +
+        `http://localhost:${port} (an SSH tunnel to it works on any local port)`
+      const refused = [
+        `evil.example:${port}`,
+        `127.0.0.1.evil.example:${port}`,
+        "localhost.evil.example",
+        "127.0.0.1:abc",
+        "127.0.0.1:0",
+        "127.0.0.1:70000",
+        "127.0.0.1@evil.example",
+        ""
+      ]
+      for (const host of refused) {
+        expect({ host, ...(yield* responseFor(port, host)) }).toEqual({ host, status: 421, body: misdirected })
+      }
+      // Without a Host header, Node's HTTP server refuses an HTTP/1.1 request before the page sees it.
+      expect((yield* responseFor(port, undefined)).status).toBe(400)
+      yield* Fiber.interrupt(server)
+    })
+  )
+
   it.live("serves a point's history on /api/history, and says why when it cannot", () =>
     Effect.gen(function* () {
       const parsed = yield* config
@@ -427,12 +644,22 @@ describe("status", () => {
         state,
         historyHandler(parsed, history)
       ).pipe(Effect.forkChild)
-      yield* Effect.sleep("300 millis")
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
-      const series = yield* client.status.history({ query: { device: "meter", point: "power", buckets: 1 } })
-      // The last hour in one bucket: an hour-wide step, so from the minute rollups.
-      expect(series.resolution).toBe("minute")
+      // Until the server is up and the history has flushed both readings (every 50 ms, later under load).
+      const series = yield* eventually(
+        client.status.history({ query: { device: "meter", point: "power", buckets: 1, changes: "true" } }),
+        (answer) => answer.buckets.reduce((sum, bucket) => sum + bucket.count, 0) === 2
+      )
+      // The last hour in one bucket: a range of an hour, so from every read, with the changes asked for.
+      expect(series.resolution).toBe("read")
       expect(series.buckets).toEqual([expect.objectContaining({ min: 3, max: 5, avg: 4, count: 2 })])
+      expect(series.changes).toEqual({
+        list: [
+          { t: now - 2_000, value: 3 },
+          { t: now - 1_000, value: 5 }
+        ],
+        truncated: false
+      })
       const unknown = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "nope" } }))
       expect(unknown._tag).toBe("HistoryQueryInvalid")
       const backwards = yield* Effect.flip(
@@ -447,10 +674,108 @@ describe("status", () => {
         state,
         historyHandler(parsed, undefined)
       ).pipe(Effect.forkChild)
-      yield* Effect.sleep("300 millis")
-      const none = yield* Effect.flip(client.status.history({ query: { device: "meter", point: "power" } }))
+      const none = yield* eventually(
+        Effect.flip(client.status.history({ query: { device: "meter", point: "power" } })),
+        (error) => error._tag === "HistoryUnavailable"
+      )
       expect(none._tag).toBe("HistoryUnavailable")
       yield* Fiber.interrupt(bare)
-    }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer]))
+    }).pipe(Effect.scoped, Effect.provide([FetchHttpClient.layer, NodeServices.layer, gatewayEventsLayer()]))
+  )
+})
+
+describe("the running gateway's delivery counts", () => {
+  it.effect("counts per topic what reached the broker, and how many the buffer delivered after an outage", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const folder = yield* fs.makeTempDirectoryScoped()
+      const port = yield* freePort
+      const network = makeMemoryNetwork()
+      const control = makeBrokerControl()
+      const gateway = yield* parseConfig(
+        JSON.stringify({
+          site: "s",
+          building: "b",
+          mqtt: { url: "mqtt://10.0.0.2:1883" },
+          buffer: { path: `${folder}/outbox.sqlite` },
+          status: { port, webRoot: "/nonexistent" },
+          devices: [
+            {
+              protocol: "simulator",
+              id: "meter",
+              pollIntervalMs: 1000,
+              points: [{ id: "power", name: "Power", waveform: "sine", min: 0, max: 10, periodSeconds: 60 }]
+            }
+          ]
+        })
+      )
+      // Real I/O (SQLite, HTTP) between steps of the test clock.
+      const step = Effect.fnUntraced(function* (times: number) {
+        for (let index = 0; index < times; index++) {
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+          yield* TestClock.adjust("500 millis")
+        }
+      })
+      // No broker yet: the gateway reads and buffers.
+      yield* runGateway(gateway, { network: network.host("10.0.0.1") }).pipe(Effect.forkScoped)
+      yield* step(10)
+      const server = yield* network.listen("10.0.0.2", 1883)
+      yield* serveMqtt(server, control).pipe(Effect.forkScoped)
+      const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
+      let drained: { delivered?: number; buffered?: number; queued?: number } | undefined
+      let connected: { buffered?: number } | undefined
+      for (let attempt = 0; attempt < 120 && drained === undefined; attempt++) {
+        yield* step(1)
+        const log = yield* client.status.events({ query: {} })
+        const event = log.events.find((each) => each.type === "buffer-drained")
+        if (event?.type === "buffer-drained") drained = event
+        const reconnect = log.events.find((each) => each.type === "broker-connected")
+        if (reconnect?.type === "broker-connected") connected = reconnect
+      }
+      const { messages } = yield* client.status.messages()
+      const power = messages.find((message) => message.topic === "s/b/meter/power")
+      const meta = messages.find((message) => message.topic === "s/b/meter/power/$meta")
+      // Every value the broker took came from the buffer or went straight, and the drained event counted the former.
+      const valuesAtBroker = control.messages.filter((message) => message.topic === "s/b/meter/power").length
+      expect(drained?.delivered).toBeGreaterThan(0)
+      expect(power?.delivered).toBe(valuesAtBroker)
+      expect(power?.count).toBeGreaterThanOrEqual(valuesAtBroker)
+      // The drained count adds up: the rows waiting at the reconnect, as that event said, and the ones queued behind.
+      expect(drained?.buffered).toBe(connected?.buffered)
+      expect((drained?.buffered ?? 0) + (drained?.queued ?? 0)).toBe(drained?.delivered)
+      // The buffer kept every value; the $meta missed while the broker was away is retained, not buffered, no loss.
+      expect(power).toMatchObject({ notSent: 0, lost: 0 })
+      expect(meta?.notSent).toBeGreaterThan(0)
+      expect(meta?.lost).toBe(0)
+    }).pipe(Effect.scoped, Effect.provide([NodeServices.layer, FetchHttpClient.layer]))
+  )
+})
+
+describe("webBuildStale", () => {
+  it.effect("is true only in a checkout whose web sources changed after the build", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped()
+      const out = `${root}/out`
+      yield* fs.makeDirectory(out, { recursive: true })
+      yield* fs.makeDirectory(`${root}/src/app`, { recursive: true })
+      yield* fs.writeFileString(`${out}/index.html`, "<html></html>")
+      yield* fs.writeFileString(`${root}/src/app/page.tsx`, "export default 1")
+      const hourAgo = new Date(Date.now() - 3_600_000)
+      yield* fs.utimes(`${root}/src/app/page.tsx`, hourAgo, hourAgo)
+      // Writing page.tsx also moved its folder's mtime, a millisecond after index.html at times: the build is
+      // stamped explicitly after every source, so the first answer does not depend on that timing.
+      const built = new Date(Date.now() + 10_000)
+      yield* fs.utimes(`${out}/index.html`, built, built)
+      expect(yield* webBuildStale(fs, out)).toBe(false)
+
+      const later = new Date(Date.now() + 60_000)
+      yield* fs.utimes(`${root}/src/app/page.tsx`, later, later)
+      expect(yield* webBuildStale(fs, out)).toBe(true)
+
+      // A package or an image: a build without sources next to it.
+      yield* fs.remove(`${root}/src`, { recursive: true })
+      expect(yield* webBuildStale(fs, out)).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

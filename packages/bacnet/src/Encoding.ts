@@ -13,6 +13,7 @@
  * request it builds.
  */
 import { Result, Schema } from "effect"
+import { shortestFloat32 } from "@ot-gateway/core"
 
 export class BacnetCodecError extends Schema.TaggedError<BacnetCodecError>()("BacnetCodecError", {
   message: Schema.String
@@ -385,20 +386,6 @@ const decodeCharacterString = (charset: number, bytes: Uint8Array): string => {
       // 5 is ISO 8859-1, whose bytes are the first 256 code points.
       return fromCodeUnits([...bytes])
   }
-}
-
-/**
- * The shortest decimal that is the same single-precision number, so a real
- * 72.4 reads as 72.4 rather than 72.40000152587891. Encoding it again gives
- * the same four bytes.
- */
-export const shortestFloat32 = (value: number): number => {
-  if (!Number.isFinite(value)) return value
-  for (let precision = 1; precision < 10; precision++) {
-    const candidate = Number(value.toPrecision(precision))
-    if (Math.fround(candidate) === value) return candidate
-  }
-  return value
 }
 
 /** Reads tags and values from a byte array; throws `BacnetCodecError`, caught by `decodeWith`. */

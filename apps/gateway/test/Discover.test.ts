@@ -28,6 +28,8 @@ import {
   discoverToPointsList,
   draftDevices,
   draftPointsList,
+  pointColumn,
+  withoutDeviceName,
   printable,
   slugify
 } from "../src/Discover.ts"
@@ -112,7 +114,7 @@ describe("draftDevices", () => {
           },
           { id: "supply-temp-2", name: "Supply Temp", objectType: "analog-input", instance: 2 },
           { id: "binary-output-3", name: "binary-output-3", objectType: "binary-output", instance: 3 },
-          { id: "fan-status", name: "Ventilation 2 Fan Status", objectType: "binary-input", instance: 4 }
+          { id: "fan-status", name: "Fan Status", objectType: "binary-input", instance: 4 }
         ]
       },
       {
@@ -189,9 +191,18 @@ const run = Effect.fnUntraced(
   function* (
     hosts: ReadonlyArray<{ readonly ip: string; readonly instance: number; readonly port?: number }>,
     devices: ReadonlyArray<unknown> = [],
-    options: DiscoverOptions = {}
+    options: DiscoverOptions = {},
+    /** Another program on the discovering host already holds its BACnet port. */
+    portTaken = false
   ) {
     const network = makeMemoryNetwork()
+    if (portTaken) {
+      // Acquiring the reader binds the port, for as long as the run's scope.
+      yield* Effect.flatMap(
+        network.host("10.0.0.1").udp({ address: "0.0.0.0", port: 47_808 }),
+        (socket) => socket.reader
+      )
+    }
     yield* Effect.forEach(hosts, ({ ip, instance, port }) =>
       Effect.flatMap(network.host(ip).udp({ address: ip, port: port ?? 47_808 }), (socket) =>
         serveSimulatedDevice(socket, ahu(instance))
@@ -340,6 +351,22 @@ describe("discover --address", () => {
     })
   )
 
+  it.effect("asks from a free port when another program holds the BACnet port", () =>
+    Effect.gen(function* () {
+      const { draft, errors } = yield* run(twoPorts, [], { address: "10.0.2.2:47809" }, true)
+      expect(draft).toMatchObject({ devices: [{ id: "ventilation-2", deviceInstance: 2002 }] })
+      expect(errors[0]).toBe("UDP 0.0.0.0:47808 is in use by another program; asking from a free port instead")
+    })
+  )
+
+  it.effect("says to stop the other program or set bacnet.port when a broadcast finds the port taken", () =>
+    Effect.gen(function* () {
+      const error = yield* run(twoPorts, [], { configPath: "site/ot-gateway.json" }, true).pipe(Effect.flip)
+      expect(error.message).toContain("the BACnet/IP port 0.0.0.0:47808 is in use by another program")
+      expect(error.message).toContain('set "bacnet.port" in site/ot-gateway.json')
+    })
+  )
+
   it.effect("refuses an address that is not ip or ip:port", () =>
     Effect.gen(function* () {
       const config = yield* parseConfig(
@@ -369,13 +396,76 @@ describe("draftPointsList", () => {
         })
       ])
       const list = draftPointsList(drafts)
-      expect(list.split("\n")[0]).toBe("device,point,unit,device_instance,address,object_type,object_instance")
-      expect(list).toContain('ventilation-2,"Supply Temp, °C",unit:DEG_C,2001,10.0.0.5,analog-input,1')
+      expect(list.split("\n")[0]).toBe("device,point,unit,publish,device_instance,address,object_type,object_instance")
+      expect(list).toContain('ventilation-2,"Supply Temp, °C",unit:DEG_C,sample,2001,10.0.0.5,analog-input,1')
       expect(list).not.toContain("=HYPERLINK")
       const [device] = yield* devicesFromPointsList(list)
       expect(device?.id).toBe("ventilation-2")
       expect(device?.points.map((point) => point.id)).toEqual(drafts[0]?.points.map((point) => point.id))
+      // Every read, written out so the list shows where to change it.
+      expect(device?.points.map((point) => point.publish?.mode)).toEqual(["sample", "sample", "sample", "sample"])
     }).pipe(Effect.runSync))
+
+  it("names points without the device's name in front, and import keeps the ids and takes the names", () =>
+    Effect.gen(function* () {
+      const drafts = draftDevices([
+        found(2001, "127.0.0.1:47809", {
+          name: "heat-pump",
+          listed: 4,
+          objects: [
+            { objectType: "analog-input", instance: 1, name: "Heat pump flow temperature", unit: "unit:DEG_C" },
+            { objectType: "analog-input", instance: 2, name: "Heat Pump return temperature", unit: "unit:DEG_C" },
+            { objectType: "binary-input", instance: 1, name: "compressor running" },
+            // Made unique with a suffix: no name slugs to its id.
+            { objectType: "binary-input", instance: 2, name: "Compressor running" }
+          ]
+        })
+      ])
+      const list = draftPointsList(drafts)
+      expect(list.split("\n").slice(1, 5)).toEqual([
+        "heat-pump,Flow temperature,unit:DEG_C,sample,2001,127.0.0.1:47809,analog-input,1",
+        "heat-pump,Return temperature,unit:DEG_C,sample,2001,127.0.0.1:47809,analog-input,2",
+        "heat-pump,Compressor running,,sample,2001,127.0.0.1:47809,binary-input,1",
+        "heat-pump,compressor-running-2,,sample,2001,127.0.0.1:47809,binary-input,2"
+      ])
+      const [device] = yield* devicesFromPointsList(list)
+      expect(device?.points.map((point) => [point.id, point.name])).toEqual([
+        ["flow-temperature", "Flow temperature"],
+        ["return-temperature", "Return temperature"],
+        ["compressor-running", "Compressor running"],
+        ["compressor-running-2", "Compressor running 2"]
+      ])
+    }).pipe(Effect.runSync))
+
+  it("drops the device's name from a point's name in the config draft too: whole words, any case", () => {
+    const [draft] = draftDevices([
+      found(2001, "10.0.0.5", {
+        name: "Heat pump",
+        listed: 4,
+        objects: [
+          { objectType: "analog-input", instance: 1, name: "Heat pump flow temperature" },
+          { objectType: "analog-input", instance: 2, name: "HEAT PUMP ★ return" },
+          { objectType: "analog-input", instance: 3, name: "Heat pumps outside" },
+          { objectType: "analog-input", instance: 4, name: "Heat pump" }
+        ]
+      })
+    ])
+    expect(draft?.points.map((point) => [point.id, point.name])).toEqual([
+      ["flow-temperature", "Flow temperature"],
+      ["return", "Return"],
+      ["heat-pumps-outside", "Heat pumps outside"],
+      // Nothing would be left: the name stays.
+      ["heat-pump", "Heat pump"]
+    ])
+    expect(withoutDeviceName("Heat_pump_flow temp", "Heat pump")).toBe("Heat_pump_flow temp")
+  })
+
+  it("starts names with a letter or digit, and writes the id for one that would run as a formula", () => {
+    expect(pointColumn({ id: "sum-a1", name: "=SUM(A1)" })).toBe("sum-a1")
+    expect(pointColumn({ id: "x", name: "Heat pump =x" })).toBe("x")
+    expect(pointColumn({ id: "flow", name: "Heat pump ★ flow" })).toBe("Flow")
+    expect(pointColumn({ id: "flow-temp", name: "Heat_pump_flow temp" })).toBe("flow-temp")
+  })
 })
 
 describe("discover --points-list", () => {
@@ -414,7 +504,9 @@ describe("discover --points-list", () => {
         yield* TestClock.adjust("200 millis")
       }
       const written = yield* Fiber.join(running)
-      expect(written).toEqual({ path, devices: 1, points: 2 })
+      const next = `ot-gateway import ${path}`
+      expect(written).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: false, next })
+      expect(yield* fs.readDirectory(directory)).toEqual(["points.csv"])
       const list = yield* fs.readFileString(path)
       const devices = yield* devicesFromPointsList(list, ["ahu"])
       expect(devices.map((device) => device.id)).toEqual(["ventilation-2"])
@@ -425,8 +517,58 @@ describe("discover --points-list", () => {
 
       const exists = yield* Effect.flip(discoverToPointsList(config, path, network.host("10.0.0.1")))
       expect(exists._tag).toBe("DiscoverError")
-      expect(exists.message).toBe(`${path} exists; give another file name, or move it away first. Nothing was written.`)
+      expect(exists.message).toBe(
+        `${path} exists; add --append to add the devices found to it, give another file name, or move it away first. Nothing was written.`
+      )
       expect(yield* fs.readFileString(path)).toBe(list)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("with append, adds to a hand-written list and skips what it has on a second run", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/points.csv`
+      const modbus = "device;point;unit;host;register;type\nboiler;Supply temperature;°C;10.0.1.5;100;int16\n"
+      yield* fs.writeFileString(path, modbus)
+      const network = makeMemoryNetwork()
+      yield* Effect.flatMap(network.host("10.0.2.1").udp({ address: "10.0.2.1", port: 47_808 }), (socket) =>
+        serveSimulatedDevice(socket, ahu(2001))
+      )
+      const config = yield* parseConfig(
+        JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices: [] })
+      )
+      const appendOnce = Effect.gen(function* () {
+        const options = { append: true, configPath: "/srv/site 1/ot-gateway.json" }
+        const running = yield* discoverToPointsList(config, path, network.host("10.0.0.1"), options).pipe(
+          Effect.forkChild
+        )
+        for (let step = 0; step < 30; step++) {
+          yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
+          yield* TestClock.adjust("200 millis")
+        }
+        return yield* Fiber.join(running)
+      })
+      const next = `ot-gateway import ${path} '/srv/site 1/ot-gateway.json'`
+      expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 2, skipped: 0, appended: true, next })
+      const list = yield* fs.readFileString(path)
+      expect(list.split("\n")).toEqual([
+        "device;point;unit;host;register;type;publish;device_instance;address;object_type;object_instance",
+        "boiler;Supply temperature;°C;10.0.1.5;100;int16;;;;;",
+        "ventilation-2;Supply Temp;unit:DEG_C;;;;sample;2001;10.0.2.1;analog-input;1",
+        "ventilation-2;Fan;;;;;sample;2001;10.0.2.1;binary-output;2",
+        ""
+      ])
+      const devices = yield* devicesFromPointsList(list)
+      expect(devices.map((device) => device.id)).toEqual(["boiler", "ventilation-2"])
+      expect(yield* fs.readDirectory(directory)).toEqual(["points.csv"])
+
+      expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 0, skipped: 2, appended: true })
+      expect(yield* fs.readFileString(path)).toBe(list)
+      const errors = (yield* TestConsole.errorLines).map(String)
+      expect(errors.some((line) => line.includes("added 2 point(s), skipped 0 already in the list"))).toBe(true)
+      expect(errors.some((line) => line.endsWith(`then: ${next}`))).toBe(true)
+      expect(errors.some((line) => line.includes("added 0 point(s), skipped 2 already in the list"))).toBe(true)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 

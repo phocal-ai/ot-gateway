@@ -271,15 +271,16 @@ describe("chaos: client over UDP", () => {
       expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(1600)
       expect(
         results.some(
-          (result) => Result.isFailure(result) && result.failure.message.startsWith("no free invoke ID within")
+          (result) =>
+            Result.isFailure(result) && result.failure.message.startsWith("too many BACnet requests in flight")
         )
       ).toBe(true)
       // Every failure says which it was: no invoke ID in time, or the device that did not answer.
       const unexplained = results.filter(
         (result) =>
           Result.isFailure(result) &&
-          !result.failure.message.startsWith("no free invoke ID within") &&
-          !result.failure.message.startsWith(`no answer from 127.0.0.1:${silent.address.port} within`)
+          !result.failure.message.startsWith("too many BACnet requests in flight") &&
+          !result.failure.message.startsWith(`no reply from 127.0.0.1:${silent.address.port} within`)
       )
       expect(unexplained).toEqual([])
     }).pipe(Effect.scoped)

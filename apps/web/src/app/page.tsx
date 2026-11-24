@@ -1,25 +1,72 @@
 "use client"
 
 /**
- * The status page, an overview: the gateway, its broker and buffer (each card opens its details), the machine
- * when it has a problem, every
- * device with its health (a row each, opening its points on the Points
- * page); the messages it publishes, command results among them, are on the Messages tab.
- * Polls `/api/status` every two seconds; read-only.
+ * The status page, an overview: alarms that are on, the broker, devices, buffer and machine (each card opens its
+ * details), every device with its health and its first few values (a row each, opening the device in a side panel:
+ * where it is, since when it fails, why and what to check, its points and its events), and the gateway's recent
+ * events; the messages it publishes, command results among them, are on the Messages tab. A gateway without
+ * devices says how to add them. The open device lives in the URL (`?device=`), so it can be linked.
+ * Polls `/api/status` every two seconds (and the new events with it), and the values shown like the Points tab
+ * does; read-only.
  *
  * Freshness is shown as a state, not as numbers that count up: the header says
  * Live while answers arrive, a device says how often it is read and gets a time
  * only once it is late or failing. The page renders when data arrives and
  * at no other time.
  */
-import type { DeviceStatus, GatewayStatus, HostStatus } from "@ot-gateway/api"
+import {
+  brokerHostOf,
+  type DeviceStatus,
+  type GatewayStatus,
+  type HostStatus,
+  type PointInfo,
+  type PointReading
+} from "@ot-gateway/api"
 import Link from "next/link"
-import { type ReactNode, useEffect, useRef, useState } from "react"
-import { useGateway } from "@/components/gateway-shell"
+import { useSearchParams } from "next/navigation"
+import { type ReactNode, Suspense, useEffect, useMemo, useRef, useState } from "react"
+import { useCatalog } from "@/components/catalog"
+import { useGateway, useGatewayEvents } from "@/components/gateway-shell"
 import { DetailDialog, Facts, morphFrom } from "@/components/detail-dialog"
+import { DeviceSheet, SHEET_POINTS } from "@/components/device-sheet"
+import { useRunningConfig } from "@/components/running-config"
+import { NoDevicesYet } from "@/components/no-devices"
+import { FirstRun } from "@/components/first-run"
+import { guideStarted, showsGuide } from "@/lib/first-run"
+import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { formatNumber } from "@/lib/format"
-import { statusOf } from "@/components/live"
-import { machineProblems } from "@/lib/host"
+import { statusOf, useValues } from "@/components/live"
+import {
+  alarmCount,
+  alarmNote,
+  glanceKeys,
+  glancePoints,
+  alarmWhen,
+  pointFreshness,
+  pointsByDevice,
+  readsOnChange,
+  type ShownAlarm,
+  shownAlarms
+} from "@/lib/glance"
+import { machineCard, machineProblems, powerLabel } from "@/lib/host"
+import { deviceAddress } from "@/lib/device"
+import {
+  deviceEvents,
+  eventDetail,
+  eventDetailTitle,
+  eventNote,
+  eventSentence,
+  eventTone,
+  hostsOf,
+  isIncident,
+  type KnownEvents,
+  latestEvents,
+  nothingYet,
+  type PointNames,
+  sharedCauseNotes,
+  sharedFailure
+} from "@/lib/events"
+import { devicesById, filterToSearch, pointKey } from "@/lib/points"
 import {
   addSample,
   type BufferSample,
@@ -28,6 +75,7 @@ import {
   bufferView,
   deviceCounts,
   dropReasons,
+  failingDevices,
   protocolCounts,
   reconnects
 } from "@/lib/overview"
@@ -37,14 +85,17 @@ import {
   byAttention,
   clockTime,
   every,
+  failingSinceText,
   fillPercent,
   failureLabel,
   formatBytes,
   freshness,
   type Freshness,
   protocolName,
-  since
+  since,
+  sinceClock
 } from "@/lib/status"
+import { canMorph, withTransition } from "@/lib/transition"
 
 const deviceBadge = (state: Freshness) => {
   switch (state._tag) {
@@ -59,15 +110,19 @@ const deviceBadge = (state: Freshness) => {
   }
 }
 
-/** Under the device's name: how often it is read, and since when it hasn't been once that matters. */
+/**
+ * Under the device's name: how often it is read, and since when it hasn't been once that matters: a failing device
+ * since its data stopped, at its last good read ("no data since 12:18:20 (3 min)").
+ */
 const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
   const read = `read ${every(device.pollIntervalMs)}`
   switch (state._tag) {
     case "live":
     case "starting":
       return read
-    case "late":
     case "failing":
+      return `${read} · ${failingSinceText(device, now) ?? "no answer yet"}`
+    case "late":
       return state.lastSuccess === undefined
         ? `${read} · no answer yet`
         : `${read} · no answer for ${since(state.lastSuccess, now)}`
@@ -77,16 +132,99 @@ const deviceLine = (device: DeviceStatus, state: Freshness, now: number) => {
 /** Devices listed before "Show all": every one with a problem is listed anyway. */
 const DEVICE_ROWS = 10
 
-/**
- * Every device, one row each: its health, how it is read and how many points it has, the ones with a problem
- * first. A row opens the device's points on the Points page, where each point has its value and history. A
- * site with many devices lists the first few until asked for all, so this page stays a short overview.
- */
-const Devices = ({ status }: { readonly status: GatewayStatus }) => {
-  const [all, setAll] = useState(false)
+/** The devices the Status tab lists, problems first: the first `DEVICE_ROWS` and every one with a problem, or all. */
+const listedDevices = (status: GatewayStatus, all: boolean) => {
   const ordered = byAttention(status.devices, status.now)
   const problems = ordered.filter((device) => freshness(device, status.now)._tag !== "live").length
-  const listed = all ? ordered : ordered.slice(0, Math.max(DEVICE_ROWS, problems))
+  return { ordered, listed: all ? ordered : ordered.slice(0, Math.max(DEVICE_ROWS, problems)) }
+}
+
+/** The values the Status tab shows (lib/glance.ts): a few per listed device, and every alarm point. */
+interface Glance {
+  readonly byDevice: ReadonlyMap<string, ReadonlyArray<PointInfo>>
+  readonly readings: ReadonlyMap<string, PointReading>
+  readonly unreachable: boolean
+}
+
+/**
+ * A device's latest values in one wrapping line: its alarms that are on first, then its first points, each with its
+ * name (the id on hover), and how many more the Points tab has. A stale value is dimmed as on the Points tab.
+ */
+const DeviceValues = ({
+  device,
+  glance,
+  now
+}: {
+  readonly device: DeviceStatus
+  readonly glance: Glance
+  readonly now: number
+}) => {
+  const points = glance.byDevice.get(device.id) ?? []
+  if (points.length === 0) return null
+  const { shown, more } = glancePoints(points, glance.readings)
+  return (
+    <ul className="col-span-full flex min-w-0 flex-wrap gap-x-4 gap-y-1 text-sm">
+      {shown.map((point) => {
+        const value = glance.readings.get(pointKey(point))
+        const read = pointFreshness(point, { value, device }, now, glance.unreachable)
+        return (
+          <li
+            className="flex max-w-full min-w-0 items-baseline gap-1"
+            key={point.id}
+            title={`${point.id}: ${point.name}`}
+          >
+            <span className="max-w-48 truncate text-muted-foreground">{point.name}</span>
+            <PointValue
+              alarm={alarmWhen(point)}
+              className="shrink-0 font-mono whitespace-nowrap tabular-nums"
+              now={now}
+              stale={read._tag === "stale"}
+              onChange={readsOnChange(point)}
+              unit={point.unit}
+              value={value}
+            />
+            {read._tag === "unchanged" ? (
+              <span className="shrink-0 text-xs text-muted-foreground" title={ON_CHANGE_HINT}>
+                COV
+              </span>
+            ) : null}
+          </li>
+        )
+      })}
+      {more > 0 ? <li className="text-muted-foreground">+{formatNumber(more)} more</li> : null}
+    </ul>
+  )
+}
+
+/**
+ * Every device, one row each: its health, how it is read, how many points it has and its first few values, the
+ * ones with a problem first. A row opens the device in a side panel (since when it fails, why, what to check, its
+ * points and events). A site with many devices lists the first few until asked for all, so this page stays a short
+ * overview.
+ */
+const Devices = ({
+  status,
+  all,
+  onShowAll,
+  onOpen,
+  opened,
+  glance
+}: {
+  readonly status: GatewayStatus
+  readonly all: boolean
+  readonly onShowAll: () => void
+  readonly onOpen: (device: string) => void
+  /** The device open in the panel, marked in the list. */
+  readonly opened: string | undefined
+  readonly glance: Glance | undefined
+}) => {
+  const { ordered, listed } = listedDevices(status, all)
+  if (ordered.length === 0)
+    return (
+      <Card className="px-5 py-5">
+        <NoDevicesYet />
+      </Card>
+    )
   return (
     <Card className="gap-0 py-0">
       <div className="flex items-center justify-between gap-2 border-b px-5 py-4">
@@ -103,13 +241,18 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
           const state = freshness(device, status.now)
           return (
             <li key={device.id}>
-              <Link
-                className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-1 px-5 py-3 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
-                href={`/points/?device=${encodeURIComponent(device.id)}`}
+              <button
+                aria-haspopup="dialog"
+                aria-pressed={device.id === opened}
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 text-left hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none aria-pressed:bg-muted sm:grid-cols-[minmax(0,1fr)_auto_auto_auto]"
+                data-device={device.id}
+                onClick={() => onOpen(device.id)}
+                type="button"
               >
                 <div className="min-w-0">
                   <p className="truncate font-mono text-sm font-medium">{device.id}</p>
-                  <p className="truncate text-xs text-muted-foreground">
+                  {/* Wraps rather than cutting off "failing since …" on a phone. */}
+                  <p className="text-xs break-words text-muted-foreground">
                     {protocolName[device.protocol]} · {deviceLine(device, state, status.now)}
                   </p>
                 </div>
@@ -120,7 +263,8 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
                 <span aria-hidden="true" className="hidden text-muted-foreground sm:block">
                   →
                 </span>
-              </Link>
+                {glance === undefined ? null : <DeviceValues device={device} glance={glance} now={status.now} />}
+              </button>
             </li>
           )
         })}
@@ -129,7 +273,7 @@ const Devices = ({ status }: { readonly status: GatewayStatus }) => {
         <div className="border-t p-3 text-center">
           <button
             className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
-            onClick={() => setAll(true)}
+            onClick={onShowAll}
             type="button"
           >
             Show all {formatNumber(ordered.length)} devices
@@ -156,9 +300,9 @@ const useBufferRate = (status: GatewayStatus) => {
   return rate
 }
 
-type Panel = "broker" | "devices" | "buffer"
+type Panel = "broker" | "devices" | "buffer" | "machine"
 
-const panelTitles = { broker: "Broker", devices: "Devices", buffer: "Buffer" } as const
+const panelTitles = { broker: "Broker", devices: "Devices", buffer: "Buffer", machine: "Machine" } as const
 
 /**
  * A card that opens its details. The button is the card's label, stretched over the whole card (valid HTML, unlike
@@ -169,6 +313,7 @@ const OverviewCard = ({
   title,
   note,
   extra,
+  hint,
   bad,
   onOpen,
   cardRef
@@ -177,6 +322,8 @@ const OverviewCard = ({
   readonly title: string
   readonly note: string
   readonly extra?: ReactNode
+  /** The note's tooltip, when it needs explaining; the note itself otherwise (it may be cut off). */
+  readonly hint?: string
   readonly bad: boolean
   readonly onOpen: () => void
   readonly cardRef: (element: HTMLDivElement | null) => void
@@ -202,7 +349,7 @@ const OverviewCard = ({
         </span>
       </div>
       <CardTitle className={`text-2xl tabular-nums ${bad ? "text-destructive" : ""}`}>{title}</CardTitle>
-      <CardDescription className="truncate" title={note}>
+      <CardDescription className="truncate" title={hint ?? note}>
         {note}
       </CardDescription>
       {extra}
@@ -221,10 +368,15 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
             ? broker.connectedAt === undefined
               ? "Connected"
               : `Connected since ${clockTime(broker.connectedAt, status.now)}`
-            : broker.connectedAt === undefined
-              ? "Not connected yet"
-              : `Disconnected, last connected at ${clockTime(broker.connectedAt, status.now)}`}
+            : broker.disconnectedSince !== undefined
+              ? `Disconnected since ${sinceClock(broker.disconnectedSince, status.now)}`
+              : broker.connectedAt === undefined
+                ? "Not connected yet"
+                : `Disconnected, last connected at ${clockTime(broker.connectedAt, status.now)}`}
         </p>
+        {broker.connected || broker.lastError === undefined ? null : (
+          <p className="font-mono text-sm break-words text-destructive">{broker.lastError}</p>
+        )}
         {broker.connected ? null : (
           <p className="text-sm text-muted-foreground">
             {buffer === undefined
@@ -236,7 +388,10 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
       <Facts
         rows={[
           ["Broker", <span className="font-mono">{broker.url}</span>],
-          ["Values published", formatNumber(broker.published)],
+          !broker.connected &&
+            broker.connectedAt !== undefined && ["Last connected", clockTime(broker.connectedAt, status.now)],
+          // Sent on, not "reached the broker": during an outage into the buffer. The Messages tab counts arrivals.
+          ["Values sent (to broker or buffer)", formatNumber(broker.published)],
           [
             "Could not publish",
             <span className={broker.publishFailures > 0 ? "text-destructive" : ""}>
@@ -262,7 +417,13 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
   )
 }
 
-const DevicesDetails = ({ status }: { readonly status: GatewayStatus }) => {
+const DevicesDetails = ({
+  status,
+  onOpenDevice
+}: {
+  readonly status: GatewayStatus
+  readonly onOpenDevice: (device: string) => void
+}) => {
   const counts = deviceCounts(status.devices, status.now)
   const attention = byAttention(status.devices, status.now).filter((device) => {
     const tag = freshness(device, status.now)._tag
@@ -303,18 +464,19 @@ const DevicesDetails = ({ status }: { readonly status: GatewayStatus }) => {
               const state = freshness(device, status.now)
               return (
                 <li key={device.id}>
-                  <Link
-                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm hover:bg-muted/50"
-                    href={`/points/?device=${encodeURIComponent(device.id)}`}
+                  <button
+                    className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-muted/50"
+                    onClick={() => onOpenDevice(device.id)}
+                    type="button"
                   >
                     <span className="min-w-0">
                       <span className="block truncate font-mono">{device.id}</span>
-                      <span className="block truncate text-xs text-muted-foreground">
+                      <span className="block text-xs break-words text-muted-foreground">
                         {deviceLine(device, state, status.now)}
                       </span>
                     </span>
                     {deviceBadge(state)}
-                  </Link>
+                  </button>
                 </li>
               )
             })}
@@ -391,17 +553,69 @@ const BufferDetails = ({ status, view }: { readonly status: GatewayStatus; reado
   )
 }
 
+const ms = (value: number) => `${formatNumber(Math.round(value))} ms`
+
+/** The machine's last sample: its problems in machineProblems' words first, then every reading calmly. */
+const MachineDetails = ({ status }: { readonly status: GatewayStatus }) => {
+  const { host } = status
+  if (host === undefined)
+    return <p className="text-sm text-muted-foreground">The gateway samples the machine every 15 s; no sample yet.</p>
+  const problems = machineProblems(host, status.now - status.since)
+  const power = powerLabel(host)
+  return (
+    <>
+      {problems.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nothing needs a look: power, heat, disk and load are fine.</p>
+      ) : (
+        <ul className="flex flex-col gap-1 text-sm text-amber-700 dark:text-amber-300">
+          {problems.map((problem) => (
+            <li key={problem}>{problem}</li>
+          ))}
+        </ul>
+      )}
+      <Facts
+        rows={[
+          ["Processor", `${Math.round(host.cpuPercent)} % of one core`],
+          ["Memory", formatBytes(host.memoryBytes)],
+          ["JavaScript heap", formatBytes(host.heapBytes)],
+          ["Event-loop lag", `${ms(host.eventLoopLagMs.p99)} (p99), up to ${ms(host.eventLoopLagMs.max)}`],
+          host.temperatureC !== undefined && ["Temperature", `${Math.round(host.temperatureC)} °C`],
+          power !== undefined && ["Power supply", power],
+          host.diskFreeBytes !== undefined && ["Disk free", formatBytes(host.diskFreeBytes)],
+          host.openFds !== undefined && ["Open files", formatNumber(host.openFds)],
+          ["Clock steps", formatNumber(host.clockSteps)],
+          ["Version", <span className="font-mono">{host.version}</span>],
+          ["Node.js", <span className="font-mono">{host.node}</span>]
+        ]}
+      />
+      <p className="text-xs text-muted-foreground">
+        Sampled every 15 s; lag over the last minute; clock steps since the gateway started.
+      </p>
+    </>
+  )
+}
+
 /**
- * The broker, the devices and the buffer at a glance; each card opens its details in a dialog that grows out of
- * it (a view transition where the browser has them).
+ * The broker, the devices, the buffer and the machine at a glance; each card opens its details in a dialog that
+ * grows out of it (a view transition where the browser has them).
  */
-const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly stale: boolean }) => {
+const Overview = ({
+  status,
+  stale,
+  onOpenDevice
+}: {
+  readonly status: GatewayStatus
+  readonly stale: boolean
+  readonly onOpenDevice: (device: string) => void
+}) => {
   const [open, setOpen] = useState<Panel | undefined>(undefined)
   const [morph, setMorph] = useState(false)
   const cards = useRef<Partial<Record<Panel, HTMLDivElement | null>>>({})
   const failing = status.devices.filter((device) => device.status === "failing").length
+  const named = failingDevices(status.devices)
   const ok = status.devices.filter((device) => device.status === "ok").length
   const buffer = bufferView(status.buffer, status.broker.connected, useBufferRate(status))
+  const machine = machineCard(status.host, status.now - status.since)
   const note = (text: string) => (stale ? "page is not reaching the gateway" : text)
 
   const openPanel = (panel: Panel) => {
@@ -421,7 +635,7 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
   })
 
   return (
-    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
       <OverviewCard
         {...cardProps("broker")}
         bad={!status.broker.connected}
@@ -433,21 +647,52 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
           )
         }
         label="Broker"
-        note={note(`${status.broker.connected ? "to " : ""}${status.broker.url}`)}
+        note={note(
+          status.broker.connected
+            ? `to ${status.broker.url}`
+            : status.broker.disconnectedSince === undefined
+              ? status.broker.url
+              : `since ${sinceClock(status.broker.disconnectedSince, status.now)}`
+        )}
         title={status.broker.connected ? "connected" : "disconnected"}
       />
       <OverviewCard
         {...cardProps("devices")}
         bad={failing > 0}
+        extra={
+          named.shown.length === 0 || stale ? null : (
+            // Above the card's stretched button, so each opens its device rather than the card's details.
+            <ul className="relative z-10 flex flex-col gap-0.5 text-sm">
+              {named.shown.map((device) => (
+                <li className="min-w-0 truncate" key={device.id}>
+                  <a
+                    className="text-destructive underline-offset-4 hover:underline"
+                    href={`?${new URLSearchParams({ device: device.id }).toString()}`}
+                    onClick={(event) => {
+                      if (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0) return
+                      event.preventDefault()
+                      onOpenDevice(device.id)
+                    }}
+                  >
+                    <span className="font-mono">{device.id}</span>: {device.why}
+                  </a>
+                </li>
+              ))}
+              {named.more === 0 ? null : <li className="text-muted-foreground">+{formatNumber(named.more)} more</li>}
+            </ul>
+          )
+        }
         label="Devices"
         note={note(
-          failing > 0
-            ? `devices answering, ${failing} failing`
-            : ok === status.devices.length
-              ? "devices answering"
-              : `devices answering, ${status.devices.length - ok} starting`
+          status.devices.length === 0
+            ? "no devices in the config yet"
+            : failing > 0
+              ? `devices answering, ${failing} failing`
+              : ok === status.devices.length
+                ? "devices answering"
+                : `devices answering, ${status.devices.length - ok} starting`
         )}
-        title={`${ok}/${status.devices.length}`}
+        title={status.devices.length === 0 ? "none" : `${ok}/${status.devices.length}`}
       />
       <OverviewCard
         {...cardProps("buffer")}
@@ -463,14 +708,30 @@ const Overview = ({ status, stale }: { readonly status: GatewayStatus; readonly 
         note={note(buffer.note)}
         title={buffer.title}
       />
+      <OverviewCard
+        {...cardProps("machine")}
+        bad={machine.bad && !stale}
+        {...(machine.hint === undefined || stale ? {} : { hint: machine.hint })}
+        label="Machine"
+        note={note(machine.note)}
+        title={machine.title}
+      />
       {open === undefined ? null : (
         <DetailDialog morph={morph} onClose={closePanel} title={panelTitles[open]}>
           {open === "broker" ? (
             <BrokerDetails status={status} />
           ) : open === "devices" ? (
-            <DevicesDetails status={status} />
-          ) : (
+            <DevicesDetails
+              onOpenDevice={(device) => {
+                setOpen(undefined)
+                onOpenDevice(device)
+              }}
+              status={status}
+            />
+          ) : open === "buffer" ? (
             <BufferDetails status={status} view={buffer} />
+          ) : (
+            <MachineDetails status={status} />
           )}
         </DetailDialog>
       )}
@@ -497,22 +758,373 @@ const MachineNotice = ({ host, upMs }: { readonly host: HostStatus; readonly upM
   )
 }
 
-const StatusPage = () => {
+/**
+ * The alarm points that are on (lib/glance.ts), above everything else: how many, and each by name with its device,
+ * a link to the point on the Points tab. An alarm whose value is stale (its device does not answer) is listed muted,
+ * as its value is, and counted apart: it is only last known to be active. Without one known to be on now, the banner
+ * is muted too.
+ */
+const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<ShownAlarm> }) => {
+  if (alarms.length === 0) return null
+  const lastKnown = alarms.filter((alarm) => alarm.lastKnown !== undefined).length
+  const active = alarms.length - lastKnown
+  return (
+    <div
+      className={`flex flex-col gap-1 rounded-xl border px-4 py-3 text-sm ${
+        active > 0 ? "border-destructive/40 bg-destructive/10 text-destructive" : "bg-muted/40 text-muted-foreground"
+      }`}
+      role={active > 0 ? "alert" : "status"}
+    >
+      <p className="font-semibold">{alarmCount(active, lastKnown)}</p>
+      <ul className="flex flex-col gap-0.5">
+        {alarms.map((alarm) => {
+          const { point } = alarm
+          const why = alarmNote(alarm, active)
+          return (
+            <li
+              className={`min-w-0 truncate ${why === undefined ? "" : "text-muted-foreground"}`}
+              data-stale={why === undefined ? undefined : ""}
+              key={pointKey(point)}
+            >
+              <Link
+                className="underline-offset-4 hover:underline"
+                href={`/points/${filterToSearch({ query: "", device: point.device }, pointKey(point))}`}
+                title={pointKey(point)}
+              >
+                {point.name}
+              </Link>{" "}
+              <span className="font-mono text-xs opacity-80">on {point.device}</span>
+              {why === undefined ? null : <span>: {why}</span>}
+            </li>
+          )
+        })}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * The catalog and the values the page shows: a few per listed device and every alarm point, asked for like the
+ * Points tab's rows. Nothing until the catalog came; the rows show without values meanwhile.
+ */
+const useGlance = (
+  status: GatewayStatus | undefined,
+  all: boolean,
+  unreachable: boolean,
+  opened: string | undefined
+) => {
+  const catalogLoad = useCatalog(status?.configSince)
+  const catalog = catalogLoad._tag === "ok" ? catalogLoad.catalog : undefined
+  const listedIds =
+    status === undefined
+      ? ""
+      : listedDevices(status, all)
+          .listed.map((device) => device.id)
+          .join(",")
+  const byDevice = useMemo(() => pointsByDevice(catalog?.points ?? []), [catalog])
+  // The open device's first points ride on the same values poll as the rows'.
+  const keys = useMemo(() => {
+    if (catalog === undefined || listedIds === "") return []
+    const sheet = opened === undefined ? [] : (byDevice.get(opened) ?? []).slice(0, SHEET_POINTS).map(pointKey)
+    return [...new Set([...glanceKeys(catalog.points, listedIds.split(",")), ...sheet])]
+  }, [catalog, listedIds, opened, byDevice])
+  const readings = useValues(keys)
+  if (catalog === undefined) return undefined
+  return {
+    glance: { byDevice, readings, unreachable },
+    alarms:
+      status === undefined ? [] : shownAlarms(catalog.points, readings, devicesById(status), status.now, unreachable)
+  }
+}
+
+/** Events the Recent events card lists before "Show all". */
+const CARD_EVENTS = 10
+
+const toneDot = {
+  bad: "bg-destructive",
+  warning: "bg-warning",
+  good: "bg-success",
+  neutral: "bg-muted-foreground/40"
+} as const
+
+/**
+ * Events, newest first, one line each: a dot for bad news, a warning or good news, the local time and what happened,
+ * with a muted detail after it (when a recovered device was detected failing) and a muted note under it (what a
+ * flapping alarm usually means). Above the newest failure of devices that stopped answering within seconds of each
+ * other, a line says they likely share a cause (their host, when they all sit on one).
+ */
+const EventList = ({
+  events,
+  now,
+  names,
+  shared,
+  onOpenDevice
+}: {
+  readonly events: KnownEvents["events"]
+  readonly now: number
+  readonly names: PointNames
+  /** The shared-cause lines by the event they go above (`sharedCauseNotes`). */
+  readonly shared: ReadonlyMap<number, string>
+  readonly onOpenDevice: (device: string) => void
+}) => (
+  <ul className="flex flex-col text-sm">
+    {events.map((event) => {
+      const sharedCause = shared.get(event.id)
+      const detail = eventDetail(event, now)
+      const note = eventNote(event)
+      const line = (
+        <>
+          <span aria-hidden="true" className={`mt-1.5 size-2 shrink-0 rounded-full ${toneDot[eventTone(event)]}`} />
+          <span className="shrink-0 font-mono text-xs leading-5 text-muted-foreground tabular-nums">
+            {clockTime(event.at, now)}
+          </span>
+          <span className="min-w-0 break-words">
+            {eventSentence(event, names, now)}
+            {detail === undefined ? null : (
+              <span className="text-xs text-muted-foreground" title={eventDetailTitle(event)}>
+                {" "}
+                · {detail}
+              </span>
+            )}
+            {note === undefined ? null : <span className="block text-xs text-muted-foreground">{note}</span>}
+          </span>
+        </>
+      )
+      const row = "flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-left"
+      const device =
+        event.type === "device-failing" ||
+        event.type === "device-recovered" ||
+        event.type === "counter-went-back" ||
+        event.type === "counter-jumped"
+          ? event.device
+          : undefined
+      return (
+        <li key={event.id}>
+          {sharedCause === undefined ? null : (
+            <p className="mt-1 rounded-md bg-destructive/10 px-2 py-1 text-xs break-words">{sharedCause}</p>
+          )}
+          {device === undefined ? (
+            <div className={row}>{line}</div>
+          ) : (
+            <button
+              className={`${row} hover:bg-muted/50`}
+              onClick={() => onOpenDevice(device)}
+              title={`Open ${device}`}
+              type="button"
+            >
+              {line}
+            </button>
+          )}
+        </li>
+      )
+    })}
+  </ul>
+)
+
+/**
+ * What happened lately (`/api/events`), newest first: devices that stopped answering and came back, the broker
+ * going away and coming back, the buffer emptying. A fault that cleared before anyone looked still shows here.
+ * "Show all" opens every event the gateway keeps.
+ */
+const RecentEvents = ({
+  status,
+  known,
+  names,
+  onOpenDevice
+}: {
+  readonly status: GatewayStatus
+  readonly known: KnownEvents | undefined
+  readonly names: PointNames
+  readonly onOpenDevice: (device: string) => void
+}) => {
+  const [all, setAll] = useState(false)
+  const [morph, setMorph] = useState(false)
+  const card = useRef<HTMLDivElement>(null)
+  // Events of an older run of the gateway are not shown against this one's start.
+  const events = known?.since === status.since ? known.events : []
+  const happened = events.some(isIncident)
+  const hostOf = useMemo(() => hostsOf(status.devices), [status.devices])
+  const brokerHost = brokerHostOf(status.broker.url)
+  const shared = useMemo(() => sharedCauseNotes(events, hostOf, brokerHost), [events, hostOf, brokerHost])
+  const open = () => {
+    const transition = morphFrom(card.current)
+    setMorph(transition.morph)
+    transition.open(() => setAll(true))
+  }
+  const openDevice = (device: string) => {
+    setAll(false)
+    onOpenDevice(device)
+  }
+  return (
+    <Card className="gap-0 py-0" ref={card}>
+      <div className="flex items-center justify-between gap-2 border-b px-5 py-4">
+        <h2 className="leading-none font-semibold">Recent events</h2>
+        {happened ? (
+          <button
+            aria-haspopup="dialog"
+            className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+            onClick={open}
+            type="button"
+          >
+            Show all ({formatNumber(events.length)})
+          </button>
+        ) : null}
+      </div>
+      <div className="px-3 py-3">
+        {happened ? (
+          <EventList
+            events={latestEvents(events, CARD_EVENTS)}
+            names={names}
+            now={status.now}
+            onOpenDevice={onOpenDevice}
+            shared={shared}
+          />
+        ) : (
+          <p className="px-2 py-1 text-sm text-muted-foreground">{nothingYet(status.since, status.now)}</p>
+        )}
+      </div>
+      {all ? (
+        <DetailDialog morph={morph} onClose={() => morphFrom(card.current).close(() => setAll(false))} title="Events">
+          <p className="text-sm text-muted-foreground">
+            Since the gateway started at {clockTime(status.since, status.now)}, newest first.
+            {known !== undefined && known.dropped > 0
+              ? ` It keeps the latest ${formatNumber(known.capacity)}; ${formatNumber(known.dropped)} older ones were let go.`
+              : ""}
+          </p>
+          <EventList
+            events={events.toReversed()}
+            names={names}
+            now={status.now}
+            onOpenDevice={openDevice}
+            shared={shared}
+          />
+        </DetailDialog>
+      ) : null}
+    </Card>
+  )
+}
+
+/** The open device in a URL query, if any. */
+const deviceFromSearch = (query: string) => new URLSearchParams(query).get("device") ?? undefined
+
+/**
+ * The device open in the panel, from the URL (`?device=`), so a failing device can be linked; written back with
+ * `replaceState` on open and close. A link to this page while it is open changes the URL under it: it follows.
+ */
+const useOpenDevice = () => {
+  const search = useSearchParams().toString()
+  const [opened, setOpened] = useState(() => deviceFromSearch(search))
+  useEffect(() => setOpened(deviceFromSearch(search)), [search])
+  const update = (device: string | undefined) => {
+    setOpened(device)
+    const query = device === undefined ? "" : `?${new URLSearchParams({ device }).toString()}`
+    window.history.replaceState(null, "", `${window.location.pathname}${query}`)
+  }
+  return [opened, update] as const
+}
+
+const StatusView = () => {
   const load = useGateway()
+  const known = useGatewayEvents()
   const status = statusOf(load)
+  const [all, setAll] = useState(false)
+  const [opened, setOpened] = useOpenDevice()
+  const [morph, setMorph] = useState(false)
+  const unreachable = load._tag === "unreachable"
+  const glance = useGlance(status, all, unreachable, opened)
+  const config = useRunningConfig(status?.configSince)
+  const catalogLoad = useCatalog(status?.configSince)
+  const byDevice = useMemo(
+    () => pointsByDevice(catalogLoad._tag === "ok" ? catalogLoad.catalog.points : []),
+    [catalogLoad]
+  )
+  const pointNames: PointNames = (deviceId, pointId) =>
+    byDevice.get(deviceId)?.find((point) => point.id === pointId)?.name
+  // The setup guide: it leads without devices, and stays after the first save until it is closed (lib/first-run.ts).
+  const [guide, setGuide] = useState(false)
+  const deviceCount = status?.devices.length
+  useEffect(() => {
+    if (deviceCount === 0 || guideStarted()) setGuide(true)
+  }, [deviceCount])
+
+  const openDevice = (device: string) => {
+    setMorph(canMorph())
+    withTransition(() => setOpened(device))
+  }
+  /** Close the panel: it slides out, and focus goes to the row of the device it showed. */
+  const closeDevice = () => {
+    const shown = opened
+    withTransition(() => setOpened(undefined), {
+      updated: () => {
+        if (shown === undefined) return
+        document.querySelector<HTMLElement>(`[data-device="${CSS.escape(shown)}"]`)?.focus({ preventScroll: true })
+      }
+    })
+  }
+
+  if (status === undefined)
+    return (
+      <p className="text-muted-foreground">{load._tag === "loading" ? "Loading…" : "The gateway does not answer."}</p>
+    )
+
+  const { listed } = listedDevices(status, all)
+  const device = opened === undefined ? undefined : status.devices.find((candidate) => candidate.id === opened)
+  const index = device === undefined ? -1 : listed.indexOf(device)
+  /** The next or previous listed device, in the open panel, without a transition: stepping should feel instant. */
+  const step = (delta: 1 | -1) => {
+    const next = listed[index + delta]
+    if (next !== undefined) setOpened(next.id)
+  }
+  const configDevice = config?.devices.find((candidate) => candidate.id === opened)
+
   return (
     <>
-      {status === undefined ? (
-        <p className="text-muted-foreground">{load._tag === "loading" ? "Loading…" : "The gateway does not answer."}</p>
-      ) : (
+      {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
+      <AlarmNotice alarms={glance?.alarms ?? []} />
+      {showsGuide(status.devices.length, guide) ? <FirstRun onClose={() => setGuide(false)} status={status} /> : null}
+      {status.devices.length === 0 ? null : (
         <>
-          {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
-          <Overview status={status} stale={load._tag !== "ok"} />
-          <Devices status={status} />
+          <Overview onOpenDevice={openDevice} stale={load._tag !== "ok"} status={status} />
+          <Devices
+            all={all}
+            glance={glance?.glance}
+            onOpen={openDevice}
+            onShowAll={() => setAll(true)}
+            opened={opened}
+            status={status}
+          />
         </>
+      )}
+      <RecentEvents known={known} names={pointNames} onOpenDevice={openDevice} status={status} />
+      {device === undefined ? null : (
+        <DeviceSheet
+          address={configDevice === undefined ? undefined : deviceAddress(configDevice)}
+          device={device}
+          events={known?.since === status.since ? deviceEvents(known.events, device.id) : []}
+          shared={
+            known?.since === status.since
+              ? sharedFailure(known.events, device.id, hostsOf(status.devices), brokerHostOf(status.broker.url))
+              : { context: {} }
+          }
+          morph={morph}
+          now={status.now}
+          onClose={closeDevice}
+          onStep={step}
+          points={catalogLoad._tag === "ok" ? (byDevice.get(device.id) ?? []) : undefined}
+          position={index < 0 ? undefined : { index: index + 1, total: listed.length }}
+          readings={glance?.glance.readings ?? new Map()}
+          unreachable={unreachable}
+        />
       )}
     </>
   )
 }
+
+/** `useSearchParams` needs a Suspense boundary in a static export: the prerendered page shows its fallback. */
+const StatusPage = () => (
+  <Suspense fallback={<p className="text-muted-foreground">Loading…</p>}>
+    <StatusView />
+  </Suspense>
+)
 
 export default StatusPage

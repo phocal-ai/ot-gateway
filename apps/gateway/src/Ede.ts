@@ -14,7 +14,7 @@
 import { ObjectType, POINT_TYPES, qudtUnits } from "@ot-gateway/bacnet"
 import { Effect, Result } from "effect"
 import { toCsv } from "./Csv.ts"
-import { slugify } from "./Discover.ts"
+import { slugify } from "./Slug.ts"
 import { PointsListError, readDelimited } from "./PointsList.ts"
 
 /** A header field as compared: letters and digits only, lower case (`# device obj.-instance` → `deviceobjinstance`). */

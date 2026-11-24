@@ -7,9 +7,16 @@ import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem, Result } from "effect"
 import { exampleConfigPath } from "../src/Demo.ts"
-import { importPointsList } from "../src/Import.ts"
+import { describeUnits, importPointsList } from "../src/Import.ts"
 import { initConfig } from "../src/Init.ts"
-import { devicesFromPointsList, parseDelimited, qudtUnit, readDelimited } from "../src/PointsList.ts"
+import {
+  devicesFromPointsList,
+  parseDelimited,
+  qudtUnit,
+  readableName,
+  readDelimited,
+  unitsWritten
+} from "../src/PointsList.ts"
 
 const minimalConfig = { site: "s", building: "b", mqtt: { url: "mqtt://localhost:1883" } }
 
@@ -73,7 +80,47 @@ describe("qudtUnit", () => {
   })
 })
 
+describe("readableName", () => {
+  it("shows a point written as an id as a name, and keeps a name as written", () => {
+    expect(readableName("active-power")).toBe("Active power")
+    expect(readableName("main_breaker_tripped")).toBe("Main breaker tripped")
+    expect(readableName("energy")).toBe("Energy")
+    expect(readableName("Supply air temp")).toBe("Supply air temp")
+    expect(readableName("CO2")).toBe("CO2")
+  })
+})
+
 describe("devicesFromPointsList", () => {
+  it.effect("marks alarm points on or off, and names points written as ids unless a name column gives one", () =>
+    Effect.gen(function* () {
+      const [device] = yield* devicesFromPointsList(
+        [
+          "device,point,name,alarm,host,register,table",
+          "panel,main-breaker-tripped,,on,1.2.3.4,0,discrete",
+          "panel,door-closed,Door contact,OFF,1.2.3.4,1,discrete",
+          "panel,power-ok,,,1.2.3.4,2,discrete"
+        ].join("\n")
+      )
+      expect(device?.points.map((point) => [point.id, point.name, point.alarmWhen])).toEqual([
+        ["main-breaker-tripped", "Main breaker tripped", "on"],
+        ["door-closed", "Door contact", "off"],
+        ["power-ok", "Power ok", undefined]
+      ])
+      const config = yield* parseConfig(JSON.stringify({ ...minimalConfig, devices: [device] }))
+      expect(config.devices[0]?.points.map((point) => point.alarmWhen)).toEqual(["on", "off", undefined])
+    })
+  )
+
+  it.effect("refuses an alarm that is neither on nor off, and reads an old list's name column as the point", () =>
+    Effect.gen(function* () {
+      expect(yield* mistake("device,point,alarm,host,register,table\nm,p,yes,1.2.3.4,0,coil")).toBe(
+        'line 2: "p" has alarm "yes"; write on (the alarm is active when the value is true or not 0) or off (active when false or 0), or leave it empty'
+      )
+      const [device] = yield* devicesFromPointsList("device,name,host,register,table\nm,Pump fault,1.2.3.4,0,coil")
+      expect(device?.points.map((point) => [point.id, point.name])).toEqual([["pump-fault", "Pump fault"]])
+    })
+  )
+
   it.effect("turns the example list into Modbus and BACnet devices that make a valid config", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
@@ -106,7 +153,7 @@ describe("devicesFromPointsList", () => {
           dataType: "uint32",
           byteOrder: "CDAB"
         },
-        { id: "breaker-tripped", name: "Breaker tripped", table: "coil", address: 0, dataType: "bool" }
+        { id: "breaker-tripped", name: "Breaker tripped", table: "coil", address: 0, dataType: "bool", alarmWhen: "on" }
       ])
       expect(devices[1]).toMatchObject({ protocol: "modbus-tcp", host: "192.168.1.51" })
       expect(devices[2]).toMatchObject({ protocol: "bacnet-ip", deviceInstance: 2001, pollIntervalMs: 30_000 })
@@ -211,8 +258,8 @@ describe("devicesFromPointsList", () => {
       expect(yield* mistake('device,point,host,register,type\nm,p,1.2.3.4,1,int16\n\nm,"q,1.2.3.4,2,int16\n')).toBe(
         "line 4: a quote opened here is never closed"
       )
-      expect(yield* mistake("device,name,point,host\nm,p,q,1.2.3.4")).toBe(
-        'the header has both "name" and "point", which are the same column'
+      expect(yield* mistake("device,point_name,point,host\nm,p,q,1.2.3.4")).toBe(
+        'the header has both "point_name" and "point", which are the same column'
       )
     })
   )
@@ -245,6 +292,27 @@ describe("devicesFromPointsList", () => {
       ])
     })
   )
+})
+
+describe("the units of an import", () => {
+  it("names each distinct unit once, with the QUDT name that goes out and how many points", () => {
+    const units = unitsWritten("device,point,unit\nm,p1,kW\nm,p2,kW\nm,p3,°C\nm,p4,unit:BAR\nm,p5,m/s\nm,p6,\n")
+    expect(units).toEqual([
+      { written: "kW", unit: "unit:KiloW", qudt: true, points: 2 },
+      { written: "°C", unit: "unit:DEG_C", qudt: true, points: 1 },
+      { written: "unit:BAR", unit: "unit:BAR", qudt: true, points: 1 },
+      { written: "m/s", unit: "m/s", qudt: false, points: 1 }
+    ])
+    expect(describeUnits(units)).toEqual([
+      "units, as the $meta of each point carries them (QUDT names):",
+      "  kW -> unit:KiloW  (2 points)",
+      "  °C -> unit:DEG_C  (1 point)",
+      "  unit:BAR  (1 point)",
+      "  m/s  kept as written: no QUDT name known for it; write one (unit:…) if consumers need it  (1 point)"
+    ])
+    expect(unitsWritten("device,point\nm,p\n")).toEqual([])
+    expect(describeUnits([])).toEqual([])
+  })
 })
 
 describe("importPointsList", () => {

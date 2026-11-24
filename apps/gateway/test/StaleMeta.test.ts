@@ -1,6 +1,6 @@
 /**
- * Retained metadata of removed points: the gateway clears it for its own devices only, and leaves the metadata
- * of points it still has and of devices it does not have (another gateway's, in the same building) alone.
+ * Retained metadata of removed points: the gateway clears what it published itself for its own devices only, and
+ * leaves the metadata of points it still has, of devices it does not have and of other gateways alone.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
@@ -9,15 +9,16 @@ import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
 import { Effect, Fiber } from "effect"
 import { TestClock } from "effect/testing"
 import { runGateway } from "../src/Gateway.ts"
-import { metaSubscriptions, staleMetaTopic } from "../src/StaleMeta.ts"
+import { metaSubscriptions, staleMeta, staleMetaTopic } from "../src/StaleMeta.ts"
 
 const config = {
+  id: "main",
   site: "s",
   building: "b",
   devices: [{ id: "meter", points: [{ id: "power" }] }]
 } as const
 
-const retained = (topic: string, payload = "{}") => ({ topic, payload, retain: true })
+const retained = (topic: string, payload = '{"name":"x","gateway":"main"}') => ({ topic, payload, retain: true })
 
 describe("staleMetaTopic", () => {
   it("names the retained metadata of a point the device no longer has", () => {
@@ -33,6 +34,19 @@ describe("staleMetaTopic", () => {
     expect(staleMetaTopic(config, retained("s/b/meter/energy/$meta", ""))).toBeUndefined()
   })
 
+  it("leaves metadata another gateway published, or that names no gateway, alone", () => {
+    const topic = "s/b/meter/energy/$meta"
+    expect(staleMetaTopic(config, retained(topic, '{"name":"x","gateway":"roof"}'))).toBeUndefined()
+    expect(staleMetaTopic(config, retained(topic, '{"name":"x"}'))).toBeUndefined()
+    expect(staleMetaTopic(config, retained(topic, "not json"))).toBeUndefined()
+    expect(staleMeta(config, retained(topic, '{"name":"x","gateway":"roof"}'))).toEqual({
+      _tag: "skip",
+      topic,
+      owner: "roof"
+    })
+    expect(staleMeta(config, retained(topic, '{"name":"x"}'))).toEqual({ _tag: "skip", topic, owner: undefined })
+  })
+
   it("subscribes to the metadata of the config's devices only", () => {
     expect(metaSubscriptions(config)).toEqual([{ filter: "s/b/meter/+/$meta", qos: 0 }])
   })
@@ -43,17 +57,19 @@ describe("the gateway and retained metadata", () => {
     Effect.gen(function* () {
       const network = makeMemoryNetwork()
       const control = makeBrokerControl()
-      const seed = (topic: string) =>
+      const seed = (topic: string, gateway = "main") =>
         control.retainedMessages.set(topic, {
           clientId: "before",
           topic,
-          payload: '{"name":"x"}',
+          payload: JSON.stringify({ name: "x", gateway }),
           qos: 0,
           retain: true
         })
       seed("s/b/meter/old-name/$meta")
       seed("s/b/meter/power/$meta")
       seed("s/b/other/x/$meta")
+      // Another gateway in the building with a device of the same id: its point is not this gateway's to clear.
+      seed("s/b/meter/roof-point/$meta", "roof")
       const server = yield* network.listen("10.0.0.2", 1883)
       yield* serveMqtt(server, control).pipe(Effect.forkScoped)
       const gateway = yield* parseConfig(
@@ -77,8 +93,11 @@ describe("the gateway and retained metadata", () => {
       }
       expect([...control.retainedMessages.keys()].filter((topic) => topic.endsWith("/$meta")).toSorted()).toEqual([
         "s/b/meter/power/$meta",
+        "s/b/meter/roof-point/$meta",
         "s/b/other/x/$meta"
       ])
+      // The gateway's own metadata names it.
+      expect(control.retainedMessages.get("s/b/meter/power/$meta")?.payload).toContain('"gateway":"main"')
       yield* Fiber.interrupt(running)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )

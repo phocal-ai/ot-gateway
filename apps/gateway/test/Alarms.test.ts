@@ -1,0 +1,372 @@
+/**
+ * Alarm points: changes become events, states never do; a chattering contact is coalesced and counted; the status
+ * reports each alarm point; the metrics count every change. On the test clock.
+ */
+import { describe, expect, it } from "@effect/vitest"
+import {
+  alarmChanges,
+  alarmsActive,
+  type GatewayConfig,
+  makeHealthRegistry,
+  parseConfig,
+  withMetricAttributes
+} from "@ot-gateway/core"
+import { Clock, Effect, Metric } from "effect"
+import { TestClock } from "effect/testing"
+import { makeStatusState } from "../src/Status.ts"
+import {
+  ALARM_EVENTS_PER_GATEWAY,
+  ALARM_EVENTS_PER_POINT,
+  type AlarmTracker,
+  isAlarmActive,
+  makeAlarmTracker,
+  pointAlarmWhen
+} from "../src/Alarms.ts"
+import { activeAlarms } from "../src/StatusReport.ts"
+import type { AlarmEventInput } from "../src/Events.ts"
+
+const configWith = (points: ReadonlyArray<Record<string, unknown>>) =>
+  parseConfig(
+    JSON.stringify({
+      site: "s",
+      building: "b",
+      mqtt: { url: "mqtt://broker" },
+      devices: [{ protocol: "simulator", id: "pump", points }]
+    })
+  )
+
+const trip = { id: "trip", name: "Trip", alarmWhen: "on", waveform: "constant", min: 0, max: 0 }
+const contact = { id: "contact", name: "Contact", alarmWhen: "off", waveform: "constant", min: 1, max: 1 }
+const speed = { id: "speed", name: "Speed", waveform: "constant", min: 0, max: 0 }
+
+/** A tracker on the test clock, configured for `config`, and the events it recorded. */
+const tracker = (config: GatewayConfig) =>
+  Effect.gen(function* () {
+    const recorded: Array<AlarmEventInput> = []
+    const alarms = makeAlarmTracker(yield* Clock.clockWith(Effect.succeed), (event) => recorded.push(event))
+    yield* alarms.configure(config)
+    return { alarms, recorded }
+  })
+
+/** A read of `point` now, on the test clock's wall time. */
+const read = (alarms: AlarmTracker, point: string, value: number | boolean) =>
+  Effect.map(Clock.currentTimeMillis, (now) => alarms.sink.record("pump", point, value, now))
+
+describe("alarm points", () => {
+  it("are active on true or not 0 for alarmWhen on, on false or 0 for off", () => {
+    expect([true, 1, -2, false, 0].map((value) => isAlarmActive("on", value))).toEqual([true, true, true, false, false])
+    expect([true, 1, false, 0].map((value) => isAlarmActive("off", value))).toEqual([false, false, true, true])
+  })
+
+  it.effect("record changes, not states: raised, cleared with how long, and nothing for a point that is no alarm", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip, contact, speed]))
+      expect(alarms.hasPoints()).toBe(true)
+      yield* read(alarms, "trip", 0)
+      yield* read(alarms, "contact", 1)
+      yield* read(alarms, "speed", 1)
+      // Off at the first read is no event; reads that keep it as it is are none either.
+      for (let cycle = 0; cycle < 10; cycle++) yield* read(alarms, "trip", 0)
+      expect(recorded).toEqual([])
+      yield* TestClock.adjust("1 minute")
+      yield* read(alarms, "trip", 1)
+      yield* read(alarms, "trip", 1)
+      yield* TestClock.adjust("90 seconds")
+      yield* read(alarms, "trip", 0)
+      yield* read(alarms, "contact", 0)
+      expect(recorded).toEqual([
+        { type: "alarm-raised", device: "pump", point: "trip", value: 1 },
+        { type: "alarm-cleared", device: "pump", point: "trip", value: 0, activeMs: 90_000 },
+        { type: "alarm-raised", device: "pump", point: "contact", value: 0 }
+      ])
+      expect(alarms.snapshot()).toEqual([
+        { device: "pump", point: "trip", alarmWhen: "on", active: false, since: 150_000, raised: 1, flapping: false },
+        { device: "pump", point: "contact", alarmWhen: "off", active: true, since: 150_000, raised: 1, flapping: false }
+      ])
+    })
+  )
+
+  it.effect("raise an alarm that is active at its first read, and keep the state across a new config", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip]))
+      yield* read(alarms, "trip", true)
+      expect(recorded).toEqual([{ type: "alarm-raised", device: "pump", point: "trip", value: true, first: true }])
+      yield* alarms.configure(yield* configWith([trip, speed]))
+      yield* read(alarms, "trip", true)
+      expect(recorded).toHaveLength(1)
+      // A config without alarm points: the reads need not come here.
+      yield* alarms.configure(yield* configWith([speed]))
+      expect(alarms.hasPoints()).toBe(false)
+      expect(alarms.snapshot()).toEqual([])
+    })
+  )
+
+  it.effect("coalesce a chattering contact: a few changes, one flapping event, then one when it keeps still", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip]))
+      yield* read(alarms, "trip", 0)
+      // Every 30 s for an hour: 120 changes.
+      for (let change = 0; change < 120; change++) {
+        yield* TestClock.adjust("30 seconds")
+        yield* read(alarms, "trip", change % 2 === 0 ? 1 : 0)
+      }
+      expect(recorded).toHaveLength(ALARM_EVENTS_PER_POINT + 1)
+      // How it flaps, from its first read to the change that made it flapping: on 30 s, off 30 s, 4 times.
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-flapping",
+        device: "pump",
+        point: "trip",
+        raised: 4,
+        pattern: { onMs: 30_000, offMs: 30_000, raised: 4, overMs: 210_000 }
+      })
+      // Raised every minute; the window is the current minute and the 14 before it. The pattern: its last 16 changes.
+      expect(alarms.snapshot()[0]).toMatchObject({
+        active: false,
+        flapping: true,
+        raised: 14,
+        pattern: { onMs: 30_000, offMs: 30_000, raised: 8, overMs: 450_000 }
+      })
+      // It keeps still: reads within 5 min say nothing; the first after 5 min settles it.
+      yield* TestClock.adjust("4 minutes")
+      yield* read(alarms, "trip", 0)
+      expect(recorded).toHaveLength(ALARM_EVENTS_PER_POINT + 1)
+      yield* TestClock.adjust("1 minute")
+      yield* read(alarms, "trip", 0)
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-settled",
+        device: "pump",
+        point: "trip",
+        active: false,
+        since: 3_600_000,
+        unlisted: 120 - ALARM_EVENTS_PER_POINT,
+        // Up to its last change: the five minutes it kept still are not part of the pattern.
+        pattern: { onMs: 30_000, offMs: 30_000, raised: 8, overMs: 450_000 }
+      })
+      // Listed again from here.
+      yield* read(alarms, "trip", 1)
+      expect(recorded.at(-1)).toMatchObject({ type: "alarm-raised" })
+      expect(alarms.snapshot()[0]).toMatchObject({ flapping: false })
+    })
+  )
+
+  it.effect("leave a device's outage out of the pattern, and an alarm found active after it is no new trip", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip]))
+      const registry = makeHealthRegistry(["pump"])
+      registry.onChange(alarms.deviceChanged)
+      registry.recordSuccess("pump", 0)
+      /** Wait until `second` (since the start), then read `value`. */
+      const readAt = (second: number, value: number) =>
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis
+          yield* TestClock.adjust(second * 1_000 - now)
+          yield* read(alarms, "trip", value)
+        })
+      // On and off every 30 s; last seen off at 140 s, then the device fails until 220 s.
+      for (const [second, value] of [
+        [0, 0],
+        [30, 1],
+        [60, 0],
+        [90, 1],
+        [120, 0],
+        [140, 0]
+      ] as const) {
+        yield* readAt(second, value)
+      }
+      yield* TestClock.adjust("10 seconds")
+      registry.recordFailure("pump", { reason: "timeout", message: "no reply", at: 150_000 })
+      // It answers again with the alarm active: when it tripped is not known.
+      yield* readAt(220, 1)
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-raised",
+        device: "pump",
+        point: "trip",
+        value: 1,
+        afterOutage: true,
+        // From the last read at 140 s to this one.
+        unknownMs: 80_000
+      })
+      expect(alarms.snapshot()[0]).toMatchObject({ active: true, since: 220_000, raised: 2 })
+      for (const [second, value] of [
+        [250, 0],
+        [280, 1],
+        [310, 0]
+      ] as const) {
+        yield* readAt(second, value)
+      }
+      expect(recorded.at(-2)).toEqual({ type: "alarm-raised", device: "pump", point: "trip", value: 1 })
+      // Six listed changes, the one after the outage not among them, then flapping. The 80 s the device was away
+      // count as neither on nor off: the off stretch it cut short counts the 20 s seen; raised 3 times, not 4.
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-flapping",
+        device: "pump",
+        point: "trip",
+        raised: 3,
+        pattern: { onMs: 30_000, offMs: 27_500, raised: 3, overMs: 230_000 }
+      })
+      expect(recorded).toHaveLength(8)
+    })
+  )
+
+  it.effect("say when an alarm was found off after an outage, without a clearing time it does not know", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([trip]))
+      const registry = makeHealthRegistry(["pump"])
+      registry.onChange(alarms.deviceChanged)
+      yield* read(alarms, "trip", 1)
+      yield* TestClock.adjust("1 minute")
+      yield* read(alarms, "trip", 1)
+      registry.recordFailure("pump", { reason: "timeout", message: "no reply", at: 60_000 })
+      yield* TestClock.adjust("2 minutes")
+      yield* read(alarms, "trip", 0)
+      expect(recorded.at(-1)).toEqual({
+        type: "alarm-cleared",
+        device: "pump",
+        point: "trip",
+        value: 0,
+        // Seen active for a minute before the device failed.
+        activeMs: 60_000,
+        afterOutage: true,
+        // Not seen from its last read before the failure to this one.
+        unknownMs: 120_000
+      })
+      expect(alarms.snapshot()[0]).toMatchObject({ active: false, raised: 1 })
+      // A device that fails without the state changing records nothing when it is back.
+      registry.recordSuccess("pump", 180_000)
+      registry.recordFailure("pump", { reason: "timeout", message: "no reply", at: 180_000 })
+      yield* TestClock.adjust("1 minute")
+      yield* read(alarms, "trip", 0)
+      expect(recorded).toHaveLength(2)
+    })
+  )
+
+  it.effect("list at most a gateway's budget of alarm events in 15 min, however many points change", () =>
+    Effect.gen(function* () {
+      const many = Array.from({ length: 100 }, (_, index) => ({ ...trip, id: `trip-${index}`, name: `Trip ${index}` }))
+      const { alarms, recorded } = yield* tracker(yield* configWith(many))
+      for (const point of many) yield* read(alarms, point.id, 0)
+      for (const point of many) yield* read(alarms, point.id, 1)
+      expect(recorded).toHaveLength(ALARM_EVENTS_PER_GATEWAY)
+      // The ones over the budget settle like a flapping point, once there is room again.
+      expect(alarms.snapshot().filter((alarm) => alarm.flapping)).toHaveLength(100 - ALARM_EVENTS_PER_GATEWAY)
+      yield* TestClock.adjust("16 minutes")
+      for (const point of many) yield* read(alarms, point.id, 1)
+      expect(recorded.at(-1)).toMatchObject({ type: "alarm-settled", active: true, unlisted: 1 })
+    })
+  )
+
+  it.effect("count every change in the metrics and keep the active ones in a gauge", () =>
+    Effect.gen(function* () {
+      const counts = Effect.all(
+        ["raised", "cleared"].map((transition) =>
+          Effect.map(
+            Metric.value(Metric.withAttributes(alarmChanges, { transition, site: "metrics-test" })),
+            (state) => state.count
+          )
+        )
+      )
+      const { alarms } = yield* tracker(yield* configWith([trip, contact])).pipe(
+        withMetricAttributes({ site: "metrics-test" })
+      )
+      const before = yield* counts
+      yield* read(alarms, "contact", 0)
+      // Active at the first read, then 19 changes: 9 more raises and 10 clears, most of them unlisted.
+      for (let change = 0; change < 20; change++) yield* read(alarms, "trip", change % 2 === 0 ? 1 : 0)
+      const after = yield* counts
+      expect(after.map((count, index) => count - (before[index] ?? 0))).toEqual([11, 10])
+      expect((yield* Metric.value(Metric.withAttributes(alarmsActive, { site: "metrics-test" }))).value).toBe(1)
+    })
+  )
+})
+
+describe("the status of alarm points", () => {
+  it.effect("lists every alarm point, also without the points, and marks the active ones among the points", () =>
+    Effect.gen(function* () {
+      const config = yield* configWith([trip, contact, speed])
+      const { alarms } = yield* tracker(config)
+      const state = makeStatusState(config, makeHealthRegistry(["pump"]), 0, undefined, 0, alarms)
+      yield* read(alarms, "trip", 1)
+      const lean = yield* state.snapshot("none")
+      expect(lean.alarms).toEqual([
+        { device: "pump", point: "trip", alarmWhen: "on", active: true, since: 0, raised: 1, flapping: false },
+        { device: "pump", point: "contact", alarmWhen: "off", raised: 0, flapping: false }
+      ])
+      const full = yield* state.snapshot("all")
+      expect(full.devices[0]?.points.map((point) => [point.id, point.alarmWhen, point.alarmActive])).toEqual([
+        ["trip", "on", true],
+        ["contact", "off", undefined],
+        ["speed", undefined, undefined]
+      ])
+      // Without alarm points, no `alarms` at all.
+      const plain = yield* configWith([speed])
+      expect(yield* makeStatusState(plain, makeHealthRegistry(["pump"]), 0).snapshot("none")).not.toHaveProperty(
+        "alarms"
+      )
+    })
+  )
+})
+
+describe("alarm points by semantics", () => {
+  // As examples/gateway.json's energy-meter/breaker-tripped: no alarmWhen, but Brick and Haystack say alarm.
+  const breaker = {
+    id: "breaker",
+    name: "Breaker tripped",
+    semantics: { brick: "Alarm", haystack: ["elec", "breaker", "alarm"] },
+    waveform: "constant",
+    min: 0,
+    max: 0
+  }
+  const smoke = { ...breaker, id: "smoke", semantics: { haystack: ["fire", "alarm"] } }
+  const run = { ...breaker, id: "run", semantics: { brick: "Run_Status", haystack: ["run", "sensor"] } }
+  const normallyClosed = { ...breaker, id: "nc", alarmWhen: "off" }
+
+  it.effect("resolve a point's polarity: alarmWhen wins, else semantics say on, else no alarm", () =>
+    Effect.gen(function* () {
+      const device = (yield* configWith([breaker, smoke, run, normallyClosed, trip, speed])).devices[0]
+      expect(device?.points.map(pointAlarmWhen)).toEqual(["on", "on", undefined, "off", "on", undefined])
+    })
+  )
+
+  it.effect("raise and clear events for a semantics-only alarm point and count it as active in the status", () =>
+    Effect.gen(function* () {
+      const config = yield* configWith([breaker, run, normallyClosed])
+      const { alarms, recorded } = yield* tracker(config)
+      const state = makeStatusState(config, makeHealthRegistry(["pump"]), 0, undefined, 0, alarms)
+      expect(alarms.hasPoints()).toBe(true)
+      yield* read(alarms, "breaker", false)
+      yield* read(alarms, "run", true)
+      yield* read(alarms, "nc", true)
+      yield* TestClock.adjust("30 seconds")
+      yield* read(alarms, "breaker", true)
+      yield* read(alarms, "run", false)
+      const status = yield* state.snapshot("all")
+      expect(activeAlarms(status)).toBe(1)
+      expect(status.alarms?.map((alarm) => [alarm.point, alarm.alarmWhen, alarm.active])).toEqual([
+        ["breaker", "on", true],
+        ["nc", "off", false]
+      ])
+      expect(status.devices[0]?.points.map((point) => [point.id, point.alarmWhen, point.alarmActive])).toEqual([
+        ["breaker", "on", true],
+        ["run", undefined, undefined],
+        ["nc", "off", false]
+      ])
+      yield* TestClock.adjust("30 seconds")
+      yield* read(alarms, "breaker", false)
+      expect(recorded).toEqual([
+        { type: "alarm-raised", device: "pump", point: "breaker", value: true },
+        { type: "alarm-cleared", device: "pump", point: "breaker", value: false, activeMs: 30_000 }
+      ])
+      expect(activeAlarms(yield* state.snapshot("none"))).toBe(0)
+    })
+  )
+
+  it.effect("keep no state for a point whose semantics say no alarm", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([run, speed]))
+      expect(alarms.hasPoints()).toBe(false)
+      yield* read(alarms, "run", true)
+      expect(recorded).toEqual([])
+      expect(alarms.snapshot()).toEqual([])
+    })
+  )
+})

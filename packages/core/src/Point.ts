@@ -35,6 +35,13 @@ export const Semantics = Schema.Struct({
 })
 export type Semantics = typeof Semantics.Type
 
+/**
+ * When an alarm point's alarm is active: `on` when its value is true or a number other than 0 (a trip flag, a fault
+ * bit), `off` when it is false or 0 (a normally-closed contact that opens on a fault, an "OK" signal that drops).
+ */
+export const AlarmWhen = Schema.Literals(["on", "off"])
+export type AlarmWhen = typeof AlarmWhen.Type
+
 /** Linear scaling applied to raw values: `value = raw * factor + offset`. */
 export const Scaling = Schema.Struct({
   /** Not 0, which would publish `offset` whatever the device reads. */
@@ -73,7 +80,13 @@ export const PointFields = {
   /** How this point's values go out, instead of its device's `publish` (see `Publish.ts`). */
   publish: Schema.optionalKey(Publish),
   scaling: Schema.optionalKey(Scaling),
-  semantics: Schema.optionalKey(Semantics)
+  semantics: Schema.optionalKey(Semantics),
+  /**
+   * The point is an alarm, active when its value is on or off (`AlarmWhen`): published on `$meta`, and it wins over
+   * its semantics. Without it, semantics that say alarm make the point one, active when on (`effectiveAlarmWhen` in
+   * @ot-gateway/api, the gateway's and the status page's one rule).
+   */
+  alarmWhen: Schema.optionalKey(AlarmWhen)
 } as const
 
 /** Value types a register-based protocol can decode. */
@@ -190,6 +203,12 @@ const names = (value: string, name: string, number: number) =>
   value === name || (/^\d+$/.test(value) && Number(value) === number)
 
 /**
+ * Whether a BACnet point reads its object's present value (by name or as 85),
+ * the property the driver subscribes to by change of value.
+ */
+export const isPresentValue = (point: { readonly property: string }) => names(point.property, "present-value", 85)
+
+/**
  * What a BACnet point's present value takes when written: true or false
  * (binary objects, clause 12.6-12.8), a whole number from 1 (multi-state
  * objects, an Unsigned state index, clause 12.18-12.20) or a REAL. Any other
@@ -200,7 +219,7 @@ export const bacnetValueKind = (point: {
   readonly objectType: string
   readonly property: string
 }): "binary" | "multi-state" | "real" => {
-  if (!names(point.property, "present-value", 85)) return "real"
+  if (!isPresentValue(point)) return "real"
   const type = point.objectType
   if (names(type, "binary-input", 3) || names(type, "binary-output", 4) || names(type, "binary-value", 5))
     return "binary"
@@ -267,4 +286,5 @@ export interface AnyPoint {
   readonly publish?: Publish
   readonly scaling?: Scaling
   readonly semantics?: Semantics
+  readonly alarmWhen?: AlarmWhen
 }

@@ -8,7 +8,7 @@ import { mqttConnected, mqttConnects, Publisher, withMetricAttributes } from "@o
 import { ConfigProvider, Context, Effect, Exit, Fiber, Layer, Metric, Redacted, Scope } from "effect"
 import type * as SocketServer from "effect/socket/SocketServer"
 import { makeBrokerControl, makeMqttClient, MqttPublisher, parseBrokerUrl, Property, serveMqtt } from "../src/index.ts"
-import type { BrokerControl, MqttClient, MqttClientOptions } from "../src/index.ts"
+import type { BrokerControl, ConnectionFailure, MqttClient, MqttClientOptions } from "../src/index.ts"
 
 const portOf = (server: SocketServer.SocketServer["Service"]) =>
   server.address._tag === "UnixPathAddress" ? 0 : server.address.port
@@ -254,6 +254,26 @@ describe("MQTT client over TCP", () => {
       expect(second.control.messages.map((m) => m.payload)).toEqual(["after"])
       expect(yield* connectCount("restart", "ok")).toBe(2)
     }).pipe(withMetricAttributes({ test: "restart" }))
+  )
+
+  it.live("says why it has no connection: lost, then each failed redial, with the reason in words", () =>
+    Effect.gen(function* () {
+      const failures: Array<ConnectionFailure> = []
+      const firstScope = yield* Scope.make()
+      const first = yield* startBroker().pipe(Scope.provide(firstScope))
+      const client = yield* clientOn(first.port, {
+        onDisconnected: (failure) => Effect.sync(() => failures.push(failure))
+      })
+      yield* connectedClient(client)
+      expect(failures).toEqual([])
+      yield* Scope.close(firstScope, Exit.void)
+      yield* eventually(Effect.sync(() => failures.length >= 2))
+      expect(failures[0]?.lost).toBe(true)
+      expect(failures[1]).toEqual({
+        lost: false,
+        error: expect.stringMatching(/^could not connect: connection refused by 127\.0\.0\.1:\d+$/)
+      })
+    })
   )
 
   it.live("sends publishes in the order they were called, also across a reconnect", () =>

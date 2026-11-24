@@ -31,6 +31,7 @@ import {
   decodeConnack,
   decodeDisconnect,
   decodePuback,
+  disconnectReasonName,
   decodePublish,
   decodeSuback,
   encodeConnect,
@@ -45,6 +46,27 @@ import {
   refusesProtocolLevel
 } from "./Packet.ts"
 import type { ProtocolVersion, Subscription, Will } from "./Packet.ts"
+
+/** A broker's DISCONNECT in words: `session taken over: … (0x8e)`, with the broker's own reason string if any. */
+export const describeDisconnect = (reasonCode: number, reasonString: string | undefined) => {
+  const code = `0x${reasonCode.toString(16)}`
+  const name = disconnectReasonName(reasonCode)
+  const described = name === undefined ? code : `${name} (${code})`
+  return reasonString === undefined ? described : `${described} ${reasonString}`
+}
+
+/**
+ * Connections in a row the broker closed without a word soon after accepting them, before the error says why that
+ * usually happens. An MQTT 3.1.1 broker drops a session taken over by a client with the same id without a reason
+ * code (3.1.1 §3.1.4), so the pattern is the only sign of it.
+ */
+const quickDropsBeforeHint = 3
+
+/** A lost connection's error, with the likely cause once the broker has dropped it soon after connecting a few times. */
+export const explainQuickDrops = (message: string, quickDrops: number) =>
+  quickDrops >= quickDropsBeforeHint && message.startsWith("connection closed")
+    ? `${message} soon after connecting, ${quickDrops} times in a row: another client may be using the same client id (set a client id no other client uses)`
+    : message
 
 /** The connection could not be opened, broke, or the broker stopped answering. */
 export class MqttConnectionError extends Schema.TaggedError<MqttConnectionError>()("MqttConnectionError", {
@@ -143,6 +165,11 @@ export interface MqttClientOptions {
    */
   readonly onConnect?: (client: MqttClient) => Effect.Effect<void>
   /**
+   * Told whenever the connection is lost (`lost`) and whenever a dial fails or the broker refuses it, with why
+   * in one line. A broker that stays down calls it on every redial. It runs on the connection loop: return at once.
+   */
+  readonly onDisconnected?: (failure: ConnectionFailure) => Effect.Effect<void>
+  /**
    * Topic filters subscribed on every connect. The session is clean, so
    * nothing sent while the client was away is delivered later: a command
    * reaches the gateway live or not at all.
@@ -154,6 +181,12 @@ export interface MqttClientOptions {
    * runs on the connection's read loop: hand the message on and return.
    */
   readonly onMessage?: (message: InboundMessage) => Effect.Effect<void>
+}
+
+/** Why the client has no connection: one it had broke (`lost`), or a dial failed or was refused. */
+export interface ConnectionFailure {
+  readonly error: string
+  readonly lost: boolean
 }
 
 export interface InboundMessage {
@@ -498,7 +531,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
               case PacketType.DISCONNECT: {
                 const disconnect = decodeDisconnect(packet.body)
                 const reason = Result.isSuccess(disconnect)
-                  ? `0x${disconnect.success.reasonCode.toString(16)}${disconnect.success.reasonString === undefined ? "" : ` ${disconnect.success.reasonString}`}`
+                  ? describeDisconnect(disconnect.success.reasonCode, disconnect.success.reasonString)
                   : "unreadable reason"
                 return yield* new MqttConnectionError({ message: `broker disconnected: ${reason}` })
               }
@@ -595,6 +628,11 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
      */
     let unreachable: string | undefined
     let failedDials = 0
+    /** Connections in a row that were lost before they held for `stableConnectionMs`. */
+    let quickDrops = 0
+    const onDisconnected = options.onDisconnected
+    const disconnected = (failure: ConnectionFailure) =>
+      onDisconnected === undefined ? Effect.void : onDisconnected(failure)
     const dialFailed = (reason: string, log: Effect.Effect<void>) =>
       Effect.suspend(() => {
         failedDials++
@@ -621,6 +659,7 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
           MqttRejected: (error) =>
             Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
               Effect.andThen(countConnect("rejected")),
+              Effect.andThen(disconnected({ error: error.message, lost: false })),
               Effect.andThen(
                 dialFailed(
                   `rejected ${error.reasonCode}`,
@@ -630,11 +669,18 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                 )
               )
             ),
-          MqttConnectionError: (error) =>
-            connectedAt !== undefined
-              ? Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: error.message }))
+          MqttConnectionError: (error, since = connectedAt) =>
+            since !== undefined
+              ? Effect.gen(function* () {
+                  const heldFor = (yield* monotonicMillis) - since
+                  quickDrops = heldFor < stableConnectionMs ? quickDrops + 1 : 0
+                  const message = explainQuickDrops(error.message, quickDrops)
+                  yield* Effect.logWarning("MQTT connection lost").pipe(Effect.annotateLogs({ error: message }))
+                  yield* disconnected({ error: message, lost: true })
+                })
               : Effect.sync(() => Deferred.doneUnsafe(firstDial, Effect.fail(error))).pipe(
                   Effect.andThen(countConnect("failed")),
+                  Effect.andThen(disconnected({ error: error.message, lost: false })),
                   Effect.andThen(
                     dialFailed(
                       "unreachable",

@@ -12,9 +12,11 @@
 import type { GatewayConfig } from "@ot-gateway/core"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Console, Deferred, Effect, Fiber, FileSystem, Random, Schema } from "effect"
+import { networkInterfaces } from "node:os"
 import { fileURLToPath } from "node:url"
+import { lanInterfaces } from "./Init.ts"
 import { loadConfig } from "./LoadConfig.ts"
-import { runBench } from "./TestBench.ts"
+import { benchPorts, firstPortInUse, type ListenPort, runBench } from "./TestBench.ts"
 
 /** The demo's config: the example, next to this checkout or inside the image. */
 export const exampleConfigPath = fileURLToPath(new URL("../../../examples/gateway.json", import.meta.url))
@@ -58,6 +60,41 @@ export const pickPublicBroker = Effect.fn("pickPublicBroker")(function* <R>(
   })
 })
 
+/** A port the demo needs is held by another program, found before the demo prints anything. */
+export class DemoPortInUse extends Schema.TaggedError<DemoPortInUse>()("DemoPortInUse", {
+  message: Schema.String
+}) {}
+
+/** Every port the demo listens on for `config` (`demoConfig`'s): the bench's, the gateway's BACnet port, the status page. */
+export const demoPorts = Effect.fn("demoPorts")(function* (config: GatewayConfig, options: DemoOptions) {
+  const ports: Array<ListenPort> = [
+    ...(yield* benchPorts(config, options.public === undefined ? {} : { only: "devices" }))
+  ]
+  if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
+    ports.push({
+      transport: "UDP",
+      host: config.bacnet.bindAddress,
+      port: config.bacnet.port,
+      role: "the gateway's BACnet/IP port",
+      likelyHolder: "a running ot-gateway, another demo or a BACnet tool"
+    })
+  }
+  if (config.status !== undefined) {
+    ports.push({
+      transport: "TCP",
+      host: config.status.bindAddress,
+      port: config.status.port,
+      role: "the status page",
+      likelyHolder: "a running ot-gateway, another demo or a web server"
+    })
+  }
+  return ports
+})
+
+/** What the demo says when another program holds one of its ports: the port, what it is for, what to do. */
+export const portInUseMessage = (port: ListenPort) =>
+  `port ${port.port} (${port.transport}, ${port.role}) is in use, probably by ${port.likelyHolder}: stop it and run the demo again, or skip the demo and describe your own building with init`
+
 export interface DemoOptions {
   /** Address the status page listens on: `127.0.0.1`, or `0.0.0.0` in a container, so a published port reaches it. */
   readonly listen: string
@@ -96,12 +133,45 @@ export const randomDemoSite = Effect.map(
 /** What the demo prints before the first message. */
 const protocolNames = { "modbus-tcp": "Modbus TCP", "bacnet-ip": "BACnet/IP", simulator: "built in" } as const
 
+const isLoopback = (address: string) => address === "localhost" || address === "::1" || address.startsWith("127.")
+
+/**
+ * Where another computer reaches a status page that listens on `listen`: nowhere on loopback, at most two of
+ * this machine's LAN addresses (`lanAddresses`) on every interface, else the one address it listens on.
+ */
+export const remoteStatusHosts = (listen: string, lanAddresses: ReadonlyArray<string>): ReadonlyArray<string> => {
+  if (isLoopback(listen)) return []
+  if (listen === "0.0.0.0" || listen === "::") return [...new Set(lanAddresses)].slice(0, 2)
+  return [listen]
+}
+
+/** Interfaces of container and VM networks: the host side of Docker's bridges, their veth pairs, libvirt's. */
+const virtualInterface = /^(docker|br-|veth|virbr|cni|flannel|cali)/
+
+/**
+ * The IPv4 LAN addresses among `interfaces` (`os.networkInterfaces()`) that another computer can reach: loopback,
+ * container bridges and Docker's default bridge network (172.17.0.0/16, which is also what a container without
+ * host networking sees as its own address) left out.
+ */
+export const reachableLanAddresses = (interfaces: Parameters<typeof lanInterfaces>[0]): ReadonlyArray<string> =>
+  lanInterfaces(interfaces)
+    .filter((lan) => !virtualInterface.test(lan.name) && !lan.address.startsWith("172.17."))
+    .map((lan) => lan.address)
+
+/** This machine's reachable LAN addresses: what `runDemo` gives the banner unless told otherwise. */
+export const lanAddresses = (): ReadonlyArray<string> => reachableLanAddresses(networkInterfaces())
+
 /**
  * What the demo prints first: what is running, then where to look, in the order a newcomer needs it, and the
- * next step towards their own building.
+ * next step towards their own building. `addresses` are this machine's LAN addresses, named next to localhost
+ * when the status page listens beyond loopback (in the container image, so on a Pi reached over SSH too).
  */
-export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
+export const demoBanner = (config: GatewayConfig, options: DemoOptions, addresses: ReadonlyArray<string> = []) => {
   const port = config.status?.port ?? 8080
+  const remoteUrls = remoteStatusHosts(options.listen, addresses).map(
+    (host) => `http://${host.includes(":") ? `[${host}]` : host}:${port}`
+  )
+  const fromElsewhere = remoteUrls.length === 0 ? "" : ` (from another computer: ${remoteUrls.join(" or ")})`
   const topics = `${config.site}/${config.building}/#`
   const devices = config.devices.map((device) => `${device.id} (${protocolNames[device.protocol]})`).join(", ")
   const remote = options.public
@@ -134,7 +204,7 @@ export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
     "",
     ...intro,
     "",
-    `  1. Look     http://localhost:${port}: every device, its latest values and the messages sent`,
+    `  1. Look     http://localhost:${port}${fromElsewhere}: every device, its latest values and the messages sent`,
     ...watchHere,
     "              topics are site/building/device/point; .../$meta describes a point, .../$gateway/<id>/health the gateway",
     `  3. Next     ${remote === undefined ? "demo --public to watch the same data from any MQTT app, or " : ""}init to describe your own building`,
@@ -144,15 +214,22 @@ export const demoBanner = (config: GatewayConfig, options: DemoOptions) => {
   ].join("\n")
 }
 
-/** Runs the demo until interrupted. `runGateway` runs the gateway for a config, as `ot-gateway run` does. */
+/**
+ * Runs the demo until interrupted. `runGateway` runs the gateway for a config, as `ot-gateway run` does;
+ * `addresses` lists this machine's LAN addresses for the banner.
+ */
 export const runDemo = Effect.fn("runDemo")(function* <E, R>(
   options: DemoOptions,
-  runGateway: (config: GatewayConfig) => Effect.Effect<void, E, R>
+  runGateway: (config: GatewayConfig) => Effect.Effect<void, E, R>,
+  addresses: () => ReadonlyArray<string> = lanAddresses
 ) {
   const fs = yield* FileSystem.FileSystem
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ot-gateway-demo-" })
   const config = demoConfig(yield* loadConfig(exampleConfigPath), directory, options)
-  yield* Console.log(demoBanner(config, options))
+  // Before the banner: a demo that cannot start must not first tell people where to look.
+  const taken = yield* firstPortInUse(yield* demoPorts(config, options))
+  if (taken !== undefined) return yield* new DemoPortInUse({ message: portInUseMessage(taken) })
+  yield* Console.log(demoBanner(config, options, addresses()))
   if (options.public !== undefined) {
     const devices = yield* runBench(config, { only: "devices" }).pipe(Effect.forkScoped)
     return yield* Effect.raceFirst(runGateway(config), Fiber.join(devices))

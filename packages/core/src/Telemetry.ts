@@ -294,6 +294,42 @@ export const commands = Metric.counter("ot_gateway_commands", {
   incremental: true
 })
 
+/**
+ * Configs saved from the status page and applied without a restart, by `outcome`: `applied`, or `rolled-back` when
+ * the new config did not start and the previous one runs again. Each apply is also a span
+ * (`Gateway.applyConfig`), an event and a log line.
+ */
+export const configApplies = Metric.counter("ot_gateway_config_applies", {
+  description: "Configs applied without a restart, by outcome",
+  incremental: true
+})
+
+/**
+ * Alarm points' changes, by `transition`: `raised` or `cleared`. Every change counts, also the ones the events leave
+ * unlisted while a point flaps; which point is in the events (`ot-gateway events`), not in a label, so a site with
+ * hundreds of alarm points still has two series per gateway.
+ */
+export const alarmChanges = Metric.counter("ot_gateway_alarm_changes", {
+  description: "Alarm points' changes, by transition",
+  incremental: true
+})
+
+/** Alarm points whose alarm is active now. */
+export const alarmsActive = Metric.gauge("ot_gateway_alarms_active", {
+  description: "Alarm points whose alarm is active",
+  attributes: { unit: "{alarm}" }
+})
+
+/**
+ * Energy counter reads that are not plausible, by `kind`: `went-back` (lower than the read before) or `jumped` (a
+ * rise far faster than the counter's fastest of the last hour). Every one counts, also the ones the events leave
+ * unlisted within an episode; which point is in the events, not in a label: two series per gateway at most.
+ */
+export const counterImplausible = Metric.counter("ot_gateway_counter_implausible", {
+  description: "Energy counter reads that went back or jumped, by kind",
+  incremental: true
+})
+
 /*
  * The gateway process and the machine it runs on: one series each per gateway
  * (no `device`), sampled every 15 seconds by the gateway's host monitor. What

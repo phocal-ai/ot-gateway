@@ -445,10 +445,64 @@ timeseries(
   {
     unit: "short",
     x: 0,
-    w: 24,
+    w: 12,
     stack: true,
     description:
       "The gateway subscribes to $set topics on every connect. granted is healthy; refused means the broker denied the filter (check its ACL); missing means no SUBACK came within 10 s. The connection is kept, but no command arrives on it until the next reconnect."
+  }
+)
+timeseries(
+  "Config applies by outcome",
+  [
+    {
+      expr: `sum by (outcome) (increase(ot_gateway_config_applies_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{outcome}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    stack: true,
+    description:
+      "Configs saved from the status page and applied without a restart. rolled-back means the new config did not start (its buffer file did not open, the broker did not answer) and the previous one runs again; the event log and the span Gateway.applyConfig say why."
+  }
+)
+y += 8
+timeseries(
+  "Alarm points",
+  [
+    {
+      expr: `max by (service_instance_id) (ot_gateway_alarms_active{${hostSel}})`,
+      legendFormat: "active {{service_instance_id}}"
+    },
+    {
+      expr: `sum by (transition) (increase(ot_gateway_alarm_changes_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{transition}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 0,
+    w: 12,
+    description:
+      "Points marked as alarms (alarmWhen, the points list's alarm column): how many are active, and how often they were raised and cleared. Which point is in the events (ot-gateway events), not a label: a contact that chatters shows as many raises here and as one flapping event there."
+  }
+)
+timeseries(
+  "Energy counters that went back or jumped",
+  [
+    {
+      expr: `sum by (kind) (increase(ot_gateway_counter_implausible_total{${hostSel}}[$__rate_interval]))`,
+      legendFormat: "{{kind}}"
+    }
+  ],
+  {
+    unit: "short",
+    x: 12,
+    w: 12,
+    description:
+      "Reads of an energy counter (a point in Wh, kWh, MWh or J) lower than the one before (went-back: a meter reset or replaced), or rising more than 10 times faster than its fastest rise of the last hour (jumped: a reset, or another device answering at its address). The values are published all the same; which point is in the events (ot-gateway events)."
   }
 )
 y += 8

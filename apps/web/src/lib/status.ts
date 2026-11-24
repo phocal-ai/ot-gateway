@@ -5,7 +5,9 @@
 import {
   type ConfigView,
   type DeviceStatus,
+  type EventLog,
   type GatewayStatus,
+  isDeviceLate,
   type Messages,
   OtGatewayApi,
   type PointCatalog,
@@ -87,12 +89,35 @@ export const fetchMessages: Effect.Effect<Messages, StatusUnavailable> = gateway
   withinThreeSeconds
 )
 
+/**
+ * The messages per topic from `since` (Unix ms, the gateway's clock) to now, in whole minutes and at most
+ * `MESSAGE_WINDOW_MINUTES` back (`/api/messages/window`): only the topics with a message in it, and `window` says
+ * where the counts start.
+ */
+export const fetchMessagesWindow = (since: number): Effect.Effect<Messages, StatusUnavailable> =>
+  gateway.pipe(
+    Effect.flatMap((client) => client.status.messagesWindow({ query: { since } })),
+    Effect.provide(FetchHttpClient.layer),
+    withinThreeSeconds
+  )
+
 /** Every configured point, for the points page; it changes only when the gateway restarts, so it is asked for once. */
 export const fetchPoints: Effect.Effect<PointCatalog, StatusUnavailable> = gateway.pipe(
   Effect.flatMap((client) => client.status.points()),
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )
+
+/**
+ * The gateway's recent events (`/api/events`): all it keeps, or only those after the event id `after`, which is what
+ * the status poll asks for each time, so it is usually an empty list.
+ */
+export const fetchEvents = (after: number | undefined): Effect.Effect<EventLog, StatusUnavailable> =>
+  gateway.pipe(
+    Effect.flatMap((client) => client.status.events({ query: after === undefined ? {} : { after } })),
+    Effect.provide(FetchHttpClient.layer),
+    withinThreeSeconds
+  )
 
 /** The running config without its points, for the Settings tab; it changes only when the gateway restarts. */
 export const fetchConfig: Effect.Effect<ConfigView, StatusUnavailable> = gateway.pipe(
@@ -108,28 +133,8 @@ export const protocolName: Readonly<Record<string, string>> = {
   simulator: "Simulated"
 }
 
-/** QUDT unit names (`unit:DEG_C`) as people write them. */
-const unitSymbols: Record<string, string> = {
-  DEG_C: "°C",
-  DEG_F: "°F",
-  PERCENT: "%",
-  KiloW: "kW",
-  W: "W",
-  "KiloW-HR": "kWh",
-  V: "V",
-  A: "A",
-  PA: "Pa",
-  BAR: "bar",
-  "M3-PER-HR": "m³/h",
-  "L-PER-SEC": "l/s",
-  PPM: "ppm"
-}
-
-export const unitLabel = (unit: string | undefined) => {
-  if (unit === undefined) return ""
-  const name = unit.replace(/^unit:/, "")
-  return unitSymbols[name] ?? name
-}
+/** QUDT unit names as people write them: shared with `ot-gateway history`. */
+export { unitLabel, unitSymbols } from "@ot-gateway/api"
 
 /**
  * A point's value for people: whole numbers and values from 1000 grouped with up to three decimals (1,500; 1,234.5),
@@ -140,10 +145,6 @@ export const formatValue = (value: number | boolean | undefined) => {
   if (typeof value === "boolean") return value ? "on" : "off"
   return Math.abs(value) >= 1000 || Number.isInteger(value) ? formatNumber(value) : formatNumber(value, 2)
 }
-
-/** A device counts as late once this many poll intervals pass without a read, and never sooner than `LATE_MIN_MS`. */
-const LATE_INTERVALS = 3
-const LATE_MIN_MS = 15_000
 
 /**
  * How fresh a device is, as a state rather than a counting number: `live` while it is read on schedule, `late`
@@ -156,14 +157,14 @@ export type Freshness =
   | { readonly _tag: "late"; readonly lastSuccess: number | undefined }
   | { readonly _tag: "failing"; readonly reason: string; readonly lastSuccess: number | undefined }
 
+/** How long a read may be missing before it counts as late, shared with `ot-gateway status`. */
+export { lateAfterMs } from "@ot-gateway/api"
+
 export const freshness = (device: DeviceStatus, now: number): Freshness => {
   if (device.status === "failing")
     return { _tag: "failing", reason: device.reason ?? "failing", lastSuccess: device.lastSuccess }
   if (device.status === "starting") return { _tag: "starting" }
-  const lateAfter = Math.max(LATE_INTERVALS * device.pollIntervalMs, LATE_MIN_MS)
-  return device.lastSuccess !== undefined && now - device.lastSuccess <= lateAfter
-    ? { _tag: "live" }
-    : { _tag: "late", lastSuccess: device.lastSuccess }
+  return isDeviceLate(device, now) ? { _tag: "late", lastSuccess: device.lastSuccess } : { _tag: "live" }
 }
 
 /** The gateway's failure reasons (`DriverError`'s, and the pipeline's `cycle-timeout`) in words. */
@@ -228,6 +229,39 @@ export const clockTime = (at: number, now: number) => {
     : `${moment.toLocaleDateString("en-US", { month: "short", day: "numeric" })} ${time}`
 }
 
+/**
+ * How long something lasted, to the precision that matters: seconds under two minutes ("61 s"), then minutes
+ * ("3 min"), hours and minutes ("2 h 5 min"), days and hours ("3 d 4 h").
+ */
+export const duration = (ms: number) => {
+  const seconds = Math.max(0, Math.round(ms / 1000))
+  if (seconds < 120) return `${seconds} s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 === 0 ? `${hours} h` : `${hours} h ${minutes % 60} min`
+  const days = Math.floor(hours / 24)
+  return hours % 24 === 0 ? `${days} d` : `${days} d ${hours % 24} h`
+}
+
+/** Since when, as a clock time and how long ago: "12:18:20 (3 min)". */
+export const sinceClock = (at: number, now: number) => `${clockTime(at, now)} (${duration(now - at)})`
+
+/**
+ * Since when a failing device has given no data: "no data since 18:33:03 (3 min)" from its last good read, which is
+ * where its data stopped (a poll or more before the gateway called it failing, `ot-gateway status` says the same);
+ * "failing since …" from when it was marked failing for a device that never answered; undefined without either.
+ */
+export const failingSinceText = (
+  device: { readonly lastSuccess?: number; readonly failingSince?: number },
+  now: number
+) =>
+  device.lastSuccess !== undefined
+    ? `no data since ${sinceClock(device.lastSuccess, now)}`
+    : device.failingSince !== undefined
+      ? `failing since ${sinceClock(device.failingSince, now)}`
+      : undefined
+
 /** "0.4 %", "37 %": how full the buffer is; under 1 % keeps a decimal, so a filling buffer never reads 0 %. */
 export const fillPercent = (rows: number, maxRows: number) => {
   const percent = (rows / maxRows) * 100
@@ -246,14 +280,5 @@ export const formatBytes = (bytes: number) => {
   return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
 }
 
-/** What a topic under `site/building/` carries, by its shape (README, "Topics"). */
-export type TopicKind = "value" | "metadata" | "health" | "command result" | "other"
-
-export const topicKind = (topic: string): TopicKind => {
-  const parts = topic.split("/")
-  if (parts[2] === "$gateway" && parts[4] === "health") return "health"
-  if (parts.length === 4) return "value"
-  if (parts.length === 5 && parts[4] === "$meta") return "metadata"
-  if (parts.length === 6 && parts[4] === "$set" && parts[5] === "result") return "command result"
-  return "other"
-}
+/** What a topic under `site/building/` carries, by its shape (README, "Topics"); shared with `ot-gateway messages`. */
+export { type TopicKind, topicKind } from "@ot-gateway/api"

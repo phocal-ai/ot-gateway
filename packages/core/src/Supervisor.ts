@@ -3,7 +3,7 @@
  * `runDevice`; this catches what is left, a defect (a bug, a throw in a
  * driver), so it stops only that device, and restarts it with backoff.
  */
-import { Cause, Duration, Effect, Metric } from "effect"
+import { Cause, Clock, Duration, Effect, Metric } from "effect"
 import type { HealthRegistry } from "./Health.ts"
 import { monotonicMillis } from "./Monotonic.ts"
 import type { Slug } from "./Point.ts"
@@ -18,6 +18,9 @@ export interface SuperviseOptions {
   /** Longest delay before a restart (default 5 minutes). A run that lasted this long resets the backoff. */
   readonly maxBackoff?: Duration.Input
 }
+
+/** How much of a defect's text the health registry keeps: one line, not a stack. */
+const MAX_DEFECT_TEXT = 200
 
 /** The text of a defect, for the log annotation; the full cause goes with the log entry. */
 const describeDefect = (defect: unknown): string => (defect instanceof Error ? defect.message : String(defect))
@@ -50,7 +53,13 @@ export const superviseDevice = Effect.fn("superviseDevice")(function* <R>(
     if ((yield* monotonicMillis) - startedAt >= maxMs) crashesInARow = 0
     const delayMs = Math.min(initialMs * 2 ** Math.min(crashesInARow, 30), maxMs)
     crashesInARow++
-    options.health?.recordFailure(options.deviceId, "crashed")
+    const crashedAt = yield* Clock.currentTimeMillis
+    const firstLine = describeDefect(crash.defect).split("\n", 1)[0] ?? ""
+    options.health?.recordFailure(options.deviceId, {
+      reason: "crashed",
+      message: `pipeline crashed on a bug, restarting: ${firstLine}`.slice(0, MAX_DEFECT_TEXT),
+      at: crashedAt
+    })
     yield* Metric.update(deviceRestarts, 1).pipe(withMetricAttributes({ device: options.deviceId }))
     yield* Effect.logError("device pipeline crashed, restarting it", Cause.die(crash.defect)).pipe(
       Effect.annotateLogs({

@@ -8,6 +8,7 @@ import { historyDisabled, historyDropped } from "@ot-gateway/core"
 import { Clock, Effect, FileSystem, Metric, Tracer } from "effect"
 import { SqlError, UnknownError } from "effect/sql/SqlError"
 import { TestClock } from "effect/testing"
+import { HISTORY_CHANGES_MAX, type HistoryBucket } from "@ot-gateway/api"
 import { type History, MAX_PENDING, openHistory, rollup, type Store, stepFor } from "../src/index.ts"
 
 const DAY = 86_400_000
@@ -64,9 +65,9 @@ describe("rollup and stepFor", () => {
         { device: "d", point: "q", ts: 0, value: 7 }
       ])
     ).toEqual([
-      { device: "d", point: "p", minute: 0, min: 1, max: 3, sum: 4, count: 2 },
-      { device: "d", point: "p", minute: 60_000, min: 5, max: 5, sum: 5, count: 1 },
-      { device: "d", point: "q", minute: 0, min: 7, max: 7, sum: 7, count: 1 }
+      { device: "d", point: "p", minute: 0, min: 1, max: 3, sum: 4, count: 2, first: 0, last: 59_999 },
+      { device: "d", point: "p", minute: 60_000, min: 5, max: 5, sum: 5, count: 1, first: 60_000, last: 60_000 },
+      { device: "d", point: "q", minute: 0, min: 7, max: 7, sum: 7, count: 1, first: 0, last: 0 }
     ])
   })
 
@@ -83,17 +84,18 @@ describe("openHistory", () => {
     Effect.gen(function* () {
       const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
       for (let second = 0; second < 10; second++) history.sink.record("ventilation-1", "temp", second, second * 1000)
-      // Nothing is written before the first flush.
-      expect(
-        (yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })).buckets
-      ).toEqual([])
+      const expected = [
+        { t: 0, min: 0, max: 4, avg: 2, count: 5, first: 0, last: 4_000 },
+        { t: 5_000, min: 5, max: 9, avg: 7, count: 5, first: 5_000, last: 9_000 }
+      ]
+      // Before the first write, the reads waiting for it are in the answer already.
+      const before = yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })
+      expect(before).toMatchObject({ stepMs: 5_000, resolution: "read", live: true })
+      expect(before.buckets).toEqual(expected)
       yield* TestClock.adjust("5 seconds")
       const series = yield* history.series({ device: "ventilation-1", point: "temp", from: 0, to: 10_000, buckets: 2 })
       expect(series).toMatchObject({ stepMs: 5_000, resolution: "read" })
-      expect(series.buckets).toEqual([
-        { t: 0, min: 0, max: 4, avg: 2, count: 5 },
-        { t: 5_000, min: 5, max: 9, avg: 7, count: 5 }
-      ])
+      expect(series.buckets).toEqual(expected)
       // Another point, or another device, is another series.
       expect((yield* history.series({ device: "ventilation-1", point: "other", from: 0, to: 10_000 })).buckets).toEqual(
         []
@@ -108,7 +110,47 @@ describe("openHistory", () => {
         history.sink.record("d", "on", value, index * 1000)
       yield* TestClock.adjust("5 seconds")
       const series = yield* history.series({ device: "d", point: "on", from: 0, to: 4_000, buckets: 1 })
-      expect(series.buckets).toEqual([{ t: 0, min: 0, max: 1, avg: 0.75, count: 4 }])
+      expect(series.buckets).toEqual([{ t: 0, min: 0, max: 1, avg: 0.75, count: 4, first: 0, last: 3_000 }])
+      expect(series.changes).toBeUndefined()
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("lists when a value changed, from every read, when asked", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      for (const [index, value] of [false, false, true, true, true, false, true].entries())
+        history.sink.record("d", "on", value, index * 500)
+      // Another point between them changes nothing.
+      history.sink.record("d", "other", 7, 600)
+      yield* TestClock.adjust("5 seconds")
+      const series = yield* history.series({ device: "d", point: "on", from: 0, to: 4_000, changes: true })
+      expect(series.changes).toEqual({
+        list: [
+          { t: 0, value: 0 },
+          { t: 1_000, value: 1 },
+          { t: 2_500, value: 0 },
+          { t: 3_000, value: 1 }
+        ],
+        truncated: false
+      })
+      // Within the range only: the first read in it starts the list.
+      const later = yield* history.series({ device: "d", point: "on", from: 1_500, to: 4_000, changes: true })
+      expect(later.changes?.list).toEqual([
+        { t: 1_500, value: 1 },
+        { t: 2_500, value: 0 },
+        { t: 3_000, value: 1 }
+      ])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("lists at most HISTORY_CHANGES_MAX changes and says there were more", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      for (let index = 0; index < HISTORY_CHANGES_MAX + 10; index++) history.sink.record("d", "on", index % 2, index)
+      yield* TestClock.adjust("5 seconds")
+      const series = yield* history.series({ device: "d", point: "on", from: 0, to: 4_000, changes: true })
+      expect(series.changes?.list).toHaveLength(HISTORY_CHANGES_MAX)
+      expect(series.changes?.truncated).toBe(true)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -125,8 +167,8 @@ describe("openHistory", () => {
         const older = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 2 })
         expect(older).toMatchObject({ resolution: "minute", stepMs: 60_000 })
         expect(older.buckets).toEqual([
-          { t: 0, min: 0, max: 59, avg: 29.5, count: 60 },
-          { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60 }
+          { t: 0, min: 0, max: 59, avg: 29.5, count: 60, first: 0, last: 59_000 },
+          { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60, first: 60_000, last: 119_000 }
         ])
         // Two days on, the rollups are gone too.
         yield* TestClock.adjust(2 * DAY)
@@ -208,6 +250,69 @@ const countWrites = (inner: (store: Store) => Store = (store) => store) => {
   }
   return { counter, wrapStore }
 }
+
+describe("a query between two writes", () => {
+  it.effect("sees every read up to now: the stored ones and the waiting ones in one bucket, without a write", () =>
+    Effect.gen(function* () {
+      const { counter, wrapStore } = countWrites()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      // A read every 5 s for a minute goes to the file in the writes at 30 s and 60 s; two more then wait.
+      for (let second = 0; second < 60; second += 5) {
+        history.sink.record("meter", "power", second, second * 1_000)
+        yield* TestClock.adjust("5 seconds")
+      }
+      yield* settle(history)
+      expect(counter.writes).toBe(2)
+      history.sink.record("meter", "power", 100, 60_000)
+      history.sink.record("meter", "power", 102, 65_000)
+      const series = yield* history.series({ device: "meter", point: "power", from: 0, to: 70_000, buckets: 2 })
+      expect(series.buckets).toEqual([
+        { t: 0, min: 0, max: 30, avg: 15, count: 7, first: 0, last: 30_000 },
+        {
+          t: 35_000,
+          min: 35,
+          max: 102,
+          avg: (35 + 40 + 45 + 50 + 55 + 100 + 102) / 7,
+          count: 7,
+          first: 35_000,
+          last: 65_000
+        }
+      ])
+      // Asking wrote nothing.
+      expect(counter.writes).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("lists a change that is still waiting, after the stored ones, and not a repeat of the last", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      history.sink.record("pump", "alarm", false, 0)
+      history.sink.record("pump", "alarm", true, 1_000)
+      yield* TestClock.adjust("5 seconds")
+      history.sink.record("pump", "alarm", true, 6_000)
+      history.sink.record("pump", "alarm", false, 7_000)
+      const series = yield* history.series({ device: "pump", point: "alarm", from: 0, to: 8_000, changes: true })
+      expect(series.changes?.list).toEqual([
+        { t: 0, value: 0 },
+        { t: 1_000, value: 1 },
+        { t: 7_000, value: 0 }
+      ])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("sees waiting reads in the per-minute buckets too, by their minute", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 60_000 })
+      yield* TestClock.adjust("2 hours")
+      const now = yield* Clock.currentTimeMillis
+      history.sink.record("m", "p", 4, now - 30_000)
+      history.sink.record("m", "p", 6, now - 1_000)
+      const series = yield* history.series({ device: "m", point: "p", from: now - 2 * 3_600_000, to: now, buckets: 2 })
+      expect(series.resolution).toBe("minute")
+      expect(series.buckets.reduce((sum, bucket) => sum + bucket.count, 0)).toBe(2)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
 
 describe("when the history writes", () => {
   it.effect("writes every 30 s by default: twice a minute for 200 points read every 5 s, every read kept", () =>
@@ -314,6 +419,22 @@ describe("which table a range is read from", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("reads the last 10 minutes in minute buckets from every read, on whole minutes, up to now", () =>
+    Effect.gen(function* () {
+      const { tables, wrapStore } = tablesAsked()
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { wrapStore })
+      // Half a minute past a whole minute: rollups would start at the minute before and lag the last 30 s.
+      yield* TestClock.adjust("90 seconds")
+      const now = yield* Clock.currentTimeMillis
+      const series = yield* history.series({ device: "d", point: "p", from: now - 600_000, to: now, buckets: 10 })
+      // The buckets start on the whole minute before the range: the newest is the current minute, up to now.
+      expect(series).toMatchObject({ resolution: "read", stepMs: 60_000, from: now - 630_000, to: now })
+      // An hour and a half in 10 buckets is past an hour, so from the rollups.
+      yield* history.series({ device: "d", point: "p", from: now - 5_400_000, to: now, buckets: 10 })
+      expect(tables).toEqual(["readings", "minutes"])
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.effect("reads a range from more than a day back from the rollups, even in buckets finer than a minute", () =>
     Effect.gen(function* () {
       const { tables, wrapStore } = tablesAsked()
@@ -329,8 +450,8 @@ describe("which table a range is read from", () => {
       const series = yield* history.series({ device: "m", point: "power", from: 0, to: 120_000, buckets: 240 })
       expect(series).toMatchObject({ resolution: "minute", stepMs: 60_000 })
       expect(series.buckets).toEqual([
-        { t: 0, min: 0, max: 59, avg: 29.5, count: 60 },
-        { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60 }
+        { t: 0, min: 0, max: 59, avg: 29.5, count: 60, first: 0, last: 59_000 },
+        { t: 60_000, min: 60, max: 119, avg: 89.5, count: 60, first: 60_000, last: 119_000 }
       ])
       expect(tables).toEqual(["minutes"])
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
@@ -352,7 +473,7 @@ describe("a file that goes corrupt while the gateway runs", () => {
       history.sink.record("d", "p", 2, 1_000)
       yield* TestClock.adjust("5 seconds")
       const series = yield* history.series({ device: "d", point: "p", from: 0, to: 2_000, buckets: 1 })
-      expect(series.buckets).toEqual([{ t: 0, min: 1, max: 2, avg: 1.5, count: 2 }])
+      expect(series.buckets).toEqual([{ t: 0, min: 1, max: 2, avg: 1.5, count: 2, first: 0, last: 1_000 }])
       expect((yield* Metric.value(historyDisabled)).value).toBe(0)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
@@ -445,4 +566,57 @@ describe("tracing", () => {
       expect(names.filter((name) => name.startsWith("sql"))).toEqual([])
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer), Effect.withTracer(tracer))
   })
+})
+
+/** Each bucket's start and the times of its first and last read. */
+const times = (series: { readonly buckets: ReadonlyArray<HistoryBucket> }) =>
+  series.buckets.map(({ t, first, last }) => ({ t, first, last }))
+
+describe("buckets on whole multiples of their width", () => {
+  it.effect("put a read in the same bucket however late it is asked, so two answers seconds apart agree", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 5_000 })
+      // A read every 5 s from 0:00 to 4:55, then asked at 5:42 and again at 5:47 for the last 5 minutes.
+      for (let second = 0; second < 300; second += 5) history.sink.record("m", "p", second, second * 1_000)
+      yield* TestClock.adjust("342 seconds")
+      const asked = Effect.flatMap(Clock.currentTimeMillis, (now) =>
+        history.series({ device: "m", point: "p", from: now - 300_000, to: now, buckets: 5 })
+      )
+      const first = yield* asked
+      yield* TestClock.adjust("5 seconds")
+      const second = yield* asked
+      // The buckets start on whole minutes, the first on the minute the range starts in.
+      expect(first).toMatchObject({ stepMs: 60_000, from: 0 })
+      expect(second).toMatchObject({ stepMs: 60_000, from: 0 })
+      expect(first.buckets.map((bucket) => [bucket.t, bucket.count])).toEqual([
+        [0, 12],
+        [60_000, 12],
+        [120_000, 12],
+        [180_000, 12],
+        [240_000, 12]
+      ])
+      expect(second.buckets).toEqual(first.buckets)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("say when each bucket's first and last read came, from the waiting reads and the rollups alike", () =>
+    Effect.gen(function* () {
+      const history = yield* openHistory({ path: yield* tempPath, retentionDays: 7 }, { flushEveryMs: 60_000 })
+      // Reads until 1:04, then none until 3:09: a gap of 125 s, whatever the buckets.
+      for (const at of [10_000, 40_000, 64_000, 189_000, 200_000]) history.sink.record("m", "p", 1, at)
+      // Still waiting for the write: from the merge.
+      const waiting = yield* history.series({ device: "m", point: "p", from: 0, to: 240_000, buckets: 4 })
+      expect(times(waiting)).toEqual([
+        { t: 0, first: 10_000, last: 40_000 },
+        { t: 60_000, first: 64_000, last: 64_000 },
+        { t: 180_000, first: 189_000, last: 200_000 }
+      ])
+      yield* TestClock.adjust("1 minute")
+      yield* TestClock.adjust(DAY + 3_600_000)
+      // A day later, from the rollups: the same times.
+      const rolled = yield* history.series({ device: "m", point: "p", from: 0, to: 240_000, buckets: 4 })
+      expect(rolled.resolution).toBe("minute")
+      expect(times(rolled)).toEqual(times(waiting))
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
 })

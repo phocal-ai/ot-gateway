@@ -12,6 +12,9 @@
         "../../packaging/ot-gateway",
         "../../docs/operations.md",
         "../../docs/raspberry-pi-testing.md",
+        "../../docs/raspberry-pi-install.md",
+        "../../README.md",
+        "../../.claude/skills/setup/SKILL.md",
         "../../profiles/**"
       ]
     }

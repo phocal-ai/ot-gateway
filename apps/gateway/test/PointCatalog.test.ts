@@ -30,7 +30,16 @@ const config = parseConfig(
             scaling: { factor: 0.1 },
             semantics: { brick: "Electric_Power_Sensor", haystack: ["elec", "power", "sensor"] }
           },
-          { id: "alarm", name: "Alarm", table: "input", address: 7, dataType: "bool", bit: 3, deadband: 0 },
+          {
+            id: "alarm",
+            name: "Alarm",
+            table: "input",
+            address: 7,
+            dataType: "bool",
+            bit: 3,
+            deadband: 0,
+            alarmWhen: "off"
+          },
           { id: "pump", name: "Pump", table: "coil", address: 1, dataType: "bool", writable: true }
         ]
       },
@@ -79,6 +88,8 @@ describe("point catalog", () => {
         writable: false,
         topic: "s/b/meter/power",
         source: "holding 40 · float32 CDAB",
+        read: "polled every 5 s",
+        cov: false,
         publish: "aggregate every 15 min",
         scaling: { factor: 0.1, offset: 0 },
         brick: "Electric_Power_Sensor",
@@ -91,6 +102,17 @@ describe("point catalog", () => {
         "analog-value 3 · present-value · priority 8",
         "sine 18 to 24 · 2 min"
       ])
+      // A BACnet present value is asked for by change of value (`cov` is on by default); the poll is its fallback.
+      expect(points.map((point) => point.read)).toEqual([
+        "polled every 5 s",
+        "polled every 5 s",
+        "polled every 5 s",
+        "on change of value where the device supports it, polled every 5 s otherwise",
+        "polled every 5 s"
+      ])
+      expect(points.map((point) => point.cov)).toEqual([false, false, false, true, false])
+      // An alarm point says when it is active, as its config does.
+      expect(points.map((point) => point.alarmWhen)).toEqual([undefined, "off", undefined, undefined, undefined])
       // A point's own deadband or publish wins over its device's.
       expect(points.map((point) => point.publish)).toEqual([
         "aggregate every 15 min",
@@ -108,5 +130,11 @@ describe("point catalog", () => {
     expect(publishLabel({ mode: "sample", intervalMs: 60_000 })).toBe("latest, every 1 min")
     expect(publishLabel({ mode: "sample", intervalMs: 3_600_000 })).toBe("latest, every 1 h")
     expect(publishLabel({ mode: "sample", intervalMs: 5_000 })).toBe("latest, every 5 s")
+  })
+
+  it("says a point read on change of value sends each change, not every poll", () => {
+    expect(publishLabel({ mode: "sample" }, true)).toBe("on change of value (COV)")
+    expect(publishLabel({ mode: "sample", intervalMs: 60_000 }, true)).toBe("latest, every 1 min")
+    expect(publishLabel({ mode: "change", deadband: 0.5 }, true)).toBe("on change ≥ 0.5")
   })
 })

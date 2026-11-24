@@ -5,13 +5,24 @@
  * without closing it; Esc or a click beside it closes it. The list opens and closes it inside a view transition, in
  * which the panel (`point-sheet`) slides in and out.
  */
-import type { PointInfo } from "@ot-gateway/api"
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react"
+import { type PointInfo, readGapMs } from "@ot-gateway/api"
+import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
+import { useGatewayEvents } from "@/components/gateway-shell"
 import { HistoryChart } from "@/components/history-chart"
-import { PointValue } from "@/components/point-value"
+import { ON_CHANGE_HINT, PointValue } from "@/components/point-value"
 import { Badge } from "@/components/ui/badge"
-import { fetchHistory, type GatewayClock, gatewayTime, type PointHistory, type Range, ranges } from "@/lib/history"
-import type { LivePoint } from "@/lib/points"
+import { counterNote, pointCounterEvents } from "@/lib/events"
+import { alarmWhen, pointFreshness, readLabel, readsOnChange } from "@/lib/glance"
+import {
+  failuresOf,
+  fetchHistory,
+  type GatewayClock,
+  gatewayTime,
+  type PointHistory,
+  type Range,
+  ranges
+} from "@/lib/history"
+import { type LivePoint, pointTitle, titledById } from "@/lib/points"
 import { clockTime, failureLabel, freshness, settle, unitLabel } from "@/lib/status"
 
 /** How often an open panel asks for history again: often for short ranges, rarely for a week of minutes. */
@@ -99,6 +110,7 @@ export const PointSheet = ({
   point,
   live,
   now,
+  since,
   position,
   morph,
   unreachable,
@@ -108,6 +120,8 @@ export const PointSheet = ({
   readonly point: PointInfo
   readonly live: LivePoint | undefined
   readonly now: number
+  /** When the gateway started, for the history's time axis. */
+  readonly since: number | undefined
   /** Where the point is in the listed points (1-based), when it is listed. */
   readonly position: { readonly index: number; readonly total: number } | undefined
   /** Opened by a view transition, which animates it; otherwise it slides in by itself. */
@@ -120,9 +134,18 @@ export const PointSheet = ({
   const dialog = useRef<HTMLDialogElement>(null)
   const [range, setRange] = useState<Range>(ranges[1])
   const history = useHistory(point.device, point.id, range, now)
+  const events = useGatewayEvents()
+  const failures = useMemo(() => failuresOf(events?.events ?? [], point.device), [events, point.device])
+  // Its energy counter went back or jumped in this run of the gateway: a muted note, the newest last.
+  const counters = useMemo(
+    () =>
+      events === undefined || events.since !== since ? [] : pointCounterEvents(events.events, point.device, point.id),
+    [events, since, point.device, point.id]
+  )
   const value = live?.value
   const device = live?.device
   const state = device === undefined ? undefined : freshness(device, now)
+  const read = pointFreshness(point, { value, device }, now, unreachable)
 
   // A layout effect, so the dialog is open in the frame the view transition takes as its new state.
   useLayoutEffect(() => {
@@ -161,8 +184,14 @@ export const PointSheet = ({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <p className="font-mono text-sm text-muted-foreground">{point.device}</p>
-            <h2 className="w-fit font-mono text-lg font-semibold break-all">{point.id}</h2>
-            <p className="text-sm text-muted-foreground">{point.name}</p>
+            {titledById(point) ? (
+              <h2 className="w-fit font-mono text-lg font-semibold break-all">{point.id}</h2>
+            ) : (
+              <>
+                <h2 className="w-fit text-lg font-semibold break-words">{pointTitle(point)}</h2>
+                <p className="font-mono text-sm break-all text-muted-foreground">{point.id}</p>
+              </>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {position === undefined ? null : (
@@ -199,11 +228,14 @@ export const PointSheet = ({
         </div>
 
         <div className="flex flex-col gap-1">
-          <p className={`font-mono text-3xl font-semibold tabular-nums ${unreachable ? "opacity-50" : ""}`}>
+          <p className="font-mono text-3xl font-semibold tabular-nums">
             <PointValue
+              alarm={alarmWhen(point)}
               className="-mx-1"
               key={`${point.device}/${point.id}`}
               now={now}
+              stale={read._tag === "stale"}
+              onChange={readsOnChange(point)}
               unit={point.unit}
               value={value}
             />
@@ -215,8 +247,22 @@ export const PointSheet = ({
             ) : null}
             {state?._tag === "late" ? <Badge variant="warning">device late</Badge> : null}
             {point.writable ? <Badge variant="outline">writable</Badge> : null}
-            <span>{value?.ts === undefined ? "nothing read yet" : `read ${clockTime(value.ts, now)}`}</span>
+            {read._tag === "unchanged" ? (
+              <span title={ON_CHANGE_HINT}>unchanged since {clockTime(read.ts, now)} (sent on change of value)</span>
+            ) : (
+              <span>{readLabel(value?.ts, now, read._tag === "stale", readsOnChange(point))}</span>
+            )}
           </div>
+          {counters.length === 0 ? null : (
+            <ul className="mt-1 flex flex-col gap-1 text-xs text-muted-foreground">
+              {counters.map((event) => (
+                <li className="flex items-baseline gap-2" key={event.id}>
+                  <span aria-hidden="true" className="size-2 shrink-0 translate-y-[-1px] rounded-full bg-warning" />
+                  <span className="min-w-0 break-words">{counterNote(event, now)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <section className="flex flex-col gap-2">
@@ -248,7 +294,12 @@ export const PointSheet = ({
             ) : (
               <HistoryChart
                 boolean={typeof value?.value === "boolean"}
-                label={point.id}
+                device={point.device}
+                cov={point.cov}
+                failures={failures}
+                label={pointTitle(point)}
+                readGapMs={device === undefined ? undefined : readGapMs(device.pollIntervalMs)}
+                startedAt={since}
                 series={history.series.series}
                 unit={point.unit}
               />
@@ -268,6 +319,7 @@ export const PointSheet = ({
               <Topic topic={point.topic} />
             </Fact>
             <Fact label="Source">{point.source}</Fact>
+            <Fact label="Read">{point.read}</Fact>
             <Fact label="Publishes">{point.publish}</Fact>
             {point.unit === undefined ? null : (
               <Fact label="Unit">

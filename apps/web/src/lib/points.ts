@@ -14,6 +14,18 @@ import {
 /** A point's key across the gateway: `device/point`, as in its topic. */
 export const pointKey = (point: { readonly device: string; readonly id: string }) => `${point.device}/${point.id}`
 
+/**
+ * What a point is called on the page: its name as people read it ("Active power"), or its id when the name is empty.
+ * The id (and topic) go under the title, for copying.
+ */
+export const pointTitle = (point: { readonly id: string; readonly name: string }) => {
+  const name = point.name.trim()
+  return name === "" ? point.id : name
+}
+
+/** Whether the point's title is its id, so the id need not be repeated under it. */
+export const titledById = (point: { readonly id: string; readonly name: string }) => pointTitle(point) === point.id
+
 /** What the user filters by; empty strings mean no filter. */
 export interface PointFilter {
   readonly query: string

@@ -83,6 +83,7 @@ export interface MqttPublisherOptions extends Pick<
   | "reconnectDelay"
   | "subscriptions"
   | "onMessage"
+  | "onDisconnected"
 > {
   /**
    * Announce the gateway on its health topic: `online` (rendered fresh by

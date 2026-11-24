@@ -6,12 +6,14 @@ import type { DeviceStatus } from "@ot-gateway/api"
 import {
   byAttention,
   clockTime,
+  duration,
   every,
   failureLabel,
   fillPercent,
   formatValue,
   freshness,
   since,
+  sinceClock,
   topicKind
 } from "../src/lib/status.ts"
 
@@ -125,5 +127,31 @@ describe("fillPercent", () => {
     expect(fillPercent(4_000, 1_000_000)).toBe("0.4 %")
     expect(fillPercent(370_000, 1_000_000)).toBe("37 %")
     expect(fillPercent(1_000_000, 1_000_000)).toBe("100 %")
+  })
+})
+
+describe("duration", () => {
+  it("says seconds under two minutes, then minutes, hours and days, to the precision that matters", () => {
+    expect(duration(0)).toBe("0 s")
+    expect(duration(20_400)).toBe("20 s")
+    expect(duration(61_000)).toBe("61 s")
+    expect(duration(119_400)).toBe("119 s")
+    expect(duration(180_000)).toBe("3 min")
+    expect(duration(3_600_000)).toBe("1 h")
+    expect(duration(7_500_000)).toBe("2 h 5 min")
+    expect(duration(86_400_000)).toBe("1 d")
+    expect(duration(3 * 86_400_000 + 4 * 3_600_000 + 60_000)).toBe("3 d 4 h")
+  })
+
+  it("never goes below zero when the clocks disagree", () => {
+    expect(duration(-5000)).toBe("0 s")
+  })
+})
+
+describe("sinceClock", () => {
+  it("gives the local clock time and how long ago", () => {
+    const at = new Date(2026, 10, 5, 12, 18, 20).getTime()
+    expect(sinceClock(at, at + 180_000)).toBe("12:18:20 (3 min)")
+    expect(sinceClock(at, at + 20_000)).toBe("12:18:20 (20 s)")
   })
 })

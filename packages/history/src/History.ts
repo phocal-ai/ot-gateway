@@ -3,8 +3,10 @@
  * read back as chart buckets for the status page.
  *
  * - Reads wait in memory and are written every `flushEveryMs` (30 s) in one transaction, sooner when half of
- *   `MAX_PENDING` is waiting. A write rewrites a page per point it touches, so fewer writes spare the SD card; the
- *   cost is that a chart can be up to 30 s behind, and a crash or power cut loses at most that much of it. At most
+ *   `MAX_PENDING` is waiting. A write rewrites a page per point it touches, so fewer writes spare the SD card; a
+ *   crash or power cut loses at most 30 s of it. A query sees the waiting reads as well: it merges the ones of its
+ *   point into what the file answers, in memory, so a chart or `ot-gateway history` is complete up to now without
+ *   a write per question. At most
  *   `MAX_PENDING` wait: while the file cannot be written (disk full, say) the oldest are dropped and counted, and the
  *   gateway's memory stays bounded. A failed write is tried again after the same interval.
  * - Every hour, reads older than a day and rollups older than `retentionDays` are deleted.
@@ -18,8 +20,8 @@
  * sooner; after it steps back, newer ones stay until the clock catches up.
  */
 import { SqliteClient, SqliteMigrator } from "@effect/sql-sqlite-node"
-import type { HistorySeries } from "@ot-gateway/api"
-import { HistoryUnavailable } from "@ot-gateway/api"
+import type { HistoryChange, HistorySeries } from "@ot-gateway/api"
+import { HISTORY_CHANGES_MAX, HistoryUnavailable } from "@ot-gateway/api"
 import {
   type HistorySettings,
   type HistorySink,
@@ -64,11 +66,13 @@ export interface SeriesQuery {
   readonly from: number
   readonly to: number
   readonly buckets?: number
+  /** Also list when the value changed, from every read; only for a range that starts within the last day. */
+  readonly changes?: boolean
 }
 
 export interface History {
   readonly sink: HistorySink
-  /** A point's reads between `from` and `to` in about `buckets` buckets: from every read for buckets under a minute on a range that starts within the last day, else per minute. */
+  /** A point's reads between `from` and `to` in about `buckets` buckets: from every read for buckets under a minute, or a range of an hour or less, that starts within the last day; else per minute. */
   readonly series: (query: SeriesQuery) => Effect.Effect<HistorySeries, HistoryUnavailable>
 }
 
@@ -98,6 +102,93 @@ export const stepFor = (from: number, to: number, buckets: number, minimum: numb
     minimum,
     Math.ceil((to - from) / Math.min(MAX_BUCKETS, Math.max(1, Math.round(buckets))) / minimum) * minimum
   )
+
+/** A bucket as the store answers it: its index from `from`, before it is labelled with its time. */
+interface IndexedBucket {
+  readonly b: number
+  readonly min: number
+  readonly max: number
+  readonly avg: number
+  readonly count: number
+  /** The times of its first and last read; null from rollups written before they were kept. */
+  readonly first: number | null
+  readonly last: number | null
+}
+
+/**
+ * `stored` buckets with the reads not written yet (`unwritten`, one point's, inside the range) added: per bucket
+ * the minimum, maximum and count of both, and the average of every read. For the rollups, a read counts in the
+ * bucket of its minute, as the rollup it will become does.
+ */
+export const mergeBuckets = (
+  stored: ReadonlyArray<IndexedBucket>,
+  unwritten: ReadonlyArray<Row>,
+  range: { readonly from: number; readonly stepMs: number; readonly perMinute: boolean }
+): ReadonlyArray<IndexedBucket> => {
+  if (unwritten.length === 0) return stored
+  const sums = new Map<
+    number,
+    { min: number; max: number; sum: number; count: number; first: number | null; last: number | null }
+  >()
+  for (const bucket of stored) {
+    sums.set(bucket.b, {
+      min: bucket.min,
+      max: bucket.max,
+      sum: bucket.avg * bucket.count,
+      count: bucket.count,
+      first: bucket.first,
+      last: bucket.last
+    })
+  }
+  for (const row of unwritten) {
+    const at = range.perMinute ? Math.floor(row.ts / MINUTE_MS) * MINUTE_MS : row.ts
+    const b = Math.floor((at - range.from) / range.stepMs)
+    const current = sums.get(b)
+    if (current === undefined) {
+      sums.set(b, { min: row.value, max: row.value, sum: row.value, count: 1, first: row.ts, last: row.ts })
+    } else {
+      current.min = Math.min(current.min, row.value)
+      current.max = Math.max(current.max, row.value)
+      current.sum += row.value
+      current.count += 1
+      // A stored bucket without times (a rollup from before they were kept) stays without them.
+      if (current.first !== null) current.first = Math.min(current.first, row.ts)
+      if (current.last !== null) current.last = Math.max(current.last, row.ts)
+    }
+  }
+  return [...sums.entries()]
+    .toSorted(([left], [right]) => left - right)
+    .map(([b, bucket]) => ({
+      b,
+      min: bucket.min,
+      max: bucket.max,
+      avg: bucket.sum / bucket.count,
+      count: bucket.count,
+      first: bucket.first,
+      last: bucket.last
+    }))
+}
+
+/**
+ * The changes the file listed (`stored`, at most `limit + 1`) followed by those of the reads not written yet,
+ * oldest first. The last change stored is the value of the last read stored, so a waiting read that repeats it is
+ * no change. When the file already listed more than `limit`, the waiting reads add nothing that would be shown.
+ */
+export const mergeChanges = (
+  stored: ReadonlyArray<HistoryChange>,
+  unwritten: ReadonlyArray<Row>,
+  limit: number
+): ReadonlyArray<HistoryChange> => {
+  if (stored.length > limit || unwritten.length === 0) return stored
+  const merged = [...stored]
+  let previous = stored.at(-1)?.value
+  for (const row of unwritten) {
+    if (previous === undefined || row.value !== previous) merged.push({ t: row.ts, value: row.value })
+    previous = row.value
+    if (merged.length > limit) break
+  }
+  return merged
+}
 
 /** Open and migrate the file at `path` in `scope`; `corrupt` when moving it aside could help. */
 const openStore = (path: string, scope: Scope.Scope) =>
@@ -317,6 +408,19 @@ export const openHistory = (
     // What is still waiting goes to the file when the gateway stops.
     yield* Effect.addFinalizer(() => flush.pipe(Effect.timeout("5 seconds"), Effect.ignore))
 
+    /**
+     * The reads of one point still waiting for the next write, in `[from, to)` (by their minute for the rollups),
+     * oldest first. A scan of at most `MAX_PENDING` rows in memory, only when someone asks.
+     */
+    const unwrittenOf = (device: string, point: string, from: number, to: number, perMinute: boolean) =>
+      pending
+        .filter((row) => {
+          if (row.device !== device || row.point !== point) return false
+          const at = perMinute ? Math.floor(row.ts / MINUTE_MS) * MINUTE_MS : row.ts
+          return at >= from && at < to
+        })
+        .toSorted((left, right) => left.ts - right.ts)
+
     return {
       sink: {
         record: (device, point, value, ts) => {
@@ -327,24 +431,50 @@ export const openHistory = (
       },
       series: (query) =>
         Effect.gen(function* () {
-          // Buckets of a minute or more always come from the rollups, whatever the range's age: a 24 h chart
-          // (360 s buckets) must not let a browser's clock a few milliseconds off the gateway's pick the table, nor
-          // aggregate up to a day of reads per point for buckets the rollups draw the same. Only finer buckets
-          // consult this clock: from every read while the range starts within the last day (reads are kept that
-          // long), else from the rollups at a minute step. The status page's fine ranges (15 min, 1 h) are far from
-          // that boundary. Rollups are merged in the same transaction as the reads, so they hold everything flushed
-          // (every 30 s); the newest bucket can lag by one flush, as the raw one does.
+          // Buckets of a minute or more on a range longer than an hour come from the rollups, whatever the range's
+          // age: a 24 h chart (360 s buckets) must not let a browser's clock a few milliseconds off the gateway's
+          // pick the table, nor aggregate up to a day of reads per point for buckets the rollups draw the same.
+          // Finer buckets, and any range of an hour or less, come from every read while the range starts within
+          // the last day (reads are kept that long), else from the rollups at a minute step. So `history --since
+          // 10m` in ten buckets has every read up to now in its newest bucket, not only up to the last flushed minute. The status page's ranges
+          // (15 min, 1 h, 24 h) are far from that boundary. Rollups are merged in the same transaction as the reads,
+          // so they hold everything flushed; the reads still waiting for the next write are merged in below, so the
+          // newest bucket holds every read up to now, whichever table answers.
           const buckets = query.buckets ?? DEFAULT_BUCKETS
           const fineMs = stepFor(query.from, query.to, buckets, 1_000)
           const now = yield* Clock.currentTimeMillis
-          const raw = fineMs < MINUTE_MS && query.from >= now - RAW_MS
+          const recent = query.from >= now - RAW_MS
+          const raw = recent && (fineMs < MINUTE_MS || query.to - query.from <= HOUR_MS)
           const stepMs = raw ? fineMs : stepFor(query.from, query.to, buckets, MINUTE_MS)
-          const from = raw ? query.from : Math.floor(query.from / MINUTE_MS) * MINUTE_MS
+          // Buckets start on whole multiples of their width (minute buckets on whole minutes), so the same read is
+          // in the same bucket whenever it is asked, and two answers a few seconds apart count alike. The first
+          // bucket can start up to a step before `query.from`.
+          const from = Math.floor(query.from / stepMs) * stepMs
           // A corrupt file only fails this request; the flusher or the pruner replaces it, never a reader.
           const rows = yield* Effect.gen(function* () {
             const target = current
             if (target === undefined) return yield* unavailable(`the gateway keeps no history: ${off ?? "it is off"}`)
-            return yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs }).pipe(
+            return yield* Effect.gen(function* () {
+              const bucketRows = yield* target.store.buckets(raw ? "readings" : "minutes", { ...query, from, stepMs })
+              // One more than shown, to tell whether there were more.
+              const changes =
+                query.changes === true && recent
+                  ? yield* target.store.changes({ ...query, limit: HISTORY_CHANGES_MAX + 1 })
+                  : undefined
+              // Under the permit no write is under way, so every read is either in the file or still waiting.
+              const waiting = unwrittenOf(query.device, query.point, from, query.to, !raw)
+              return {
+                buckets: mergeBuckets(bucketRows, waiting, { from, stepMs, perMinute: !raw }),
+                changes:
+                  changes === undefined
+                    ? undefined
+                    : mergeChanges(
+                        changes.map((row) => ({ t: row.ts, value: row.value })),
+                        unwrittenOf(query.device, query.point, query.from, query.to, false),
+                        HISTORY_CHANGES_MAX
+                      )
+              }
+            }).pipe(
               Effect.tapError(() => Metric.update(Metric.withAttributes(historyFailures, { operation: "read" }), 1)),
               Effect.catchTags({
                 SqlError: (error) => unavailable(`history could not be read: ${error.message}`),
@@ -363,13 +493,24 @@ export const openHistory = (
             to: query.to,
             stepMs,
             resolution: raw ? "read" : "minute",
-            buckets: rows.map((row) => ({
+            live: true,
+            buckets: rows.buckets.map((row) => ({
               t: from + row.b * stepMs,
               min: row.min,
               max: row.max,
               avg: row.avg,
-              count: row.count
-            }))
+              count: row.count,
+              ...(row.first === null ? {} : { first: row.first }),
+              ...(row.last === null ? {} : { last: row.last })
+            })),
+            ...(rows.changes === undefined
+              ? {}
+              : {
+                  changes: {
+                    list: rows.changes.slice(0, HISTORY_CHANGES_MAX),
+                    truncated: rows.changes.length > HISTORY_CHANGES_MAX
+                  }
+                })
           } satisfies HistorySeries
         })
     }

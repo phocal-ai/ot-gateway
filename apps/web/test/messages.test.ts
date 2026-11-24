@@ -1,6 +1,67 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { MessageStatus } from "@ot-gateway/api"
-import { countKinds, matchesMessage } from "../src/lib/messages.ts"
+import { countKinds, countsNote, matchesMessage, messageRanges, totalsNote, windowSince } from "../src/lib/messages.ts"
+
+const counted = (topic: string, count: number, delivered: number, notSent = 0): MessageStatus => ({
+  topic,
+  payload: "{}",
+  truncated: false,
+  at: 0,
+  retained: topic.endsWith("/health"),
+  count,
+  delivered,
+  notSent,
+  lost: 0
+})
+
+describe("message totals", () => {
+  it("add up the topics shown by kind, and say how many reached the broker", () => {
+    expect(
+      totalsNote([
+        counted("s/b/meter/power", 1_200, 1_190),
+        counted("s/b/meter/power/$meta", 1, 1),
+        counted("s/b/$gateway/main/health", 12, 12)
+      ])
+    ).toBe(
+      "1,213 messages on 3 topics: 1,200 values, 1 metadata, 12 health; 1,203 reached the broker; 10 waiting for the broker."
+    )
+    // The outage of the report: values went out from the buffer, 5 health messages missed the broker and that is fine.
+    expect(
+      totalsNote([counted("s/b/meter/power", 1_420, 1_408), counted("s/b/$gateway/main/health", 14, 9, 5)], {
+        dropped: 0
+      })
+    ).toBe(
+      "1,434 messages on 2 topics: 1,420 values, 0 metadata, 14 health; 1,417 reached the broker; 12 waiting in the buffer; 5 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect."
+    )
+    expect(totalsNote([counted("s/b/meter/valve/$set/result", 1, 1)])).toBe(
+      "1 message on 1 topic: 0 values, 0 metadata, 0 health, 1 other; 1 reached the broker."
+    )
+    expect(totalsNote([])).toBeUndefined()
+  })
+})
+
+describe("message counts over a window", () => {
+  it("offers since start, 15 and 60 minutes, and starts a window on the gateway's clock", () => {
+    expect(messageRanges.map((range) => range.label)).toEqual(["Since start", "15 min", "60 min"])
+    expect(windowSince(15, 1_000_000_000)).toBe(1_000_000_000 - 900_000)
+  })
+
+  it("says what the column counts, and the 60-minute limit for a window", () => {
+    const started = new Date(2026, 10, 11, 8, 2, 11).getTime()
+    expect(countsNote({ messages: [], droppedTopics: 0 }, started)).toBe(
+      "Messages counts every message since the gateway started at 08:02."
+    )
+    const from = new Date(2026, 10, 11, 14, 27).getTime()
+    const window = { from, to: from + 900_000 }
+    const note = countsNote({ messages: [], droppedTopics: 0, window }, started)
+    expect(note).toContain("from 14:27 to 14:42, in whole minutes")
+    expect(note).toContain("the last 60 minutes")
+    // A window that reaches back before the gateway's start counts from the start.
+    expect(countsNote({ messages: [], droppedTopics: 0, window }, from + 120_000)).toContain(
+      "from the gateway's start at 14:29 to 14:42"
+    )
+  })
+})
 
 const message = (topic: string, payload = "{}"): MessageStatus => ({
   topic,
@@ -8,7 +69,8 @@ const message = (topic: string, payload = "{}"): MessageStatus => ({
   truncated: false,
   retained: false,
   at: 0,
-  count: 1
+  count: 1,
+  delivered: 1
 })
 
 const value = message("site/hq/ahu-1/supply-temp", '{"value":21.5}')

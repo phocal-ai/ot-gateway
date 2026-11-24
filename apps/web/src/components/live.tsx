@@ -1,13 +1,15 @@
 "use client"
 /**
- * The status poll every page shares: `/api/status` every two seconds, the next request only once this one has
- * settled, and the page's freshness as one badge. While the gateway does not answer, the last status is kept.
+ * The status poll every page shares: `/api/status` every two seconds, then the events that are new since the last
+ * poll (`/api/events?after=`, usually none), the next request only once these have settled, and the page's freshness
+ * as one badge. While the gateway does not answer, the last status and the events known are kept.
  */
 import type { GatewayStatus, PointReading } from "@ot-gateway/api"
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Badge } from "@/components/ui/badge"
+import { eventsAfter, type KnownEvents, mergeEvents } from "@/lib/events"
 import { withReadings } from "@/lib/points"
-import { fetchStatus, fetchValues, settle } from "@/lib/status"
+import { fetchEvents, fetchStatus, fetchValues, settle } from "@/lib/status"
 
 export const POLL_MS = 2000
 
@@ -20,20 +22,39 @@ export type Load =
 export const statusOf = (load: Load) =>
   load._tag === "ok" ? load.status : load._tag === "unreachable" ? load.last : undefined
 
+/**
+ * The status, and the gateway's events as far as the page has seen them (undefined until the first answer). The
+ * events ride on the status poll: asked for right after each status, by the id of the newest known, so a quiet
+ * gateway answers an empty list.
+ */
 export const useStatus = () => {
   const [load, setLoad] = useState<Load>({ _tag: "loading" })
+  const [events, setEvents] = useState<KnownEvents | undefined>(undefined)
+  const known = useRef<KnownEvents | undefined>(undefined)
   useEffect(() => {
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    const askEvents = async (since: number) => {
+      const result = await settle(fetchEvents(eventsAfter(known.current, since)))
+      if (cancelled || result._tag !== "Success") return
+      const next = mergeEvents(known.current, since, result.success)
+      // A quiet poll changes nothing: keep the same object, so nothing renders for it.
+      if (known.current !== undefined && next.since === known.current.since && result.success.events.length === 0)
+        return
+      known.current = next
+      setEvents(next)
+    }
     // The next request only once this one has settled: a slow gateway never gets them piled up.
     const poll = () =>
-      settle(fetchStatus).then((result) => {
+      settle(fetchStatus).then(async (result) => {
         if (cancelled) return
         setLoad((previous) => {
           if (result._tag === "Success") return { _tag: "ok", status: result.success }
           const last = statusOf(previous)
           return last === undefined ? { _tag: "unreachable" } : { _tag: "unreachable", last }
         })
+        if (result._tag === "Success") await askEvents(result.success.since)
+        if (cancelled) return
         timer = setTimeout(() => void poll(), POLL_MS)
       })
     void poll()
@@ -42,7 +63,7 @@ export const useStatus = () => {
       if (timer !== undefined) clearTimeout(timer)
     }
   }, [])
-  return load
+  return { load, events }
 }
 
 /** Wait this long after the keys change before asking: a scroll changes the shown rows many times a second. */

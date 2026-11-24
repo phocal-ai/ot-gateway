@@ -15,6 +15,7 @@
 import type { BacnetDevice } from "@ot-gateway/core"
 import { Result } from "effect"
 import { AbortReason, type Apdu, ConfirmedService, encodeApdu, RejectReason, UnconfirmedService } from "./Apdu.ts"
+import { bacnetUnits } from "./Discovery.ts"
 import type { BacnetValue, ObjectId } from "./Encoding.ts"
 import { ErrorClass, ErrorCode, ObjectType, type ObjectTypeName, PropertyId, Segmentation } from "./Enums.ts"
 import {
@@ -468,13 +469,15 @@ const isObjectTypeName = (name: string): name is ObjectTypeName => Object.hasOwn
 /**
  * A simulated device with an object for every point of `device` (named
  * object types only; proprietary numeric ones are left out). Binary objects
- * start `inactive`, multi-state ones in state 1, everything else at 0.
+ * start `inactive`, multi-state ones in state 1, everything else at 0. Analog
+ * objects carry the point's unit as BACnetEngineeringUnits when there is one.
  */
 export const simulatedDeviceFor = (device: BacnetDevice): SimulatedDevice => {
   const objects = new Map<string, SimulatedObjectConfig>()
   for (const point of device.points) {
     const objectType = point.objectType
     if (!isObjectTypeName(objectType)) continue
+    const units = objectType.startsWith("analog-") && point.unit !== undefined ? bacnetUnits.get(point.unit) : undefined
     objects.set(`${objectType}:${point.instance}`, {
       objectType,
       instance: point.instance,
@@ -483,7 +486,8 @@ export const simulatedDeviceFor = (device: BacnetDevice): SimulatedDevice => {
         ? { type: "enumerated", value: 0 }
         : multiStateObjectTypes.has(objectType)
           ? { type: "unsigned", value: 1 }
-          : { type: "real", value: 0 }
+          : { type: "real", value: 0 },
+      ...(units === undefined ? {} : { units })
     })
   }
   return makeSimulatedDevice({ instance: device.deviceInstance, name: device.id, objects: [...objects.values()] })

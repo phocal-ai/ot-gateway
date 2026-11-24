@@ -20,7 +20,9 @@
  *   present-value point gets an unconfirmed COV subscription (clause 13.14),
  *   renewed before it runs out. While its notifications arrive, the polling
  *   cycle skips the object's present-value points; an object the device
- *   refuses, or that goes quiet, is polled again.
+ *   refuses, or that goes quiet, is polled again. When every point is pushed,
+ *   the cycle reads one only to see that the device still answers, and does
+ *   not publish that read: each value goes out once per notification.
  *
  * Binary objects' present values (`inactive`/`active`) are published as
  * booleans; every other numeric value as a number.
@@ -1185,6 +1187,12 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
   const fail = (reason: DriverError["reason"], message: string) =>
     Effect.fail(new DriverError({ device: device.id, reason, message }))
 
+  /** A timeout as the device's error says it: `no reply from device 2001 at 10.0.0.5:47808 within 3 s`. */
+  const timeoutMessage = (error: BacnetTimeout) =>
+    error.peer === undefined || error.within === undefined
+      ? error.message
+      : `no reply from device ${device.deviceInstance} at ${error.peer} within ${error.within}`
+
   const cov = device.cov
     ? makeCovSubscriptions({
         client,
@@ -1199,18 +1207,23 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
   /**
    * The points to poll: those no COV subscription keeps up to date. When
    * every point is pushed, the first is still read, so a device that stopped
-   * answering is noticed within a cycle, not when its subscriptions lapse.
+   * answering is noticed within a cycle, not when its subscriptions lapse;
+   * that read only `probes`: its value is not a reading, since the point's
+   * notifications already deliver it, and publishing it too would send the
+   * point once more every cycle (twice per interval in `sample` mode).
    */
   const toPoll = Effect.gen(function* () {
     // After a timeout the device may have restarted, so what was pushed may be stale: read it all once.
-    if (cov === undefined || lostCycles > 0) return { polled: points, pushed: 0 }
+    if (cov === undefined || lostCycles > 0) return { polled: points, pushed: 0, probes: false }
     const pushed = cov.pushedPointIds(yield* monotonicMillis)
     const polled = points.filter((point) => !pushed.has(point.point.id))
-    return { polled: polled.length === 0 ? points.slice(0, 1) : polled, pushed: pushed.size }
+    return polled.length === 0
+      ? { polled: points.slice(0, 1), pushed: pushed.size, probes: true }
+      : { polled, pushed: pushed.size, probes: false }
   })
 
   const readAll = Effect.gen(function* () {
-    const { polled, pushed } = yield* toPoll
+    const { polled, pushed, probes } = yield* toPoll
     // Before the device is looked for, so the gauge falls to 0 as subscriptions lapse while it is unreachable.
     if (cov !== undefined) yield* Metric.update(pushedPoints, pushed)
     // The pipeline retries a failed cycle at once; a busy device is not asked again until its backoff ends.
@@ -1255,7 +1268,8 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
     lostCycles = 0
     yield* countPointFailures("not_read", notReadPoints)
     yield* regrow(shrunk || busy !== undefined)
-    return readings
+    // The probe answered, so the device is alive; its value came, and comes, by COV.
+    return probes ? [] : readings
   }).pipe(
     Effect.catchTags({
       BacnetTimeout: (error) =>
@@ -1263,9 +1277,11 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
           lostCycles++
           // Once per outage, for the device; its points are not logged one by one.
           return lostCycles === 1
-            ? Effect.logWarning("BACnet device stopped answering").pipe(Effect.annotateLogs({ error: error.message }))
+            ? Effect.logWarning("BACnet device stopped answering").pipe(
+                Effect.annotateLogs({ error: timeoutMessage(error) })
+              )
             : Effect.void
-        }).pipe(Effect.andThen(fail("timeout", error.message))),
+        }).pipe(Effect.andThen(fail("timeout", timeoutMessage(error)))),
       // An unreadable answer is contained per batch in `readPoints`, so it never gets here.
       BacnetSocketError: (error) => fail("connection", error.message)
     })
@@ -1294,7 +1310,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
       }).pipe(
         Effect.catchTags({
           BacnetDeviceError: (error) => fail("protocol", `device refused the write: ${error.message}`),
-          BacnetTimeout: (error) => fail("timeout", error.message),
+          BacnetTimeout: (error) => fail("timeout", timeoutMessage(error)),
           BacnetSocketError: (error) => fail("connection", error.message),
           BacnetCodecError: (error) => fail("invalid-response", error.message),
           BacnetEncodeError: (error) => fail("configuration", error.message)

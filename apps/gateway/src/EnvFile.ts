@@ -1,6 +1,7 @@
 /**
  * `./ot-gateway.env`, read into the environment when the CLI starts, so `ot-gateway run`, `watch` and `discover`
- * in the gateway's folder find the broker password where Docker Compose does. Variables already set win: the
+ * in the gateway's folder find the broker password where Docker Compose does (LoadConfig.ts reads the one next to a
+ * config in another folder too). Variables already set win: the
  * shell, systemd's EnvironmentFile and the container's env_file all come first. A missing file is not an error.
  * Values are never logged.
  */

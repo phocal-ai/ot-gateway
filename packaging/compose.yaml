@@ -1,13 +1,13 @@
 # The gateway as a container, for a Raspberry Pi or any Linux edge box with Docker (amd64 or arm64).
 # Put this file in a folder of its own, with the config next to it:
 #
-#   curl -fsSLO https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
+#   curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/compose.yaml
 #   # ot-gateway.json next to it, and ot-gateway.env for secrets if the config names any
 #   docker compose up -d
 #
-# No sudo and no folders to make: the outbox and the history live in the `ot-gateway_data` volume, which is
-# also the gateway's working directory, so relative paths in the config (`./ot-gateway-buffer.sqlite`, as
-# `ot-gateway init` writes them) end up in it and outlive the container.
+# No sudo and no folders to make: the outbox and the history live in the `ot-gateway_data` volume. The image
+# resolves relative paths in the config (`./ot-gateway-buffer.sqlite`, as `ot-gateway init` writes them) against
+# it (OT_GATEWAY_DATA_DIR), not against this folder, so they outlive the container.
 #
 # Upgrade by writing the new tag into the default below, then docker compose up -d; go back the same way:
 #   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-<new tag>/' compose.yaml && docker compose up -d
@@ -17,21 +17,27 @@ name: ot-gateway
 services:
   gateway:
     # A release tag, not latest: an upgrade is a decision, and going back is setting the old tag again.
-    image: ghcr.io/phocal-ai/ot-gateway:${OT_GATEWAY_TAG:-v0.12.0}
+    image: ghcr.io/phocal-ai/ot-gateway:${OT_GATEWAY_TAG:-v0.13.0}
     container_name: ot-gateway
     # BACnet discovery and change-of-value need the building network's broadcasts, which a bridge network drops.
     network_mode: host
     restart: unless-stopped
     # Time to flush the outbox and say goodbye to the broker before the container is killed.
     stop_grace_period: 30s
-    # Relative paths in the config resolve here, in the volume. The entrypoint is absolute, so this is safe.
+    # The volume, where releases before OT_GATEWAY_DATA_DIR resolved relative paths (their working directory).
+    # The entrypoint is absolute, so this is safe.
     working_dir: /var/lib/ot-gateway
+    # The config in this folder. The image's default (/etc/ot-gateway/gateway.json) is for compose files that
+    # mounted the file alone, read-only.
+    command: [/etc/ot-gateway/ot-gateway.json]
     volumes:
-      # Fails with a clear error when ot-gateway.json is missing, instead of mounting an empty folder in its place.
+      # This folder, writable: the status page's Settings tab saves ot-gateway.json here (written to a new file and
+      # renamed over it, which a file mounted alone does not allow) and keeps the previous one as
+      # ot-gateway.json.bak. The gateway runs as user 1000, the first user of a Pi; a folder that user may not
+      # write keeps the page read-only, and the page says why.
       - type: bind
-        source: ./ot-gateway.json
-        target: /etc/ot-gateway/gateway.json
-        read_only: true
+        source: .
+        target: /etc/ot-gateway
         bind:
           create_host_path: false
       # A named volume starts with the image's ownership (the gateway's user), so nothing needs a chown.

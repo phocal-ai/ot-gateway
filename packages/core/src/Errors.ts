@@ -1,6 +1,7 @@
 import { Schema } from "effect"
-import type { DatagramSocketError } from "effect/socket/DatagramSocket"
-import type { SocketError } from "effect/socket/Socket"
+import { type DatagramSocketError, isDatagramSocketError } from "effect/socket/DatagramSocket"
+import { isSocketError, type SocketError } from "effect/socket/Socket"
+import { SocketServerError } from "effect/socket/SocketServer"
 
 /** An expected failure while talking to a field device. */
 export class DriverError extends Schema.TaggedError<DriverError>()("DriverError", {
@@ -48,6 +49,34 @@ export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("Pipe
   message: Schema.String
 }) {}
 
+/** A property of a Node system error (`code`, `address`, `port`, `hostname`), when it has one of that type. */
+const field = (error: Error, key: string): string | undefined => {
+  const value: unknown = Reflect.get(error, key)
+  return typeof value === "string" ? value : typeof value === "number" ? String(value) : undefined
+}
+
+/**
+ * A Node system error in words, for the usual connect failures that carry the address they were about:
+ * `connect ECONNREFUSED 127.0.0.1:5020` becomes `connection refused by 127.0.0.1:5020`. Others keep Node's text.
+ */
+const systemErrorText = (error: Error): string | undefined => {
+  const code = field(error, "code")
+  const address = field(error, "address")
+  const port = field(error, "port")
+  const hostname = field(error, "hostname")
+  if (code === "ENOTFOUND" && hostname !== undefined) return `host name ${hostname} not found`
+  if (address === undefined) return undefined
+  const host = address.includes(":") ? `[${address}]` : address
+  const target = port === undefined ? address : `${host}:${port}`
+  if (code === "ECONNREFUSED") return `connection refused by ${target}`
+  if (code === "ETIMEDOUT") return `no answer from ${target}`
+  if (code === "EHOSTUNREACH") return `host ${address} unreachable`
+  if (code === "ENETUNREACH") return `no route to ${address}`
+  if (code === "EADDRINUSE") return `${target} is in use by another program`
+  if (code === "EADDRNOTAVAIL") return `${address} is not an address of this machine`
+  return undefined
+}
+
 /**
  * The most specific text in a Node error. Dialing a name with several
  * addresses (`localhost` is `::1` and `127.0.0.1`) fails with an
@@ -55,6 +84,8 @@ export class PipelineTimeout extends Schema.TaggedError<PipelineTimeout>()("Pipe
  */
 const causeText = (cause: unknown): string | undefined => {
   if (!(cause instanceof Error)) return undefined
+  const plain = systemErrorText(cause)
+  if (plain !== undefined) return plain
   if (cause.message !== "") return cause.message
   if (cause instanceof AggregateError) {
     const parts = cause.errors.map(causeText).filter((part) => part !== undefined)
@@ -96,10 +127,13 @@ export const describeSocketError = (error: SocketError): string => {
 export const describeDatagramSocketError = (error: DatagramSocketError): string => {
   const reason = error.reason
   switch (reason._tag) {
-    case "DatagramSocketOpenError":
-      return reason.kind === "AddressInUse"
-        ? withCause("could not open the UDP socket, the port is in use", reason.cause)
-        : withCause("could not open the UDP socket", reason.cause)
+    case "DatagramSocketOpenError": {
+      const text = causeText(reason.cause)
+      if (reason.kind !== "AddressInUse" || text?.endsWith("in use by another program") === true) {
+        return withCause("could not open the UDP socket", reason.cause)
+      }
+      return withCause("could not open the UDP socket, the port is in use", reason.cause)
+    }
     case "DatagramSocketReadError":
       return withCause("UDP read failed", reason.cause)
     case "DatagramSocketWriteError":
@@ -109,4 +143,25 @@ export const describeDatagramSocketError = (error: DatagramSocketError): string 
     case "DatagramSocketUnsupportedError":
       return reason.message
   }
+}
+
+/** A log-friendly description of a server socket that could not listen: its own message is a bare "Open". */
+export const describeSocketServerError = (error: SocketServerError): string =>
+  withCause(
+    error.reason._tag === "SocketServerOpenError" ? "could not listen" : "server socket failed",
+    error.reason.cause
+  )
+
+/**
+ * An expected failure in words, for the command line's last line. Socket errors carry their detail in a reason
+ * (a UDP socket that could not bind has an empty message, a server socket says "Open"), so they are described
+ * from it; any other error with an empty message is named by its tag and cause, never printed as nothing.
+ */
+export const describeFailure = (error: { readonly message: string }): string => {
+  if (isDatagramSocketError(error)) return describeDatagramSocketError(error)
+  if (isSocketError(error)) return describeSocketError(error)
+  if (error instanceof SocketServerError) return describeSocketServerError(error)
+  if (error.message.trim() !== "") return error.message
+  const tag: unknown = Reflect.get(error, "_tag")
+  return withCause(typeof tag === "string" ? tag : "failed", Reflect.get(error, "cause"))
 }

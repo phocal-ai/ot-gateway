@@ -19,3 +19,9 @@ export const formatNumber = (value: number, decimals?: number) => {
   }
   return format.format(value)
 }
+
+/**
+ * A topic in pieces that each end after a `/` ("…/", "meter/", "power/", "$set"), for a line break after a slash
+ * rather than in the middle of a name on a narrow screen.
+ */
+export const topicParts = (topic: string): ReadonlyArray<string> => topic.split(/(?<=\/)/)

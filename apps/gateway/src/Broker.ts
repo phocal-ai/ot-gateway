@@ -7,7 +7,7 @@
  *
  * Both connect with a client id of their own, so they run next to the gateway without taking its session.
  */
-import type { GatewayConfig, MqttSettings } from "@ot-gateway/core"
+import type { GatewayConfig, MqttSettings, Network } from "@ot-gateway/core"
 import {
   type ConnectionInfo,
   makeMqttClient,
@@ -38,14 +38,18 @@ const randomSuffix = Effect.map(Random.nextIntBetween(0, 0xffffff), (value) => v
 export const brokerClient = Effect.fn("brokerClient")(function* (
   settings: MqttSettings,
   role: string,
-  options: Omit<MqttClientOptions, "clientId" | "username" | "password" | "protocolVersion"> = {}
+  options: Omit<MqttClientOptions, "clientId" | "username" | "password" | "protocolVersion"> = {},
+  /** Connect through this network instead of Node's (a simulation); TLS is then the network's business. */
+  network?: Pick<Network, "tcp">
 ) {
   const address = yield* parseBrokerUrl(settings.url)
   const password = yield* readBrokerPassword(settings)
   const openTimeout = "10 seconds"
-  const socket = address.tls
-    ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
-    : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
+  const socket = network
+    ? yield* network.tcp({ host: address.host, port: address.port, openTimeout })
+    : address.tls
+      ? yield* NodeSocket.makeTls({ host: address.host, port: address.port, servername: address.host, openTimeout })
+      : yield* NodeSocket.makeNet({ host: address.host, port: address.port, openTimeout })
   return yield* makeMqttClient(socket, {
     ...options,
     clientId: `ot-gateway-${role}-${yield* randomSuffix}`,
@@ -108,20 +112,25 @@ export const brokerWarnings = (info: ConnectionInfo, roundTripMs: number | undef
 ]
 
 /** `ot-gateway broker`: connect, report what the broker allows, send a message through it and back. */
-export const checkBroker = Effect.fn("checkBroker")(function* (config: GatewayConfig) {
+export const checkBroker = Effect.fn("checkBroker")(function* (config: GatewayConfig, network?: Pick<Network, "tcp">) {
   const topic = `${config.site}/${config.building}/$gateway/${config.id}/check/${yield* randomSuffix}`
   const payload = "ot-gateway broker check"
   const received = yield* Deferred.make<number>()
-  const client = yield* brokerClient(config.mqtt, "check", {
-    subscriptions: [{ filter: topic, qos: 1 }],
-    onMessage: (message) =>
-      message.topic === topic
-        ? Effect.flatMap(
-            Effect.clockWith((clock) => clock.currentTimeMillis),
-            (now) => Deferred.succeed(received, now)
-          ).pipe(Effect.asVoid)
-        : Effect.void
-  })
+  const client = yield* brokerClient(
+    config.mqtt,
+    "check",
+    {
+      subscriptions: [{ filter: topic, qos: 1 }],
+      onMessage: (message) =>
+        message.topic === topic
+          ? Effect.flatMap(
+              Effect.clockWith((clock) => clock.currentTimeMillis),
+              (now) => Deferred.succeed(received, now)
+            ).pipe(Effect.asVoid)
+          : Effect.void
+    },
+    network
+  )
   yield* firstDialOf(client, config.mqtt.url)
   const info = yield* client.connection
   if (info === undefined) {

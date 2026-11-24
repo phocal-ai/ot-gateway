@@ -14,7 +14,7 @@ import {
   valuesPublished,
   valuesSuppressed
 } from "../src/index.ts"
-import type { AnyPoint, Driver, HealthRegistry, Reading } from "../src/index.ts"
+import type { AnyPoint, DeviceHealth, Driver, HealthRegistry, Reading } from "../src/index.ts"
 
 const point: AnyPoint = {
   id: "zone-temp",
@@ -41,6 +41,23 @@ const scriptedDriver = (values: ReadonlyArray<number | "fail">, deviceId = "test
   }
 }
 
+/** The first retained metadata `runDevice` publishes for the scripted point, parsed. */
+const metaOf = (
+  context: { readonly covPoints?: ReadonlyArray<string>; readonly gateway?: string } = {},
+  driver: Driver = scriptedDriver([200])
+) =>
+  Effect.gen(function* () {
+    const { messages, layer } = yield* makeMemoryPublisher
+    const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, ...context }, driver).pipe(
+      Effect.provide(layer),
+      Effect.forkChild
+    )
+    yield* TestClock.adjust("1 millis")
+    yield* Fiber.interrupt(fiber)
+    const meta = messages.find((message) => message.topic.endsWith("$meta"))
+    return meta === undefined ? undefined : JSON.parse(meta.payload)
+  })
+
 describe("runDevice", () => {
   it.effect("publishes metadata, then scaled values outside the deadband", () =>
     Effect.gen(function* () {
@@ -60,21 +77,46 @@ describe("runDevice", () => {
     })
   )
 
+  it.effect("says when an alarm point's alarm is active", () =>
+    Effect.gen(function* () {
+      const alarm = { ...scriptedDriver([0]), points: [{ ...point, alarmWhen: "off" as const }] }
+      expect(yield* metaOf({}, alarm)).toMatchObject({ name: "Zone temperature", alarmWhen: "off" })
+      expect(yield* metaOf()).not.toHaveProperty("alarmWhen")
+    })
+  )
+
+  it.effect("names the gateway that published the metadata", () =>
+    Effect.gen(function* () {
+      expect(yield* metaOf({ gateway: "roof" })).toMatchObject({ name: "Zone temperature", gateway: "roof" })
+      expect(yield* metaOf()).not.toHaveProperty("gateway")
+    })
+  )
+
+  it.effect("marks a point asked for by change of value in its metadata, and only that one", () =>
+    Effect.gen(function* () {
+      expect(yield* metaOf({ covPoints: ["zone-temp"] })).toMatchObject({ name: "Zone temperature", cov: true })
+      expect(yield* metaOf()).not.toHaveProperty("cov")
+    })
+  )
+
   it.effect("keeps running when the driver fails, and reports it to the health registry", () =>
     Effect.gen(function* () {
       const { messages, layer } = yield* makeMemoryPublisher
       const registry = makeHealthRegistry(["test-device"])
       const recorded: Array<string> = []
+      let lastFailure: DeviceHealth | undefined
       const health: HealthRegistry = {
         devices: registry.devices,
         recordSuccess: (device, timestamp) => {
           recorded.push("ok")
           registry.recordSuccess(device, timestamp)
         },
-        recordFailure: (device, reason) => {
-          recorded.push(`failing:${reason}`)
-          registry.recordFailure(device, reason)
-        }
+        recordFailure: (device, failure) => {
+          recorded.push(`failing:${failure.reason}`)
+          registry.recordFailure(device, failure)
+          lastFailure = registry.devices.get(device)
+        },
+        onChange: registry.onChange
       }
       const driver = scriptedDriver(["fail", "fail", "fail", "fail", "fail", 300])
       const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 1000, health }, driver).pipe(
@@ -88,6 +130,10 @@ describe("runDevice", () => {
       expect(values).toEqual([30])
       // The first cycle fails after its retries; every later cycle reads fine.
       expect(recorded[0]).toBe("failing:timeout")
+      // While it failed, the registry kept the driver's own words and when it started.
+      expect(lastFailure).toMatchObject({ status: "failing", reason: "timeout", failures: 1 })
+      expect(lastFailure?.failingSince).toEqual(expect.any(Number))
+      expect(lastFailure?.lastError).toEqual(expect.any(String))
       expect(recorded.slice(1).every((entry) => entry === "ok")).toBe(true)
       expect(health.devices.get("test-device")?.status).toBe("ok")
     })
@@ -368,6 +414,39 @@ describe("runDevice with pushed values", () => {
         { value: 19, unit: "unit:DEG_C", ts: 4000 }
       ])
       expect(yield* countOf(pushedReadings, { device: "pushing" })).toBe(3)
+    })
+  )
+
+  it.effect("publishes a reading once when a push repeats the polled value with the same timestamp", () =>
+    Effect.gen(function* () {
+      const { messages, layer } = yield* makeMemoryPublisher
+      const pushes = yield* Queue.unbounded<Reading>()
+      // Every read published (no deadband), as a change-of-value point is by default.
+      const running: AnyPoint = { id: "compressor-running", name: "Compressor running", writable: false }
+      const driver: Driver = {
+        deviceId: "chiller",
+        points: [running],
+        readAll: Effect.succeed([{ pointId: running.id, value: true, timestamp: 0 }]),
+        write: () => Effect.void,
+        changes: Stream.fromQueue(pushes)
+      }
+      const fiber = yield* runDevice({ site: "s", building: "b", pollIntervalMs: 60_000 }, driver).pipe(
+        Effect.provide(layer),
+        Effect.forkChild
+      )
+      yield* TestClock.adjust("1 millis")
+      // The subscription's first notification: the same value, read in the same millisecond as the first poll.
+      yield* Queue.offer(pushes, { pointId: running.id, value: true, timestamp: 0 })
+      yield* TestClock.adjust("1 millis")
+      // A later notification with the same value is a new reading, and is published.
+      yield* Queue.offer(pushes, { pointId: running.id, value: true, timestamp: 5_000 })
+      yield* TestClock.adjust("1 millis")
+      yield* Fiber.interrupt(fiber)
+
+      expect(messages.filter((m) => !m.topic.endsWith("$meta")).map((m) => JSON.parse(m.payload))).toEqual([
+        { value: true, ts: 0 },
+        { value: true, ts: 5_000 }
+      ])
     })
   )
 

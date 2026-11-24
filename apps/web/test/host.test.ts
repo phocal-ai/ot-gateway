@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { HostStatus } from "@ot-gateway/api"
-import { machineProblems } from "../src/lib/host.ts"
+import { CPU_HINT, machineCard, machineNote, machineProblems, powerLabel } from "../src/lib/host.ts"
 
 /** Long past starting up. */
 const up = 3_600_000
@@ -69,5 +69,50 @@ describe("machineProblems", () => {
       "The machine is too hot (85 °C): give it air or a heat sink."
     ])
     expect(machineProblems(starting, 60_000)).toHaveLength(1)
+  })
+})
+
+describe("machineNote", () => {
+  it("sums a healthy machine up in one line, the temperature where there is one", () => {
+    expect(machineNote(healthy)).toBe("CPU 4 % · 85.0 MB memory · 52 °C")
+    const { temperatureC: _temperature, ...cool } = healthy
+    expect(machineNote(cool)).toBe("CPU 4 % · 85.0 MB memory")
+  })
+})
+
+describe("machineCard", () => {
+  it("says starting and leaves the CPU out in the first minute", () => {
+    const card = machineCard({ ...healthy, cpuPercent: 115 }, 10_000)
+    expect(card).toMatchObject({ title: "starting", bad: false })
+    expect(card.note).not.toContain("CPU")
+    expect(card.note).toMatch(/memory · 52 °C$/)
+  })
+
+  it("is ok with the CPU, explained as a share of one core, once warmed up", () => {
+    const card = machineCard(healthy, up)
+    expect(card.title).toBe("ok")
+    expect(card.note).toContain("CPU 4 %")
+    expect(card.hint).toBe(CPU_HINT)
+    expect(CPU_HINT).toContain("one processor core")
+  })
+
+  it("leads with a problem, also while starting, and says when there is no sample", () => {
+    const hot = machineCard({ ...healthy, temperatureC: 85 }, 10_000)
+    expect(hot).toMatchObject({ title: "1 problem", bad: true })
+    expect(machineCard(undefined, up)).toEqual({ title: "–", note: "no sample yet", bad: false })
+  })
+})
+
+describe("powerLabel", () => {
+  it("says how the power is on a Pi, and nothing elsewhere", () => {
+    expect(powerLabel(healthy)).toBe("ok")
+    expect(powerLabel({ ...healthy, throttled: { now: ["under_voltage"], watched: ["under_voltage"] } })).toBe(
+      "too weak"
+    )
+    expect(powerLabel({ ...healthy, throttled: { now: ["soft_temperature_limit"], watched: [] } })).toBe(
+      "slowed down (soft temperature limit)"
+    )
+    const { throttled: _throttled, ...plain } = healthy
+    expect(powerLabel(plain)).toBeUndefined()
   })
 })

@@ -6,6 +6,9 @@ const csvField = (value: string | number) => {
   return /[",;\t\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text
 }
 
+/** One row as a line, without its line break: `separator` between the fields (a comma unless given). */
+export const csvLine = (fields: ReadonlyArray<string | number>, separator = ",") => fields.map(csvField).join(separator)
+
 /** Rows as CSV text, comma-separated, one line each. */
 export const toCsv = (rows: ReadonlyArray<ReadonlyArray<string | number>>) =>
-  `${rows.map((fields) => fields.map(csvField).join(",")).join("\n")}\n`
+  `${rows.map((fields) => csvLine(fields)).join("\n")}\n`

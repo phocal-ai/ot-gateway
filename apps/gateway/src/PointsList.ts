@@ -12,7 +12,7 @@
  * checks everything this module does not.
  */
 import { Effect, Result, Schema } from "effect"
-import { slugify } from "./Discover.ts"
+import { slugify } from "./Slug.ts"
 import type { Profile, ProfilePoint } from "./Profile.ts"
 import { closestMatch } from "./Suggest.ts"
 
@@ -32,6 +32,14 @@ export interface UnterminatedQuote {
   readonly records: ReadonlyArray<DelimitedRecord>
 }
 
+/** The separator of a delimited text: whichever of `;`, tab and `,` its first line has most of (`;` before tab before `,` on a tie). */
+export const detectDelimiter = (text: string) => {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? ""
+  return [";", "\t", ","].reduce((best, candidate) =>
+    firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
+  )
+}
+
 /**
  * The records of a delimited text (RFC 4180: quotes, doubled quotes, line breaks inside quotes), each with the line
  * it starts on, empty lines dropped. The separator is the one the first line has most of, unless given. A quote that
@@ -42,12 +50,7 @@ export const readDelimited = (
   separator?: string
 ): Result.Result<ReadonlyArray<DelimitedRecord>, UnterminatedQuote> => {
   const body = text.replace(/^﻿/, "")
-  const firstLine = body.split(/\r?\n/, 1)[0] ?? ""
-  const delimiter =
-    separator ??
-    [";", "\t", ","].reduce((best, candidate) =>
-      firstLine.split(candidate).length > firstLine.split(best).length ? candidate : best
-    )
+  const delimiter = separator ?? detectDelimiter(body)
   const records: Array<DelimitedRecord> = []
   let row: Array<string> = []
   let field = ""
@@ -145,7 +148,9 @@ export const qudtUnit = (unit: string) => {
 export const columnAliases: Readonly<Record<string, string>> = {
   device_name: "device",
   point_name: "point",
-  name: "point",
+  display_name: "name",
+  label: "name",
+  alarm_when: "alarm",
   ip: "host",
   unitid: "unit_id",
   slave: "unit_id",
@@ -170,11 +175,13 @@ export const columnAliases: Readonly<Record<string, string>> = {
 export const readColumns: ReadonlyArray<string> = [
   "device",
   "point",
+  "name",
   "unit",
   "interval_s",
   "publish",
   "publish_s",
   "deadband",
+  "alarm",
   "scale",
   "offset",
   "host",
@@ -190,6 +197,15 @@ export const readColumns: ReadonlyArray<string> = [
   "object_type",
   "object_instance"
 ]
+
+/**
+ * A header's columns as `columnName` names them. A list from before the `name` column has `name` where `point`
+ * belongs: without a `point` column, `name` is the point.
+ */
+export const headerColumns = (header: ReadonlyArray<string>) => {
+  const named = header.map(columnName)
+  return named.includes("point") ? named : named.map((column) => (column === "name" ? "point" : column))
+}
 
 /** A header as the column it names: lower case, `_` for spaces and `-`, aliases resolved. */
 export const columnName = (header: string) => {
@@ -217,6 +233,9 @@ const numberIn = Effect.fnUntraced(function* (row: Row, column: string) {
 
 const publishModes = ["sample", "aggregate", "change"]
 
+/** A point as its row writes it, for an error to name: its `point` column, which may differ from its shown name. */
+const listedAs = (row: Row, name: string) => row.get("point") ?? name
+
 /**
  * The point's `publish` or `deadband` from its `publish`, `publish_s` and `deadband` columns. A deadband alone stays
  * the short form; ranges and clock alignment are the schema's to check.
@@ -228,7 +247,9 @@ const publishOf = Effect.fnUntraced(function* (row: Row, name: string) {
   const intervalMs = seconds === undefined ? {} : { intervalMs: Math.round(seconds * 1000) }
   if (mode === undefined) {
     if (seconds !== undefined) {
-      return yield* fail(`line ${row.line}: "${name}" has publish_s but no publish (sample or aggregate)`)
+      return yield* fail(
+        `line ${row.line}: "${listedAs(row, name)}" has publish_s but no publish (sample or aggregate)`
+      )
     }
     return deadband === undefined ? {} : { deadband }
   }
@@ -237,16 +258,33 @@ const publishOf = Effect.fnUntraced(function* (row: Row, name: string) {
   }
   if (mode === "change") {
     if (seconds !== undefined)
-      return yield* fail(`line ${row.line}: "${name}" sends on change, so it takes no publish_s`)
+      return yield* fail(`line ${row.line}: "${listedAs(row, name)}" sends on change, so it takes no publish_s`)
     return { publish: { mode, ...(deadband === undefined ? {} : { deadband }) } }
   }
   if (deadband !== undefined) {
-    return yield* fail(`line ${row.line}: "${name}" has a deadband, which only change mode uses`)
+    return yield* fail(`line ${row.line}: "${listedAs(row, name)}" has a deadband, which only change mode uses`)
   }
   if (mode === "aggregate" && seconds === undefined) {
-    return yield* fail(`line ${row.line}: "${name}" aggregates, so it needs publish_s, the window (900 for 15 minutes)`)
+    return yield* fail(
+      `line ${row.line}: "${listedAs(row, name)}" aggregates, so it needs publish_s, the window (900 for 15 minutes)`
+    )
   }
   return { publish: { mode, ...intervalMs } }
+})
+
+const alarmValues = ["on", "off"] as const
+
+/** The point's `alarmWhen` from its `alarm` column: `on` or `off`, empty for a point that is no alarm. */
+const alarmOf = Effect.fnUntraced(function* (row: Row, name: string) {
+  const text = row.get("alarm")?.toLowerCase()
+  if (text === undefined) return {}
+  const alarmWhen = alarmValues.find((value) => value === text)
+  if (alarmWhen === undefined) {
+    return yield* fail(
+      `line ${row.line}: "${listedAs(row, name)}" has alarm "${text}"; write on (the alarm is active when the value is true or not 0) or off (active when false or 0), or leave it empty`
+    )
+  }
+  return { alarmWhen }
 })
 
 const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: string) {
@@ -258,6 +296,7 @@ const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: str
     id,
     name,
     ...(unit === undefined ? {} : { unit: qudtUnit(unit) }),
+    ...(yield* alarmOf(row, name)),
     ...publish,
     ...(factor === undefined && offset === undefined
       ? {}
@@ -268,12 +307,12 @@ const commonPoint = Effect.fnUntraced(function* (row: Row, id: string, name: str
 const modbusPoint = Effect.fnUntraced(function* (row: Row, id: string, name: string) {
   const table = row.get("table")?.toLowerCase() ?? "holding"
   const address = yield* numberIn(row, "register")
-  if (address === undefined) return yield* fail(`line ${row.line}: "${name}" has a host but no register`)
+  if (address === undefined) return yield* fail(`line ${row.line}: "${listedAs(row, name)}" has a host but no register`)
   const bits = table === "coil" || table === "discrete"
   const dataType = row.get("type")?.toLowerCase() ?? (bits ? "bool" : undefined)
   if (dataType === undefined) {
     return yield* fail(
-      `line ${row.line}: "${name}" needs a type (int16, uint16, int32, uint32, float32, …): the register alone does not say how to read it`
+      `line ${row.line}: "${listedAs(row, name)}" needs a type (int16, uint16, int32, uint32, float32, …): the register alone does not say how to read it`
     )
   }
   const byteOrder = row.get("byte_order")?.toUpperCase()
@@ -293,7 +332,9 @@ const bacnetPoint = Effect.fnUntraced(function* (row: Row, id: string, name: str
     .replace(/[\s_]+/g, "-")
   const instance = yield* numberIn(row, "object_instance")
   if (objectType === undefined || instance === undefined) {
-    return yield* fail(`line ${row.line}: "${name}" needs object_type and object_instance (analog-input 1, say)`)
+    return yield* fail(
+      `line ${row.line}: "${listedAs(row, name)}" needs object_type and object_instance (analog-input 1, say)`
+    )
   }
   return { ...(yield* commonPoint(row, id, name)), objectType, instance }
 })
@@ -364,9 +405,41 @@ const expandProfile = Effect.fnUntraced(function* (row: Row, profiles: ReadonlyM
   }
   return picked.map((point): Row => ({
     line: row.line,
-    get: (column) => (column === "point" ? point.name : (row.get(column) ?? profileValue(point, column)))
+    get: (column) =>
+      column === "point"
+        ? point.name
+        : // A name given on a row that stands for several points would name them all alike.
+          column === "name" && picked.length > 1
+          ? undefined
+          : (row.get(column) ?? profileValue(point, column))
   }))
 })
+
+/** A unit as a points list writes it, what the config gets for it, and on how many rows. */
+export interface UnitMapping {
+  readonly written: string
+  /** A QUDT name (`unit:KiloW`), or `written` itself when it is not a spelling `qudtUnit` knows. */
+  readonly unit: string
+  /** Whether `unit` is a QUDT name, as consumers of the `$meta` expect. */
+  readonly qudt: boolean
+  readonly points: number
+}
+
+/** Each distinct unit the list's `unit` column writes, in the order first written, and what it becomes. */
+export const unitsWritten = (text: string): ReadonlyArray<UnitMapping> => {
+  const [header, ...records] = parseDelimited(text)
+  const column = headerColumns(header ?? []).indexOf("unit")
+  if (column === -1) return []
+  const counted = new Map<string, number>()
+  for (const fields of records) {
+    const written = fields[column]?.trim() ?? ""
+    if (written !== "") counted.set(written, (counted.get(written) ?? 0) + 1)
+  }
+  return Array.from(counted, ([written, points]) => {
+    const unit = qudtUnit(written)
+    return { written, unit, qudt: unit.startsWith("unit:"), points }
+  })
+}
 
 /** The profiles a points list names, as written, for the caller to load before devicesFromPointsList. */
 export const profileNames = (text: string): ReadonlyArray<string> => {
@@ -382,14 +455,22 @@ interface NamedPoint {
   readonly pointName: string
 }
 
+/**
+ * A name to show for a point (or device) written as an id: `active-power` → `Active power`, `main_breaker_tripped` →
+ * `Main breaker tripped`. Anything that is not already a slug is a name as written, and kept.
+ */
+export const readableName = (written: string) =>
+  slugify(written) === written ? (written.charAt(0).toUpperCase() + written.slice(1)).replace(/[-_]+/g, " ") : written
+
 /** The points of one device with their ids, which must be unique within it. */
 const namedPoints = Effect.fnUntraced(function* (name: string, rows: ReadonlyArray<Row>) {
   const lines = new Map<string, number>()
   const points: Array<NamedPoint> = []
   for (const row of rows) {
-    const pointName = row.get("point") ?? ""
-    const pointId = slugify(pointName)
-    if (pointId === "") return yield* fail(`line ${row.line}: the point name "${pointName}" has no letters or digits`)
+    const written = row.get("point") ?? ""
+    const pointId = slugify(written)
+    const pointName = row.get("name") ?? readableName(written)
+    if (pointId === "") return yield* fail(`line ${row.line}: the point name "${written}" has no letters or digits`)
     const seen = lines.get(pointId)
     if (seen !== undefined) {
       return yield* fail(`lines ${seen} and ${row.line}: two points of "${name}" are both called ${pointId}`)
@@ -452,21 +533,27 @@ const toDevice = Effect.fnUntraced(function* (
 
 export type PointsListDevice = Effect.Success<ReturnType<typeof toDevice>>
 
+/** The rows of one device as the list has them, before they become its config entry. */
+interface DeviceRows {
+  readonly name: string
+  /** The 1-based lines of its rows. */
+  readonly lines: ReadonlyArray<number>
+  readonly rows: ReadonlyArray<Row>
+  /** A row naming a profile it cannot use: the device cannot be made, whatever its other rows say. */
+  readonly expansionError: PointsListError | undefined
+}
+
 /**
- * The devices of a points list, with ids that are not in `existing`. Fails with the first mistake, naming its
- * line, the way `check` names a path.
+ * A points list's rows by device, after the checks of the list as a whole (a quote never closed, the header, the
+ * field counts, a row without a device), which fail: nothing in such a list can be trusted.
  */
-export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function* (
-  text: string,
-  existing: ReadonlyArray<string> = [],
-  profiles: ReadonlyMap<string, Profile> = new Map()
-) {
+const groupRows = Effect.fnUntraced(function* (text: string, profiles: ReadonlyMap<string, Profile>) {
   const read = readDelimited(text)
   if (Result.isFailure(read)) return yield* fail(`line ${read.failure.line}: a quote opened here is never closed`)
   const [headerRecord, ...records] = read.success
   if (headerRecord === undefined) return yield* fail("the points list is empty")
   const header = headerRecord.fields
-  const columns = header.map(columnName)
+  const columns = headerColumns(header)
   for (const required of ["device", "point"]) {
     if (!columns.includes(required)) {
       return yield* fail(`the points list needs a "${required}" column; its header has ${header.join(", ")}`)
@@ -496,13 +583,70 @@ export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function
       return value === undefined || value === "" ? undefined : value
     }
   }))
-  const byDevice = new Map<string, Array<Row>>()
+  const byDevice = new Map<string, { lines: Array<number>; rows: Array<Row>; expansionError?: PointsListError }>()
   for (const row of rows) {
     const device = row.get("device")
     if (device === undefined) return yield* fail(`line ${row.line}: no device`)
-    byDevice.set(device, [...(byDevice.get(device) ?? []), ...(yield* expandProfile(row, profiles))])
+    const entry = byDevice.get(device) ?? { lines: [], rows: [] }
+    byDevice.set(device, entry)
+    entry.lines.push(row.line)
+    const expanded = yield* Effect.result(expandProfile(row, profiles))
+    if (Result.isSuccess(expanded)) entry.rows.push(...expanded.success)
+    else entry.expansionError ??= expanded.failure
   }
+  return [...byDevice].map(([name, entry]): DeviceRows => ({
+    name,
+    lines: entry.lines,
+    rows: entry.rows,
+    expansionError: entry.expansionError
+  }))
+})
+
+/**
+ * The devices of a points list, with ids that are not in `existing`. Fails with the first mistake, naming its
+ * line, the way `check` names a path.
+ */
+export const devicesFromPointsList = Effect.fn("devicesFromPointsList")(function* (
+  text: string,
+  existing: ReadonlyArray<string> = [],
+  profiles: ReadonlyMap<string, Profile> = new Map()
+) {
+  const groups = yield* groupRows(text, profiles)
+  // Profiles are checked before any device is made, so the first such mistake in the list is the one named.
+  const expansionError = groups.find((group) => group.expansionError !== undefined)?.expansionError
+  if (expansionError !== undefined) return yield* expansionError
   const inConfig = new Set(existing)
   const listed = new Map<string, string>()
-  return yield* Effect.forEach(byDevice, ([name, deviceRows]) => toDevice(name, deviceRows, inConfig, listed))
+  return yield* Effect.forEach(groups, (group) => toDevice(group.name, group.rows, inConfig, listed))
+})
+
+/** One device of a points list, checked on its own: its config entry, or what is wrong with it. */
+export interface CheckedDevice {
+  /** The device as the list names it. */
+  readonly name: string
+  readonly lines: ReadonlyArray<number>
+  readonly result: Result.Result<PointsListDevice, PointsListError>
+}
+
+/**
+ * The devices of a points list, each checked on its own with the rules of `devicesFromPointsList` (which stops at
+ * the first mistake), for the status page: it shows every device with its mistake and adds the ones without. A
+ * mistake in the list as a whole (its header, a row without a device) still fails.
+ */
+export const checkPointsListByDevice = Effect.fn("checkPointsListByDevice")(function* (
+  text: string,
+  existing: ReadonlyArray<string> = [],
+  profiles: ReadonlyMap<string, Profile> = new Map()
+) {
+  const groups = yield* groupRows(text, profiles)
+  const inConfig = new Set(existing)
+  const listed = new Map<string, string>()
+  return yield* Effect.forEach(groups, (group) =>
+    Effect.map(
+      group.expansionError === undefined
+        ? Effect.result(toDevice(group.name, group.rows, inConfig, listed))
+        : Effect.succeed(Result.fail(group.expansionError)),
+      (result): CheckedDevice => ({ name: group.name, lines: group.lines, result })
+    )
+  )
 })

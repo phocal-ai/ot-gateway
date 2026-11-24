@@ -7,7 +7,7 @@
  * - Modbus Messaging on TCP/IP Implementation Guide v1.0b (MBAP header, §3.1.3)
  */
 import { Effect, Schema } from "effect"
-import { type ByteOrder, type DataType, registerWidth } from "@ot-gateway/core"
+import { type ByteOrder, type DataType, registerWidth, shortestFloat32 } from "@ot-gateway/core"
 
 export const FunctionCode = {
   ReadCoils: 0x01,
@@ -503,7 +503,8 @@ export const reorderRegisters = (registers: ReadonlyArray<number>, byteOrder: By
 
 /**
  * Decode a value from registers sent in `byteOrder` (default big-endian,
- * high word first). A 64-bit integer beyond ±2^53 loses precision as a
+ * high word first). A float32 is the shortest decimal that is the same
+ * single-precision number (`shortestFloat32`). A 64-bit integer beyond ±2^53 loses precision as a
  * JavaScript number; no meter counts that far.
  */
 export const decodeValue = (
@@ -526,7 +527,8 @@ export const decodeValue = (
     case "int32":
       return view.getInt32(0)
     case "float32":
-      return view.getFloat32(0)
+      // As the device meant it: 6.73, not the 6.730000019073486 that its 32 bits are as a float64.
+      return shortestFloat32(view.getFloat32(0))
     case "uint64":
       return Number(view.getBigUint64(0))
     case "int64":

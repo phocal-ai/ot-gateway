@@ -42,6 +42,11 @@ import { metaTopic, pointTopic } from "./Topic.ts"
 export interface DeviceContext {
   readonly site: Slug
   readonly building: Slug
+  /**
+   * The gateway that runs the device (its config `id`), named in each `$meta` so a gateway only ever clears metadata
+   * it published itself.
+   */
+  readonly gateway?: Slug
   readonly pollIntervalMs: number
   /**
    * Share of polling cycles exported as traces, from 0 to 1 (default 1).
@@ -59,6 +64,8 @@ export interface DeviceContext {
   readonly publish?: Publish
   /** Where every read is kept on the device, if anywhere. */
   readonly history?: HistorySink
+  /** Points the config asks to receive by change of value (`covPointIds`); their `$meta` says `"cov": true`. */
+  readonly covPoints?: ReadonlyArray<string>
 }
 
 /** Payload of a value: on a read, on a change, or the latest once per interval. */
@@ -68,13 +75,21 @@ export interface ValueMessage {
   readonly ts: number
 }
 
-const metaPayload = (point: AnyPoint, publish: Publish): string =>
+/**
+ * A point's retained metadata. `cov: true` marks a point asked for by change of value: its values come when the
+ * device notifies a change (in `sample` mode each notification is a message, possibly more often than the poll
+ * interval), and by polling while the device does not notify.
+ */
+const metaPayload = (point: AnyPoint, publish: Publish, cov: boolean, gateway: string | undefined): string =>
   JSON.stringify({
     name: point.name,
     unit: point.unit,
     writable: point.writable,
     publish,
-    semantics: point.semantics
+    ...(cov ? { cov } : {}),
+    semantics: point.semantics,
+    ...(point.alarmWhen === undefined ? {} : { alarmWhen: point.alarmWhen }),
+    ...(gateway === undefined ? {} : { gateway })
   })
 
 /** A value to publish now, and what to remember once the broker took it. */
@@ -144,6 +159,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
   const points = new Map(driver.points.map((p) => [p.id, p] as const))
   const policies = new Map(driver.points.map((p) => [p.id, publishOf(ctx.publish, p)] as const))
   const policyOf = (pointId: string) => policies.get(pointId) ?? everyRead
+  const covPoints = new Set(ctx.covPoints)
   /** Change mode: the last value sent, and when (monotonic), for the deadband and `maxSilenceMs`. */
   const last = new Map<string, PointValue>()
   const lastSentAt = new Map<string, number>()
@@ -197,6 +213,11 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
       deviceProblem = problem
       return Effect.logWarning(message).pipe(Effect.annotateLogs(annotations))
     })
+  /** A failed cycle in the health registry: why, in the error's own words, and when. */
+  const recordFailure = (reason: HealthReason, message: string) =>
+    ctx.health === undefined
+      ? Effect.void
+      : Effect.map(Clock.currentTimeMillis, (at) => ctx.health?.recordFailure(driver.deviceId, { reason, message, at }))
   const deviceRecovered = Effect.suspend(() => {
     const was = deviceProblem
     if (was === undefined) return Effect.void
@@ -237,7 +258,13 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     Effect.forEach(
       [...unpublishedMeta],
       (point) =>
-        publishPoint(metaTopic(topicFor(point.id)), metaPayload(point, policyOf(point.id)), { retain: true }).pipe(
+        publishPoint(
+          metaTopic(topicFor(point.id)),
+          metaPayload(point, policyOf(point.id), covPoints.has(point.id), ctx.gateway),
+          {
+            retain: true
+          }
+        ).pipe(
           Effect.catchTag("PublishError", skipRefused),
           Effect.andThen(Effect.sync(() => unpublishedMeta.delete(point)))
         ),
@@ -261,6 +288,14 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
    * time, which can step back, so they are never compared.
    */
   const pushedAt = new Map<string, bigint>()
+
+  /**
+   * Each point's last value the broker took, with its own timestamp, in the modes that publish a read as it is. A
+   * reading that repeats both is the same reading twice, not a new one (at start, the first poll and a
+   * change-of-value subscription's first notification can read the same value in the same millisecond), so it is
+   * neither published nor recorded again. One whose publish failed is not remembered, so a repeat retries it.
+   */
+  const lastPublished = new Map<string, { readonly value: PointValue; readonly ts: number }>()
 
   /**
    * Points whose last value was not a finite number. Each one is a point read
@@ -300,6 +335,9 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     if (nonFinitePoints.delete(point.id)) {
       yield* Effect.logInfo("point delivers numbers again").pipe(Effect.annotateLogs({ point: point.id }))
     }
+    const previous = lastPublished.get(point.id)
+    if (previous !== undefined && previous.ts === reading.timestamp && previous.value === value) return nothing
+    const published = () => lastPublished.set(point.id, { value, ts: reading.timestamp })
     ctx.history?.record(driver.deviceId, point.id, value, reading.timestamp)
     const message: ValueMessage = {
       value,
@@ -309,7 +347,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     const policy = policyOf(point.id)
     switch (policy.mode) {
       case "sample": {
-        if (policy.intervalMs === undefined) return { pointId: point.id, message }
+        if (policy.intervalMs === undefined) return { pointId: point.id, message, onSent: published }
         latest.set(point.id, message)
         fresh.add(point.id)
         return nothing
@@ -335,6 +373,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
           onSent: () => {
             last.set(point.id, value)
             lastSentAt.set(point.id, atMono)
+            published()
           }
         }
       }
@@ -502,7 +541,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
     Effect.catchTags({
       DriverError: (error) =>
         Effect.all([
-          Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, error.reason)),
+          recordFailure(error.reason, error.message),
           handling.withPermit(interruptWindows),
           deviceFailed(error.reason, "device read failed", { reason: error.reason, error: error.message }),
           Effect.annotateCurrentSpan({ "ot_gateway.outcome": "read_failed", "ot_gateway.reason": error.reason }),
@@ -518,7 +557,7 @@ export const runDevice = Effect.fn("runDevice")(function* (ctx: DeviceContext, d
         ]),
       PipelineTimeout: (error) =>
         Effect.all([
-          Effect.sync(() => ctx.health?.recordFailure(driver.deviceId, "cycle-timeout")),
+          recordFailure("cycle-timeout", error.message),
           handling.withPermit(interruptWindows),
           deviceFailed("cycle-timeout", "polling cycle hung, abandoned it", {
             timeoutMs: error.timeoutMs,

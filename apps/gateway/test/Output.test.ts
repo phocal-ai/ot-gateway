@@ -3,12 +3,24 @@
  * included, and a usage mistake exits with 2 rather than the 1 of a failed run.
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
+import { spawnSync } from "node:child_process"
+import { EventEmitter } from "node:events"
+import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "@effect/vitest"
-import { Cause, Console, Effect, Exit, Result } from "effect"
+import { Cause, Console, Effect, Exit, Fiber, Result } from "effect"
 import { CliError } from "effect/cli"
+import { DatagramSocketError, DatagramSocketOpenError } from "effect/socket/DatagramSocket"
 import { TestConsole } from "effect/testing"
-import { runCli, toCliArgs } from "../src/Cli.ts"
-import { isUsageError, printJson, ResultConsole, stderrConsole, usageFailure } from "../src/Output.ts"
+import { isLongRunning, runCli, toCliArgs } from "../src/Cli.ts"
+import {
+  isUsageError,
+  printJson,
+  reportFailure,
+  ResultConsole,
+  stderrConsole,
+  stdoutClosed,
+  usageFailure
+} from "../src/Output.ts"
 import { gatewayTeardown } from "../src/Shutdown.ts"
 import { messageRecord } from "../src/Watch.ts"
 
@@ -88,6 +100,67 @@ describe("--json output", () => {
   )
 })
 
+describe("failures of one-shot commands", () => {
+  const main = fileURLToPath(new URL("../src/main.ts", import.meta.url))
+  // The real entry point, as a person or an agent runs it: what reaches stderr, stdout and the exit code.
+  const runMain = (args: ReadonlyArray<string>) =>
+    spawnSync(process.execPath, [main, ...args], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } })
+  const missing = "no-such-config.json"
+  const message = `no config at ${missing}.`
+
+  it("print the failure as one plain error: line on stderr, without a timestamp or fiber id", () => {
+    const result = runMain(["check", missing])
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe("")
+    expect(result.stderr.startsWith(`error: ${message}`)).toBe(true)
+    expect(result.stderr).not.toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]|ERROR \(#\d+\)/)
+    expect(result.stderr.trimEnd().split("\n")).toHaveLength(1)
+  })
+
+  it("leave --json as it was: the failure as JSON on stdout, nothing on stderr", () => {
+    const result = runMain(["check", missing, "--json"])
+    expect(result.status).toBe(1)
+    expect(JSON.parse(result.stdout)).toEqual({ ok: false, path: missing, error: expect.stringContaining(message) })
+    expect(result.stderr).toBe("")
+  })
+
+  it.effect("print a defect with its cause, to report it, not as a log line", () =>
+    Effect.gen(function* () {
+      const cause = Cause.die(new Error("boom"))
+      yield* reportFailure({ json: false, longRunning: false })(cause)
+      const [line = ""] = yield* TestConsole.errorLines
+      expect(String(line)).toMatch(/^error: an unexpected failure, a bug in ot-gateway/)
+      expect(String(line)).toContain("boom")
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it.effect("print a socket error by its reason, never an empty line", () =>
+    Effect.gen(function* () {
+      const cause = new Error("bind EADDRINUSE 127.0.0.1:47809")
+      const error = new DatagramSocketError({
+        reason: new DatagramSocketOpenError({
+          kind: "AddressInUse",
+          cause: Object.assign(cause, { code: "EADDRINUSE", address: "127.0.0.1", port: 47_809 })
+        })
+      })
+      yield* reportFailure({ json: false, longRunning: false })(Cause.fail(error))
+      expect(yield* TestConsole.errorLines).toEqual([
+        "error: could not open the UDP socket: 127.0.0.1:47809 is in use by another program"
+      ])
+    }).pipe(Effect.provide(TestConsole.layer))
+  )
+
+  it("are told apart from run and demo, which log, the bare config path included", () => {
+    expect(isLongRunning(["run", "x.json"])).toBe(true)
+    expect(isLongRunning(["demo"])).toBe(true)
+    expect(isLongRunning([])).toBe(true)
+    expect(isLongRunning(["gateway.json"])).toBe(true)
+    expect(isLongRunning(["check", "x.json"])).toBe(false)
+    expect(isLongRunning(["--check", "x.json"])).toBe(false)
+    expect(isLongRunning(["discover", "--points-list", "bacnet.csv"])).toBe(false)
+  })
+})
+
 describe("watch --json", () => {
   it("prints one JSON object per message, the payload parsed when it is JSON", () => {
     const at = new Date("2026-11-06T10:00:00.000Z")
@@ -101,4 +174,30 @@ describe("watch --json", () => {
     })
     expect(JSON.parse(messageRecord({ topic: "x", payload: "on", retain: true }, at)).payload).toBe("on")
   })
+})
+
+describe("a reader that closes stdout", () => {
+  it.effect("ends a streaming command as done, exit code 0, and later failed writes throw nothing", () =>
+    Effect.gen(function* () {
+      const stdout = new EventEmitter()
+      const fiber = yield* Effect.never.pipe(Effect.raceFirst(stdoutClosed(stdout)), Effect.forkChild)
+      yield* Effect.yieldNow
+      stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(exitCodeOf(exit)).toEqual([0])
+      expect(() => stdout.emit("error", Object.assign(new Error("write EPIPE"), { code: "EPIPE" }))).not.toThrow()
+    })
+  )
+
+  it.effect("leaves any other error on stdout a defect", () =>
+    Effect.gen(function* () {
+      const stdout = new EventEmitter()
+      const fiber = yield* Effect.forkChild(stdoutClosed(stdout))
+      yield* Effect.yieldNow
+      stdout.emit("error", Object.assign(new Error("disk"), { code: "EIO" }))
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true)
+    })
+  )
 })

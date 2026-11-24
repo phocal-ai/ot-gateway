@@ -2,16 +2,35 @@
 /**
  * One point's history: the average as a line, the range of its reads in each bucket as a band behind it, on one
  * axis. Hovering shows a crosshair and the bucket's time, average, range and reads. A gap where the device did not
- * answer breaks the line instead of bridging it.
+ * answer breaks the line instead of bridging it, and a muted band behind the break says why where it is known (the
+ * device was failing, the reads came back with a restart of the gateway), also in a line under the chart and on hover.
+ * A point read on change of value has no reads while it keeps still: that is no gap, and its line holds its value as
+ * steps up to its next change (and on to the end while its device answers).
  */
 import type { HistorySeries } from "@ot-gateway/api"
 import { useEffect, useRef, useState } from "react"
 import { formatNumber } from "@/lib/format"
-import { nearest, segments, timeLabel, timeTicks, valueTicks } from "@/lib/history"
-import { formatValue, unitLabel } from "@/lib/status"
+import {
+  axisFrom,
+  bucketTime,
+  chartGaps,
+  type Failure,
+  gapAt,
+  gapSentence,
+  heldUntil,
+  nearest,
+  segments,
+  timeLabel,
+  timeTicks,
+  valueTicks
+} from "@/lib/history"
+import { clockTime, formatValue, unitLabel } from "@/lib/status"
 
 const HEIGHT = 150
-const margin = { top: 8, right: 12, bottom: 22, left: 48 }
+// Room at the top for the unit over the value axis.
+const margin = { top: 20, right: 12, bottom: 22, left: 48 }
+/** Gaps the line under the chart names, newest first; the rest are counted. */
+const GAPS_LISTED = 3
 
 /** The element's width, following resizes. */
 const useWidth = () => {
@@ -34,16 +53,32 @@ export const HistoryChart = ({
   series,
   unit,
   boolean,
-  label
+  label,
+  startedAt,
+  device,
+  failures,
+  cov = false,
+  readGapMs
 }: {
   readonly series: HistorySeries
   readonly unit: string | undefined
   readonly boolean: boolean
   readonly label: string
+  /** When the gateway started (its `since`): a history that begins there starts the axis there (`axisFrom`). */
+  readonly startedAt: number | undefined
+  /** The point's device, to say which one was not answering in a gap. */
+  readonly device: string
+  /** The device's failures in this run of the gateway (from its events): a gap while it failed says so. */
+  readonly failures: ReadonlyArray<Failure>
+  /** The point comes on change of value (`PointInfo.cov`): a stretch without reads while its device answers is no gap. */
+  readonly cov?: boolean
+  /** How far apart two reads may be before the stretch is a gap (`readGapMs` of the device's poll interval). */
+  readonly readGapMs?: number | undefined
 }) => {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | undefined>(undefined)
-  const { buckets, stepMs, from, to } = series
+  const { buckets, stepMs, to } = series
+  const from = axisFrom(series, startedAt)
   const lows = buckets.map((bucket) => bucket.min)
   const highs = buckets.map((bucket) => bucket.max)
   const ticks = boolean ? [0, 1] : valueTicks(Math.min(...lows), Math.max(...highs))
@@ -54,8 +89,27 @@ export const HistoryChart = ({
   const y = (value: number) =>
     margin.top + ((yMax - value) / (yMax - yMin || 1)) * (HEIGHT - margin.top - margin.bottom)
   const time = timeTicks(from, to)
-  const runs = segments(buckets, stepMs)
-  const hovered = hover === undefined ? undefined : nearest(buckets, hover)
+  const gaps = chartGaps(series, from, { startedAt, failures, cov, readGapMs })
+  // On change of value the line holds across a stretch without reads (only a gap breaks it), as steps; the band of
+  // each bucket's range stays where reads are.
+  const runs = segments(buckets, stepMs, cov ? gaps : undefined)
+  const stepped = boolean || cov
+  // The pointer's time is `hover` plus half a step (`hover` is a bucket's start, as `nearest` wants it).
+  const hoveredGap = hover === undefined ? undefined : gapAt(gaps, hover + stepMs / 2)
+  const hovered = hover === undefined || hoveredGap !== undefined ? undefined : nearest(buckets, hover)
+  // A band covers the break in the line: from the last read before it to the first one after it (`chartGaps`: their
+  // times where the buckets say them, else the edges of their buckets), inside the plot. `x` places a bucket's start
+  // at its middle, so a moment `at` is `x(at - stepMs / 2)`. A gap split at the gateway's start does not overlap the
+  // band before it.
+  const plotLeft = margin.left
+  const plotRight = width - margin.right
+  const bands: Array<{ readonly left: number; readonly right: number }> = []
+  for (const gap of gaps) {
+    const left = Math.max(plotLeft, x(gap.from - stepMs / 2), bands.at(-1)?.right ?? plotLeft)
+    const right = Math.min(plotRight, x(gap.to - stepMs / 2))
+    bands.push({ left, right: Math.max(left, right) })
+  }
+  const listed = gaps.toReversed().slice(0, GAPS_LISTED)
   const units = unitLabel(unit)
 
   return (
@@ -80,6 +134,22 @@ export const HistoryChart = ({
           role="img"
           width={width}
         >
+          {boolean || units === "" ? null : (
+            <text className="fill-muted-foreground text-[11px]" textAnchor="end" x={margin.left - 6} y={11}>
+              {units}
+            </text>
+          )}
+          {bands.map((band, index) => (
+            <rect
+              fill="var(--muted-foreground)"
+              fillOpacity={0.1}
+              height={HEIGHT - margin.top - margin.bottom}
+              key={gaps[index]?.from}
+              width={band.right - band.left}
+              x={band.left}
+              y={margin.top}
+            />
+          ))}
           {ticks.map((tick) => (
             <g key={tick}>
               <line stroke="var(--border)" x1={margin.left} x2={width - margin.right} y1={y(tick)} y2={y(tick)} />
@@ -105,21 +175,33 @@ export const HistoryChart = ({
             </text>
           ))}
           {runs.map((run) => {
-            const top = run.map((bucket) => `${x(bucket.t)},${y(bucket.max)}`)
-            const bottom = run.toReversed().map((bucket) => `${x(bucket.t)},${y(bucket.min)}`)
-            // A state holds until the next bucket, so it is drawn as steps; a measurement as a line.
+            // A state, or a value sent on change, holds until the next bucket, so it is drawn as steps; a measurement
+            // as a line. A value sent on change also holds after the run's last change, up to the next gap or the end.
             const line = run.map((bucket, index) =>
               index === 0
                 ? `M${x(bucket.t)},${y(bucket.avg)}`
-                : boolean
+                : stepped
                   ? `H${x(bucket.t)}V${y(bucket.avg)}`
                   : `L${x(bucket.t)},${y(bucket.avg)}`
             )
+            const held = heldUntil(run, gaps, to, cov)
+            const holds = held !== undefined && x(held - stepMs / 2) > x(run.at(-1)?.t ?? held)
+            if (holds) line.push(`H${Math.min(plotRight, x(held - stepMs / 2))}`)
             return (
               <g key={run[0]?.t}>
-                {boolean ? null : (
-                  <polygon fill="var(--series-1)" fillOpacity={0.14} points={[...top, ...bottom].join(" ")} />
-                )}
+                {boolean
+                  ? null
+                  : segments(run, stepMs).map((part) => (
+                      <polygon
+                        fill="var(--series-1)"
+                        fillOpacity={0.14}
+                        key={part[0]?.t}
+                        points={[
+                          ...part.map((bucket) => `${x(bucket.t)},${y(bucket.max)}`),
+                          ...part.toReversed().map((bucket) => `${x(bucket.t)},${y(bucket.min)}`)
+                        ].join(" ")}
+                      />
+                    ))}
                 <path
                   d={line.join(" ")}
                   fill="none"
@@ -128,7 +210,7 @@ export const HistoryChart = ({
                   strokeLinejoin="round"
                   strokeWidth={2}
                 />
-                {run.length === 1 ? (
+                {run.length === 1 && !holds ? (
                   <circle cx={x(run[0]?.t ?? 0)} cy={y(run[0]?.avg ?? 0)} fill="var(--series-1)" r={3} />
                 ) : null}
               </g>
@@ -156,6 +238,37 @@ export const HistoryChart = ({
           )}
         </svg>
       )}
+      {from > series.from && startedAt !== undefined ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          The gateway started at {clockTime(startedAt, to)}: there is no history before that.
+        </p>
+      ) : null}
+      {listed.length === 0 ? null : (
+        <ul className="mt-1 grid gap-0.5 text-xs text-muted-foreground">
+          {listed.map((gap) => (
+            <li className="flex items-baseline gap-1.5" key={gap.from}>
+              <span
+                aria-hidden="true"
+                className="inline-block size-2.5 shrink-0 rounded-[2px] bg-muted-foreground/20"
+              />
+              {gapSentence(gap, device, to)}
+            </li>
+          ))}
+          {gaps.length > listed.length ? (
+            <li className="pl-4">
+              and {gaps.length - listed.length} earlier {gaps.length - listed.length === 1 ? "gap" : "gaps"}
+            </li>
+          ) : null}
+        </ul>
+      )}
+      {hoveredGap === undefined || hover === undefined ? null : (
+        <div
+          className="pointer-events-none absolute top-0 z-10 max-w-64 rounded-md border bg-card px-2.5 py-1.5 text-xs text-muted-foreground shadow-md"
+          style={{ left: Math.min(Math.max(x(hover) + 10, 0), Math.max(0, width - 256)) }}
+        >
+          {gapSentence(hoveredGap, device, to)}
+        </div>
+      )}
       {hovered === undefined ? null : (
         <div
           className="pointer-events-none absolute top-0 z-10 rounded-md border bg-card text-card-foreground px-2.5 py-1.5 text-xs shadow-md"
@@ -164,14 +277,7 @@ export const HistoryChart = ({
             minWidth: 150
           }}
         >
-          <div className="text-muted-foreground tabular-nums">
-            {new Date(hovered.t).toLocaleString([], {
-              weekday: "short",
-              hour: "2-digit",
-              minute: "2-digit",
-              second: stepMs < 60_000 ? "2-digit" : undefined
-            })}
-          </div>
+          <div className="text-muted-foreground tabular-nums">{bucketTime(hovered.t, stepMs)}</div>
           <div className="font-mono tabular-nums">
             {format(hovered.avg, boolean)} {boolean ? "" : units}
           </div>

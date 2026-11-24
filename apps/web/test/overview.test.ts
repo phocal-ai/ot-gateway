@@ -7,6 +7,7 @@ import {
   bufferView,
   deviceCounts,
   dropReasons,
+  failingDevices,
   protocolCounts,
   reconnects,
   roughly
@@ -21,6 +22,26 @@ const device = (fields: Partial<DeviceStatus>): DeviceStatus => ({
   pointCount: 3,
   points: [],
   ...fields
+})
+
+describe("failingDevices", () => {
+  it("names the first failing devices with why, and counts the rest", () => {
+    const devices = [
+      device({ id: "boiler" }),
+      device({ id: "energy-meter", status: "failing", reason: "connection" }),
+      device({ id: "ahu-1", status: "failing", reason: "timeout" }),
+      device({ id: "ahu-2", status: "failing" }),
+      device({ id: "ahu-3", status: "failing", reason: "cycle-timeout" })
+    ]
+    expect(failingDevices(devices)).toEqual({
+      shown: [
+        { id: "energy-meter", why: "cannot connect" },
+        { id: "ahu-1", why: "no reply" }
+      ],
+      more: 2
+    })
+    expect(failingDevices([device({})])).toEqual({ shown: [], more: 0 })
+  })
 })
 
 describe("deviceCounts", () => {

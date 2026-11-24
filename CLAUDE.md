@@ -20,14 +20,17 @@ pnpm gateway          # build the status page (cached), then run apps/gateway wi
 pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, compose.yaml and ot-gateway.env out (the CLI: apps/gateway/src/Cli.ts)
 pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
-pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim)
+pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim, --append adds to one)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
-pnpm ot-gateway points schema              # the points list's columns (--json); points template prints a list to fill in
+pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
-pnpm ot-gateway status                     # the running gateway's devices, one line each
+pnpm ot-gateway status                     # the running gateway of ./ot-gateway.json (or a config named): its devices, one line each, what to check (exit 1 when one fails)
+pnpm ot-gateway events --since 1h          # what broke, since when and why, and when it came back (/api/events; --follow for what comes)
+pnpm ot-gateway history meter/power        # a point's last 10 minutes from the gateway's history: min, max, average per minute, gaps (on/off and switch times for a bool)
+pnpm ot-gateway messages                   # messages per topic since the gateway started, and how many reached the broker
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)
@@ -72,7 +75,7 @@ Work happens on `dev`: branch off it and open pull requests against it. `main` i
 4. **Resources in Scope.** Sockets and files are acquired with `Effect.acquireRelease` or scoped layers.
 5. **Config through Schema.** Every config field is defined in `packages/core/src/Config.ts` or `Point.ts`, with defaults set by `withDecodingDefaultKey`. IDs are slugs, so they are always valid topic segments.
 6. **Topics:** `site/building/device/point`, metadata on the retained `.../$meta` topic, health on `site/building/$gateway/<id>/health`.
-7. **Writes are guarded.** Only points with `writable: true`, only through the command guard, always logged.
+7. **Writes are guarded.** Only points with `writable: true`, only through the command guard, always logged. The status page's config editor writes only through the edit guard (`apps/gateway/src/EditGuard.ts`: same origin, the `X-OT-Gateway` header, loopback or `OT_GATEWAY_EDIT_TOKEN`) and never sees a secret.
 8. **Every driver has a simulator**, and tests run without hardware.
 9. **Observable by default.** New behaviour that can fail or stall gets a metric in `packages/core/src/Telemetry.ts` (with a `unit` attribute when it is not a count) or a span, and the dashboard script is updated. Telemetry config is the standard `OTEL_*` env vars only.
 

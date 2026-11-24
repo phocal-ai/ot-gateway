@@ -52,6 +52,14 @@ describe("application values", () => {
     expect(reencode({ type: "real", value: 72.4 })).toEqual(Result.succeed([{ type: "real", value: 72.4 }]))
   })
 
+  it.each([
+    [6.73, "44 40 d7 5c 29"],
+    [50.13, "44 42 48 85 1f"]
+  ])("decodes a real %s as that decimal, as a float32 Modbus register reads", (value, bytes) => {
+    // The same shortest-decimal rule as Modbus (shortestFloat32 in @ot-gateway/core), not 6.730000019073486.
+    expect(decodeValues(bytesOf(bytes))).toEqual(Result.succeed([{ type: "real", value }]))
+  })
+
   it("uses an extended length above 4 bytes (20.2.1.3.1)", () => {
     const value: BacnetValue = { type: "octet-string", value: new Uint8Array(300).fill(7) }
     expect(hex(encodeValues([value]).subarray(0, 4))).toBe("65 fe 01 2c")

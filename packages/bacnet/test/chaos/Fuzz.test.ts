@@ -166,7 +166,9 @@ const refused = (encode: () => unknown) => {
 
 const objectId = (instance: number) => () => encodeReadProperty({ object: { objectType: 8, instance }, property: 85 })
 
-describe("chaos: codec fuzzing", () => {
+// Fixed, seeded work: well under a second on a laptop, but up to several seconds on a CI runner that runs every
+// package's tests at once, which crossed the default 5 s. The limit is for a hang, not for a busy runner.
+describe("chaos: codec fuzzing", { timeout: 30_000 }, () => {
   it("never throws on mutated or random input, and stays fast", () => {
     const random = rng(1234)
     const thrown: Array<string> = []

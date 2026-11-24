@@ -13,6 +13,8 @@ import {
   matchesWords,
   noFilter,
   pointKey,
+  pointTitle,
+  titledById,
   withReadings
 } from "../src/lib/points.ts"
 
@@ -23,6 +25,8 @@ const point = (fields: Partial<PointInfo>): PointInfo => ({
   writable: false,
   topic: "site/b/ahu-1/supply-temp",
   source: "analog-input 3 · present-value",
+  read: "on change of value where the device supports it, polled every 5 s otherwise",
+  cov: true,
   publish: "every read",
   ...fields
 })
@@ -52,6 +56,7 @@ describe("devicesById and withReadings", () => {
       id: "main",
       since: 0,
       now: 1,
+      configSince: 0,
       broker: {
         url: "mqtt://broker",
         connected: true,
@@ -122,5 +127,15 @@ describe("matchesWords", () => {
     expect(matchesWords("heat-pump BACnet/IP", "bacnet heat")).toBe(true)
     expect(matchesWords("heat-pump BACnet/IP", "modbus")).toBe(false)
     expect(matchesWords("anything", "")).toBe(true)
+  })
+})
+
+describe("pointTitle", () => {
+  it("is the name people read, the id when there is no name", () => {
+    expect(pointTitle(point({}))).toBe("Supply air temperature")
+    expect(pointTitle(point({ name: "  " }))).toBe("supply-temp")
+    expect(titledById(point({ name: "" }))).toBe(true)
+    expect(titledById(point({ name: "supply-temp" }))).toBe(true)
+    expect(titledById(point({}))).toBe(false)
   })
 })

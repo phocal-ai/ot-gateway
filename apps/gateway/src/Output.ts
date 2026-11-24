@@ -3,8 +3,10 @@
  * else: `main.ts` sends the `Console` (help, progress, banners) to stderr and results to `ResultConsole`, so `ot-gateway check --json | jq` and an
  * agent reading stdout always get one parseable document, a usage mistake included.
  */
-import { Console, Context, Effect } from "effect"
-import type { CliError } from "effect/cli"
+import { describeFailure } from "@ot-gateway/core"
+import { Cause, Console, Context, Effect, Result } from "effect"
+import type { EventEmitter } from "node:events"
+import { CliError } from "effect/cli"
 
 /** `--json` anywhere on the command line, as the CLI's flags take it. */
 export const isJsonMode = (argv: ReadonlyArray<string>) => argv.includes("--json")
@@ -28,6 +30,20 @@ export const printResult = (text: string) =>
   )
 
 export const printJson = (value: unknown) => printResult(JSON.stringify(value, null, 2))
+
+const twoDigits = (value: number) => String(value).padStart(2, "0")
+
+/**
+ * A moment as the CLI prints it, in this machine's time zone: `12:18:20` on the same day as `now`, with the date
+ * before it (`2026-11-09 12:18:20`) otherwise. Never epoch milliseconds: people read these.
+ */
+export const localTime = (at: number | Date, now: number | Date = at) => {
+  const moment = new Date(at)
+  const today = new Date(now)
+  const time = `${twoDigits(moment.getHours())}:${twoDigits(moment.getMinutes())}:${twoDigits(moment.getSeconds())}`
+  if (moment.toDateString() === today.toDateString()) return time
+  return `${moment.getFullYear()}-${twoDigits(moment.getMonth() + 1)}-${twoDigits(moment.getDate())} ${time}`
+}
 
 /** The `Console` of `--json` mode: what it is asked to print goes to stderr; the rest is `base`'s own. */
 export const stderrConsole = (base: Console.Console): Console.Console => ({
@@ -66,3 +82,65 @@ export const usageFailure = (error: CliError.ShowHelp) => ({
   error: error.errors.map((each) => each.message).join("; "),
   hint: `ot-gateway ${[...error.commandPath.slice(1), "--help"].join(" ")} lists the commands and flags`
 })
+
+/**
+ * How a failed command ends. A one-shot command (check, discover, import, …) prints an expected failure (a
+ * config mistake, nothing found) as one plain line on stderr, `error: <message>`: it is the command's answer,
+ * not a log line, so it carries no timestamp or fiber id. A defect, which is a bug, is printed with its whole
+ * cause, to report it. The long-running ones (run, demo) log both instead, as everything else they say, so a
+ * failed start reads like the rest of the gateway's log under Compose or systemd. With --json, the command has
+ * printed an expected failure as JSON on stdout already, and a usage mistake is printed so here; neither is
+ * printed a second time. The CLI has shown a usage mistake with the help already. The exit code is 2 for a
+ * usage mistake (Shutdown.ts) and 1 for the rest.
+ */
+export const reportFailure =
+  (options: { readonly json: boolean; readonly longRunning: boolean }) =>
+  <E extends { readonly message: string }>(cause: Cause.Cause<E>) => {
+    if (Cause.hasInterruptsOnly(cause)) return Effect.void
+    const error = Cause.findError(cause)
+    if (Result.isFailure(error) || Cause.hasDies(cause)) {
+      return options.longRunning
+        ? Effect.logError(cause)
+        : Console.error(
+            `error: an unexpected failure, a bug in ot-gateway; please report it with this:\n${Cause.pretty(cause)}`
+          )
+    }
+    if (CliError.isCliError(error.success)) {
+      return options.json && isUsageError(error.success) ? printJson(usageFailure(error.success)) : Effect.void
+    }
+    if (options.json) return Effect.void
+    return options.longRunning
+      ? Effect.logError(describeFailure(error.success))
+      : Console.error(failureLine(describeFailure(error.success)))
+  }
+
+/** An expected failure of a one-shot command, as stderr shows it. */
+export const failureLine = (message: string) => `error: ${message}`
+
+/** A path or word as one argument of a printed command line: as it is when that is safe, else in single quotes. */
+export const shellArgument = (value: string) =>
+  /^[\w./:@%+=,-]+$/.test(value) && !value.startsWith("-") ? value : `'${value.replaceAll("'", `'\\''`)}'`
+
+/** What later write errors on a pipe already found closed go to: nowhere, and no uncaught error. */
+const ignore = () => {}
+
+/**
+ * Succeeds when `stream` (stdout) is closed by its reader: `ot-gateway watch | head` closes the pipe after a few
+ * lines, and the next write fails with EPIPE. Raced against a command, that ends it as finished, exit code 0, with
+ * its scopes closed (the broker connection too), instead of an uncaught error and exit code 1. Any other error on
+ * the stream is a defect, as it would have been without this listener.
+ */
+export const stdoutClosed = (stream: Pick<EventEmitter, "on" | "off">) =>
+  Effect.callback<void>((resume) => {
+    const onError = (error: unknown) => {
+      // Later writes to the closed pipe fail too; nobody reads them, and the race is decided by this first one.
+      stream.off("error", onError)
+      stream.on("error", ignore)
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      resume(code === "EPIPE" ? Effect.void : Effect.die(error))
+    }
+    stream.on("error", onError)
+    return Effect.sync(() => {
+      stream.off("error", onError)
+    })
+  })
