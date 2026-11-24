@@ -21,7 +21,7 @@ import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import type { PointSelection } from "./HistoryReport.ts"
 import { localTime, printJson, printResult } from "./Output.ts"
-import { ago, askGateway, fetchGatewayStatus } from "./StatusReport.ts"
+import { ago, askGateway, fetchGatewayStatus, requireEvents } from "./StatusReport.ts"
 
 /** Payloads are cut here on the terminal; `--json` has them as the gateway keeps them (2,000 characters). */
 const MAX_PAYLOAD = 80
@@ -64,6 +64,14 @@ const shortfallSuffix = (
   return words.length === 0 ? "" : ` (${words.join("; ")})`
 }
 
+/** `", 2 reached the broker"`, or nothing from a gateway before v0.13, which does not count it. */
+const reachedText = (delivered: number | undefined) =>
+  delivered === undefined ? "" : `, ${delivered} reached the broker`
+
+/** Under the totals of a gateway before v0.13: why they do not say what reached the broker. */
+export const NOT_COUNTED_LINE =
+  "  (this gateway does not count what reached the broker: upgrade it to v0.13.0 or later for that)"
+
 /**
  * One line per topic, aligned: the topic below the site and building, the counts, when the last went, its payload;
  * for a point's `$meta`, its publish mode instead of the payload.
@@ -84,7 +92,7 @@ export const formatMessages = (
       mode !== undefined ? `publish: ${mode}` : flat.length > MAX_PAYLOAD ? `${flat.slice(0, MAX_PAYLOAD)}…` : flat
     return [
       `  ${withoutControls(message.topic.slice(prefix.length)).padEnd(width)}`,
-      `${String(message.count).padStart(countWidth)} sent, ${message.delivered} reached the broker${shortfallSuffix(messageShortfall(message), buffer)},`,
+      `${String(message.count).padStart(countWidth)} sent${reachedText(message.delivered)}${shortfallSuffix(messageShortfall(message), buffer)},`,
       `last ${localTime(message.at, now)}${message.retained ? " retained" : ""}  ${payload}`
     ].join("  ")
   })
@@ -101,7 +109,7 @@ export const formatTotals = (totals: MessageTotals, buffer?: BufferContext) => {
     `${totals.health} health`,
     ...(totals.other > 0 ? [`${totals.other} other`] : [])
   ].join(", ")
-  return `  total: ${totals.all} sent (${kinds}), ${totals.delivered} reached the broker${shortfallSuffix(totals, buffer)}`
+  return `  total: ${totals.all} sent (${kinds})${reachedText(totals.delivered)}${shortfallSuffix(totals, buffer)}`
 }
 
 export interface MessagesOptions {
@@ -126,6 +134,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const status = yield* fetchGatewayStatus(target.url, "none")
   yield* checkIdentity(target, status)
   const sinceMs = options.sinceMs
+  if (sinceMs !== undefined) yield* requireEvents(target, status, "messages --since")
   const answer = yield* askGateway(target.url, (client) =>
     sinceMs === undefined
       ? client.status.messages()
@@ -175,7 +184,11 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
                 ? "  nothing published yet"
                 : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
-        : [...formatMessages(messages, prefix, status.now, modes, status.buffer), formatTotals(totals, status.buffer)]),
+        : [
+            ...formatMessages(messages, prefix, status.now, modes, status.buffer),
+            formatTotals(totals, status.buffer),
+            ...(totals.delivered === undefined ? [NOT_COUNTED_LINE] : [])
+          ]),
       ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
         ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]

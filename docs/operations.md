@@ -365,6 +365,8 @@ and open `http://127.0.0.1:8080`. `GET /api/status` serves the same as JSON. The
 
 `ot-gateway status`, `events`, `history` and `messages` ask the running gateway of a config: the one named (`ot-gateway status site-1/ot-gateway.json`, or `--config site-1/ot-gateway.json`), else `ot-gateway.json` in this folder, at the address its `status` block gives (`bindAddress`, asked on `127.0.0.1` when it is `0.0.0.0`, and `port`). `--url` asks elsewhere; with neither a config nor `--url` they ask `http://127.0.0.1:8080`, and say so on stderr (`no ./ot-gateway.json: asking http://127.0.0.1:8080`). Each names the gateway that answered first, and when the config was given and another gateway answers there (a second gateway on the machine, an old SSH tunnel), it says `WRONG GATEWAY` with both names and exits with 1 instead of reporting on the wrong building.
 
+The CLI reads gateways of the previous minor release, so it can be updated before the gateway: against a v0.12 gateway `status`, `history` and `messages` leave out what it does not keep (its events, what reached the broker) and say so, and `events` and `messages --since` say `this gateway runs v0.12.0, the CLI is v0.13.0` with the two ways out: upgrade the gateway, or run the CLI at the gateway's version (`npx ot-gateway@0.12.0`).
+
 `ot-gateway status` prints one line for the gateway, its broker and buffer, and one per device. A device says how often it is read (`every 5 s`); a failing one says since when and why, and below it the first thing to check for that failure (the status page's device panel has the rest); the broker says since when it is connected or away, with the last error and the failed connects since start:
 
 ```

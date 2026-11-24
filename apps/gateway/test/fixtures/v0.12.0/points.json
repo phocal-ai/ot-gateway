@@ -1,0 +1,98 @@
+{
+  "points": [
+    {
+      "device": "pv-inverter",
+      "id": "ac-power",
+      "name": "PV inverter AC power",
+      "unit": "unit:KiloW",
+      "writable": false,
+      "topic": "demo-site/building-a/pv-inverter/ac-power",
+      "source": "sine 0 to 8 · 1 min",
+      "publish": "on change ≥ 0.1",
+      "brick": "Active_Power_Sensor",
+      "haystack": ["pv", "elec", "power", "active", "sensor"]
+    },
+    {
+      "device": "pv-inverter",
+      "id": "energy-today",
+      "name": "PV inverter energy today",
+      "unit": "unit:KiloW-HR",
+      "writable": false,
+      "topic": "demo-site/building-a/pv-inverter/energy-today",
+      "source": "ramp 0 to 40 · 2 min",
+      "publish": "every read",
+      "brick": "Energy_Sensor",
+      "haystack": ["pv", "elec", "energy", "sensor"]
+    },
+    {
+      "device": "energy-meter",
+      "id": "active-power",
+      "name": "Energy meter active power",
+      "unit": "unit:KiloW",
+      "writable": false,
+      "topic": "demo-site/building-a/energy-meter/active-power",
+      "source": "holding 100 · float32 ABCD",
+      "publish": "every read",
+      "brick": "Active_Power_Sensor",
+      "haystack": ["elec", "power", "active", "sensor"]
+    },
+    {
+      "device": "energy-meter",
+      "id": "energy",
+      "name": "Energy meter energy counter",
+      "unit": "unit:KiloW-HR",
+      "writable": false,
+      "topic": "demo-site/building-a/energy-meter/energy",
+      "source": "input 0 · uint32 ABCD",
+      "publish": "every read",
+      "brick": "Energy_Sensor",
+      "haystack": ["elec", "energy", "sensor"]
+    },
+    {
+      "device": "energy-meter",
+      "id": "breaker-tripped",
+      "name": "Main breaker tripped",
+      "writable": false,
+      "topic": "demo-site/building-a/energy-meter/breaker-tripped",
+      "source": "discrete 0 · bool",
+      "publish": "every read",
+      "brick": "Alarm",
+      "haystack": ["elec", "breaker", "alarm"]
+    },
+    {
+      "device": "heat-pump",
+      "id": "flow-temp",
+      "name": "Heat pump flow temperature",
+      "unit": "unit:DEG_C",
+      "writable": false,
+      "topic": "demo-site/building-a/heat-pump/flow-temp",
+      "source": "analog-input 1 · present-value",
+      "publish": "on change ≥ 0.2",
+      "brick": "Leaving_Hot_Water_Temperature_Sensor",
+      "haystack": ["leaving", "hot", "water", "temp", "sensor"]
+    },
+    {
+      "device": "heat-pump",
+      "id": "return-temp",
+      "name": "Heat pump return temperature",
+      "unit": "unit:DEG_C",
+      "writable": false,
+      "topic": "demo-site/building-a/heat-pump/return-temp",
+      "source": "analog-input 2 · present-value",
+      "publish": "on change ≥ 0.2",
+      "brick": "Entering_Hot_Water_Temperature_Sensor",
+      "haystack": ["entering", "hot", "water", "temp", "sensor"]
+    },
+    {
+      "device": "heat-pump",
+      "id": "compressor-running",
+      "name": "Heat pump compressor running",
+      "writable": false,
+      "topic": "demo-site/building-a/heat-pump/compressor-running",
+      "source": "binary-input 1 · present-value",
+      "publish": "every read",
+      "brick": "Run_Status",
+      "haystack": ["compressor", "run", "sensor"]
+    }
+  ]
+}
