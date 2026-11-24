@@ -134,14 +134,27 @@ export const MessageStatus = Schema.Struct({
   at: Schema.Number,
   /**
    * Messages the gateway published on this topic since it started: every one it handed on, also while the broker was
-   * down (then into the buffer, or lost without one).
+   * down (then into the buffer, or not sent).
    */
   count: Schema.Number,
   /**
    * Of those, and of ones the buffer kept from before a restart, how many reached the broker: QoS 1 acknowledged by
-   * it, QoS 0 written to its connection. `count - delivered` is roughly what waits in the buffer or was lost.
+   * it, QoS 0 written to its connection.
    */
-  delivered: Schema.Number
+  delivered: Schema.Number,
+  /**
+   * Of `count`, retained messages (health, `$meta`) not sent because the broker was away. They are never buffered:
+   * the gateway sends the latest again when it reconnects, so nothing is missing. Absent from an older gateway.
+   */
+  notSent: Schema.optionalKey(Schema.Number),
+  /**
+   * Of `count`, messages not sent and kept nowhere: a value without a buffer or one the buffer could not store, a
+   * command result, or a message the broker refused. Absent from an older gateway.
+   *
+   * The rest, `count - delivered - notSent - lost`, was taken on and has not reached the broker yet: it waits in the
+   * buffer (or was dropped by it, counted in the status's `buffer.droppedBy`), or is on its way right now.
+   */
+  lost: Schema.optionalKey(Schema.Number)
 })
 export type MessageStatus = typeof MessageStatus.Type
 
@@ -180,7 +193,15 @@ export const BrokerStatus = Schema.Struct({
    */
   connects: Schema.Number,
   failedConnects: Schema.Number,
-  /** Point values published, and messages that could not be published (without a buffer, those are lost). */
+  /**
+   * Point values the gateway sent on since it started: to the broker, or into the buffer while the broker was away.
+   * Values only, and not "reached the broker": `/api/messages` counts that per topic (`delivered`), `$meta` and
+   * health included. `publishFailures`: publishes that failed with nothing keeping the message: health and `$meta`
+   * while the broker was away (retained, not buffered: the latest goes out again on reconnect), values without a
+   * buffer or that it could not store, and messages the broker refused. Not a loss count: a failed polling cycle or
+   * `$meta` batch counts once, and the retained ones are sent again; `/api/messages` has `notSent` and `lost` per
+   * message.
+   */
   published: Schema.Number,
   publishFailures: Schema.Number
 })
@@ -323,7 +344,7 @@ export const topicKind = (topic: string): TopicKind => {
   return "other"
 }
 
-/** Messages of a list of topics added up: by kind, all of them, and how many of those reached the broker. */
+/** Messages of a list of topics added up: by kind, all of them, and what became of them. */
 export interface MessageTotals {
   readonly values: number
   readonly meta: number
@@ -331,7 +352,22 @@ export interface MessageTotals {
   /** Command results and any other topic. */
   readonly other: number
   readonly all: number
+  /** Reached the broker. */
   readonly delivered: number
+  /** Taken on, not at the broker yet: in the buffer (or dropped by it), or on its way. */
+  readonly waiting: number
+  /** Retained messages not sent while the broker was away; the latest goes out again on reconnect. */
+  readonly notSent: number
+  /** Not sent and kept nowhere. */
+  readonly lost: number
+}
+
+/** What became of one topic's messages that did not reach the broker (`MessageStatus`'s fields, filled in). */
+export const messageShortfall = (message: MessageStatus) => {
+  const notSent = message.notSent ?? 0
+  const lost = message.lost ?? 0
+  // Rows the buffer kept from before a restart can make `delivered` more than this run published.
+  return { waiting: Math.max(0, message.count - message.delivered - notSent - lost), notSent, lost }
 }
 
 /** The totals of `messages` (`count` and `delivered` per topic), for `ot-gateway messages` and the Messages tab. */
@@ -341,6 +377,9 @@ export const messageTotals = (messages: ReadonlyArray<MessageStatus>): MessageTo
   let health = 0
   let other = 0
   let delivered = 0
+  let waiting = 0
+  let notSent = 0
+  let lost = 0
   for (const message of messages) {
     const kind = topicKind(message.topic)
     if (kind === "value") values += message.count
@@ -348,13 +387,45 @@ export const messageTotals = (messages: ReadonlyArray<MessageStatus>): MessageTo
     else if (kind === "health") health += message.count
     else other += message.count
     delivered += message.delivered
+    const shortfall = messageShortfall(message)
+    waiting += shortfall.waiting
+    notSent += shortfall.notSent
+    lost += shortfall.lost
   }
-  return { values, meta, health, other, all: values + meta + health + other, delivered }
+  return { values, meta, health, other, all: values + meta + health + other, delivered, waiting, notSent, lost }
 }
 
 /**
+ * What did not reach the broker, in words, for `ot-gateway messages` and the Messages tab alike: `["12 waiting in
+ * the buffer", "5 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect"]`.
+ * Empty when everything arrived. `buffer` is the status's buffer, absent without one: waiting messages are then
+ * waiting for the broker, and once the buffer dropped any, a waiting one may be among them. `format` writes a count.
+ */
+export const shortfallWords = (
+  shortfall: { readonly waiting: number; readonly notSent: number; readonly lost: number },
+  buffer: { readonly dropped: number } | undefined,
+  format: (count: number) => string = String
+): ReadonlyArray<string> => [
+  ...(shortfall.waiting > 0
+    ? [
+        buffer === undefined
+          ? `${format(shortfall.waiting)} waiting for the broker`
+          : buffer.dropped > 0
+            ? `${format(shortfall.waiting)} waiting in the buffer or dropped by it`
+            : `${format(shortfall.waiting)} waiting in the buffer`
+      ]
+    : []),
+  ...(shortfall.notSent > 0
+    ? [
+        `${format(shortfall.notSent)} not sent while the broker was away: retained, not buffered, the latest goes out on reconnect`
+      ]
+    : []),
+  ...(shortfall.lost > 0 ? [`${format(shortfall.lost)} lost: not sent, not buffered`] : [])
+]
+
+/**
  * How far back `/api/messages/window` can count: the gateway keeps a count per topic per minute for the last hour,
- * one small ring (about a third of a kilobyte) per topic it already keeps.
+ * one small ring (about half a kilobyte) per topic it already keeps.
  */
 export const MESSAGE_WINDOW_MINUTES = 60
 
@@ -593,13 +664,37 @@ export const BrokerConnectedEvent = Schema.Struct({
 
 /**
  * Every message the buffer kept during an outage reached the broker. `delivered` counts the messages that went from
- * the buffer to the broker since the broker came back: the backlog and what queued behind it.
+ * the buffer to the broker since the broker came back: `buffered`, the ones waiting at the reconnect (as in
+ * `broker-connected`), plus `queued`, the ones stored behind them meanwhile, less any the buffer dropped. Counted
+ * from the reconnect, or from the last time it drained when it filled again on the same connection (`buffered` 0).
+ * `buffered` and `queued` are absent from an older gateway.
  */
 export const BufferDrainedEvent = Schema.Struct({
   ...eventFields,
   type: Schema.Literal("buffer-drained"),
-  delivered: Schema.optionalKey(Schema.Number)
+  delivered: Schema.optionalKey(Schema.Number),
+  buffered: Schema.optionalKey(Schema.Number),
+  queued: Schema.optionalKey(Schema.Number)
 })
+
+/**
+ * How a drained buffer's count adds up, from a `buffer-drained` event: the messages waiting at the reconnect, the
+ * ones queued behind them, and the ones the buffer dropped meanwhile (overflow, refused, unreadable). Undefined when
+ * the event has no such numbers or nothing waited at the reconnect, where `delivered` says it all.
+ */
+export const drainedParts = (event: {
+  readonly delivered?: number
+  readonly buffered?: number
+  readonly queued?: number
+}) => {
+  if (event.delivered === undefined || event.buffered === undefined || event.queued === undefined) return undefined
+  if (event.buffered === 0) return undefined
+  return {
+    buffered: event.buffered,
+    queued: event.queued,
+    dropped: Math.max(0, event.buffered + event.queued - event.delivered)
+  }
+}
 
 /**
  * A config saved from the status page was applied without a restart: `summary` says what changed in a line

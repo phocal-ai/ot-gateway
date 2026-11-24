@@ -2,14 +2,16 @@ import { describe, expect, it } from "@effect/vitest"
 import type { MessageStatus } from "@ot-gateway/api"
 import { countKinds, countsNote, matchesMessage, messageRanges, totalsNote, windowSince } from "../src/lib/messages.ts"
 
-const counted = (topic: string, count: number, delivered: number): MessageStatus => ({
+const counted = (topic: string, count: number, delivered: number, notSent = 0): MessageStatus => ({
   topic,
   payload: "{}",
   truncated: false,
   at: 0,
-  retained: false,
+  retained: topic.endsWith("/health"),
   count,
-  delivered
+  delivered,
+  notSent,
+  lost: 0
 })
 
 describe("message totals", () => {
@@ -21,7 +23,15 @@ describe("message totals", () => {
         counted("s/b/$gateway/main/health", 12, 12)
       ])
     ).toBe(
-      "1,213 messages on 3 topics: 1,200 values, 1 metadata, 12 health; 1,203 reached the broker, 10 waiting or lost."
+      "1,213 messages on 3 topics: 1,200 values, 1 metadata, 12 health; 1,203 reached the broker; 10 waiting for the broker."
+    )
+    // The outage of the report: values went out from the buffer, 5 health messages missed the broker and that is fine.
+    expect(
+      totalsNote([counted("s/b/meter/power", 1_420, 1_408), counted("s/b/$gateway/main/health", 14, 9, 5)], {
+        dropped: 0
+      })
+    ).toBe(
+      "1,434 messages on 2 topics: 1,420 values, 0 metadata, 14 health; 1,417 reached the broker; 12 waiting in the buffer; 5 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect."
     )
     expect(totalsNote([counted("s/b/meter/valve/$set/result", 1, 1)])).toBe(
       "1 message on 1 topic: 0 values, 0 metadata, 0 health, 1 other; 1 reached the broker."

@@ -80,6 +80,13 @@ describe("eventSentence", () => {
     expect(eventSentence({ id: 2, at: now, type: "broker-connected" })).toBe("Connected to the broker")
     expect(eventSentence({ ...brokerBack, buffered: 0 })).toBe("Broker back after 20 s")
     expect(eventSentence({ ...drained, delivered: 66 })).toBe("Buffer emptied: 66 values from it reached the broker")
+    // Adds up with the reconnect's "on their way": those, plus the values read while they went out.
+    expect(eventSentence({ ...drained, delivered: 130, buffered: 124, queued: 6 })).toBe(
+      "Buffer emptied: 130 values from it reached the broker, the 124 waiting at the reconnect and 6 read meanwhile"
+    )
+    expect(eventSentence({ ...drained, delivered: 1_300, buffered: 1_240, queued: 62 })).toBe(
+      "Buffer emptied: 1,300 values from it reached the broker, the 1,240 waiting at the reconnect and 62 read meanwhile, less 2 the buffer dropped"
+    )
     expect(eventSentence({ ...brokerBack, buffered: 1 })).toBe(
       "Broker back after 20 s, 1 value from the buffer on its way"
     )

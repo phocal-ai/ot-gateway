@@ -250,7 +250,7 @@ describe("events", () => {
       },
       { id: 5, at: at(12, 19, 0), type: "device-recovered", device: "energy-meter", downMs: 40_000 },
       { id: 6, at: at(12, 19, 10), type: "broker-connected", downMs: 70_000, buffered: 1204 },
-      { id: 7, at: at(12, 19, 20), type: "buffer-drained", delivered: 1266 }
+      { id: 7, at: at(12, 19, 20), type: "buffer-drained", delivered: 1266, buffered: 1204, queued: 62 }
     ]
   }
 
@@ -273,12 +273,32 @@ describe("events", () => {
       "                          then: Is a firewall or a VLAN between the gateway and the device blocking the port?",
       "12:19:00  energy-meter  ok again after 40 s",
       "12:19:10  broker        connected again after 1 min 10 s, 1204 message(s) waiting in the buffer at reconnect",
-      "12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since it was last empty"
+      "12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since the broker came back: the 1204 waiting at reconnect and 62 queued behind them"
     ])
     expect(formatEvents(log, Number.POSITIVE_INFINITY, "all").split("\n")[0]).toBe(
       "10:19:30  gateway       started (v1.2.3, 2 device(s))"
     )
     expect(formatEvents(log, 5_000, "5s")).toBe("no events in the last 5s")
+  })
+
+  /** The line of one `buffer-drained` event with these counts. */
+  const drainedLine = (fields: { delivered?: number; buffered?: number; queued?: number }) =>
+    formatEvents(
+      { ...log, events: [{ id: 7, at: at(12, 19, 20), type: "buffer-drained", ...fields }] },
+      Number.POSITIVE_INFINITY,
+      "all"
+    ).split("\n")[0]
+
+  it("adds a drained buffer up from the reconnect: waiting then, queued behind, dropped meanwhile", () => {
+    expect(drainedLine({ delivered: 130, buffered: 124, queued: 8 })).toBe(
+      "12:19:20  buffer  drained: 130 message(s) delivered from the buffer since the broker came back: the 124 waiting at reconnect and 8 queued behind them, less 2 the buffer dropped"
+    )
+    // Filled again on the same connection, or from an older gateway: the count alone.
+    expect(drainedLine({ delivered: 6, buffered: 0, queued: 6 })).toBe(
+      "12:19:20  buffer  drained: 6 message(s) delivered from the buffer"
+    )
+    expect(drainedLine({ delivered: 66 })).toBe("12:19:20  buffer  drained: 66 message(s) delivered from the buffer")
+    expect(drainedLine({})).toBe("12:19:20  buffer  drained: every waiting message delivered")
   })
 
   it("prints a config applied from the status page, and one that was rolled back", () => {

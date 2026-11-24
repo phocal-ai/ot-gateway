@@ -4,10 +4,18 @@
  * `--since 10m` they cover the last minutes (`/api/messages/window`), as far back as the gateway keeps a count per
  * topic per minute (`MESSAGE_WINDOW_MINUTES`, an hour), in whole minutes. A point's `$meta` line shows its publish
  * mode, from the point catalog, instead of the JSON cut at 80 characters; `--json` has the whole payload and
- * `publish` on the point's topics. A last line adds up the topics listed: values, `$meta`, health and all, and how
- * many of them reached the broker (`totals` in `--json`).
+ * `publish` on the point's topics. A last line adds up the topics listed: values, `$meta`, health and all, how
+ * many of them reached the broker, and what became of the rest (`totals` in `--json`): waiting in the buffer,
+ * retained ones not sent while the broker was away, lost ones (`shortfallWords`, as the Messages tab says it).
  */
-import { MESSAGE_WINDOW_MINUTES, type MessageStatus, type MessageTotals, messageTotals } from "@ot-gateway/api"
+import {
+  MESSAGE_WINDOW_MINUTES,
+  messageShortfall,
+  type MessageStatus,
+  type MessageTotals,
+  messageTotals,
+  shortfallWords
+} from "@ot-gateway/api"
 import { Effect } from "effect"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
@@ -44,6 +52,18 @@ export type PublishModes = ReadonlyMap<string, string>
 const publishModeOf = (topic: string, modes: PublishModes) =>
   modes.get(topic.endsWith("/$meta") ? topic.slice(0, -"/$meta".length) : topic)
 
+/** The status's buffer, for what a waiting message may be: absent when the gateway runs without one. */
+export type BufferContext = { readonly dropped: number } | undefined
+
+/** `" (12 waiting in the buffer; 5 not sent while …)"`, or nothing when every message reached the broker. */
+const shortfallSuffix = (
+  shortfall: { readonly waiting: number; readonly notSent: number; readonly lost: number },
+  buffer: BufferContext
+) => {
+  const words = shortfallWords(shortfall, buffer)
+  return words.length === 0 ? "" : ` (${words.join("; ")})`
+}
+
 /**
  * One line per topic, aligned: the topic below the site and building, the counts, when the last went, its payload;
  * for a point's `$meta`, its publish mode instead of the payload.
@@ -52,7 +72,8 @@ export const formatMessages = (
   messages: ReadonlyArray<MessageStatus>,
   prefix: string,
   now: number,
-  modes: PublishModes = new Map()
+  modes: PublishModes = new Map(),
+  buffer?: BufferContext
 ) => {
   const width = Math.max(0, ...messages.map((message) => message.topic.length - prefix.length))
   const countWidth = Math.max(0, ...messages.map((message) => String(message.count).length))
@@ -61,28 +82,26 @@ export const formatMessages = (
     const mode = message.topic.endsWith("/$meta") ? publishModeOf(message.topic, modes) : undefined
     const payload =
       mode !== undefined ? `publish: ${mode}` : flat.length > MAX_PAYLOAD ? `${flat.slice(0, MAX_PAYLOAD)}…` : flat
-    const lost = message.count - message.delivered
     return [
       `  ${withoutControls(message.topic.slice(prefix.length)).padEnd(width)}`,
-      `${String(message.count).padStart(countWidth)} sent, ${message.delivered} reached the broker${lost > 0 ? ` (${lost} waiting or lost)` : ""},`,
+      `${String(message.count).padStart(countWidth)} sent, ${message.delivered} reached the broker${shortfallSuffix(messageShortfall(message), buffer)},`,
       `last ${localTime(message.at, now)}${message.retained ? " retained" : ""}  ${payload}`
     ].join("  ")
   })
 }
 
 /**
- * The topics listed added up: `  total  4 sent (3 values, 1 $meta, 0 health), 2 reached the broker (2 waiting or
- * lost)`, with command results and other topics named only when there are some.
+ * The topics listed added up: `  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (2 waiting in
+ * the buffer)`, with command results and other topics named only when there are some.
  */
-export const formatTotals = (totals: MessageTotals) => {
-  const lost = totals.all - totals.delivered
+export const formatTotals = (totals: MessageTotals, buffer?: BufferContext) => {
   const kinds = [
     `${totals.values} value(s)`,
     `${totals.meta} $meta`,
     `${totals.health} health`,
     ...(totals.other > 0 ? [`${totals.other} other`] : [])
   ].join(", ")
-  return `  total: ${totals.all} sent (${kinds}), ${totals.delivered} reached the broker${lost > 0 ? ` (${lost} waiting or lost)` : ""}`
+  return `  total: ${totals.all} sent (${kinds}), ${totals.delivered} reached the broker${shortfallSuffix(totals, buffer)}`
 }
 
 export interface MessagesOptions {
@@ -156,7 +175,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
                 ? "  nothing published yet"
                 : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
-        : [...formatMessages(messages, prefix, status.now, modes), formatTotals(totals)]),
+        : [...formatMessages(messages, prefix, status.now, modes, status.buffer), formatTotals(totals, status.buffer)]),
       ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
         ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]

@@ -1,7 +1,13 @@
 /**
  * Filtering the Messages tab: the latest message on each topic, narrowed by what a topic carries and by text.
  */
-import { MESSAGE_WINDOW_MINUTES, type Messages, type MessageStatus, messageTotals } from "@ot-gateway/api"
+import {
+  MESSAGE_WINDOW_MINUTES,
+  type Messages,
+  type MessageStatus,
+  messageTotals,
+  shortfallWords
+} from "@ot-gateway/api"
 import { formatNumber } from "./format"
 import { type TopicKind, topicKind } from "./status"
 
@@ -71,9 +77,10 @@ const plural = (count: number, one: string, many: string) => `${formatNumber(cou
 
 /**
  * The topics shown added up, under the table, as `ot-gateway messages` ends: "1,204 messages on 12 topics: 1,180
- * values, 12 metadata, 12 health; 1,204 reached the broker." Undefined without a topic.
+ * values, 12 metadata, 12 health; 1,204 reached the broker." Undefined without a topic. What did not arrive is said
+ * as the CLI says it (`shortfallWords`); `buffer` is the status's, absent without one.
  */
-export const totalsNote = (messages: ReadonlyArray<MessageStatus>) => {
+export const totalsNote = (messages: ReadonlyArray<MessageStatus>, buffer?: { readonly dropped: number }) => {
   if (messages.length === 0) return undefined
   const totals = messageTotals(messages)
   const kinds = [
@@ -82,6 +89,6 @@ export const totalsNote = (messages: ReadonlyArray<MessageStatus>) => {
     `${formatNumber(totals.health)} health`,
     ...(totals.other > 0 ? [`${formatNumber(totals.other)} other`] : [])
   ].join(", ")
-  const lost = totals.all - totals.delivered
-  return `${plural(totals.all, "message", "messages")} on ${plural(messages.length, "topic", "topics")}: ${kinds}; ${formatNumber(totals.delivered)} reached the broker${lost > 0 ? `, ${formatNumber(lost)} waiting or lost` : ""}.`
+  const shortfall = shortfallWords(totals, buffer, formatNumber).map((words) => `; ${words}`)
+  return `${plural(totals.all, "message", "messages")} on ${plural(messages.length, "topic", "topics")}: ${kinds}; ${formatNumber(totals.delivered)} reached the broker${shortfall.join("")}.`
 }
