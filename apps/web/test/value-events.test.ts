@@ -180,6 +180,16 @@ describe("shared cause on one host", () => {
     expect(shared.line).toContain("both on 10.0.1.20")
     expect(sharedFailure([failing, second, third], "boiler", hostOf)).toEqual({ context: {} })
   })
+
+  it("adds the broker when it sits on the devices' host and went away with them", () => {
+    const brokerLost: GatewayEvent = { id: 5, at: failing.at - 1_000, type: "broker-disconnected", error: "closed" }
+    const events = [brokerLost, failing, second]
+    expect(sharedCauseNotes(events, hostOf, "10.0.1.20").get(7)).toBe(
+      "2 devices (energy-meter, heat-meter) and the broker stopped answering within 3 s of each other, all on 10.0.1.20: likely the host itself, its power or its network link"
+    )
+    expect(sharedFailure(events, "heat-meter", hostOf, "10.0.1.20").line).toContain("and the broker")
+    expect(sharedCauseNotes(events, hostOf, "10.0.9.9").get(7)).not.toContain("broker")
+  })
 })
 
 describe("eventNote", () => {

@@ -12,6 +12,8 @@ import {
   ALARM_WINDOW_MS,
   type AlarmPattern,
   type AlarmStatus,
+  brokerHostOf,
+  brokerWith,
   commonHost,
   COUNTER_RATE_FACTOR,
   counterShareText,
@@ -88,9 +90,10 @@ export const sharedHostOf = (devices: ReadonlyArray<DeviceStatus>) => {
 /**
  * `all 3 devices stopped answering within 6 s of each other: …` when every device of two or more fails and their
  * failures began within `SHARED_CAUSE_WINDOW_MS`; undefined otherwise. Devices on one host say so: the host itself is
- * then the likelier cause than a switch on the way.
+ * then the likelier cause than a switch on the way. With `broker`, a broker on that host (loopback in any spelling is
+ * this machine) that is away since then is named too: `all 2 devices and the broker stopped answering …`.
  */
-export const sharedCause = (devices: ReadonlyArray<DeviceStatus>) => {
+export const sharedCause = (devices: ReadonlyArray<DeviceStatus>, broker?: GatewayStatus["broker"]) => {
   if (devices.length < 2) return undefined
   const starts: Array<number> = []
   for (const device of devices) {
@@ -99,7 +102,19 @@ export const sharedCause = (devices: ReadonlyArray<DeviceStatus>) => {
   }
   const spread = Math.max(...starts) - Math.min(...starts)
   if (spread > SHARED_CAUSE_WINDOW_MS) return undefined
-  return sharedCauseLine(`all ${devices.length} devices`, spread, sharedHostOf(devices), devices.length)
+  const host = sharedHostOf(devices)
+  const away =
+    broker === undefined || broker.connected || broker.disconnectedSince === undefined
+      ? undefined
+      : brokerWith(Math.min(...starts), host, brokerHostOf(broker.url), [{ at: broker.disconnectedSince }])
+  if (away === undefined) return sharedCauseLine(`all ${devices.length} devices`, spread, host, devices.length)
+  const times = [...starts, away.at]
+  return sharedCauseLine(
+    `all ${devices.length} devices and the broker`,
+    Math.max(...times) - Math.min(...times),
+    host,
+    devices.length + 1
+  )
 }
 
 /** What `events` adds to an event: what to check for a device that failed, and whether others failed with it. */
@@ -133,17 +148,20 @@ export interface DeviceInfo {
  * Advice per event id: for each `device-failing`, the hint table's advice (by the device's protocol from
  * `deviceOf`, any protocol's rules when the device is no longer in the config), and when two or more devices
  * started failing within `SHARED_CAUSE_WINDOW_MS` of the first of them, the shared-cause line on each of them
- * (naming their host when they all sit on one). A flapping alarm gets what a fixed rhythm usually means.
+ * (naming their host when they all sit on one, and the broker when it sits on that host too, `brokerHost`, and went
+ * away with them). A flapping alarm gets what a fixed rhythm usually means.
  */
 export const adviseEvents = (
   events: ReadonlyArray<AnyEvent>,
-  deviceOf: (device: string) => DeviceInfo | undefined
+  deviceOf: (device: string) => DeviceInfo | undefined,
+  brokerHost?: string
 ): ReadonlyMap<number, EventAdvice> => {
   const advice = new Map<number, EventAdvice>()
   const failures = events.filter((event) => event.type === "device-failing")
   const followers = new Set<number>()
   const hosts = new Map<number, string>()
-  for (const shared of sharedCauses(failures, (device) => deviceOf(device)?.host)) {
+  const broker = { host: brokerHost, disconnects: events.filter((event) => event.type === "broker-disconnected") }
+  for (const shared of sharedCauses(failures, (device) => deviceOf(device)?.host, broker)) {
     const first = Math.min(...shared.ids)
     for (const id of shared.ids) {
       advice.set(id, { sharedCause: shared.line })
@@ -183,6 +201,12 @@ export interface RecentIncidents {
   /** Times the broker connection was lost (or a first dial failed) in the window. */
   readonly brokerOutages: number
   /**
+   * Each of those outages, oldest first: when it began (`from`), and once the broker was back, when (`to`), how long
+   * it lasted (`downMs`) and how many dials failed meanwhile (`retries`, absent from older gateways). The failed
+   * connects `broker.failedConnects` counts are these retries, not another problem.
+   */
+  readonly brokerOutageSpans?: ReadonlyArray<RecentBrokerOutage>
+  /**
    * Each failure in the window as the data saw it: from the device's last good read (`lastReadAt`, absent when it
    * had not read yet or from an older gateway) to its first read again (`recoveredAt`, absent while it still fails),
    * and when the gateway called it failing (`detectedAt`). The same span `events` and `history` show.
@@ -190,6 +214,14 @@ export interface RecentIncidents {
   readonly outages?: ReadonlyArray<RecentOutage>
   /** Energy counters that went back or jumped in the window (value events), oldest first. */
   readonly counters?: ReadonlyArray<ValueEvent>
+}
+
+/** One broker outage, from the lost connection (or the first failed dial) to the connect that ended it. */
+export interface RecentBrokerOutage {
+  readonly from: number
+  readonly to?: number
+  readonly downMs?: number
+  readonly retries?: number
 }
 
 /** One device failure, from its last good read to its first read again. */
@@ -212,6 +244,19 @@ export const recentIncidents = (log: EventLog, windowMs: number = RECENT_WINDOW_
   const first = failures[0]
   const last = failures.at(-1)
   const counters = (log.valueEvents ?? []).filter((event) => event.at >= log.now - windowMs)
+  const brokerOutageSpans = within.flatMap((event): Array<RecentBrokerOutage> => {
+    if (event.type !== "broker-disconnected") return []
+    const back = log.events.find((later) => later.type === "broker-connected" && later.id > event.id)
+    if (back?.type !== "broker-connected") return [{ from: event.at }]
+    return [
+      {
+        from: event.at,
+        to: back.at,
+        ...(back.downMs === undefined ? {} : { downMs: back.downMs }),
+        ...(back.retries === undefined ? {} : { retries: back.retries })
+      }
+    ]
+  })
   const outages = failures.map((failure): RecentOutage => {
     const recovered = log.events.find(
       (event) => event.type === "device-recovered" && event.device === failure.device && event.id > failure.id
@@ -232,7 +277,8 @@ export const recentIncidents = (log: EventLog, windowMs: number = RECENT_WINDOW_
     windowMs,
     failedDevices: [...new Set(failures.map((event) => event.device))],
     ...(first === undefined || last === undefined ? {} : { from: first.at, to: last.at }),
-    brokerOutages: within.filter((event) => event.type === "broker-disconnected").length,
+    brokerOutages: brokerOutageSpans.length,
+    ...(brokerOutageSpans.length === 0 ? {} : { brokerOutageSpans }),
     ...(outages.length === 0 ? {} : { outages }),
     ...(counters.length === 0 ? {} : { counters })
   }
@@ -311,14 +357,29 @@ const recentLines = (recent: RecentIncidents, now: number) => {
               : []),
             ...shown.map((outage) => `    ${outage.device.padEnd(width)}  ${outageText(outage, outage.noDataMs, now)}`)
           ]
+  const spans = recent.brokerOutageSpans ?? []
+  const times = recent.brokerOutages === 1 ? "once" : `${recent.brokerOutages} times`
   const broker =
     recent.brokerOutages === 0
       ? []
-      : [`  broker connection lost ${recent.brokerOutages} time(s) in the last ${minutes}, see ot-gateway events`]
+      : [
+          `  broker connection lost ${times} in the last ${minutes}${spans.length === 0 ? "" : ` (${spans.map((outage) => brokerOutageText(outage, now)).join("; ")})`}, see ot-gateway events`
+        ]
   const counters = (recent.counters ?? []).map(
     (event) => `  ${event.device}/${event.point} at ${localTime(event.at, now)}: ${counterText(event)}`
   )
   return [...devices, ...broker, ...counters]
+}
+
+/**
+ * `14:15:35–14:17:43, 2 min 7 s, 14 retries`: a broker outage with the dials that failed during it, or `since
+ * 14:15:35` while it lasts (the broker line says whether it is back).
+ */
+export const brokerOutageText = (outage: RecentBrokerOutage, now: number) => {
+  if (outage.to === undefined) return `since ${localTime(outage.from, now)}`
+  const retries =
+    outage.retries === undefined ? "" : `, ${outage.retries} ${outage.retries === 1 ? "retry" : "retries"}`
+  return `${span(outage.from, outage.to, now)}, ${preciseDuration(outage.downMs ?? outage.to - outage.from)}${retries}`
 }
 
 /** `on 30 s, off 30 s, 6 times in 6 min`: how a flapping alarm switched. */
@@ -357,6 +418,14 @@ const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number) => {
     })
   ]
 }
+
+/** `5 s`, `1.5 s`, `500 ms`, `1 min`: how often a device is read. */
+export const intervalText = (milliseconds: number) =>
+  milliseconds < 1000
+    ? `${milliseconds} ms`
+    : milliseconds < 60_000 && milliseconds % 1000 !== 0
+      ? `${numberText(milliseconds / 1000)} s`
+      : preciseDuration(milliseconds)
 
 /** A device's state as `status` shows it: the gateway's, or `late` for an `ok` device not read lately. */
 const deviceStateName = (device: GatewayStatus["devices"][number], now: number) =>
@@ -397,11 +466,17 @@ const deviceState = (device: GatewayStatus["devices"][number], now: number) => {
 }
 
 /**
- * `connected since 12:00:01, 3 failed connects`, `NOT CONNECTED since 12:18:20 (1 min): <why>`, or
- * `connecting (started 2 s ago)` while the first connect is under way.
+ * `connected since 12:00:01, 3 failed connect(s) since start`, `NOT CONNECTED since 12:18:20 (1 min): <why>`, or
+ * `connecting (started 2 s ago)` while the first connect is under way. A connected broker whose failed connects are
+ * all retries of the outages `recent` lists says nothing of them here: the outage line has them, as one problem.
  */
-const brokerState = (broker: GatewayStatus["broker"], now: number, started: number) => {
-  const failed = broker.failedConnects > 0 ? `, ${broker.failedConnects} failed connect(s) since start` : ""
+const brokerState = (broker: GatewayStatus["broker"], now: number, started: number, recent?: RecentIncidents) => {
+  const spans = recent?.brokerOutageSpans ?? []
+  const explained =
+    broker.connected && spans.length > 0 && spans.every((outage) => outage.retries !== undefined)
+      ? spans.reduce((sum, outage) => sum + (outage.retries ?? 0), 0)
+      : 0
+  const failed = broker.failedConnects > explained ? `, ${broker.failedConnects} failed connect(s) since start` : ""
   if (broker.connected) {
     return `${broker.connectedAt === undefined ? "connected" : `connected since ${localTime(broker.connectedAt, now)}`}${failed}`
   }
@@ -422,11 +497,11 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
   const width = Math.max(0, ...status.devices.map((device) => device.id.length))
   const failing = status.devices.filter((device) => device.status === "failing").length
   const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
-  const shared = sharedCause(status.devices)
+  const shared = sharedCause(status.devices, status.broker)
   const sharedHost = shared === undefined ? undefined : sharedHostOf(status.devices)
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)} (since ${localTime(status.since, status.now)})`,
-    `  broker ${status.broker.url}: ${brokerState(status.broker, status.now, status.since)}`,
+    `  broker ${status.broker.url}: ${brokerState(status.broker, status.now, status.since, recent)}`,
     ...(status.buffer === undefined
       ? []
       : [
@@ -435,7 +510,7 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
         ]),
     `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}${late > 0 ? `, ${late} late` : ""}`,
     ...status.devices.flatMap((device) => [
-      `    ${device.id.padEnd(width)}  ${deviceStateName(device, status.now).padEnd(8)} ${device.protocol}, ${device.pointCount} point(s), ${deviceState(device, status.now)}`,
+      `    ${device.id.padEnd(width)}  ${deviceStateName(device, status.now).padEnd(8)} ${device.protocol}, ${device.pointCount} point(s) every ${intervalText(device.pollIntervalMs)}, ${deviceState(device, status.now)}`,
       ...(device.status === "failing"
         ? [`    ${" ".repeat(width)}  check: ${hintsFor(device, shared !== undefined, sharedHost).checks[0] ?? ""}`]
         : [])
@@ -518,7 +593,7 @@ export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: b
  * (from the events), so `ok: true` right after an outage does not hide it.
  */
 export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => {
-  const shared = sharedCause(status.devices) !== undefined
+  const shared = sharedCause(status.devices, status.broker) !== undefined
   const sharedHost = shared ? sharedHostOf(status.devices) : undefined
   return {
     ok: isHealthy(status),
@@ -665,23 +740,36 @@ export const devicesOf = (status: Pick<GatewayStatus, "devices">) => {
  * to check (the status page's hint table); after the last of several devices that failed within 10 s of each
  * other, that they likely share a cause.
  */
+/** What `events` knows of the gateway besides its events: its broker's host and when it started (Unix ms). */
+export interface EventsContext {
+  readonly brokerHost?: string | undefined
+  readonly started?: number | undefined
+}
+
 export const formatEvents = (
   log: EventLog,
   sinceMs: number,
   sinceText: string,
-  deviceOf: (device: string) => DeviceInfo | undefined = () => undefined
+  deviceOf: (device: string) => DeviceInfo | undefined = () => undefined,
+  context: EventsContext = {}
 ) => {
   const events = eventsWithin(log, sinceMs)
   const window = sinceMs === Number.POSITIVE_INFINITY ? "since the gateway started" : `in the last ${sinceText}`
+  // A window that reaches back past the gateway's start: say so, as `history` does, so its quiet start is not read
+  // as a quiet site.
+  const before =
+    context.started !== undefined && log.now - sinceMs < context.started
+      ? [`the gateway started at ${localTime(context.started, log.now)}: nothing is known before that`]
+      : []
   const all = allEvents(log)
   // The ring let older events go and the oldest kept is inside the window: some of the window is missing.
   const gap =
     log.dropped > 0 && events.length > 0 && events.length === all.length
       ? [`(the gateway keeps the latest ${log.capacity} events; ${log.dropped} older ones were let go)`]
       : []
-  if (events.length === 0) return `no events ${window}`
+  if (events.length === 0) return [...before, `no events ${window}`].join("\n")
   const width = Math.max(...events.map((event) => subjectOf(event).length))
-  const advice = adviseEvents(all, deviceOf)
+  const advice = adviseEvents(all, deviceOf, context.brokerHost)
   // The shared-cause line goes once, after the last failure of its group that is shown.
   const sharedShown = new Set<string>()
   const sharedAfter = new Set<number>()
@@ -692,6 +780,7 @@ export const formatEvents = (
     sharedAfter.add(event.id)
   }
   return [
+    ...before,
     ...gap,
     ...events.flatMap((event) => {
       const line = eventLine(event, log.now, width)
@@ -755,10 +844,21 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
   const log = yield* fetchGatewayEvents(target.url)
   const gateway = { site: status.site, building: status.building, id: status.id }
   const deviceOf = devicesOf(status)
-  const advice = adviseEvents(allEvents(log), deviceOf)
+  const context = { brokerHost: brokerHostOf(status.broker.url), started: status.since }
+  const advice = adviseEvents(allEvents(log), deviceOf, context.brokerHost)
   const events = eventsWithin(log, options.sinceMs).map((event) => eventJson(event, advice))
   if (options.json === true && options.follow !== true) {
-    return yield* printJson({ ok: true, gateway, now: log.now, capacity: log.capacity, dropped: log.dropped, events })
+    return yield* printJson({
+      ok: true,
+      gateway,
+      now: log.now,
+      // The window's events cover from `from`: the window's start, or the gateway's start when that is later.
+      gatewayStarted: status.since,
+      from: Math.max(log.now - options.sinceMs, status.since),
+      capacity: log.capacity,
+      dropped: log.dropped,
+      events
+    })
   }
   if (options.json === true) {
     for (const event of events) yield* printResult(JSON.stringify(event))
@@ -770,7 +870,7 @@ export const eventsReport = Effect.fn("eventsReport")(function* (target: Gateway
           : `then what comes for ${options.seconds} s`
         : ""
     yield* printResult(`${gatewayName(gateway)} at ${target.url}${window === "" ? "" : `, ${window}`}`)
-    yield* printResult(formatEvents(log, options.sinceMs, options.since, deviceOf))
+    yield* printResult(formatEvents(log, options.sinceMs, options.since, deviceOf, context))
   }
   if (options.follow !== true) return
   const follow = followEvents((after) => fetchGatewayEvents(target.url, after), allEvents(log).at(-1)?.id ?? 0, {

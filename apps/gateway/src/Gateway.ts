@@ -319,7 +319,7 @@ const northbound = (
     onDisconnected: (failure) =>
       Effect.map(Clock.currentTimeMillis, (at) => {
         status?.recordBrokerFailure(at, failure.error)
-        events.brokerDisconnected(failure.error)
+        events.brokerDisconnected(failure.error, failure.lost)
         start.brokerError = failure.error
       }),
     ...(options.network === undefined ? {} : { network: options.network }),
