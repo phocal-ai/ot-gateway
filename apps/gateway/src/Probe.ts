@@ -359,7 +359,7 @@ const describeFailure = (request: ProbeRequest, endpoint: string) => ({
     Effect.fail(
       new ProbeError({
         reason: "unreachable",
-        message: `cannot reach ${endpoint}: ${error.message}; check the host, the port (Modbus TCP is 502 unless the device says otherwise) and that nothing blocks it`
+        message: `cannot reach ${endpoint}: ${error.message}; check the host, the port (Modbus TCP is 502 unless the device says otherwise) and that nothing blocks it; a device that takes one connection at a time refuses a second while a gateway polls it`
       })
     ),
   ModbusTimeout: (error: { readonly message: string }) =>
