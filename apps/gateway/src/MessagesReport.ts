@@ -9,7 +9,9 @@
  * retained ones not sent while the broker was away, lost ones (`shortfallWords`, as the Messages tab says it).
  */
 import {
+  type GatewayStatus,
   MESSAGE_WINDOW_MINUTES,
+  type Messages,
   messageShortfall,
   type MessageStatus,
   type MessageTotals,
@@ -20,7 +22,8 @@ import { Effect } from "effect"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
 import type { PointSelection } from "./HistoryReport.ts"
-import { localTime, printJson, printResult } from "./Output.ts"
+import { printJsonWithLocalTimes } from "./JsonTimes.ts"
+import { localTime, printResult } from "./Output.ts"
 import { ago, askGateway, fetchGatewayStatus } from "./StatusReport.ts"
 
 /** Payloads are cut here on the terminal; `--json` has them as the gateway keeps them (2,000 characters). */
@@ -104,6 +107,29 @@ export const formatTotals = (totals: MessageTotals, buffer?: BufferContext) => {
   return `  total: ${totals.all} sent (${kinds}), ${totals.delivered} reached the broker${shortfallSuffix(totals, buffer)}`
 }
 
+/**
+ * What `messages --json` prints: `{ok, gateway, now, since, window?, droppedTopics, totals, messages}`, the gateway's
+ * answer (its topics already selected) with each point topic's `publish` mode and the totals of those topics.
+ */
+export const messagesJson = (
+  gateway: { readonly site: string; readonly building: string; readonly id: string },
+  status: Pick<GatewayStatus, "now" | "since">,
+  answer: Messages,
+  modes: PublishModes
+) => ({
+  ok: true,
+  gateway,
+  now: status.now,
+  since: status.since,
+  ...(answer.window === undefined ? {} : { window: answer.window }),
+  droppedTopics: answer.droppedTopics,
+  totals: messageTotals(answer.messages),
+  messages: answer.messages.map((message) => {
+    const mode = publishModeOf(message.topic, modes)
+    return mode === undefined ? message : { ...message, publish: mode }
+  })
+})
+
 export interface MessagesOptions {
   readonly json?: boolean
   /** `--since` as typed (`10m`) and in ms, at most `MESSAGE_WINDOW_MINUTES`: the counts of that window only. */
@@ -138,19 +164,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const totals = messageTotals(messages)
   const gateway = { site: status.site, building: status.building, id: status.id }
   if (options.json === true) {
-    return yield* printJson({
-      ok: true,
-      gateway,
-      now: status.now,
-      since: status.since,
-      ...(answer.window === undefined ? {} : { window: answer.window }),
-      droppedTopics: answer.droppedTopics,
-      totals,
-      messages: messages.map((message) => {
-        const mode = publishModeOf(message.topic, modes)
-        return mode === undefined ? message : { ...message, publish: mode }
-      })
-    })
+    return yield* printJsonWithLocalTimes(messagesJson(gateway, status, { ...answer, messages }, modes))
   }
   const started = `since it started at ${localTime(status.since, status.now)} (${ago(status.now - status.since)} ago)`
   // The window as the gateway counted it: whole minutes, and never before its start.

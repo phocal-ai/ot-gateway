@@ -24,7 +24,8 @@ import {
 } from "@ot-gateway/api"
 import { Effect, Result, Schema } from "effect"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
-import { localTime, printJson, printResult } from "./Output.ts"
+import { printJsonWithLocalTimes } from "./JsonTimes.ts"
+import { localTime, printResult } from "./Output.ts"
 import { askGateway, fetchGatewayEvents, fetchGatewayStatus } from "./StatusReport.ts"
 import { closestMatch } from "./Suggest.ts"
 import { withoutControls } from "./Discover.ts"
@@ -395,6 +396,24 @@ export const seriesJson = (point: PointInfo, series: HistorySeries, context: Ser
   gaps: explainGaps(series, context)
 })
 
+/** What `history --json` prints: `{ok, gateway, now, since, series}`, `since` as typed (`10m`), each series as `seriesJson`. */
+export const historyJson = (
+  gateway: { readonly site: string; readonly building: string; readonly id: string },
+  now: number,
+  since: string,
+  answers: ReadonlyArray<{
+    readonly point: PointInfo
+    readonly series: HistorySeries
+    readonly context: SeriesContext
+  }>
+) => ({
+  ok: true,
+  gateway,
+  now,
+  since,
+  series: answers.map(({ point, series, context }) => seriesJson(point, series, context))
+})
+
 /** How the gateway's answer that it keeps no history reads on the command line. */
 export const historyOff = (reason: string) =>
   `the gateway keeps no history (${reason}). Add "history": {"path": "history.sqlite"} to its config and restart it; from then on it keeps every read for a day and per-minute values for 7 days`
@@ -488,13 +507,7 @@ export const historyReport = Effect.fn("historyReport")(function* (
   )
   const gateway = { site: status.site, building: status.building, id: status.id }
   if (options.json === true) {
-    return yield* printJson({
-      ok: true,
-      gateway,
-      now: status.now,
-      since: options.since,
-      series: answers.map(({ point, series, context }) => seriesJson(point, series, context))
-    })
+    return yield* printJsonWithLocalTimes(historyJson(gateway, status.now, options.since, answers))
   }
   yield* printResult(
     [
