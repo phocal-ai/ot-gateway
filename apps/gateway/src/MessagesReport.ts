@@ -9,7 +9,9 @@
  * retained ones not sent while the broker was away, lost ones (`shortfallWords`, as the Messages tab says it).
  */
 import {
+  type GatewayStatus,
   MESSAGE_WINDOW_MINUTES,
+  type Messages,
   messageShortfall,
   type MessageStatus,
   type MessageTotals,
@@ -19,9 +21,11 @@ import {
 import { Effect } from "effect"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
+import { EVENTS_RELEASE } from "./GatewayRelease.ts"
 import type { PointSelection } from "./HistoryReport.ts"
-import { localTime, printJson, printResult } from "./Output.ts"
-import { ago, askGateway, fetchGatewayStatus } from "./StatusReport.ts"
+import { printJsonWithLocalTimes } from "./JsonTimes.ts"
+import { localTime, printResult } from "./Output.ts"
+import { ago, askGateway, fetchGatewayStatus, requireEvents } from "./StatusReport.ts"
 
 /** Payloads are cut here on the terminal; `--json` has them as the gateway keeps them (2,000 characters). */
 const MAX_PAYLOAD = 80
@@ -64,6 +68,13 @@ const shortfallSuffix = (
   return words.length === 0 ? "" : ` (${words.join("; ")})`
 }
 
+/** `", 2 reached the broker"`, or nothing from a gateway before v0.13, which does not count it. */
+const reachedText = (delivered: number | undefined) =>
+  delivered === undefined ? "" : `, ${delivered} reached the broker`
+
+/** Under the totals of a gateway before v0.13: why they do not say what reached the broker. */
+export const NOT_COUNTED_LINE = `  (this gateway does not count what reached the broker: upgrade it to v${EVENTS_RELEASE.join(".")} or later for that)`
+
 /**
  * One line per topic, aligned: the topic below the site and building, the counts, when the last went, its payload;
  * for a point's `$meta`, its publish mode instead of the payload.
@@ -84,7 +95,7 @@ export const formatMessages = (
       mode !== undefined ? `publish: ${mode}` : flat.length > MAX_PAYLOAD ? `${flat.slice(0, MAX_PAYLOAD)}…` : flat
     return [
       `  ${withoutControls(message.topic.slice(prefix.length)).padEnd(width)}`,
-      `${String(message.count).padStart(countWidth)} sent, ${message.delivered} reached the broker${shortfallSuffix(messageShortfall(message), buffer)},`,
+      `${String(message.count).padStart(countWidth)} sent${reachedText(message.delivered)}${shortfallSuffix(messageShortfall(message), buffer)},`,
       `last ${localTime(message.at, now)}${message.retained ? " retained" : ""}  ${payload}`
     ].join("  ")
   })
@@ -101,8 +112,31 @@ export const formatTotals = (totals: MessageTotals, buffer?: BufferContext) => {
     `${totals.health} health`,
     ...(totals.other > 0 ? [`${totals.other} other`] : [])
   ].join(", ")
-  return `  total: ${totals.all} sent (${kinds}), ${totals.delivered} reached the broker${shortfallSuffix(totals, buffer)}`
+  return `  total: ${totals.all} sent (${kinds})${reachedText(totals.delivered)}${shortfallSuffix(totals, buffer)}`
 }
+
+/**
+ * What `messages --json` prints: `{ok, gateway, now, since, window?, droppedTopics, totals, messages}`, the gateway's
+ * answer (its topics already selected) with each point topic's `publish` mode and the totals of those topics.
+ */
+export const messagesJson = (
+  gateway: { readonly site: string; readonly building: string; readonly id: string },
+  status: Pick<GatewayStatus, "now" | "since">,
+  answer: Messages,
+  modes: PublishModes
+) => ({
+  ok: true,
+  gateway,
+  now: status.now,
+  since: status.since,
+  ...(answer.window === undefined ? {} : { window: answer.window }),
+  droppedTopics: answer.droppedTopics,
+  totals: messageTotals(answer.messages),
+  messages: answer.messages.map((message) => {
+    const mode = publishModeOf(message.topic, modes)
+    return mode === undefined ? message : { ...message, publish: mode }
+  })
+})
 
 export interface MessagesOptions {
   readonly json?: boolean
@@ -126,6 +160,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const status = yield* fetchGatewayStatus(target.url, "none")
   yield* checkIdentity(target, status)
   const sinceMs = options.sinceMs
+  if (sinceMs !== undefined) yield* requireEvents(target, status, "messages --since")
   const answer = yield* askGateway(target.url, (client) =>
     sinceMs === undefined
       ? client.status.messages()
@@ -138,19 +173,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const totals = messageTotals(messages)
   const gateway = { site: status.site, building: status.building, id: status.id }
   if (options.json === true) {
-    return yield* printJson({
-      ok: true,
-      gateway,
-      now: status.now,
-      since: status.since,
-      ...(answer.window === undefined ? {} : { window: answer.window }),
-      droppedTopics: answer.droppedTopics,
-      totals,
-      messages: messages.map((message) => {
-        const mode = publishModeOf(message.topic, modes)
-        return mode === undefined ? message : { ...message, publish: mode }
-      })
-    })
+    return yield* printJsonWithLocalTimes(messagesJson(gateway, status, { ...answer, messages }, modes))
   }
   const started = `since it started at ${localTime(status.since, status.now)} (${ago(status.now - status.since)} ago)`
   // The window as the gateway counted it: whole minutes, and never before its start.
@@ -175,7 +198,11 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
                 ? "  nothing published yet"
                 : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
-        : [...formatMessages(messages, prefix, status.now, modes, status.buffer), formatTotals(totals, status.buffer)]),
+        : [
+            ...formatMessages(messages, prefix, status.now, modes, status.buffer),
+            formatTotals(totals, status.buffer),
+            ...(totals.delivered === undefined ? [NOT_COUNTED_LINE] : [])
+          ]),
       ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
         ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]

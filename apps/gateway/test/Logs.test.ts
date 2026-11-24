@@ -274,11 +274,16 @@ describe("against a running status page", () => {
           lines: [{ id: 2, level: "WARN", message: "energy-meter failing", annotations: { device: "energy-meter" } }]
         })
         expect(JSON.stringify(json)).not.toContain("hunter2")
+        expect(json).toHaveProperty("timeZone")
+        expect(json).toHaveProperty(
+          ["lines", 0, "atLocal"],
+          expect.stringMatching(/^\d{4}-\d\d-\d\dT[\d:.]+(Z|[+-]\d\d:\d\d)$/)
+        )
 
         yield* logsReport(target, { since: "1h", sinceMs: 3_600_000, level: "error" })
         expect((yield* TestConsole.logLines).map(String).at(-1)).toBe("  no errors in the last 1h")
         yield* Fiber.interrupt(server)
-      }).pipe(Effect.provide(TestConsole.layer)),
+      }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer])),
     20_000
   )
 
@@ -335,7 +340,7 @@ describe("against a running status page", () => {
         expect(error._tag).toBe("LogsUnsupported")
         expect(error.message).toContain("this gateway is older than the logs command: plant-1/hall-a gateway main")
         expect(error.message).toContain("docker compose logs gateway")
-      }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+      }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
     )
   }
 })

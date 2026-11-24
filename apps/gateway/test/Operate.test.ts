@@ -21,7 +21,7 @@ import {
   seriesJson
 } from "../src/HistoryReport.ts"
 import { messagesReport } from "../src/MessagesReport.ts"
-import { localTime } from "../src/Output.ts"
+import { localIsoTime, localTime } from "../src/Output.ts"
 import { historyHandler, makeStatusState, serveStatus } from "../src/Status.ts"
 import {
   eventsReport,
@@ -252,7 +252,7 @@ describe("events --follow", () => {
     }).pipe(Effect.provide(TestConsole.layer))
   )
 
-  it.effect("prints one JSON event per line with --json", () =>
+  it.effect("prints one JSON event per line with --json, its time also local", () =>
     Effect.gen(function* () {
       const event = { id: 2, at: now, type: "buffer-drained" as const, delivered: 66 }
       const follow = yield* followEvents((after) => Effect.succeed(log(after < 2 ? [event] : [])), 1, {
@@ -260,7 +260,9 @@ describe("events --follow", () => {
       }).pipe(Effect.forkChild)
       yield* TestClock.adjust("4 seconds")
       yield* Fiber.interrupt(follow)
-      expect((yield* TestConsole.logLines).map((line): unknown => JSON.parse(String(line)))).toEqual([event])
+      expect((yield* TestConsole.logLines).map((line): unknown => JSON.parse(String(line)))).toEqual([
+        { ...event, atLocal: localIsoTime(now) }
+      ])
     }).pipe(Effect.provide(TestConsole.layer))
   )
 })
@@ -794,6 +796,14 @@ describe("against a running status page", () => {
           `plant-1/hall-a gateway main at http://127.0.0.1:${port}`
         )
 
+        yield* eventsReport(target, { since: "1h", sinceMs: 3_600_000, json: true })
+        expect(JSON.parse(String((yield* TestConsole.logLines).at(-1)))).toMatchObject({
+          ok: true,
+          timeZone: expect.any(String),
+          gatewayStartedLocal: expect.any(String),
+          events: [{ type: "gateway-started", atLocal: expect.any(String) }]
+        })
+
         const other = yield* targetOf("other.json", { ...config, id: "second" }, undefined)
         expect((yield* Effect.flip(eventsReport(other, { since: "1h", sinceMs: 3_600_000 })))._tag).toBe(
           "GatewayMismatch"
@@ -860,12 +870,16 @@ describe("against a running status page", () => {
         const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
         expect(json).toMatchObject({
           ok: true,
+          // The CLI's own: the machine's zone, and each time also as a local ISO string.
+          timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          nowLocal: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/),
           since: expect.any(Number),
+          sinceLocal: expect.any(String),
           totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2, waiting: 2, notSent: 1, lost: 0 },
           messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
         })
         yield* Fiber.interrupt(server)
-      }).pipe(Effect.provide(TestConsole.layer)),
+      }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer])),
     // A real server and several HTTP round trips: a slow CI runner took over 5 s once.
     20_000
   )

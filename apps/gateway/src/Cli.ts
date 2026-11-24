@@ -1064,7 +1064,8 @@ export const rootDescription = [
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
   "    messages [<device/point>] --json how many messages went out per topic since start (--since 10m: lately), and reached the broker",
   "    logs --level warn --since 1h     the gateway's recent warnings and errors in detail, without docker logs (--follow, --json)",
-  "  status, events, history, messages and logs ask the gateway of ./ot-gateway.json (or the config named, or --config) at its status port."
+  "  status, events, history, messages and logs ask the gateway of ./ot-gateway.json (or the config named, or --config) at its status port.",
+  "  Their --json gives each time as Unix ms and as <key>Local, this machine's local time with its UTC offset (timeZone names the zone)."
 ].join("\n")
 
 export const cli = Command.make("ot-gateway").pipe(

@@ -5,12 +5,19 @@
  * what comes, as `events --follow` does. A gateway from before the ring says so, instead of a decode error.
  */
 import { type LogLevelFilter, type LogLine, LogPage } from "@ot-gateway/api"
-import { Console, Effect, Option, Result, Schema } from "effect"
+import { Console, Effect, type FileSystem, Option, Result, Schema } from "effect"
 import type { HttpClientResponse } from "effect/http"
 import { withoutControls } from "./Discover.ts"
 import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.ts"
-import { localTime, printJson, printResult } from "./Output.ts"
-import { askGateway, fetchGatewayStatus, FOLLOW_INTERVAL, type GatewayUnreachable } from "./StatusReport.ts"
+import { jsonLineWithLocalTimes, printJsonWithLocalTimes } from "./JsonTimes.ts"
+import { localTime, printResult } from "./Output.ts"
+import {
+  askGateway,
+  fetchGatewayStatus,
+  FOLLOW_INTERVAL,
+  type GatewayAnswerUnreadable,
+  type GatewayUnreachable
+} from "./StatusReport.ts"
 
 /** The gateway answered, but it is older than the logs command: it serves no `/api/logs`. */
 export class LogsUnsupported extends Schema.TaggedError<LogsUnsupported>()("LogsUnsupported", {
@@ -38,7 +45,7 @@ const decodeLogPage = Schema.decodeUnknownEffect(LogPage)
 export const fetchGatewayLogs = (
   url: string,
   query: { readonly level?: LogLevelFilter; readonly since?: number; readonly after?: number } = {}
-): Effect.Effect<Option.Option<LogPage>, GatewayUnreachable> =>
+): Effect.Effect<Option.Option<LogPage>, GatewayUnreachable | GatewayAnswerUnreadable, FileSystem.FileSystem> =>
   askGateway(url, (client) =>
     Effect.gen(function* () {
       const response = yield* client.logs.logs({ query, responseMode: "response-only" })
@@ -125,7 +132,7 @@ export const logsReport = Effect.fn("logsReport")(function* (target: GatewayTarg
   }
   const page = answer.value
   if (options.json === true && options.follow !== true) {
-    return yield* printJson({
+    return yield* printJsonWithLocalTimes({
       ok: true,
       gateway,
       now: page.now,
@@ -137,7 +144,7 @@ export const logsReport = Effect.fn("logsReport")(function* (target: GatewayTarg
     })
   }
   if (options.json === true) {
-    for (const line of page.lines) yield* printResult(JSON.stringify(line))
+    for (const line of page.lines) yield* printResult(jsonLineWithLocalTimes(line))
   } else {
     const window =
       options.follow === true
@@ -162,12 +169,13 @@ export const logsReport = Effect.fn("logsReport")(function* (target: GatewayTarg
 
 /**
  * Asks `fetchAfter` for the lines after `lastId` every `FOLLOW_INTERVAL` and prints each new one, until interrupted.
- * A gateway that stops answering, or one that answers without logs (replaced by an older version), is said once on
+ * A gateway that stops answering, or one that answers without logs or in a form this CLI cannot read (replaced by
+ * another version), is said once on
  * stderr, and once more when it is back; one that restarted counts its ids from 1 again, which the gateway answers
  * with everything it keeps, and that is said too.
  */
-export const followLogs = Effect.fn("followLogs")(function* (
-  fetchAfter: (after: number) => Effect.Effect<Option.Option<LogPage>, GatewayUnreachable>,
+export const followLogs = Effect.fn("followLogs")(function* <R>(
+  fetchAfter: (after: number) => Effect.Effect<Option.Option<LogPage>, GatewayUnreachable | GatewayAnswerUnreadable, R>,
   lastId: number,
   options: { readonly json: boolean }
 ) {
@@ -182,7 +190,10 @@ export const followLogs = Effect.fn("followLogs")(function* (
           onSome: (page) => Result.succeed(page)
         })
       ),
-      Effect.catchTag("GatewayUnreachable", (error) => Effect.succeed(Result.fail(error.message)))
+      Effect.catchTags({
+        GatewayUnreachable: (error) => Effect.succeed(Result.fail(error.message)),
+        GatewayAnswerUnreadable: (error) => Effect.succeed(Result.fail(error.message))
+      })
     )
     if (Result.isFailure(asked)) {
       if (!away) yield* Console.error(`lost the gateway, asking again: ${asked.failure}`)
@@ -195,7 +206,7 @@ export const followLogs = Effect.fn("followLogs")(function* (
     const first = answer.lines[0]
     if (first !== undefined && first.id <= last) yield* Console.error("the gateway restarted: its log starts over")
     for (const line of answer.lines) {
-      yield* printResult(options.json ? JSON.stringify(line) : formatLogLine(line, answer.now))
+      yield* printResult(options.json ? jsonLineWithLocalTimes(line) : formatLogLine(line, answer.now))
     }
     last = answer.lines.at(-1)?.id ?? last
   }
