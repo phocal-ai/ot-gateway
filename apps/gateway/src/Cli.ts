@@ -18,7 +18,8 @@
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
  * that is the path of a JSON file, which is a config meant for `--config` (with `--retain` it would otherwise stay
- * on the broker). `messages` takes `--config` too, as it did first.
+ * on the broker). `status`, `events`, `history` and `messages` take `--config` too, the same as the positional; without
+ * either and without `./ot-gateway.json`, they say on stderr which address they ask instead.
  *
  * The forms from before the subcommands keep working, because the systemd unit, the image and scripts use
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
@@ -40,7 +41,7 @@ import {
   pointsListTemplate
 } from "./PointsSchema.ts"
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
-import { DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
+import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { watch } from "./Watch.ts"
@@ -770,6 +771,19 @@ const targetConfig = Argument.String("config").pipe(
   Argument.map(Option.getOrUndefined)
 )
 
+/** `--config`, the same as naming the config as the argument: status, events, history and messages take both. */
+const targetConfigFlag = Flag.String("config").pipe(
+  Flag.withDescription(
+    `Path of the gateway's JSON config, the same as naming it as the argument (default ${defaultConfigPath} when it is in this folder)`
+  ),
+  Flag.optional,
+  Flag.map(Option.getOrUndefined)
+)
+
+/** The gateway status, events and history ask: the config named either way, or `--url`, or the defaults. */
+const targetFrom = (positional: string | undefined, flag: string | undefined, url: string | undefined) =>
+  chooseConfig(positional, flag).pipe(Effect.flatMap((config) => resolveTarget({ config, url })))
+
 const secondsFlag = (description: string) =>
   Flag.Int("seconds").pipe(
     Flag.withDescription(description),
@@ -787,6 +801,7 @@ const status = Command.make(
   "status",
   {
     config: targetConfig,
+    configFlag: targetConfigFlag,
     url: urlFlag,
     json: jsonFlag,
     failOnAlarm: Flag.Boolean("fail-on-alarm").pipe(
@@ -794,10 +809,10 @@ const status = Command.make(
       Flag.withDefault(false)
     )
   },
-  ({ config, url, json, failOnAlarm }) =>
-    resolveTarget({ config, url }).pipe(
+  ({ config, configFlag, url, json, failOnAlarm }) =>
+    targetFrom(config, configFlag, url).pipe(
       Effect.flatMap((target) => fetchStatusFor(target, { json })),
-      jsonFailure(json, { url: url ?? null, path: config ?? null }),
+      jsonFailure(json, { url: url ?? null, path: config ?? configFlag ?? null }),
       Effect.flatMap(({ status: report, recent }) => statusOutcome(json, { failOnAlarm })(report, recent))
     )
 ).pipe(
@@ -834,6 +849,7 @@ const eventsCommand = Command.make(
   "events",
   {
     config: targetConfig,
+    configFlag: targetConfigFlag,
     url: urlFlag,
     since: sinceFlag("1h", true),
     follow: Flag.Boolean("follow").pipe(
@@ -844,8 +860,8 @@ const eventsCommand = Command.make(
     seconds: secondsFlag("With --follow, stop after this many seconds instead of at Ctrl-C, for scripts and agents"),
     json: jsonFlag
   },
-  ({ config, url, since, follow, seconds, json }) =>
-    resolveTarget({ config, url }).pipe(
+  ({ config, configFlag, url, since, follow, seconds, json }) =>
+    targetFrom(config, configFlag, url).pipe(
       Effect.flatMap((target) =>
         eventsReport(target, {
           since,
@@ -855,7 +871,7 @@ const eventsCommand = Command.make(
           seconds
         })
       ),
-      jsonFailure(json, { url: url ?? null, path: config ?? null })
+      jsonFailure(json, { url: url ?? null, path: config ?? configFlag ?? null })
     )
 ).pipe(
   Command.withDescription(
@@ -882,6 +898,7 @@ const historyCommand = Command.make(
       )
     ),
     config: targetConfig,
+    configFlag: targetConfigFlag,
     url: urlFlag,
     since: sinceFlag("10m", false),
     buckets: Flag.Int("buckets").pipe(
@@ -895,8 +912,8 @@ const historyCommand = Command.make(
     ),
     json: jsonFlag
   },
-  ({ points: selection, config, url, since, buckets, json }) =>
-    resolveTarget({ config, url }).pipe(
+  ({ points: selection, config, configFlag, url, since, buckets, json }) =>
+    targetFrom(config, configFlag, url).pipe(
       Effect.flatMap((target) =>
         historyReport(target, parseSelection(selection) ?? [], {
           since,
@@ -905,7 +922,7 @@ const historyCommand = Command.make(
           json
         })
       ),
-      jsonFailure(json, { url: url ?? null, path: config ?? null })
+      jsonFailure(json, { url: url ?? null, path: config ?? configFlag ?? null })
     )
 ).pipe(
   Command.withDescription(
@@ -929,13 +946,7 @@ const messagesCommand = Command.make(
       Argument.map(Option.getOrUndefined)
     ),
     positionalConfig: targetConfig,
-    config: Flag.String("config").pipe(
-      Flag.withDescription(
-        `Path of the gateway's JSON config, the same as naming it after the points (default ${defaultConfigPath} when it is in this folder)`
-      ),
-      Flag.optional,
-      Flag.map(Option.getOrUndefined)
-    ),
+    config: targetConfigFlag,
     url: urlFlag,
     since: Flag.String("since").pipe(
       Flag.withDescription(
@@ -995,7 +1006,7 @@ export const rootDescription = [
   "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
   "    messages [<device/point>] --json how many messages went out per topic since start (--since 10m: lately), and reached the broker",
-  "  status, events, history and messages ask the gateway of ./ot-gateway.json (or the config named) at its status port."
+  "  status, events, history and messages ask the gateway of ./ot-gateway.json (or the config named, or --config) at its status port."
 ].join("\n")
 
 export const cli = Command.make("ot-gateway").pipe(
