@@ -255,7 +255,7 @@ const MessagesPage = () => {
           )}
         </CardContent>
       </Card>
-      {found.length === 0 ? null : <p className="text-sm text-muted-foreground">{totalsNote(found)}</p>}
+      {found.length === 0 ? null : <p className="text-sm text-muted-foreground">{totalsNote(found, status?.buffer)}</p>}
       <p className="text-sm text-muted-foreground">{countsNote(list, status?.since)}</p>
       {list.droppedTopics > 0 ? (
         <p className="text-sm text-muted-foreground">

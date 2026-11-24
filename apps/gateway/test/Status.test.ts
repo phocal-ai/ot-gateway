@@ -367,6 +367,11 @@ describe("status", () => {
         // A topic it keeps nothing for (another site's) is not counted, and nothing is added for it.
         state.recordDelivered("other/site/meter/power")
         state.recordPublish("s/b/$gateway/main/health", '{"status":"online"}', { retained: true, at: 13 })
+        // The broker is away for the health message (retained: not buffered) and refused a value: not sent, lost.
+        state.recordUnsent("s/b/$gateway/main/health", "notSent")
+        state.recordPublish("s/b/meter/power", '{"value":3,"ts":13}', { retained: false, at: 13 })
+        state.recordUnsent("s/b/meter/power", "lost")
+        state.recordUnsent("other/site/meter/power", "lost")
         state.recordPublish("other/site/meter/power", '{"value":99,"ts":1}', { retained: false, at: 14 })
         expect(yield* state.messages).toEqual({
           messages: [
@@ -377,16 +382,20 @@ describe("status", () => {
               retained: true,
               at: 13,
               count: 1,
-              delivered: 0
+              delivered: 0,
+              notSent: 1,
+              lost: 0
             },
             {
               topic: "s/b/meter/power",
-              payload: '{"value":2,"ts":12}',
+              payload: '{"value":3,"ts":13}',
               truncated: false,
               retained: false,
-              at: 12,
-              count: 2,
-              delivered: 1
+              at: 13,
+              count: 3,
+              delivered: 1,
+              notSent: 0,
+              lost: 1
             },
             {
               topic: "s/b/meter/power/$meta",
@@ -395,7 +404,9 @@ describe("status", () => {
               retained: true,
               at: 10,
               count: 1,
-              delivered: 1
+              delivered: 1,
+              notSent: 0,
+              lost: 0
             }
           ],
           droppedTopics: 0
@@ -446,12 +457,20 @@ describe("status", () => {
         monotonic = minute * 60_000 + 30_000
         state.recordPublish("s/b/meter/power", `{"value":${minute},"ts":0}`, { retained: false, at: monotonic })
         if (minute < 9) state.recordDelivered("s/b/meter/power")
+        else state.recordUnsent("s/b/meter/power", "lost")
       }
       yield* TestClock.setTime(monotonic)
       // The last 4 minutes and a half: the minute it starts in counts whole, so five values.
       const window = yield* state.messagesWindow(monotonic - 270_000)
       expect(window.messages).toEqual([
-        expect.objectContaining({ topic: "s/b/meter/power", count: 5, delivered: 4, payload: '{"value":9,"ts":0}' })
+        expect.objectContaining({
+          topic: "s/b/meter/power",
+          count: 5,
+          delivered: 4,
+          notSent: 0,
+          lost: 1,
+          payload: '{"value":9,"ts":0}'
+        })
       ])
       expect(window.window).toEqual({ from: 5 * 60_000, to: monotonic })
       // Since the start: everything, with the window cut to the hour it keeps.
@@ -528,7 +547,7 @@ describe("status", () => {
       ring.started("v1", 1)
       ring.brokerDisconnected("connection closed by the peer")
       ring.brokerConnected(12)
-      ring.bufferDrained(14)
+      ring.bufferDrained({ delivered: 14, buffered: 12, queued: 2 })
       const server = yield* serveStatus({ bindAddress: "127.0.0.1", port, webRoot: "/nonexistent" }, state).pipe(
         Effect.provide([NodeServices.layer, Layer.succeed(GatewayEvents, ring)]),
         Effect.forkChild
@@ -546,7 +565,7 @@ describe("status", () => {
       expect(log.events[1]).toMatchObject({ id: 3, buffered: 12 })
       const newer = yield* client.status.events({ query: { after: 3 } })
       expect(newer.events.map((event) => event.id)).toEqual([4])
-      expect(newer.events[0]).toMatchObject({ type: "buffer-drained", delivered: 14 })
+      expect(newer.events[0]).toMatchObject({ type: "buffer-drained", delivered: 14, buffered: 12, queued: 2 })
       const future = yield* client.status.events({ query: { since: Date.now() + 60_000 } })
       expect(future.events).toEqual([])
       const status = yield* client.status.status({ query: {} })
@@ -703,20 +722,31 @@ describe("the running gateway's delivery counts", () => {
       const server = yield* network.listen("10.0.0.2", 1883)
       yield* serveMqtt(server, control).pipe(Effect.forkScoped)
       const client = yield* HttpApiClient.make(OtGatewayApi, { baseUrl: `http://127.0.0.1:${port}` })
-      let drained: number | undefined
+      let drained: { delivered?: number; buffered?: number; queued?: number } | undefined
+      let connected: { buffered?: number } | undefined
       for (let attempt = 0; attempt < 120 && drained === undefined; attempt++) {
         yield* step(1)
         const log = yield* client.status.events({ query: {} })
         const event = log.events.find((each) => each.type === "buffer-drained")
-        if (event?.type === "buffer-drained") drained = event.delivered
+        if (event?.type === "buffer-drained") drained = event
+        const reconnect = log.events.find((each) => each.type === "broker-connected")
+        if (reconnect?.type === "broker-connected") connected = reconnect
       }
       const { messages } = yield* client.status.messages()
       const power = messages.find((message) => message.topic === "s/b/meter/power")
+      const meta = messages.find((message) => message.topic === "s/b/meter/power/$meta")
       // Every value the broker took came from the buffer or went straight, and the drained event counted the former.
       const valuesAtBroker = control.messages.filter((message) => message.topic === "s/b/meter/power").length
-      expect(drained).toBeGreaterThan(0)
+      expect(drained?.delivered).toBeGreaterThan(0)
       expect(power?.delivered).toBe(valuesAtBroker)
       expect(power?.count).toBeGreaterThanOrEqual(valuesAtBroker)
+      // The drained count adds up: the rows waiting at the reconnect, as that event said, and the ones queued behind.
+      expect(drained?.buffered).toBe(connected?.buffered)
+      expect((drained?.buffered ?? 0) + (drained?.queued ?? 0)).toBe(drained?.delivered)
+      // The buffer kept every value; the $meta missed while the broker was away is retained, not buffered, no loss.
+      expect(power).toMatchObject({ notSent: 0, lost: 0 })
+      expect(meta?.notSent).toBeGreaterThan(0)
+      expect(meta?.lost).toBe(0)
     }).pipe(Effect.scoped, Effect.provide([NodeServices.layer, FetchHttpClient.layer]))
   )
 })

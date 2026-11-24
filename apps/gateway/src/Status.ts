@@ -142,6 +142,11 @@ export interface StatusState {
    */
   readonly recordDelivered: (topic: string) => void
   /**
+   * Note that a message on `topic` was not sent and nothing kept it: `"notSent"` for a retained one while the broker
+   * was away (the latest goes out again on reconnect), `"lost"` for any other. The messages view's `notSent`, `lost`.
+   */
+  readonly recordUnsent: (topic: string, outcome: "notSent" | "lost") => void
+  /**
    * Every read, as the pipeline hands it to the history: the page shows a point's last read, which is never
    * older than what was published and is there before the first message of an aggregate or a change.
    */
@@ -191,7 +196,10 @@ export const makeStatusState = (
   const payloads = new Map<string, string>()
   // The last read per device/point: one entry per configured point, so bounded by the config.
   const reads = new Map<string, { readonly value: number | boolean; readonly ts: number }>()
-  const latest = new Map<string, { payload: string; retained: boolean; at: number; count: number; delivered: number }>()
+  const latest = new Map<
+    string,
+    { payload: string; retained: boolean; at: number; count: number; delivered: number; notSent: number; lost: number }
+  >()
   const droppedTopics = new Set<string>()
   /** Per kept topic, the messages of each of the last 60 minutes (MessageWindow.ts). */
   const perMinute = makeMessageMinutes(MESSAGE_WINDOW_MINUTES)
@@ -224,7 +232,15 @@ export const makeStatusState = (
         previous.count++
         perMinute.published(topic, monotonicMs())
       } else if (latest.size < MAX_TOPICS) {
-        latest.set(topic, { payload, retained: message.retained, at: message.at, count: 1, delivered: 0 })
+        latest.set(topic, {
+          payload,
+          retained: message.retained,
+          at: message.at,
+          count: 1,
+          delivered: 0,
+          notSent: 0,
+          lost: 0
+        })
         perMinute.published(topic, monotonicMs())
       } else if (droppedTopics.size < MAX_TOPICS) droppedTopics.add(topic)
       const rest = topic.slice(prefix.length)
@@ -237,6 +253,12 @@ export const makeStatusState = (
       if (entry === undefined) return
       entry.delivered++
       perMinute.delivered(topic, monotonicMs())
+    },
+    recordUnsent: (topic, outcome) => {
+      const entry = latest.get(topic)
+      if (entry === undefined) return
+      entry[outcome]++
+      perMinute[outcome](topic, monotonicMs())
     },
     reads: {
       record: (device, point, value, ts) => {
@@ -268,7 +290,7 @@ export const makeStatusState = (
         const rows = (yield* Metric.value(Metric.withAttributes(bufferRows, attributes))).value
         const disabled = (yield* Metric.value(Metric.withAttributes(bufferDisabled, attributes))).value === 1
         // Counters summed over their other attributes (device, outcome, reason, ...): one pass over the registry.
-        const total = totals(yield* Metric.snapshot, attributes)
+        const total = counterTotals(yield* Metric.snapshot, attributes)
         const droppedBy = Object.fromEntries(
           bufferDropReasons.map((reason) => [reason, total(bufferDropped.id, { reason })])
         )
@@ -389,7 +411,9 @@ export const makeStatusState = (
           retained: message.retained,
           at: message.at,
           count: message.count,
-          delivered: message.delivered
+          delivered: message.delivered,
+          notSent: message.notSent,
+          lost: message.lost
         })),
       droppedTopics: droppedTopics.size
     })),
@@ -414,7 +438,9 @@ export const makeStatusState = (
                       retained: message.retained,
                       at: message.at,
                       count: counted.published,
-                      delivered: counted.delivered
+                      delivered: counted.delivered,
+                      notSent: counted.notSent,
+                      lost: counted.lost
                     }
                   ]
             }),
@@ -437,6 +463,7 @@ export const switchableStatus = (initial: StatusState) => {
   const state: StatusState = {
     recordPublish: (topic, payload, message) => current.recordPublish(topic, payload, message),
     recordDelivered: (topic) => current.recordDelivered(topic),
+    recordUnsent: (topic, outcome) => current.recordUnsent(topic, outcome),
     reads: { record: (device, point, value, ts) => current.reads.record(device, point, value, ts) },
     recordBrokerConnection: (at, connection) => current.recordBrokerConnection(at, connection),
     recordBrokerFailure: (at, error) => current.recordBrokerFailure(at, error),
@@ -460,7 +487,7 @@ export const switchableStatus = (initial: StatusState) => {
  * A sum over a registry snapshot: every counter series with this id whose attributes include `scope` (this
  * gateway's site and building) and `match`, whatever else they carry (a device, an outcome).
  */
-const totals =
+export const counterTotals =
   (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, scope: Readonly<Record<string, string>>) =>
   (id: string, match: Readonly<Record<string, string>> = {}) => {
     const wanted = Object.entries({ ...scope, ...match })

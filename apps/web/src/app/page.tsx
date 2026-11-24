@@ -383,7 +383,8 @@ const BrokerDetails = ({ status }: { readonly status: GatewayStatus }) => {
           ["Broker", <span className="font-mono">{broker.url}</span>],
           !broker.connected &&
             broker.connectedAt !== undefined && ["Last connected", clockTime(broker.connectedAt, status.now)],
-          ["Values published", formatNumber(broker.published)],
+          // Sent on, not "reached the broker": during an outage into the buffer. The Messages tab counts arrivals.
+          ["Values sent (to broker or buffer)", formatNumber(broker.published)],
           [
             "Could not publish",
             <span className={broker.publishFailures > 0 ? "text-destructive" : ""}>

@@ -813,6 +813,8 @@ describe("against a running status page", () => {
         state.recordDelivered(power)
         state.recordDelivered(power)
         state.recordPublish(`${power}/$meta`, `{"name":"Active power"}`, { retained: true, at: Date.now() })
+        // The broker was away for it: retained, so not buffered, and no loss.
+        state.recordUnsent(`${power}/$meta`, "notSent")
         state.recordPublish("plant-1/hall-a/energy-meter/voltage", `{"value":230,"ts":1}`, {
           retained: false,
           at: Date.now()
@@ -821,14 +823,16 @@ describe("against a running status page", () => {
         const report = String((yield* TestConsole.logLines).at(-1)).split("\n")
         expect(report[0]).toMatch(/^plant-1\/hall-a gateway main at .*: messages per topic since it started at /)
         expect(report[1]).toMatch(
-          /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting or lost\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
+          /^ {2}energy-meter\/active-power {8}3 sent, 2 reached the broker \(1 waiting for the broker\), {2}last \S+ {2}\{"value":2,"ts":1\}$/
         )
-        expect(report[2]).toMatch(/^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 waiting/)
+        expect(report[2]).toMatch(
+          /^ {2}energy-meter\/active-power\/\$meta {2}1 sent, 0 reached the broker \(1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect\),/
+        )
         // Its publish mode, from the point catalog, instead of the JSON cut short; and why the counts run since start.
         expect(report[2]).toMatch(/retained {2}publish: every read$/)
         // The topics listed, added up.
         expect(report[3]).toBe(
-          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (2 waiting or lost)"
+          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (1 waiting for the broker; 1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect)"
         )
         expect(report.at(-1)).toBe("  (since the gateway started; --since 10m counts the last minutes, up to 60m back)")
         // The last minutes only, over the window endpoint: the same counts here, all sent within this minute.
@@ -840,20 +844,20 @@ describe("against a running status page", () => {
         expect(recent[0]).toMatch(/: messages per topic in the last 5m, since it started at /)
         expect(recent[1]).toMatch(/3 sent, 2 reached the broker/)
         expect(recent[3]).toBe(
-          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (2 waiting or lost)"
+          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (1 waiting for the broker; 1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect)"
         )
         expect(recent).toHaveLength(4)
         yield* messagesReport(target, [], { json: true, since: "5m", sinceMs: 300_000 })
         expect(JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")).toMatchObject({
           window: { from: expect.any(Number), to: expect.any(Number) },
-          totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2 }
+          totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2, waiting: 2, notSent: 1, lost: 0 }
         })
         yield* messagesReport(target, [], { json: true })
         const json: unknown = JSON.parse((yield* TestConsole.logLines).map(String).at(-1) ?? "")
         expect(json).toMatchObject({
           ok: true,
           since: expect.any(Number),
-          totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2 },
+          totals: { values: 4, meta: 1, health: 0, other: 0, all: 5, delivered: 2, waiting: 2, notSent: 1, lost: 0 },
           messages: [{ publish: "every read" }, { publish: "every read" }, { count: 1 }]
         })
         yield* Fiber.interrupt(server)

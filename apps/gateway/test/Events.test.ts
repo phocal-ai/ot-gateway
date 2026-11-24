@@ -14,14 +14,14 @@ describe("GatewayEvents", () => {
       yield* TestClock.setTime(1_000)
       events.started("v1.2.3", 2)
       events.brokerConnected(undefined)
-      events.bufferDrained(66)
+      events.bufferDrained({ delivered: 66, buffered: 60, queued: 6 })
       const log = yield* events.log()
       expect(log).toEqual({
         now: 1_000,
         events: [
           { id: 1, at: 1_000, type: "gateway-started", version: "v1.2.3", devices: 2 },
           { id: 2, at: 1_000, type: "broker-connected" },
-          { id: 3, at: 1_000, type: "buffer-drained", delivered: 66 }
+          { id: 3, at: 1_000, type: "buffer-drained", delivered: 66, buffered: 60, queued: 6 }
         ],
         capacity: 500,
         dropped: 0

@@ -48,8 +48,15 @@ export interface GatewayEventsShape {
   readonly brokerConnected: (buffered: number | undefined) => void
   /** The broker connection was lost or a dial failed. Only the first of an outage is an event. */
   readonly brokerDisconnected: (error: string) => void
-  /** The buffer delivered its backlog: `delivered` messages since the broker came back, when known. */
-  readonly bufferDrained: (delivered?: number) => void
+  /**
+   * The buffer delivered its backlog, when known: `delivered` messages since the broker came back, the `buffered`
+   * ones waiting then and the `queued` ones stored behind them.
+   */
+  readonly bufferDrained: (counts?: {
+    readonly delivered: number
+    readonly buffered: number
+    readonly queued: number
+  }) => void
   /** A config saved from the status page runs now; `summary` says what changed. */
   readonly configApplied: (summary: string) => void
   /** A config saved from the status page did not start, and the previous one runs again. */
@@ -141,7 +148,7 @@ export const makeGatewayEvents = (clock: Clock.Clock, capacity: number = EVENT_C
       brokerDownSince = monotonicMs()
       record({ type: "broker-disconnected", error })
     },
-    bufferDrained: (delivered) => record({ type: "buffer-drained", ...(delivered === undefined ? {} : { delivered }) }),
+    bufferDrained: (counts) => record({ type: "buffer-drained", ...counts }),
     configApplied: (summary) => record({ type: "config-applied", summary }),
     configApplyFailed: (error) => record({ type: "config-apply-failed", error }),
     gatewayConflict: (gateway, devices, sameId) => record({ type: "gateway-conflict", gateway, devices, sameId }),

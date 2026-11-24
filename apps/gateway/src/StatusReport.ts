@@ -16,6 +16,7 @@ import {
   COUNTER_RATE_FACTOR,
   counterShareText,
   type DeviceStatus,
+  drainedParts,
   type EventLog,
   flappingAlarmHint,
   type GatewayEvent,
@@ -619,10 +620,13 @@ const describeEvent = (event: AnyEvent, now: number) => {
           ? []
           : [`${event.buffered} message(s) waiting in the buffer at reconnect`])
       ].join(", ")
-    case "buffer-drained":
-      return event.delivered === undefined
-        ? "drained: every waiting message delivered"
-        : `drained: ${event.delivered} message(s) delivered from the buffer since it was last empty`
+    case "buffer-drained": {
+      if (event.delivered === undefined) return "drained: every waiting message delivered"
+      const parts = drainedParts(event)
+      return parts === undefined
+        ? `drained: ${event.delivered} message(s) delivered from the buffer`
+        : `drained: ${event.delivered} message(s) delivered from the buffer since the broker came back: the ${parts.buffered} waiting at reconnect and ${parts.queued} queued behind them${parts.dropped > 0 ? `, less ${parts.dropped} the buffer dropped` : ""}`
+    }
     case "config-applied":
       return `applied from the status page: ${withoutControls(event.summary)}`
     case "config-apply-failed":

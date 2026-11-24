@@ -5,6 +5,7 @@
 import {
   COUNTER_RATE_FACTOR,
   counterShareText,
+  drainedParts,
   type EventLog,
   type FailureContext,
   flappingAlarmHint,
@@ -130,10 +131,15 @@ export const eventSentence = (event: PageEvent, names?: PointNames, now: number 
         ? connected
         : `${connected}, ${values(event.buffered)} from the buffer on ${event.buffered === 1 ? "its" : "their"} way`
     }
-    case "buffer-drained":
-      return event.delivered === undefined || event.delivered === 0
-        ? "Buffer emptied: every value kept while the broker was away reached it"
-        : `Buffer emptied: ${values(event.delivered)} from it reached the broker`
+    case "buffer-drained": {
+      if (event.delivered === undefined || event.delivered === 0)
+        return "Buffer emptied: every value kept while the broker was away reached it"
+      // Adds up with the reconnect's "on their way": those, plus the values read while they went out.
+      const parts = drainedParts(event)
+      return parts === undefined
+        ? `Buffer emptied: ${values(event.delivered)} from it reached the broker`
+        : `Buffer emptied: ${values(event.delivered)} from it reached the broker, the ${formatNumber(parts.buffered)} waiting at the reconnect and ${formatNumber(parts.queued)} read meanwhile${parts.dropped > 0 ? `, less ${formatNumber(parts.dropped)} the buffer dropped` : ""}`
+    }
     case "config-applied":
       return `Settings saved and applied: ${event.summary}`
     case "config-apply-failed":

@@ -30,6 +30,7 @@ import {
   withMetricAttributes,
   bufferDrained,
   bufferRows,
+  bufferWritten,
   configApplies
 } from "@ot-gateway/core"
 import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@ot-gateway/modbus"
@@ -63,7 +64,14 @@ import { makeOtherGatewaysCheck, type OtherGatewaysCheck } from "./OtherGateways
 import { makeSetupTools } from "./SetupTools.ts"
 import { makeStaleMetaCleaner, type StaleMetaCleaner } from "./StaleMeta.ts"
 import { type HostMonitor, type HostSources, hostHealth, makeHostMonitor } from "./Host.ts"
-import { historyHandler, makeStatusState, serveStatus, type StatusState, switchableStatus } from "./Status.ts"
+import {
+  counterTotals,
+  historyHandler,
+  makeStatusState,
+  serveStatus,
+  type StatusState,
+  switchableStatus
+} from "./Status.ts"
 import { traceSampleRatio, tracesExported } from "./Telemetry.ts"
 
 export interface GatewayOptions {
@@ -281,14 +289,16 @@ const northbound = (
   const bufferedRows = Effect.map(Metric.value(Metric.withAttributes(bufferRows, attributes)), (gauge) =>
     Math.max(0, gauge.value)
   )
-  // Messages the buffer has delivered since start; the drained event says how many since it was last empty.
-  const bufferDelivered = Effect.map(
-    Metric.value(Metric.withAttributes(bufferDrained, attributes)),
-    (counter) => counter.count
-  )
-  // The counter outlives this layer (a config applied from the page builds a new one), so the baseline is taken
-  // at this layer's first connect, before its buffer can deliver anything.
-  let deliveredWhenLastEmpty: number | undefined
+  // Messages the buffer has delivered and taken in since start, summed over devices (a value is stored on its
+  // device's fiber): the drained event says how many since the reconnect.
+  const bufferCounts = Effect.map(Metric.snapshot, (snapshot) => {
+    const total = counterTotals(snapshot, attributes)
+    return { delivered: total(bufferDrained.id), written: total(bufferWritten.id) }
+  })
+  // The counters outlive this layer (a config applied from the page builds a new one), so a baseline is taken at
+  // every connect, before the buffer can deliver anything on it, and again once it drained: the drained event then
+  // adds up as the rows waiting at the reconnect plus the ones queued behind them (less any the buffer dropped).
+  let sinceReconnect: { readonly buffered: number; readonly delivered: number; readonly written: number } | undefined
   // Retain As Published, so a command published retained is seen as such even live, and refused.
   // No Local, so nothing the gateway publishes itself is ever taken for a command.
   const commandSubscriptions =
@@ -310,10 +320,12 @@ const northbound = (
       Effect.gen(function* () {
         const at = yield* Clock.currentTimeMillis
         status?.recordBrokerConnection(at, connection)
-        if (config.buffer !== undefined && deliveredWhenLastEmpty === undefined) {
-          deliveredWhenLastEmpty = yield* bufferDelivered
+        if (config.buffer === undefined) events.brokerConnected(undefined)
+        else {
+          const buffered = yield* bufferedRows
+          sinceReconnect = { buffered, ...(yield* bufferCounts) }
+          events.brokerConnected(buffered)
         }
-        events.brokerConnected(config.buffer === undefined ? undefined : yield* bufferedRows)
         yield* Deferred.succeed(start.brokerConnected, undefined)
       }),
     onDisconnected: (failure) =>
@@ -357,9 +369,20 @@ const northbound = (
           ...options.buffer,
           // A config applied from the page must open its buffer; at start the gateway runs unbuffered instead.
           requireOpen: start.requireBuffer,
-          onDrained: Effect.map(bufferDelivered, (total) => {
-            events.bufferDrained(deliveredWhenLastEmpty === undefined ? undefined : total - deliveredWhenLastEmpty)
-            deliveredWhenLastEmpty = total
+          onDrained: Effect.gen(function* () {
+            const { delivered, written } = yield* bufferCounts
+            const baseline = sinceReconnect
+            events.bufferDrained(
+              baseline === undefined
+                ? undefined
+                : {
+                    delivered: delivered - baseline.delivered,
+                    buffered: baseline.buffered,
+                    queued: written - baseline.written
+                  }
+            )
+            // Should it fill and drain again on this connection, the next event counts from here.
+            sinceReconnect = { buffered: 0, delivered, written }
           })
         }).pipe(Layer.provide(mqtt))
   const onAccepted = options.onAccepted
@@ -375,6 +398,16 @@ const northbound = (
             Effect.sync(() => status?.recordPublish(topic, payload, { retained: publishOptions?.retain === true, at }))
           ).pipe(
             Effect.andThen(inner.publish(topic, payload, publishOptions)),
+            // Failed with nothing keeping it: the buffer stores values it can, and returns success for them. A
+            // retained message missed while the broker is away is no loss: the latest goes out again on reconnect.
+            Effect.tapError((error) =>
+              Effect.sync(() =>
+                status?.recordUnsent(
+                  topic,
+                  publishOptions?.retain === true && error.reason === "unavailable" ? "notSent" : "lost"
+                )
+              )
+            ),
             Effect.tap(() => Effect.sync(() => onAccepted?.(topic, payload, publishOptions)))
           )
       })

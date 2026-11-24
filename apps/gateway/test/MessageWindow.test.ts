@@ -16,11 +16,11 @@ describe("message minutes", () => {
     expect(minutes.window(1, minute(3) + 59_999)).toEqual({
       fromMs: minute(3),
       counts: new Map([
-        ["a", { published: 1, delivered: 0 }],
-        ["b", { published: 1, delivered: 0 }]
+        ["a", { published: 1, delivered: 0, notSent: 0, lost: 0 }],
+        ["b", { published: 1, delivered: 0, notSent: 0, lost: 0 }]
       ])
     })
-    expect(minutes.window(4, minute(3)).counts.get("a")).toEqual({ published: 2, delivered: 1 })
+    expect(minutes.window(4, minute(3)).counts.get("a")).toEqual({ published: 2, delivered: 1, notSent: 0, lost: 0 })
   })
 
   it("forgets what is older than its length, and leaves a topic out of a window it sent nothing in", () => {
@@ -39,14 +39,36 @@ describe("message minutes", () => {
     const minutes = makeMessageMinutes(5)
     for (let index = 0; index < 5; index++) minutes.published("a", minute(index))
     minutes.published("a", minute(12))
-    expect(minutes.window(5, minute(12)).counts.get("a")).toEqual({ published: 1, delivered: 0 })
+    expect(minutes.window(5, minute(12)).counts.get("a")).toEqual({ published: 1, delivered: 0, notSent: 0, lost: 0 })
     minutes.remove("a")
     expect(minutes.window(5, minute(12)).counts.size).toBe(0)
+  })
+
+  it("counts retained messages not sent and lost ones apart, and lists a topic with only those", () => {
+    const minutes = makeMessageMinutes(60)
+    minutes.published("health", minute(0))
+    minutes.published("health", minute(2))
+    minutes.notSent("health", minute(2))
+    minutes.published("value", minute(2))
+    minutes.lost("value", minute(2))
+    expect(minutes.window(1, minute(2)).counts).toEqual(
+      new Map([
+        ["health", { published: 1, delivered: 0, notSent: 1, lost: 0 }],
+        ["value", { published: 1, delivered: 0, notSent: 0, lost: 1 }]
+      ])
+    )
+    // An hour later every kind's slot is cleared.
+    expect(minutes.window(60, minute(62)).counts.size).toBe(0)
   })
 
   it("stops a count at what a minute's slot holds", () => {
     const minutes = makeMessageMinutes(2)
     for (let index = 0; index < 70_000; index++) minutes.published("a", minute(1))
-    expect(minutes.window(1, minute(1)).counts.get("a")).toEqual({ published: 65_535, delivered: 0 })
+    expect(minutes.window(1, minute(1)).counts.get("a")).toEqual({
+      published: 65_535,
+      delivered: 0,
+      notSent: 0,
+      lost: 0
+    })
   })
 })
