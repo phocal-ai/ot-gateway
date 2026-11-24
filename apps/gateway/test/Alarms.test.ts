@@ -19,8 +19,10 @@ import {
   ALARM_EVENTS_PER_POINT,
   type AlarmTracker,
   isAlarmActive,
-  makeAlarmTracker
+  makeAlarmTracker,
+  pointAlarmWhen
 } from "../src/Alarms.ts"
+import { activeAlarms } from "../src/StatusReport.ts"
 import type { AlarmEventInput } from "../src/Events.ts"
 
 const configWith = (points: ReadonlyArray<Record<string, unknown>>) =>
@@ -300,6 +302,71 @@ describe("the status of alarm points", () => {
       expect(yield* makeStatusState(plain, makeHealthRegistry(["pump"]), 0).snapshot("none")).not.toHaveProperty(
         "alarms"
       )
+    })
+  )
+})
+
+describe("alarm points by semantics", () => {
+  // As examples/gateway.json's energy-meter/breaker-tripped: no alarmWhen, but Brick and Haystack say alarm.
+  const breaker = {
+    id: "breaker",
+    name: "Breaker tripped",
+    semantics: { brick: "Alarm", haystack: ["elec", "breaker", "alarm"] },
+    waveform: "constant",
+    min: 0,
+    max: 0
+  }
+  const smoke = { ...breaker, id: "smoke", semantics: { haystack: ["fire", "alarm"] } }
+  const run = { ...breaker, id: "run", semantics: { brick: "Run_Status", haystack: ["run", "sensor"] } }
+  const normallyClosed = { ...breaker, id: "nc", alarmWhen: "off" }
+
+  it.effect("resolve a point's polarity: alarmWhen wins, else semantics say on, else no alarm", () =>
+    Effect.gen(function* () {
+      const device = (yield* configWith([breaker, smoke, run, normallyClosed, trip, speed])).devices[0]
+      expect(device?.points.map(pointAlarmWhen)).toEqual(["on", "on", undefined, "off", "on", undefined])
+    })
+  )
+
+  it.effect("raise and clear events for a semantics-only alarm point and count it as active in the status", () =>
+    Effect.gen(function* () {
+      const config = yield* configWith([breaker, run, normallyClosed])
+      const { alarms, recorded } = yield* tracker(config)
+      const state = makeStatusState(config, makeHealthRegistry(["pump"]), 0, undefined, 0, alarms)
+      expect(alarms.hasPoints()).toBe(true)
+      yield* read(alarms, "breaker", false)
+      yield* read(alarms, "run", true)
+      yield* read(alarms, "nc", true)
+      yield* TestClock.adjust("30 seconds")
+      yield* read(alarms, "breaker", true)
+      yield* read(alarms, "run", false)
+      const status = yield* state.snapshot("all")
+      expect(activeAlarms(status)).toBe(1)
+      expect(status.alarms?.map((alarm) => [alarm.point, alarm.alarmWhen, alarm.active])).toEqual([
+        ["breaker", "on", true],
+        ["nc", "off", false]
+      ])
+      expect(status.devices[0]?.points.map((point) => [point.id, point.alarmWhen, point.alarmActive])).toEqual([
+        ["breaker", "on", true],
+        ["run", undefined, undefined],
+        ["nc", "off", false]
+      ])
+      yield* TestClock.adjust("30 seconds")
+      yield* read(alarms, "breaker", false)
+      expect(recorded).toEqual([
+        { type: "alarm-raised", device: "pump", point: "breaker", value: true },
+        { type: "alarm-cleared", device: "pump", point: "breaker", value: false, activeMs: 30_000 }
+      ])
+      expect(activeAlarms(yield* state.snapshot("none"))).toBe(0)
+    })
+  )
+
+  it.effect("keep no state for a point whose semantics say no alarm", () =>
+    Effect.gen(function* () {
+      const { alarms, recorded } = yield* tracker(yield* configWith([run, speed]))
+      expect(alarms.hasPoints()).toBe(false)
+      yield* read(alarms, "run", true)
+      expect(recorded).toEqual([])
+      expect(alarms.snapshot()).toEqual([])
     })
   )
 })
