@@ -329,7 +329,9 @@ export const formatSeries = (point: PointInfo, series: HistorySeries, now: numbe
     const failure = gaps.find((gap) => gap.cause?.kind === "device-failing")?.cause
     const why =
       start?.kind === "gateway-start"
-        ? ` before the gateway started at ${localTime(start.started, now)}${failing(failure)}`
+        ? failure?.kind === "device-failing"
+          ? `: none before the gateway started at ${localTime(start.started, now)}, and since ${localTime(failure.since, now)} ${point.device} is failing: ${withoutControls(failure.error)}`
+          : ` before the gateway started at ${localTime(start.started, now)}`
         : failing(failure)
     const quiet = context.cov === true && failure === undefined && start === undefined
     return [

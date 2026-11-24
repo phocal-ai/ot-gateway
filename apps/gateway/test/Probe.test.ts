@@ -224,6 +224,25 @@ describe("probe failures", () => {
   })
 })
 
+const likeliest = (registers: ReadonlyArray<number>) => suggest(interpretRegisters("input", 0, registers), registers)
+
+describe("suggest", () => {
+  it("reads a small counter, its high word 0, as an unsigned integer, not as a byte-swapped float", () => {
+    // From a meter: 0x0000 0x9DC0 read as float32 DCBA is -4.90625, a plausible but wrong reading.
+    expect(likeliest([0x0000, 0x9dc0])).toMatchObject({ type: "uint32", byteOrder: "ABCD", value: 40384 })
+    expect(likeliest([0x9dc0, 0x0000])).toMatchObject({ type: "uint32", byteOrder: "CDAB", value: 40384 })
+  })
+
+  it("keeps a round float whose low word is 0 as the float it is", () => {
+    expect(likeliest(encodeValue(95, "float32", "ABCD"))).toMatchObject({
+      type: "float32",
+      byteOrder: "ABCD",
+      value: 95
+    })
+    expect(likeliest(encodeValue(95.27, "float32", "CDAB"))).toMatchObject({ type: "float32", byteOrder: "CDAB" })
+  })
+})
+
 describe("parseEndpoint", () => {
   it("takes a host, host:port and IPv6 in brackets, with 502 as the port", () => {
     expect(parseEndpoint("192.168.1.50")).toEqual({ host: "192.168.1.50", port: 502 })
@@ -241,7 +260,7 @@ describe("the output", () => {
     Effect.gen(function* () {
       const registers = encodeValue(70000, "uint32", "CDAB")
       const interpretations = interpretRegisters("holding", 300, registers)
-      const reading = suggest(interpretations, registers.length)
+      const reading = suggest(interpretations, registers)
       expect(reading).toMatchObject({ type: "uint32", byteOrder: "CDAB" })
       if (reading === undefined) return
       const report = {

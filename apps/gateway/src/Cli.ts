@@ -109,6 +109,11 @@ export const describeConfig = (config: GatewayConfig) => {
     ...(config.history === undefined
       ? []
       : [`  history ${config.history.path}, per-minute values for ${config.history.retentionDays} days`]),
+    config.status === undefined
+      ? "  no status page"
+      : config.status.bindAddress === "0.0.0.0"
+        ? `  status page on port ${config.status.port} at every address of this machine (http://localhost:${config.status.port} here)`
+        : `  status page http://${config.status.bindAddress}:${config.status.port}`,
     ...config.devices.map((device) => {
       const where =
         device.protocol === "modbus-tcp"
@@ -357,6 +362,11 @@ const init = Command.make(
       Flag.withDefault(false)
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false)),
+    statusPort: Flag.Int("status-port").pipe(
+      Flag.withDescription("The status page's port (default 8080), when another program has 8080"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
     history: Flag.Boolean("history").pipe(
       Flag.withDescription(
         "Keep every read on the gateway for the status page's charts and /api/history (on; --no-history leaves it out)"

@@ -793,6 +793,12 @@ export const runGateway = Effect.fn("Gateway")(
         setup
       ).pipe(Effect.forkScoped)
     }
+    // A stop (SIGTERM from Docker, Ctrl-C) interrupts the gateway: say so, so a clean stop is told from a crash.
+    yield* Effect.addFinalizer((exit) =>
+      Exit.hasInterrupts(exit)
+        ? Effect.log("OT Gateway stopping: closing the connections, the outbox and the history")
+        : Effect.void
+    )
     return yield* Effect.raceFirst(Deferred.await(shared.fatal), applyLoop)
   },
   Effect.scoped,

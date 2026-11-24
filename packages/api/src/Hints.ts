@@ -149,6 +149,32 @@ export const hintRules: ReadonlyArray<Rule> = [
   },
   {
     reason: "protocol",
+    protocol: "modbus-tcp",
+    error: /gateway_target_failed_to_respond/,
+    hint: {
+      meaning:
+        "A Modbus gateway answers, but no device behind it answers as this unit id (exception 11): every register fails the same way.",
+      checks: [
+        "Is the unit id in the config the meter's own Modbus address (on its display or in its settings)?",
+        "Is the device behind the Modbus gateway powered and wired (RS-485 A/B, termination)?",
+        "Do the serial settings on the Modbus gateway (baud rate, parity) match the device's?"
+      ]
+    }
+  },
+  {
+    reason: "protocol",
+    protocol: "modbus-tcp",
+    error: /gateway_path_unavailable/,
+    hint: {
+      meaning: "A Modbus gateway answers, but has no route to this unit id (exception 10).",
+      checks: [
+        "Is the unit id in the config one the Modbus gateway is set up to route to a serial port?",
+        "Is the Modbus gateway's serial port enabled and set up for this device?"
+      ]
+    }
+  },
+  {
+    reason: "protocol",
     hint: {
       meaning: "The device answers, but refuses the reads (a Modbus exception).",
       checks: [
