@@ -287,7 +287,7 @@ const gatewayStatusFields = {
    */
   host: Schema.optionalKey(HostStatus),
   devices: Schema.Array(DeviceStatus),
-  /** Every alarm point of the config (`effectiveAlarmWhen`), in config order, also with `points=none`. */
+  /** Every alarm point of the config (`effectiveAlarmWhen`), in config order, also with `points=none`, unless `alarms=none` is asked. */
   alarms: Schema.optionalKey(Schema.Array(AlarmStatus)),
   /** The most recent commands, newest first. */
   commands: Schema.Array(CommandStatus)
@@ -931,7 +931,9 @@ export class StatusGroup extends HttpApiGroup.make("status")
     HttpApiEndpoint.get("status", "/api/status", {
       query: {
         /** `none` leaves each device's `points` empty: health without every value, for a page that pages them. */
-        points: Schema.optional(Schema.Literals(["all", "none"]))
+        points: Schema.optional(Schema.Literals(["all", "none"])),
+        /** `none` leaves out `alarms`: for the status page, which reads alarm values from `/api/values`. */
+        alarms: Schema.optional(Schema.Literals(["all", "none"]))
       },
       success: GatewayStatus
     })
