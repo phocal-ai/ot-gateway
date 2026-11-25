@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import type { HostStatus } from "@ot-gateway/api"
-import { CPU_HINT, machineCard, machineNote, machineProblems, powerLabel } from "../src/lib/host.ts"
+import { CPU_HINT, machineCard, machineFine, machineNote, machineProblems, powerLabel } from "../src/lib/host.ts"
 
 /** Long past starting up. */
 const up = 3_600_000
@@ -114,5 +114,26 @@ describe("powerLabel", () => {
     )
     const { throttled: _throttled, ...plain } = healthy
     expect(powerLabel(plain)).toBeUndefined()
+  })
+})
+
+describe("machineFine", () => {
+  it("names power, heat, disk and load where the machine measures them all", () => {
+    expect(machineFine(healthy, up)).toBe("Nothing needs a look: power, heat, disk and load are fine.")
+  })
+
+  it("names only what is measured: no temperature or power off a Pi", () => {
+    const { throttled: _throttled, temperatureC: _temperature, ...plain } = healthy
+    expect(machineFine(plain, up)).toBe("Nothing needs a look: disk and load are fine.")
+    const { diskFreeBytes: _disk, ...bare } = plain
+    expect(machineFine(bare, up)).toBe("Nothing needs a look: load is fine.")
+  })
+
+  it("does not call the load fine while the gateway starts", () => {
+    const { throttled: _throttled, temperatureC: _temperature, diskFreeBytes: _disk, ...bare } = healthy
+    expect(machineFine(bare, 10_000)).toBe("Nothing needs a look. The load counts once the gateway has run a minute.")
+    expect(machineFine(healthy, 10_000)).toBe(
+      "Nothing needs a look: power, heat and disk are fine. The load counts once the gateway has run a minute."
+    )
   })
 })

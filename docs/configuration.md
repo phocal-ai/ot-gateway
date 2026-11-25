@@ -189,12 +189,12 @@ A binary object's present value is published as `true` or `false`; a multi-state
 
 ## Simulated points
 
-| Key             | Type                       | Default  | Meaning                    |
-| --------------- | -------------------------- | -------- | -------------------------- |
-| `waveform`      | `sine`, `ramp`, `constant` | required |                            |
-| `min`           | number                     | required |                            |
-| `max`           | number                     | required |                            |
-| `periodSeconds` | number                     | 60       | One cycle of the waveform. |
+| Key             | Type                                | Default  | Meaning                                                                                                                                        |
+| --------------- | ----------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waveform`      | `sine`, `ramp`, `daily`, `constant` | required | `daily`: a counter of the day so far ("energy today"), from `min` at local midnight to `max` at the next one; it never goes back within a day. |
+| `min`           | number                              | required |                                                                                                                                                |
+| `max`           | number                              | required |                                                                                                                                                |
+| `periodSeconds` | number                              | 60       | One cycle of the waveform (not `daily`).                                                                                                       |
 
 ## publish
 
