@@ -207,6 +207,20 @@ export const hintRules: ReadonlyArray<Rule> = [
   },
   {
     reason: "configuration",
+    protocol: "bacnet-ip",
+    error: /\bnot device \d+/,
+    hint: {
+      meaning:
+        "Another BACnet device answers at this address: its device instance is not the one in the config, so the gateway does not read it.",
+      checks: [
+        "Is the device instance in the config the device's own? The error names the instance that answers at the address; if that is the device you mean, put it in the config.",
+        "If you mean another device, is the address in the config its own (ip, or ip:port when several devices share a host)?",
+        "ot-gateway discover lists each device that answers, with its instance and address."
+      ]
+    }
+  },
+  {
+    reason: "configuration",
     hint: {
       meaning: "The config does not work for this device.",
       checks: ["The error above says what; ot-gateway check validates the config file."]

@@ -3,6 +3,10 @@
  * with ReadPropertyMultiple, falling back to ReadProperty for devices that do
  * not support it.
  *
+ * - **Identity**: a device at a fixed address is asked its device instance
+ *   before it is read, and again every hour. Another device answering there
+ *   is a `configuration` error ("the device at 10.0.0.5:47808 is device
+ *   2001, not device 2002"), never its values published as this device's.
  * - **Batches** are sized from the largest APDU the device accepts (from its
  *   I-Am). A device that still aborts an answer as too large gets half the
  *   batch, and keeps that size. One that rejects ReadPropertyMultiple is read
@@ -262,6 +266,27 @@ const notRead = (points: ReadonlyArray<ResolvedPoint>): ReadonlyArray<PointOutco
 /** Points a device did not give a value for, by `reason`: `refused` (it answered without one) or `not_read`. */
 const countPointFailures = (reason: "refused" | "not_read", count: number) =>
   count === 0 ? Effect.void : Metric.update(Metric.withAttributes(pointReadFailures, { reason }), count)
+
+/** A device instance in a request that stands for whichever device receives it (clause 15.5.1.1.1). */
+const WILDCARD_DEVICE: ObjectId = { objectType: ObjectType.device, instance: 4_194_303 }
+
+/** What reading a device object's Object_Identifier said. */
+type Identifier =
+  | { readonly _tag: "Instance"; readonly instance: number }
+  /** The device has no such device object: it is not that device. */
+  | { readonly _tag: "UnknownObject" }
+  /** Refused otherwise, or answered with something else: says nothing about which device it is. */
+  | { readonly _tag: "Unclear" }
+
+/** Whether the device at a fixed address is the configured one. */
+type Identity =
+  | { readonly _tag: "Confirmed" }
+  | { readonly _tag: "Unknown" }
+  | { readonly _tag: "Mismatch"; readonly message: string }
+
+const identityConfirmed: Identity = { _tag: "Confirmed" }
+const identityUnknown: Identity = { _tag: "Unknown" }
+const identityMismatch = (message: string): Identity => ({ _tag: "Mismatch", message })
 
 /** Where the device is, and the largest APDU it takes. */
 interface Location extends DeviceAddress {
@@ -758,18 +783,85 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
         Effect.map(Option.getOrUndefined)
       )
 
+  /** The Object_Identifier of `object` at `target`, as a device instance, or why it does not say one. */
+  const readDeviceInstance = (target: DeviceAddress, object: ObjectId) =>
+    client.readProperty(target, { object, property: PropertyId["object-identifier"] }).pipe(
+      Effect.map(([value, ...rest]): Identifier =>
+        value?.type === "object-identifier" && value.value.objectType === ObjectType.device && rest.length === 0
+          ? { _tag: "Instance", instance: value.value.instance }
+          : { _tag: "Unclear" }
+      ),
+      Effect.catchTags({
+        BacnetDeviceError: (error) =>
+          Effect.succeed<Identifier>(
+            error.kind === "error" && error.code === ErrorCode["unknown-object"]
+              ? { _tag: "UnknownObject" }
+              : { _tag: "Unclear" }
+          ),
+        BacnetCodecError: () => Effect.succeed<Identifier>({ _tag: "Unclear" }),
+        BacnetEncodeError: () => Effect.succeed<Identifier>({ _tag: "Unclear" })
+      })
+    )
+
   /**
-   * A fixed address: Who-Is goes there for the device's APDU size, and if no
-   * I-Am arrives (one broadcast on another subnet never does) the device
-   * object is asked instead; failing both, 480 bytes is assumed. It is asked
-   * again every hour while the device answers (every 10 minutes while the
-   * size is only assumed), so one missed Who-Is does not cost it forever.
+   * Whether the device at a fixed address is the configured one. The address
+   * alone does not say: another device there (a typo in the instance, a
+   * device swapped, two devices on one host) answers reads of its own
+   * objects, and its values would be published as this device's. So its
+   * device object is asked who it is: the wildcard instance first (clause
+   * 15.5.1.1.1, a device answers with its own identifier), then, for an
+   * older device without the wildcard, the configured instance, which a
+   * different device does not have. Only a clear answer fails the device;
+   * one that says nothing either way lets the reads go ahead.
+   */
+  const identify = Effect.fnUntraced(function* (target: DeviceAddress) {
+    const at = NetAddress.formatInet(target.address)
+    const configured = device.deviceInstance
+    const any = yield* readDeviceInstance(target, WILDCARD_DEVICE)
+    if (any._tag === "Instance") {
+      return any.instance === configured
+        ? identityConfirmed
+        : identityMismatch(`the device at ${at} is device ${any.instance}, not device ${configured}`)
+    }
+    const own = yield* readDeviceInstance(target, { objectType: ObjectType.device, instance: configured })
+    switch (own._tag) {
+      case "Instance":
+        // The client accepts only an answer about the object asked for, so this is the configured device.
+        return identityConfirmed
+      case "UnknownObject":
+        return identityMismatch(
+          `the device at ${at} is not device ${configured}: it has no device object ${configured}`
+        )
+      case "Unclear":
+        return identityUnknown
+    }
+  })
+
+  /**
+   * A fixed address: first the device there is asked who it is, and another
+   * device fails with a `configuration` error instead of being read. Then
+   * Who-Is goes there for the device's APDU size, and if no I-Am arrives
+   * (one broadcast on another subnet never does) the device object is asked
+   * instead; failing both, 480 bytes is assumed. It is asked again every
+   * hour while the device answers (every 10 minutes while the size is only
+   * assumed), so one missed Who-Is does not cost it forever.
    */
   const locateFixed = Effect.fnUntraced(function* (address: NetAddress.InetAddress) {
     const now = yield* monotonicMillis
     // While the device does not answer, asking costs only more waiting.
     if (location !== undefined && (now < recheckAt || lostCycles > 0)) return location
     const target = { address }
+    // A device found before that misses the hourly question is read on; one never found is not read unasked.
+    const identity = yield* identify(target).pipe(
+      Effect.catchTag("BacnetTimeout", (error) =>
+        location === undefined ? Effect.fail(error) : Effect.succeed(identityUnknown)
+      )
+    )
+    if (identity._tag === "Mismatch") {
+      // Nothing is read, written or subscribed where another device answers; asked again next cycle.
+      location = undefined
+      return yield* configurationError(identity.message)
+    }
     const found = yield* client.locate(device.deviceInstance, { target }).pipe(
       Effect.map(Option.some),
       Effect.catchTag("BacnetTimeout", () => Effect.succeedNone),
@@ -799,7 +891,7 @@ export const makeBacnetDriverFromClient = Effect.fn("makeBacnetDriverFromClient"
    * Who-Is. Otherwise the device is found by broadcast, and looked for again
    * only after several cycles timed out.
    */
-  const locate: Effect.Effect<Location, BacnetTimeout | BacnetSocketError> = Effect.gen(function* () {
+  const locate: Effect.Effect<Location, BacnetTimeout | BacnetSocketError | DriverError> = Effect.gen(function* () {
     if (fixedAddress !== undefined) return yield* locateFixed(fixedAddress)
     if (location === undefined || lostCycles >= LOST_AFTER_CYCLES) {
       const found = yield* broadcastLocate

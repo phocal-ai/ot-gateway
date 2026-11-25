@@ -71,7 +71,15 @@ const scriptedClient = () => {
   const client: BacnetClient = {
     confirmed: () => Effect.die("not scripted"),
     writeProperty: () => Effect.die("not scripted"),
-    readProperty: () => Effect.die("not scripted"),
+    // Only the driver's question at a fixed address: which device is this?
+    readProperty: (_target, request) =>
+      request.property === PropertyId["object-identifier"] && request.object.objectType === ObjectType.device
+        ? state.offline
+          ? Effect.fail(timeout)
+          : Effect.succeed([
+              { type: "object-identifier" as const, value: { objectType: ObjectType.device, instance: 2001 } }
+            ])
+        : Effect.die("not scripted"),
     readPropertyMultiple: (_target, specifications) =>
       Effect.suspend(() => {
         state.reads++
