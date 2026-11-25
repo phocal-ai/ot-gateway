@@ -89,6 +89,8 @@ jobs:
           bin="$work/node_modules/.bin/ot-gateway"
           "$bin" --version
           "$bin" check examples/gateway.json
+          # Node 22's notice that node:sqlite is experimental stays off the terminal (apps/gateway/src/NodeWarnings.ts).
+          if "$bin" check examples/gateway.json 2>&1 | grep -F "ExperimentalWarning"; then exit 1; fi
           # The files the package ships and finds through import.meta.url: the profile library and init's compose.yaml.
           "$bin" profiles list --json | grep -q '"id": "eastron-sdm630"'
           "$bin" init "$work/site" --dry-run --json --yes --site s --broker mqtt://127.0.0.1:1883
