@@ -8,7 +8,7 @@
     "prepare": "effect-tsgo patch",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "check": "pnpm format:check && pnpm lint && turbo run typecheck test",
+    "check": "pnpm format:check && turbo run //#lint typecheck test",
     "demo": "turbo run build --filter=@ot-gateway/web --output-logs=errors-only && node --max-semi-space-size=4 apps/gateway/src/main.ts demo",
     "ot-gateway": "node --max-semi-space-size=4 apps/gateway/src/main.ts",
     "gateway": "turbo run build --filter=@ot-gateway/web --output-logs=errors-only && pnpm --filter @ot-gateway/gateway start",

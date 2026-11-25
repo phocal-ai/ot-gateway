@@ -84,7 +84,10 @@ describe("ConfigStore", () => {
       expect(checked).toMatchObject({ _tag: "Failure", failure: [{ path: [] }] })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+})
 
+// Not as root (a cloud container, Docker's default user): root may write whatever the mode bits say.
+describe.skipIf(process.getuid?.() === 0)("ConfigStore, as a user the mode bits bind", () => {
   it.effect("says why saving cannot work: a file or a folder the gateway may not write", () =>
     Effect.gen(function* () {
       const { folder, path, store } = yield* folderWithConfig(valid("s"))

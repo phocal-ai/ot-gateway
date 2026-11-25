@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stop: run the same gate as CI (`pnpm check`) before Claude reports a change
-# as done. Turbo caches typecheck and test, so an unchanged tree costs ~1s.
+# as done. Turbo caches lint, typecheck and test, so an unchanged tree costs ~1s.
 set -euo pipefail
 INPUT=$(cat)
 

@@ -6,27 +6,12 @@
  *
  * runs a simulated week per seed. A failing run prints its seed; run that
  * seed alone to replay it.
+ *
+ * Without SIM_SEEDS, `pnpm test` runs seeds 1, 2 and 3, one per file (this one
+ * and `Simulation.seed2.test.ts`, `Simulation.seed3.test.ts`): a seed takes
+ * most of the suite's time on one core, and Vitest runs files side by side
+ * but the tests of one file in turn.
  */
-import { describe, expect, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { checkInvariants } from "./sim/Invariants.ts"
-import { simulate } from "./sim/Simulation.ts"
+import { namedSeeds, simulationSuite } from "./sim/Suite.ts"
 
-const seeds = (process.env["SIM_SEEDS"] ?? "1,2,3").split(",").map(Number)
-const hours = Number(process.env["SIM_HOURS"] ?? "6")
-
-describe("simulation: the whole gateway through broker, device and network faults", () => {
-  for (const seed of seeds) {
-    it.effect(
-      `seed ${seed}, ${hours} simulated hours`,
-      () =>
-        Effect.gen(function* () {
-          const run = yield* simulate({ seed, hours })
-          const verdict = checkInvariants(run, hours * 3_600_000)
-          console.log(`seed ${seed}: ${JSON.stringify(verdict.summary)}`)
-          expect(verdict.violations).toEqual([])
-        }),
-      { timeout: 600_000 }
-    )
-  }
-})
+simulationSuite(namedSeeds ?? [1])
