@@ -103,8 +103,19 @@ describe("--json output", () => {
 describe("failures of one-shot commands", () => {
   const main = fileURLToPath(new URL("../src/main.ts", import.meta.url))
   // The real entry point, as a person or an agent runs it: what reaches stderr, stdout and the exit code.
-  const runMain = (args: ReadonlyArray<string>) =>
-    spawnSync(process.execPath, [main, ...args], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } })
+  const runMain = (args: ReadonlyArray<string>) => {
+    const result = spawnSync(process.execPath, [main, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1" }
+    })
+    // Without the one warning that is Node's own: Node 22 says on stderr that node:sqlite is experimental (and how
+    // to trace the warning), Node 24 does not.
+    const stderr = result.stderr
+      .split("\n")
+      .filter((line) => !/ExperimentalWarning: SQLite is an experimental feature|--trace-warnings/.test(line))
+      .join("\n")
+    return { ...result, stderr }
+  }
   const missing = "no-such-config.json"
   const message = `no config at ${missing}.`
 

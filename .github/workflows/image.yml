@@ -1,13 +1,15 @@
 name: Image
 
 # The gateway's container image (Dockerfile), for amd64 and arm64. Pull
-# requests build both and smoke-test them against the bench, with a build cache
-# per architecture that pull requests and pushes to dev write. A pushed release
-# tag (v*) on main publishes ghcr.io/phocal-ai/ot-gateway, built from the tagged
-# source without the cache; only a plain vX.Y.Z also moves :latest. A push to
-# dev that changes the image publishes the preview, :dev and :dev-<short sha>,
-# from the cache the same run's builds just wrote (docs/raspberry-pi-testing.md,
-# "Test an unreleased build"); it never moves :latest or a v* tag.
+# requests build both and smoke-test them against the bench, reading the build
+# cache per architecture that pushes to dev write (a pull request writes none:
+# exporting it costs more than it saves, minutes when the lockfile changed). A
+# pushed release tag (v*) on main publishes ghcr.io/phocal-ai/ot-gateway, built
+# from the tagged source without the cache; only a plain vX.Y.Z also moves
+# :latest. A push to dev that changes the image publishes the preview, :dev and
+# :dev-<short sha>, from the cache the same run's builds just wrote
+# (docs/raspberry-pi-testing.md, "Test an unreleased build"); it never moves
+# :latest or a v* tag.
 on:
   pull_request:
     branches: [main, dev]
@@ -42,10 +44,11 @@ on:
 permissions:
   contents: read
 
-# On dev a newer push cancels the run before it, so an older build never moves :dev back. Every other run gets a
-# group of its own, as before.
+# On dev a newer push cancels the run before it, so an older build never moves :dev back. On a pull request a newer
+# push cancels the run before it too: only the last commit's result is read. Every other run (a release tag, a
+# manual start) gets a group of its own.
 concurrency:
-  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'image-dev' || format('image-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'image-dev' || format('image-{0}', github.event.pull_request.number || github.run_id) }}
   cancel-in-progress: true
 
 jobs:
@@ -82,8 +85,9 @@ jobs:
           tags: ot-gateway:smoke
           build-args: ${{ steps.version.outputs.build-args }}
           cache-from: type=gha,scope=image-amd64
-          # Empty outside pull requests and pushes to dev: a release tag or a manual run exports no cache.
-          cache-to: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) && 'type=gha,scope=image-amd64,mode=max' || '' }}
+          # Empty outside pushes to dev: a pull request reads dev's cache and exports none (a few seconds saved on
+          # every run, about four minutes when the lockfile changed), and a release tag or a manual run exports none.
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'type=gha,scope=image-amd64,mode=max' || '' }}
 
       - name: Smoke test against the bench
         env:
@@ -146,7 +150,7 @@ jobs:
           tags: ot-gateway:arm64
           build-args: ${{ steps.version.outputs.build-args }}
           cache-from: type=gha,scope=image-arm64
-          cache-to: ${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) && 'type=gha,scope=image-arm64,mode=max' || '' }}
+          cache-to: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'type=gha,scope=image-arm64,mode=max' || '' }}
 
       # The arm64 image under QEMU, bench and gateway in one container on Docker's default network,
       # as the arm64 soak runs them: values must reach the broker within four minutes of emulation.

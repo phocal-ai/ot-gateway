@@ -8,7 +8,7 @@
   "scripts": {
     "build": "next build",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests --no-isolate"
   },
   "dependencies": {
     "@ot-gateway/api": "workspace:*",

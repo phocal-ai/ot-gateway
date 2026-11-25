@@ -30,6 +30,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the run before it: only the last commit's result is read. Every other
+# run (a push to dev, a manual start) is in a group of its own and runs to the end.
+concurrency:
+  group: interop-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   interop:
     runs-on: ubuntu-latest

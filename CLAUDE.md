@@ -10,7 +10,7 @@ An Effect-native OT gateway for buildings and industrial sites: Modbus TCP and B
 
 ```bash
 pnpm install
-pnpm check            # format:check + lint, then turbo: typecheck + test in every package
+pnpm check            # format:check, then turbo: lint, and typecheck + test in every package, side by side
 pnpm format           # oxfmt --write .
 pnpm lint             # oxlint, type-aware (lint:fix to autofix)
 pnpm typecheck
@@ -40,7 +40,7 @@ scripts/interop.sh [mqtt|bacnet|modbus]   # against Mosquitto, EMQX, the BACnet 
 scripts/build-package.sh   # the ot-gateway npm package (the CLI bundled, with the status page) in dist/
 ```
 
-Turborepo caches `typecheck` and `test` locally and in a remote cache on Vercel (team `wimluks-projects`; `pnpm exec turbo login` and `turbo link` once per machine, `TURBO_TOKEN` in CI). A cached task is replayed only when none of its declared inputs changed, so **a test that reads a file outside its package must list that file in the package's `turbo.json` inputs**, as `packages/core` does for `docs/configuration.md`. Otherwise a change to that file replays a stale pass. Before changing Turborepo config, read `AGENTS.md`: turbo keeps a block there that points at the docs bundled with the installed version.
+Turborepo caches `lint` (one task for the whole repository; any change but Markdown reruns it), `typecheck` and `test` locally and in a remote cache on Vercel (team `wimluks-projects`; `pnpm exec turbo login` and `turbo link` once per machine, `TURBO_TOKEN` in CI). A cached task is replayed only when none of its declared inputs changed, so **a test that reads a file outside its package must list that file in the package's `turbo.json` inputs**, as `packages/core` does for `docs/configuration.md`. Otherwise a change to that file replays a stale pass. Tests do not wait for a typecheck; the `sources` task (no script) only carries a change in a package to the tests of the packages that depend on it. Before changing Turborepo config, read `AGENTS.md`: turbo keeps a block there that points at the docs bundled with the installed version.
 
 There is no build step. Node runs `.ts` files directly through type stripping (Node >= 22.18), and packages export `./src/index.ts`. What ships is a bundle: the npm package and the container image's entrypoint run `apps/gateway/src/main.mjs`, built by `scripts/bundle.sh` (esbuild), because one file starts about three times faster on a Pi and a running gateway keeps a third less heap. Code that finds a file through `import.meta.url` must work from that bundle too (the image smoke test checks the profiles and the version).
 
@@ -122,7 +122,7 @@ git subtree pull --prefix=repos/improve-skill https://github.com/shadcn/improve.
 - Errors: `class E extends Schema.TaggedError<E>()("E", { ...fields }) {}`; inside a generator, fail with `return yield* new E({...})`.
 - Named, traced functions: `Effect.fn("name")(function*(...) { ... })`.
 - Retries: `Effect.retry({ schedule: Schedule.exponential("200 millis").pipe(Schedule.jittered), times: 4 })`.
-- Tests: `@effect/vitest` with `it.effect`; control time with `TestClock` from `effect/testing`.
+- Tests: `@effect/vitest` with `it.effect`; control time with `TestClock` from `effect/testing`. Vitest runs files side by side and the tests of one file in turn, so a slow suite is split over files (the simulation: one seed per file). Each file gets a fresh process, which the metrics registry and the simulation's reproducible seeds rely on; only `apps/web`, pure functions over data, shares workers (`--no-isolate`).
 - Modules that used to live in `effect/unstable/*` in the betas are now top-level subpaths such as `effect/socket/Socket` and `effect/sql/SqlClient`. When unsure, check `repos/effect/` (above) rather than examples online, which are often Effect 3 and wrong for 4.
 - `.claude/rules/effect.md` (loaded when you touch `packages/` or `apps/`) covers type evidence, tagged-error translation, `gen` vs `pipe`, v4 spellings and the v4 traps. `/review-effect` reviews a change against it. `.claude/rules/edge.md` is the Raspberry Pi checklist: monotonic time, deadlines, misbehaving peers, isolation, storage faults and log budget.
 

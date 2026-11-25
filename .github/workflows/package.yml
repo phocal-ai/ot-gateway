@@ -31,6 +31,12 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the run before it: only the last commit's result is read. Every other
+# run (a release tag, a manual start) is in a group of its own and runs to the end.
+concurrency:
+  group: package-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 env:
   NEXT_TELEMETRY_DISABLED: "1"
   TURBO_TELEMETRY_DISABLED: "1"
