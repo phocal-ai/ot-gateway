@@ -13,6 +13,29 @@ import { captureLogs, deviceConfig, points, scriptedClient } from "./scripted.ts
 const fixed = { address: "10.0.0.5" }
 
 describe("chaos: driver", () => {
+  it.effect("stops reading a fixed address when another device takes it, and asks one request a cycle", () =>
+    Effect.gen(function* () {
+      const { state, client } = scriptedClient()
+      const driver = yield* makeBacnetDriverFromClient(deviceConfig(points(10), fixed), client)
+      expect(yield* driver.readAll).toHaveLength(10)
+      // The device is swapped for one with another instance; the hourly question finds out.
+      state.instance = 2002
+      yield* TestClock.adjust("1 hour")
+      state.rpm = 0
+      state.identify = 0
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
+        reason: "configuration",
+        message: "the device at 10.0.0.5:47808 is device 2002, not device 2001"
+      })
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({ reason: "configuration" })
+      // No point is read: each cycle asks only which device is there.
+      expect([state.rpm, state.rp, state.identify]).toEqual([0, 0, 2])
+      // The right device back at the address is read again.
+      state.instance = 2001
+      expect(yield* driver.readAll).toHaveLength(10)
+    })
+  )
+
   it.effect("asks a device that rejected ReadPropertyMultiple once again after an hour", () =>
     Effect.gen(function* () {
       const { state, client } = scriptedClient()
@@ -58,12 +81,9 @@ describe("chaos: driver", () => {
     Effect.gen(function* () {
       const { state, client } = scriptedClient()
       state.answersWhoIs = false
-      // Neither Who-Is nor the device object answers: 480 bytes is assumed.
-      state.mode = "timeout"
+      // Neither Who-Is nor the device object's APDU size answers: 480 bytes is assumed.
+      state.answersMaxApdu = false
       const driver = yield* makeBacnetDriverFromClient(deviceConfig(points(200), fixed), client)
-      yield* Effect.flip(driver.readAll)
-      state.mode = "ok"
-      state.rpm = 0
       yield* driver.readAll
       // 480-byte batches of 21 points.
       expect(state.rpm).toBe(10)

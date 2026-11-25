@@ -80,10 +80,16 @@ export const scriptedClient = () => {
     /** Answers Who-Is; when false, `locate` times out although reads are answered. */
     answersWhoIs: true,
     maxApdu: 1476,
+    /** Answers a read of the device object's Max_APDU_Length_Accepted; when false, it times out. */
+    answersMaxApdu: true,
     /** Analog inputs the device does not have; a ReadPropertyMultiple naming one is refused as a whole. */
     missing: new Set<number>(),
     rpm: 0,
     rp: 0,
+    /** The device's own instance, which its device object answers with. */
+    instance: 2001,
+    /** ReadProperty requests for a device object's identifier (which device this is), not in `rp`. */
+    identify: 0,
     locate: 0,
     /** How SubscribeCOV goes; succeeds by default, after the mode allowed the request. */
     subscribe: (_request: SubscribeCovRequest): Effect.Effect<void, BacnetRequestError> => Effect.void,
@@ -114,11 +120,23 @@ export const scriptedClient = () => {
     writeProperty: () => Effect.die("not scripted"),
     readProperty: (_target, request) =>
       Effect.suspend((): Effect.Effect<ReadonlyArray<BacnetValue>, BacnetRequestError> => {
-        state.rp++
+        // The driver asking which device is at a fixed address: counted apart from point reads.
+        const identifying =
+          request.object.objectType === ObjectType.device && request.property === PropertyId["object-identifier"]
+        if (identifying) state.identify++
+        else state.rp++
         const refused = refusal()
         if (refused !== undefined) return refused
+        if (identifying) {
+          const wildcard = request.object.instance === 4_194_303
+          if (!wildcard && request.object.instance !== state.instance) return Effect.fail(unknownObject)
+          return Effect.succeed([
+            { type: "object-identifier" as const, value: { objectType: ObjectType.device, instance: state.instance } }
+          ])
+        }
         if (state.missing.has(request.object.instance)) return Effect.fail(unknownObject)
         if (request.property === PropertyId["max-apdu-length-accepted"]) {
+          if (!state.answersMaxApdu) return Effect.fail(timeout)
           return Effect.succeed([{ type: "unsigned" as const, value: state.maxApdu }])
         }
         return Effect.succeed([{ type: "real" as const, value: state.value }])

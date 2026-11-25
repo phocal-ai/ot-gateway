@@ -53,6 +53,22 @@ describe("whatToCheck", () => {
     expect(mentions(whoIs.checks, /subnet/)).toBe(true)
   })
 
+  it("points another BACnet device at the configured address at the device instance first", () => {
+    for (const error of [
+      "the device at 10.0.0.5:47808 is device 2001, not device 2002",
+      "the device at 10.0.0.5:47808 is not device 2002: it has no device object 2002"
+    ]) {
+      const hint = whatToCheck("bacnet-ip", "configuration", error)
+      expect(hint.meaning).toMatch(/Another BACnet device answers at this address/)
+      expect(hint.checks[0]).toMatch(/device instance in the config/)
+      expect(mentions(hint.checks, /discover/)).toBe(true)
+    }
+    // Other configuration errors keep the general hint.
+    expect(whatToCheck("bacnet-ip", "configuration", 'point x: unknown object type "y"').meaning).toMatch(
+      /config does not work/
+    )
+  })
+
   it("points a refusal or a bad reply at the register map, data type and word order", () => {
     const refused = whatToCheck("modbus-tcp", "protocol", "device refused every read (illegal_data_address)")
     expect(mentions(refused.checks, /register map/)).toBe(true)

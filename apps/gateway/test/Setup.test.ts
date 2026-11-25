@@ -221,6 +221,44 @@ describe("testing a device from the status page", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("says when another BACnet device answers at the address, instead of reading its values", () =>
+    Effect.gen(function* () {
+      const { port, running } = yield* startGateway([])
+      const wrongInstance = { ...heatPump, deviceInstance: 2002 }
+      const reply = yield* post(port, "/api/test/read", { text: configText(port, [wrongInstance]), device: 0 })
+      expect(reply.body).toMatchObject({
+        ok: false,
+        target: `device 2002 at ${HEAT_PUMP}:47808`,
+        error: {
+          reason: "configuration",
+          message: `the device at ${HEAT_PUMP}:47808 is device 2001, not device 2002`
+        },
+        points: []
+      })
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect(
+    "runs a device whose instance another device answers for as failing, and publishes none of its values",
+    () =>
+      Effect.gen(function* () {
+        const { port, running, broker } = yield* startGateway([{ ...heatPump, deviceInstance: 2002 }])
+        const status = yield* whileTimePasses(() => request(port, "GET", "/api/status?points=none", undefined, {}))
+        expect(status.body).toMatchObject({
+          devices: [
+            {
+              id: "heat-pump",
+              reason: "configuration",
+              lastError: `the device at ${HEAT_PUMP}:47808 is device 2001, not device 2002`
+            }
+          ]
+        })
+        expect(broker.messages.filter((message) => message.topic === "s/b/heat-pump/flow")).toEqual([])
+        yield* Fiber.interrupt(running)
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.effect("says when a device refuses a second connection while the gateway holds one", () =>
     Effect.gen(function* () {
       const { port, running, meterControl } = yield* startGateway([{ ...meter, points: meter.points.slice(0, 1) }], {
