@@ -84,6 +84,13 @@ describe("ConfigStore", () => {
       expect(checked).toMatchObject({ _tag: "Failure", failure: [{ path: [] }] })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+
+  it.effect("names the compose.yaml mount as the fix in the container (/etc/ot-gateway)", () =>
+    Effect.gen(function* () {
+      const inContainer = yield* checkEditability("/etc/ot-gateway/gateway.json")
+      expect(inContainer).toMatchObject({ writable: false, fix: expect.stringContaining("- .:/etc/ot-gateway") })
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
 })
 
 // Not as root (a cloud container, Docker's default user): root may write whatever the mode bits say.
@@ -106,9 +113,6 @@ describe.skipIf(process.getuid?.() === 0)("ConfigStore, as a user the mode bits 
         writable: false,
         reason: expect.stringContaining("keeps the previous one as a backup")
       })
-      // In the container (/etc/ot-gateway), the fix is the compose.yaml mount.
-      const inContainer = yield* checkEditability("/etc/ot-gateway/gateway.json")
-      expect(inContainer).toMatchObject({ writable: false, fix: expect.stringContaining("- .:/etc/ot-gateway") })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

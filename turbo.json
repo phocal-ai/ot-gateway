@@ -19,7 +19,8 @@
       "inputs": ["src/**", "test/**", "tsconfig.json"]
     },
     "//#lint": {
-      "description": "oxlint over the whole repository (the root's lint script), beside the other tasks and cached: it reruns when any file that is not Markdown changes",
+      "description": "oxlint over the whole repository (the root's lint script), beside the other tasks and cached: it reruns when any file that is not Markdown changes. After the site's typecheck, which writes the generated types (apps/site/.source) that the site's sources import and type-aware rules read",
+      "dependsOn": ["@ot-gateway/site#typecheck"],
       "inputs": ["$TURBO_DEFAULT$", "!**/*.md"]
     },
     "build": {
