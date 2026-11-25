@@ -5,7 +5,8 @@
  * first: a `stopped` time means a clean stop, none means the run before ended some other way.
  *
  * Two small writes per run, so nothing for an SD card. A file that cannot be read or written costs the answer, never
- * the gateway: it logs a warning and runs on.
+ * the gateway: it logs a warning and runs on. Each read and write has a deadline (`RUN_FILE_DEADLINE`), so a card
+ * that hangs cannot hold the gateway's start before it connects, nor its stop.
  */
 import { Effect, Exit, FileSystem, Option, type Path, Schema } from "effect"
 
@@ -19,6 +20,9 @@ export type PreviousRun = typeof PreviousRun.Type
 const decodeRun = Schema.decodeUnknownOption(Schema.fromJsonString(PreviousRun))
 
 export const RUN_FILE = "ot-gateway-run.json"
+
+/** How long one read or write of the run file may take before the gateway gives up on it and runs on. */
+export const RUN_FILE_DEADLINE = "5 seconds"
 
 /** Where the run file goes: next to the outbox, else next to the history; nowhere for a gateway with neither. */
 export const runFilePath = (
@@ -42,13 +46,23 @@ export const trackRun = Effect.fn("trackRun")(function* (file: string, started: 
     Effect.logWarning(`could not ${what} ${file}, so the next start cannot tell how this run ended`).pipe(
       Effect.annotateLogs({ error: error.message })
     )
+  const timedOut = { message: `no answer within ${RUN_FILE_DEADLINE}` }
   const previous = yield* fs.readFileString(file).pipe(
     Effect.map(decodeRun),
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-    Effect.catchTag("PlatformError", (error) => warn("read")(error).pipe(Effect.as(Option.none<PreviousRun>())))
+    Effect.catchTag("PlatformError", (error) => warn("read")(error).pipe(Effect.as(Option.none<PreviousRun>()))),
+    Effect.timeoutOrElse({
+      duration: RUN_FILE_DEADLINE,
+      orElse: () => warn("read")(timedOut).pipe(Effect.as(Option.none<PreviousRun>()))
+    })
   )
   const write = (run: PreviousRun) =>
-    fs.writeFileString(file, `${JSON.stringify(run)}\n`).pipe(Effect.catchTag("PlatformError", warn("write")))
+    fs
+      .writeFileString(file, `${JSON.stringify(run)}\n`)
+      .pipe(
+        Effect.catchTag("PlatformError", warn("write")),
+        Effect.timeoutOrElse({ duration: RUN_FILE_DEADLINE, orElse: () => warn("write")(timedOut) })
+      )
   yield* write({ started })
   yield* Effect.addFinalizer((exit) =>
     Exit.hasInterrupts(exit)

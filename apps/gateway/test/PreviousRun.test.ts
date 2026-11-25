@@ -3,8 +3,9 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, FileSystem, Option, Path, Scope } from "effect"
-import { RUN_FILE, runFilePath, trackRun } from "../src/PreviousRun.ts"
+import { Effect, Exit, Fiber, FileSystem, Option, Path, Scope } from "effect"
+import { TestClock } from "effect/testing"
+import { RUN_FILE, RUN_FILE_DEADLINE, runFilePath, trackRun } from "../src/PreviousRun.ts"
 
 describe("trackRun", () => {
   it.effect("tells a clean stop from one that never ran its shutdown, and a first run from both", () =>
@@ -42,5 +43,38 @@ describe("trackRun", () => {
       expect(runFilePath({ history: { path: "/h/history.sqlite" } }, path)).toBe("/h/ot-gateway-run.json")
       expect(runFilePath({}, path)).toBeUndefined()
     }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("gives up on a card that hangs, at start and at stop, instead of holding the gateway", () =>
+    Effect.gen(function* () {
+      const writes: Array<string> = []
+      const hanging = FileSystem.makeNoop({
+        readFileString: () => Effect.never,
+        writeFileString: (_path, data) =>
+          Effect.andThen(
+            Effect.sync(() => writes.push(data)),
+            Effect.never
+          )
+      })
+      const scope = yield* Scope.make()
+      const started = yield* trackRun("/card/ot-gateway-run.json", 1000).pipe(
+        Scope.provide(scope),
+        Effect.provideService(FileSystem.FileSystem, hanging),
+        Effect.forkChild
+      )
+      // The read and the first write each wait out their deadline, and no longer.
+      yield* TestClock.adjust(RUN_FILE_DEADLINE)
+      expect(started.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust(RUN_FILE_DEADLINE)
+      expect(yield* Fiber.join(started)).toEqual(Option.none())
+      // The stop's write is bounded too: closing the scope finishes once its deadline has passed.
+      const stopping = yield* Scope.close(scope, Exit.interrupt(1)).pipe(Effect.forkChild)
+      yield* TestClock.adjust(RUN_FILE_DEADLINE)
+      yield* Fiber.join(stopping)
+      expect(writes.map((data) => JSON.parse(data))).toEqual([
+        { started: 1000 },
+        { started: 1000, stopped: 5_000 + 5_000 }
+      ])
+    })
   )
 })
