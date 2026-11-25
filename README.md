@@ -41,7 +41,7 @@ One minute, no devices needed. With [Docker Desktop](https://www.docker.com/prod
 docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
 ```
 
-Or from a checkout, with Node.js 22.18 or newer (24 LTS recommended) and pnpm 10:
+Or from a checkout, with Node.js 22.18 or newer (24 LTS recommended) and pnpm 10 (`sudo npm install -g pnpm@10` on Node 25 or later, which no longer include corepack):
 
 ```bash
 git clone https://github.com/phocal-ai/ot-gateway

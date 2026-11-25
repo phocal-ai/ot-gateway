@@ -297,6 +297,15 @@ describe("the status of alarm points", () => {
         ["contact", "off", undefined],
         ["speed", undefined, undefined]
       ])
+      // The status page's poll asks for neither, and an alarm point still marks its row with `points: "all"`.
+      expect(yield* state.snapshot("none", "none")).not.toHaveProperty("alarms")
+      const pointsOnly = yield* state.snapshot("all", "none")
+      expect(pointsOnly).not.toHaveProperty("alarms")
+      expect(pointsOnly.devices[0]?.points.map((point) => [point.id, point.alarmWhen, point.alarmActive])).toEqual([
+        ["trip", "on", true],
+        ["contact", "off", undefined],
+        ["speed", undefined, undefined]
+      ])
       // Without alarm points, no `alarms` at all.
       const plain = yield* configWith([speed])
       expect(yield* makeStatusState(plain, makeHealthRegistry(["pump"]), 0).snapshot("none")).not.toHaveProperty(

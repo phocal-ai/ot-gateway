@@ -59,10 +59,11 @@ const withinThreeSeconds = <A, E extends { readonly message: string }, R>(reques
 
 /**
  * The status, for the whole page: health, broker, buffer, host and commands, without each point's value (that is
- * a megabyte every poll at 10,000 points). The points page asks for the values of the rows it shows.
+ * a megabyte every poll at 10,000 points). The points page asks for the values of the rows it shows. Without the alarm list too: the page reads alarm
+ * values from `/api/values`, and the list is one object per alarm point on every poll.
  */
 export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = gateway.pipe(
-  Effect.flatMap((client) => client.status.status({ query: { points: "none" } })),
+  Effect.flatMap((client) => client.status.status({ query: { points: "none", alarms: "none" } })),
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )

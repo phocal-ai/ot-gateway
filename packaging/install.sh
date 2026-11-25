@@ -6,7 +6,7 @@
 # - Runs from a checkout owned by root or by the user running sudo, and not writable
 #   by group or others; it refuses any other and installs nothing.
 # - Builds the runtime files and their production dependencies in
-#   /opt/ot-gateway.new (pnpm through corepack; Node 22.18 or later needed), and
+#   /opt/ot-gateway.new (pnpm, or corepack's; Node 22.18 or later needed), and
 #   swaps them in for /opt/ot-gateway only once the config passes their check.
 # - Creates the system user `ot-gateway`, and /etc/ot-gateway/gateway.json from the
 #   config given (or keeps the one already there; the example config on a
@@ -32,6 +32,16 @@ command -v runuser >/dev/null || fail "runuser (util-linux) is needed"
 command -v node >/dev/null || fail "Node.js 22.18 or later is needed: https://nodejs.org/en/download"
 node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 18) ? 0 : 1)' ||
   fail "Node.js $(node --version) is too old: 22.18 or later runs the TypeScript sources directly"
+
+# pnpm installs the production dependencies: pnpm itself (10 or later), or corepack, which Node 25 and later no
+# longer include. Found now, so a missing one changes nothing.
+if command -v pnpm >/dev/null; then
+  pnpm_cmd=(pnpm)
+elif command -v corepack >/dev/null; then
+  pnpm_cmd=(corepack pnpm)
+else
+  fail "pnpm is needed, and Node.js $(node --version) has no corepack: run sudo npm install -g pnpm@10 (or sudo npm install -g corepack), then this again"
+fi
 
 # Root copies the checkout: a symlink in it (say apps/web/out/env -> /etc/ot-gateway/gateway.env) would end up
 # where the service reads or serves files. node_modules is pnpm's own links, and is not copied.
@@ -117,7 +127,7 @@ if [[ -f $repo/apps/web/out/index.html ]]; then
 else
   echo "The status page is not built (pnpm --filter @ot-gateway/web build); the gateway serves its API only."
 fi
-(cd "$staging" && corepack pnpm install --frozen-lockfile --prod --ignore-scripts --filter "@ot-gateway/gateway...")
+(cd "$staging" && "${pnpm_cmd[@]}" install --frozen-lockfile --prod --ignore-scripts --filter "@ot-gateway/gateway...")
 
 mkdir -p /etc/ot-gateway
 if [[ -n $config_source ]]; then

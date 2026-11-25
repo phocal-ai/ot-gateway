@@ -221,6 +221,44 @@ describe("testing a device from the status page", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("says when another BACnet device answers at the address, instead of reading its values", () =>
+    Effect.gen(function* () {
+      const { port, running } = yield* startGateway([])
+      const wrongInstance = { ...heatPump, deviceInstance: 2002 }
+      const reply = yield* post(port, "/api/test/read", { text: configText(port, [wrongInstance]), device: 0 })
+      expect(reply.body).toMatchObject({
+        ok: false,
+        target: `device 2002 at ${HEAT_PUMP}:47808`,
+        error: {
+          reason: "configuration",
+          message: `the device at ${HEAT_PUMP}:47808 is device 2001, not device 2002`
+        },
+        points: []
+      })
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect(
+    "runs a device whose instance another device answers for as failing, and publishes none of its values",
+    () =>
+      Effect.gen(function* () {
+        const { port, running, broker } = yield* startGateway([{ ...heatPump, deviceInstance: 2002 }])
+        const status = yield* whileTimePasses(() => request(port, "GET", "/api/status?points=none", undefined, {}))
+        expect(status.body).toMatchObject({
+          devices: [
+            {
+              id: "heat-pump",
+              reason: "configuration",
+              lastError: `the device at ${HEAT_PUMP}:47808 is device 2001, not device 2002`
+            }
+          ]
+        })
+        expect(broker.messages.filter((message) => message.topic === "s/b/heat-pump/flow")).toEqual([])
+        yield* Fiber.interrupt(running)
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.effect("says when a device refuses a second connection while the gateway holds one", () =>
     Effect.gen(function* () {
       const { port, running, meterControl } = yield* startGateway([{ ...meter, points: meter.points.slice(0, 1) }], {
@@ -410,6 +448,25 @@ describe("testing the broker from the status page", () => {
   )
 })
 
+describe("the broker test keeps the running password variable", () => {
+  it.effect("refuses a candidate that names another variable, without connecting", () =>
+    Effect.gen(function* () {
+      const { port, running, broker } = yield* startGateway([])
+      const connectsBefore = broker.connects.length
+      const text = configText(port, []).replace(
+        `"url": "mqtt://${BROKER}:1883"`,
+        `"url": "mqtt://${BROKER}:1883",\n    "passwordEnv": "OTHER_VARIABLE"`
+      )
+      expect(text).toContain("OTHER_VARIABLE")
+      const reply = yield* post(port, "/api/test/broker", { text })
+      expect(reply.status).toBe(400)
+      expect(reply.body).toMatchObject({ _tag: "TestInvalid", issues: [{ path: ["mqtt", "passwordEnv"] }] })
+      expect(broker.connects.length).toBe(connectsBefore)
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
 const pointsList = [
   "device,point,unit,host,register,table,type",
   `Main meter,Active power,kW,${METER},100,holding,float32`,
@@ -472,6 +529,10 @@ describe("adding a points list from the status page", () => {
         text: `device,point,host,profile\nm,*,${METER},../secret.json`
       })
       expect(String(profileFile.body["error"])).toContain("library")
+      const notAnId = yield* post(port, "/api/import/check", {
+        text: `device,point,host,profile\nm,*,${METER},../x`
+      })
+      expect(String(notAnId.body["error"])).toContain("is not a library id")
       const huge = yield* post(port, "/api/import/check", { text: "x".repeat(MAX_IMPORT_BYTES + 1) })
       expect(huge.status).toBeGreaterThanOrEqual(400)
       const nothing = yield* post(port, "/api/import/apply", { text: "name,value\nx,1", etag: "x" })
