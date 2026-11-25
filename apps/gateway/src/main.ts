@@ -20,8 +20,13 @@ import { identity } from "effect/Function"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { isLongRunning, runCli } from "./Cli.ts"
 import { loadEnvFile } from "./EnvFile.ts"
+import { hideSqliteExperimentalWarning } from "./NodeWarnings.ts"
 import { isJsonMode, reportFailure, ResultConsole, stderrConsole, stdoutClosed } from "./Output.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
+
+// First: Node 22's notice that node:sqlite is experimental is queued by the imports above and printed on the
+// next tick. It stays off stderr (NodeWarnings.ts); every other warning prints.
+hideSqliteExperimentalWarning()
 
 // A broker or device named by host name may have several addresses (localhost: 127.0.0.1 and ::1). Node tries
 // them in turn and abandons each but the last after 250 ms, which a busy event loop (a loaded Pi, emulation)
