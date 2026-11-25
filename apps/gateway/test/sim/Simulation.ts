@@ -403,8 +403,9 @@ const outboxOnDisk = (disk: { full: boolean }): typeof openDatabase => {
  * sleeps are untouched, as they are on Linux.
  */
 const steppedClock = (clock: Clock.Clock, offset: () => number): Clock.Clock => ({
-  currentTimeMillisUnsafe: () => clock.currentTimeMillisUnsafe() + offset(),
-  currentTimeMillis: Effect.sync(() => clock.currentTimeMillisUnsafe() + offset()),
+  // Whole milliseconds, as Date.now() gives them: jittered sleeps put the test clock between two.
+  currentTimeMillisUnsafe: () => Math.floor(clock.currentTimeMillisUnsafe() + offset()),
+  currentTimeMillis: Effect.sync(() => Math.floor(clock.currentTimeMillisUnsafe() + offset())),
   currentTimeNanosUnsafe: () => clock.currentTimeNanosUnsafe() + BigInt(offset()) * 1_000_000n,
   currentTimeNanos: Effect.sync(() => clock.currentTimeNanosUnsafe() + BigInt(offset()) * 1_000_000n),
   monotonicTimeNanosUnsafe: () => clock.monotonicTimeNanosUnsafe(),

@@ -12,6 +12,7 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
+    "@ot-gateway/core": "workspace:*",
     "effect": "4.1.5"
   }
 }
