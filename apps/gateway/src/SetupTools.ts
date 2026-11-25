@@ -44,7 +44,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Duration, Effect, type FileSystem, Option, type Path, Result, Schema, Semaphore } from "effect"
 import { dirname } from "node:path"
 import { checkBroker } from "./Broker.ts"
-import type { ConfigEditor } from "./ConfigEditor.ts"
+import { type ConfigEditor, pageIssues } from "./ConfigEditor.ts"
 import { checkConfigText } from "./ConfigStore.ts"
 import { pointsListFromText } from "./Import.ts"
 import { checkPointsListByDevice, type PointsListDevice, profileNames } from "./PointsList.ts"
@@ -337,6 +337,8 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
 
   const testBroker = Effect.fn("Setup.testBroker")(function* (text: string) {
     const config = yield* candidateBroker(text)
+    const refused = pageIssues(config, deps.running())
+    if (refused.length > 0) return yield* new TestInvalid({ message: "Fix the fields marked first.", issues: refused })
     return yield* gate(
       `the broker at ${config.mqtt.url}`,
       checkBroker(config, deps.network).pipe(
@@ -468,6 +470,9 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
         return Result.fail(
           `profile "${name}" is a file; on this page a points list names profiles from the library only (ot-gateway profiles list). Import it with ot-gateway import instead.`
         )
+      }
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name) || name.includes("..")) {
+        return Result.fail(`profile "${name}" is not a library id (ot-gateway profiles list names them)`)
       }
       const profile = yield* Effect.result(resolveProfile(name, { relativeTo: dirname(deps.configPath) }))
       if (Result.isFailure(profile)) return Result.fail(profile.failure.message)
