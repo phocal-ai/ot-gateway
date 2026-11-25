@@ -131,12 +131,16 @@ describe("fillPercent", () => {
 })
 
 describe("duration", () => {
-  it("says seconds under two minutes, then minutes, hours and days, to the precision that matters", () => {
+  it("says seconds under a minute, minutes and seconds under ten, then minutes, hours and days", () => {
     expect(duration(0)).toBe("0 s")
     expect(duration(20_400)).toBe("20 s")
-    expect(duration(61_000)).toBe("61 s")
-    expect(duration(119_400)).toBe("119 s")
+    expect(duration(59_400)).toBe("59 s")
+    expect(duration(61_000)).toBe("1 min 1 s")
+    expect(duration(117_000)).toBe("1 min 57 s")
+    expect(duration(119_400)).toBe("1 min 59 s")
     expect(duration(180_000)).toBe("3 min")
+    expect(duration(599_000)).toBe("9 min 59 s")
+    expect(duration(754_000)).toBe("12 min")
     expect(duration(3_600_000)).toBe("1 h")
     expect(duration(7_500_000)).toBe("2 h 5 min")
     expect(duration(86_400_000)).toBe("1 d")

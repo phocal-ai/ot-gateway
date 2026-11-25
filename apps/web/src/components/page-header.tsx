@@ -39,6 +39,10 @@ export const PageHeader = ({
   readonly count: ListCount | undefined
 }) => {
   const status = statusOf(load)
+  const counted =
+    count === undefined
+      ? undefined
+      : `${count.matching === undefined ? "" : `${formatNumber(count.matching)} of `}${formatNumber(count.total)} ${count.total === 1 ? count.noun : `${count.noun}s`}`
   return (
     <header className="flex flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -54,6 +58,15 @@ export const PageHeader = ({
         </div>
         <LiveBadge load={load} />
       </div>
+      {/* Below 400 px the four tabs and the count do not fit in one row: the count gets its own line above them. */}
+      {counted === undefined ? null : (
+        <p
+          aria-live="polite"
+          className="-mb-2 text-right text-sm text-muted-foreground tabular-nums min-[400px]:hidden"
+        >
+          {counted}
+        </p>
+      )}
       <nav aria-label="Pages" className="flex gap-1 border-b">
         {pages.map((page) => (
           <Link
@@ -69,10 +82,12 @@ export const PageHeader = ({
             {page.label}
           </Link>
         ))}
-        {count === undefined ? null : (
-          <span aria-live="polite" className="ml-auto self-center text-sm text-muted-foreground tabular-nums">
-            {count.matching === undefined ? "" : `${formatNumber(count.matching)} of `}
-            {formatNumber(count.total)} {count.total === 1 ? count.noun : `${count.noun}s`}
+        {counted === undefined ? null : (
+          <span
+            aria-live="polite"
+            className="ml-auto hidden self-center text-sm whitespace-nowrap text-muted-foreground tabular-nums min-[400px]:inline"
+          >
+            {counted}
           </span>
         )}
       </nav>

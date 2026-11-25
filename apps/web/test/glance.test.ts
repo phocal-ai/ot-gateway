@@ -8,6 +8,11 @@ import {
   alarmActive,
   alarmCount,
   alarmNote,
+  alarmTrips,
+  CLEARED_SHOWN_MS,
+  clearedAlarms,
+  clearedCount,
+  clearedNote,
   alarmWhen,
   glanceKeys,
   glancePoints,
@@ -15,8 +20,10 @@ import {
   pointFreshness,
   readLabel,
   readsOnChange,
-  shownAlarms
+  shownAlarms,
+  tripsNote
 } from "../src/lib/glance.ts"
+import type { PageEvent } from "../src/lib/events.ts"
 
 const polled = { read: "polled every 5 s", cov: false }
 const cov = { read: "on change of value where the device supports it, polled every 5 s otherwise", cov: true }
@@ -238,5 +245,90 @@ describe("shownAlarms", () => {
     expect(alarmCount(0, 1)).toBe("1 alarm last known active")
     expect(alarmCount(0, 2)).toBe("2 alarms last known active")
     expect(alarmCount(2, 1)).toBe("2 alarms active, 1 last known active")
+  })
+})
+
+/** 14:mm:ss on the day of `clock`. */
+const afternoon = (minute: number, second: number) => new Date(2026, 10, 11, 14, minute, second).getTime()
+
+const breakerRaised = (id: number, when: number, first?: true): PageEvent => ({
+  id,
+  at: when,
+  type: "alarm-raised",
+  device: "energy-meter",
+  point: "breaker",
+  value: true,
+  ...(first === undefined ? {} : { first })
+})
+
+const breakerCleared = (id: number, when: number): PageEvent => ({
+  id,
+  at: when,
+  type: "alarm-cleared",
+  device: "energy-meter",
+  point: "breaker",
+  value: false,
+  activeMs: 15_000
+})
+
+describe("clearedAlarms", () => {
+  const later = clock(14, 7)
+  const breaker = point({ device: "energy-meter", id: "breaker", name: "Main breaker tripped", alarmWhen: "on" })
+  const smoke = point({ device: "ahu-1", id: "smoke", name: "Smoke detected", alarmWhen: "on" })
+  const power = point({ device: "energy-meter", id: "power" })
+  const flapping: ReadonlyArray<PageEvent> = [
+    breakerRaised(1, afternoon(5, 0), true),
+    breakerCleared(2, afternoon(5, 30)),
+    breakerRaised(3, afternoon(6, 0)),
+    breakerCleared(4, afternoon(6, 2)),
+    breakerRaised(5, afternoon(6, 30)),
+    breakerCleared(6, afternoon(6, 32))
+  ]
+
+  it("keeps an alarm that cleared a moment ago, with when and how often it tripped", () => {
+    const [alarm, ...rest] = clearedAlarms([breaker, smoke, power], [], flapping, later)
+    expect(rest).toEqual([])
+    expect(alarm).toEqual({ point: breaker, clearedAt: afternoon(6, 32), raised: 2, flapping: false })
+    expect(alarm === undefined ? undefined : clearedNote(alarm, later)).toBe(
+      "cleared 14:06:32, raised 2 times in 15 min"
+    )
+    expect(clearedCount(1)).toBe("1 alarm cleared recently")
+  })
+
+  it("lets it go five minutes after it cleared, and leaves out the ones the banner lists as active", () => {
+    expect(clearedAlarms([breaker], [], flapping, afternoon(6, 32) + CLEARED_SHOWN_MS + 1)).toEqual([])
+    expect(clearedAlarms([breaker], [{ point: breaker }], flapping, later)).toEqual([])
+  })
+
+  it("keeps a flapping alarm, with the count the gateway gives, until it settles", () => {
+    const flaps: ReadonlyArray<PageEvent> = [
+      ...flapping,
+      { id: 7, at: afternoon(6, 40), type: "alarm-flapping", device: "energy-meter", point: "breaker", raised: 6 }
+    ]
+    const long = afternoon(6, 40) + 10 * 60_000
+    const [alarm] = clearedAlarms([breaker], [], flaps, long)
+    expect(alarm).toEqual({ point: breaker, raised: 6, flapping: true })
+    expect(alarm === undefined ? undefined : clearedNote(alarm, long)).toBe(
+      "off now, flapping, raised 6 times in 15 min"
+    )
+    const settled: ReadonlyArray<PageEvent> = [
+      ...flaps,
+      {
+        id: 8,
+        at: long,
+        type: "alarm-settled",
+        device: "energy-meter",
+        point: "breaker",
+        active: false,
+        since: afternoon(7, 0),
+        unlisted: 9
+      }
+    ]
+    expect(clearedAlarms([breaker], [], settled, long)).toEqual([])
+  })
+
+  it("counts trips only, not a first read, and says nothing for a single one", () => {
+    expect(alarmTrips(flapping, "energy-meter", "breaker", later)).toEqual({ raised: 2, flapping: false })
+    expect(tripsNote({ raised: 1, flapping: false })).toBeUndefined()
   })
 })

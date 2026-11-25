@@ -40,10 +40,10 @@ interface HistoryState {
  * chart on screen (dimmed, see `stale`) until the new one arrives, so the panel does not blank out on every step.
  * It asks in the gateway's time (`now`, from the last status), moved on by the monotonic clock between status polls:
  * the browser's clock can be far off a gateway without network time. A new `now` only updates the clock it reads;
- * it does not fetch again.
+ * it does not fetch again. `changes`: also ask when the value changed, for an on/off point's switch times.
  */
-const useHistory = (device: string, point: string, range: Range, now: number) => {
-  const of = `${device}/${point}@${range.id}`
+const useHistory = (device: string, point: string, range: Range, now: number, changes: boolean) => {
+  const of = `${device}/${point}@${range.id}${changes ? "+changes" : ""}`
   const [history, setHistory] = useState<HistoryState>({})
   const clock = useRef<GatewayClock>({ now, at: performance.now() })
   useEffect(() => {
@@ -53,21 +53,23 @@ const useHistory = (device: string, point: string, range: Range, now: number) =>
     let cancelled = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const load = () =>
-      settle(fetchHistory(device, point, range, gatewayTime(clock.current, performance.now()))).then((result) => {
-        if (cancelled) return
-        setHistory((previous) =>
-          result._tag === "Success"
-            ? { of, series: result.success }
-            : { ...previous, unreachable: result.failure.message }
-        )
-        timer = setTimeout(() => void load(), refreshMs(range))
-      })
+      settle(fetchHistory(device, point, range, gatewayTime(clock.current, performance.now()), changes)).then(
+        (result) => {
+          if (cancelled) return
+          setHistory((previous) =>
+            result._tag === "Success"
+              ? { of, series: result.success }
+              : { ...previous, unreachable: result.failure.message }
+          )
+          timer = setTimeout(() => void load(), refreshMs(range))
+        }
+      )
     void load()
     return () => {
       cancelled = true
       if (timer !== undefined) clearTimeout(timer)
     }
-  }, [device, point, range, of])
+  }, [device, point, range, changes, of])
   return { ...history, stale: history.of !== of }
 }
 
@@ -133,7 +135,8 @@ export const PointSheet = ({
 }) => {
   const dialog = useRef<HTMLDialogElement>(null)
   const [range, setRange] = useState<Range>(ranges[1])
-  const history = useHistory(point.device, point.id, range, now)
+  const boolean = typeof live?.value?.value === "boolean"
+  const history = useHistory(point.device, point.id, range, now, boolean)
   const events = useGatewayEvents()
   const failures = useMemo(() => failuresOf(events?.events ?? [], point.device), [events, point.device])
   // Its energy counter went back or jumped in this run of the gateway: a muted note, the newest last.
@@ -293,7 +296,7 @@ export const PointSheet = ({
               </p>
             ) : (
               <HistoryChart
-                boolean={typeof value?.value === "boolean"}
+                boolean={boolean}
                 device={point.device}
                 cov={point.cov}
                 failures={failures}

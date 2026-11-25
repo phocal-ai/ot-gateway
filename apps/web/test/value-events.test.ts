@@ -146,7 +146,7 @@ describe("one duration per outage", () => {
 
   it("words an older gateway's recovery as before", () => {
     const old: GatewayEvent = { id: 4, at: at(18, 35, 23), type: "device-recovered", device: "meter", downMs: 61_000 }
-    expect(eventSentence(old)).toBe("meter answering again after 61 s")
+    expect(eventSentence(old)).toBe("meter answering again after 1 min 1 s")
     expect(eventDetail(old, now)).toBeUndefined()
   })
 
