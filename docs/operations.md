@@ -14,7 +14,7 @@ One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much 
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 
-`ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login and the telemetry variables commented out. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
+`ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login, this machine's time zone (`TZ=Europe/Vienna`, so the gateway's own log lines show local time: a container is in UTC otherwise, and mounting `/etc/localtime` does not change that) and the telemetry variables commented out. For a folder made before, add the `TZ=` line yourself and run `docker compose up -d`. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
 
 ```bash
 mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile

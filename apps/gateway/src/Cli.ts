@@ -71,7 +71,7 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { failureLine, printJson, printResult } from "./Output.ts"
+import { failureLine, localTimeZone, printJson, printResult } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -392,7 +392,7 @@ const init = Command.make(
       const config = yield* initTarget(directory, flags.yes)
       const written = yield* runInit(config, flags)
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
-      const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun })
+      const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun, timeZone: localTimeZone() })
       const files = { ...folder, written: [config, ...folder.written] }
       const context = {
         ssh: sshSession(yield* sshEnvironment),
