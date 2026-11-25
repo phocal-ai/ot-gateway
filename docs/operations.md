@@ -69,7 +69,7 @@ The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose doe
 
 ### systemd, without Docker
 
-Needs Node.js 22.18 or later (24 LTS recommended) and systemd. From a checkout:
+Needs Node.js 22.18 or later (24 LTS recommended), systemd and pnpm 10 (on Node 25 or later, which no longer include corepack: `sudo npm install -g pnpm@10`). From a checkout:
 
 ```bash
 pnpm --filter @ot-gateway/web build
