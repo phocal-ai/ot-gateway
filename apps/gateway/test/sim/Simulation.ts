@@ -36,15 +36,16 @@ import {
   type SimulatorControl
 } from "@ot-gateway/modbus"
 import { type BrokerControl, makeBrokerControl, publishToSubscribers, serveMqtt } from "@ot-gateway/mqtt"
-import { Clock, Effect, Exit, Fiber, Logger, Random, Schedule, Scope } from "effect"
+import { Clock, Effect, Exit, Fiber, FileSystem, Logger, PlatformError, Random, Schedule, Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { mkdtempSync, rmSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { openDatabase } from "@ot-gateway/buffer"
 import { classifySqliteError, SqlError } from "effect/sql/SqlError"
 import { runGateway } from "../../src/Gateway.ts"
+import { RUN_FILE } from "../../src/PreviousRun.ts"
 
 export const GATEWAY = "10.0.0.1"
 export const BROKER = "10.0.0.2"
@@ -412,6 +413,57 @@ const steppedClock = (clock: Clock.Clock, offset: () => number): Clock.Clock => 
   sleep: (duration) => clock.sleep(duration)
 })
 
+/** The run file and the file it is written to before the rename over it (`PreviousRun.ts`). */
+const ours = (path: string) => basename(path) === RUN_FILE || basename(path) === `${RUN_FILE}.tmp`
+
+/**
+ * The real file system, except that the gateway's run file (`PreviousRun.ts`) lives in `files`, which outlives the
+ * gateway's restarts. Real asynchronous file I/O takes real time, and while the gateway waits on it virtual time
+ * runs on: a read and a write at every start and stop cost a restart anywhere from nothing to half an hour of
+ * virtual time, depending on the machine, and made runs of the same seed differ (#193).
+ */
+const runFileInMemory =
+  (files: Map<string, string>) =>
+  (fs: FileSystem.FileSystem): FileSystem.FileSystem => {
+    return {
+      ...fs,
+      readFileString: (path, encoding) => {
+        if (!ours(path)) return fs.readFileString(path, encoding)
+        const data = files.get(path)
+        return data === undefined
+          ? Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "FileSystem",
+                method: "readFileString",
+                pathOrDescriptor: path
+              })
+            )
+          : Effect.succeed(data)
+      },
+      writeFileString: (path, data, options) =>
+        ours(path) ? Effect.sync(() => void files.set(path, data)) : fs.writeFileString(path, data, options),
+      rename: (from, to) => {
+        if (!ours(from)) return fs.rename(from, to)
+        const data = files.get(from)
+        if (data === undefined) {
+          return Effect.fail(
+            PlatformError.systemError({
+              _tag: "NotFound",
+              module: "FileSystem",
+              method: "rename",
+              pathOrDescriptor: from
+            })
+          )
+        }
+        return Effect.sync(() => {
+          files.delete(from)
+          files.set(to, data)
+        })
+      }
+    }
+  }
+
 /** Let real I/O (the outbox's file checks) finish between steps of virtual time. */
 const realTick = Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)))
 
@@ -439,6 +491,7 @@ export const simulate = (options: SimulationOptions) =>
     const network = makeMemoryNetwork(random)
     const clock = yield* Clock.clockWith(Effect.succeed)
     const disk = { full: false }
+    const runFiles = new Map<string, string>()
     let wallOffset = 0
     const world = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(world, Exit.void))
@@ -511,6 +564,7 @@ export const simulate = (options: SimulationOptions) =>
           }
         }
       }).pipe(
+        Effect.updateService(FileSystem.FileSystem, runFileInMemory(runFiles)),
         Effect.provide(NodeServices.layer),
         Effect.provideService(
           Clock.Clock,
