@@ -5,6 +5,7 @@
  */
 import { type Device, type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Schema } from "effect"
+import { etagOf, makeConfigStore } from "./ConfigStore.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import {
   devicesFromPointsList,
@@ -177,9 +178,10 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
   const listText = yield* readPointsList(listPath)
   const added = yield* devicesFromText(listText, listPath, existing)
   const units = unitsWritten(listText)
-  const raw = checkOnly
-    ? checkOnlyConfig
-    : yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(path))
+  // One read: the text the devices are appended to and the ETag the save checks, so a change in between is refused.
+  const fileText = checkOnly ? "" : yield* fs.readFileString(path)
+  const etag = etagOf(fileText)
+  const raw = checkOnly ? checkOnlyConfig : yield* Schema.decodeUnknownEffect(ConfigObject)(fileText)
   const { text, existing: devices } = devicesAppended(raw, added)
   const target = checkOnly ? "a config" : path
   const outcome = options.dryRun ? "" : ", so nothing was written"
@@ -195,6 +197,20 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
   const decoded = config.devices.slice(devices)
   const against = checkOnly ? undefined : path
   if (options.dryRun) return { added, decoded, config: undefined, against, units } satisfies ImportResult
-  yield* fs.writeFileString(path, text)
+  const store = yield* makeConfigStore(path)
+  yield* store.save(text, etag).pipe(
+    Effect.catchTags({
+      ConfigConflict: () =>
+        Effect.fail(
+          new PointsListError({
+            message: `${path} changed while the import ran (saved from the status page, or edited): nothing was written; run the import again`
+          })
+        ),
+      ConfigInvalid: (error) => Effect.fail(new PointsListError({ message: error.message })),
+      ConfigUnreadable: (error) => Effect.fail(new PointsListError({ message: error.message })),
+      ConfigWriteFailed: (error) =>
+        Effect.fail(new PointsListError({ message: `${error.message}; ${path} is as it was` }))
+    })
+  )
   return { added, decoded, config, against, units } satisfies ImportResult
 })
