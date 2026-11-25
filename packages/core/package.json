@@ -5,11 +5,13 @@
   "license": "MIT",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./Contract": "./src/Contract.ts"
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "contract:write": "node scripts/write-contract.ts"
   },
   "dependencies": {
     "effect": "4.1.5"

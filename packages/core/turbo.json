@@ -3,7 +3,10 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      "inputs": ["src/**", "test/**", "../../docs/configuration.md"]
+      "inputs": ["src/**", "test/**", "../../docs/configuration.md", "../../docs/mqtt-contract/**"]
+    },
+    "typecheck": {
+      "inputs": ["src/**", "test/**", "scripts/**", "tsconfig.json", "../../tsconfig.base.json"]
     }
   }
 }

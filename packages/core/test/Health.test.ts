@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, Fiber, Layer, Logger, Metric } from "effect"
 import { TestClock } from "effect/testing"
 import {
+  contractVersion,
   healthTopic,
   makeHealthRegistry,
   makeMemoryPublisher,
@@ -130,6 +131,7 @@ describe("health messages", () => {
     registry.recordSuccess("meter", 5)
     expect(JSON.parse(onlinePayload(registry, 1, 10))).toEqual({
       status: "online",
+      contract: contractVersion,
       since: 1,
       ts: 10,
       devices: { meter: { status: "ok", lastSuccess: 5 } }
@@ -150,6 +152,7 @@ describe("health messages", () => {
     const host = { memoryBytes: 1e8, eventLoopLagMs: 12, clockSteps: 1, temperatureC: 61.2, throttled: [] }
     expect(JSON.parse(onlinePayload(makeHealthRegistry([]), 1, 10, host))).toEqual({
       status: "online",
+      contract: contractVersion,
       since: 1,
       ts: 10,
       devices: {},

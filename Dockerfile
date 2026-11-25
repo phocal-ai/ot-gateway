@@ -28,10 +28,12 @@ RUN corepack enable
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/api/package.json packages/api/
+COPY packages/core/package.json packages/core/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile --ignore-scripts --filter "@ot-gateway/web..."
 COPY tsconfig.base.json ./
 COPY packages/api packages/api
+COPY packages/core packages/core
 COPY apps/web apps/web
 RUN pnpm --filter @ot-gateway/web build
 
