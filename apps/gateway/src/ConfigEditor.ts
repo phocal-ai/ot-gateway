@@ -12,7 +12,8 @@ import {
   type ConfigCheck,
   type ConfigConflict,
   type ConfigFile,
-  type ConfigInvalid,
+  ConfigInvalid,
+  type ConfigIssue,
   type ConfigSaved,
   type ConfigUnreadable,
   type ConfigWriteFailed,
@@ -21,8 +22,22 @@ import {
 } from "@ot-gateway/api"
 import type { GatewayConfig } from "@ot-gateway/core"
 import { Config, Effect, Option, type Redacted, Result, Semaphore } from "effect"
-import { makeConfigStore } from "./ConfigStore.ts"
+import { describeIssues, makeConfigStore } from "./ConfigStore.ts"
 import { type EditAccess, editAccess, editToken } from "./EditGuard.ts"
+
+/**
+ * What the page may not change: the variable the broker password is read from. Variables are read when the gateway
+ * starts, so another one needs ot-gateway.env and a restart anyway; from the page, keep it or remove it.
+ */
+export const pageIssues = (candidate: GatewayConfig, running: GatewayConfig): ReadonlyArray<ConfigIssue> =>
+  candidate.mqtt.passwordEnv === undefined || candidate.mqtt.passwordEnv === running.mqtt.passwordEnv
+    ? []
+    : [
+        {
+          path: ["mqtt", "passwordEnv"],
+          message: `the page keeps ${running.mqtt.passwordEnv === undefined ? "no password variable" : running.mqtt.passwordEnv} here: to read the password from another variable, set it in ot-gateway.env, edit ot-gateway.json by hand and restart the gateway`
+        }
+      ]
 
 /** The file the running config came from, and how its relative paths were resolved at start. */
 export interface ConfigFileSource {
@@ -92,17 +107,27 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
   })
 
   const check = (text: string) =>
-    store
-      .check(text)
-      .pipe(
-        Effect.map((result): ConfigCheck =>
-          Result.isSuccess(result) ? { valid: true, issues: [] } : { valid: false, issues: result.failure }
-        )
-      )
+    store.check(text).pipe(
+      Effect.map((result): ConfigCheck => {
+        if (Result.isFailure(result)) return { valid: false, issues: result.failure }
+        const issues = pageIssues(result.success, deps.running())
+        return issues.length === 0 ? { valid: true, issues: [] } : { valid: false, issues }
+      })
+    )
 
   const save = Effect.fn("ConfigEditor.save")(function* (text: string, etag: string) {
     const editable = yield* store.editability
     if (!editable.writable) return yield* new EditingDisabled({ message: `${editable.reason} ${editable.fix}` })
+    const candidate = yield* store.check(text)
+    if (Result.isSuccess(candidate)) {
+      const issues = pageIssues(candidate.success, deps.running())
+      if (issues.length > 0) {
+        return yield* new ConfigInvalid({
+          message: `not a valid config:\n${describeIssues(issues).join("\n")}`,
+          issues
+        })
+      }
+    }
     const saved = yield* store.save(text, etag)
     const applied = yield* deps
       .apply(deps.file.resolve(saved.config))
