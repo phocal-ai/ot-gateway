@@ -196,6 +196,9 @@ export type HostHealthPayload = typeof HostHealthPayload.Type
 
 export const OnlineHealthPayload = Schema.Struct({
   status: Schema.Literal("online"),
+  contract: Schema.String.annotate({
+    description: "The version of this contract the gateway speaks, major.minor: a consumer checks the major."
+  }),
   since: UnixMillis.annotate({ description: "When the gateway started (Unix ms)." }),
   ts: UnixMillis.annotate({
     description: "When this message was written (Unix ms): it advances with every heartbeat."

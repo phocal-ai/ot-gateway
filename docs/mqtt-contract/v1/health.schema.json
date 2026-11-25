@@ -9,6 +9,10 @@
           "type": "string",
           "enum": ["online"]
         },
+        "contract": {
+          "type": "string",
+          "description": "The version of this contract the gateway speaks, major.minor: a consumer checks the major."
+        },
         "since": {
           "type": "integer",
           "minimum": 0,
@@ -71,7 +75,7 @@
           "title": "Host health"
         }
       },
-      "required": ["status", "since", "ts", "devices"],
+      "required": ["status", "contract", "since", "ts", "devices"],
       "additionalProperties": true,
       "title": "Gateway online"
     },
