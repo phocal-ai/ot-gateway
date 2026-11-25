@@ -336,4 +336,36 @@ describe("importPointsList", () => {
       expect(yield* fs.readFileString(configPath)).toBe(written)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+
+  it.effect("keeps the previous config as .bak, leaves no .tmp and keeps the file's mode", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const configPath = `${directory}/gateway.json`
+      const original = JSON.stringify(initConfig(answers, []))
+      yield* fs.writeFileString(configPath, original, { mode: 0o600 })
+      yield* fs.chmod(configPath, 0o600)
+
+      yield* importPointsList(examplePoints, configPath, { dryRun: false })
+      expect(yield* fs.readFileString(`${configPath}.bak`)).toBe(original)
+      expect(yield* fs.exists(`${configPath}.tmp`)).toBe(false)
+      expect((yield* fs.stat(configPath)).mode & 0o777).toBe(0o600)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("fails with the file as it was when the write fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const configPath = `${directory}/gateway.json`
+      const original = JSON.stringify(initConfig(answers, []))
+      yield* fs.writeFileString(configPath, original)
+      yield* fs.makeDirectory(`${configPath}.bak`)
+
+      const error = yield* importPointsList(examplePoints, configPath, { dryRun: false }).pipe(Effect.flip)
+      expect(error._tag).toBe("PointsListError")
+      expect(error.message.endsWith("is as it was")).toBe(true)
+      expect(yield* fs.readFileString(configPath)).toBe(original)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
 })
