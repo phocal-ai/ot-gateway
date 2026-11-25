@@ -207,7 +207,7 @@ export const FirstRun = ({ status, onClose }: { readonly status: GatewayStatus; 
         <Step number={2} title="Devices" done={view.devices} current={view.next === 2}>
           {view.devices ? (
             <p className="text-sm text-muted-foreground">
-              {devices} device{devices === 1 ? "" : "s"} in the config.{" "}
+              {devices} device{devices === 1 ? "" : "s"} on this gateway.{" "}
               <Link className="underline underline-offset-4 hover:text-foreground" href="/settings/">
                 Add more
               </Link>

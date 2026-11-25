@@ -449,10 +449,46 @@ export const touching = (touched: Touched, scope: string, field: string, autoId:
 }
 
 /**
+ * Fields chosen from a list (or a button): a choice is made at once, so its issues may show at once. A field typed
+ * into shows its issues once it is left (`fieldLeft`), not while the first characters are typed.
+ */
+const chosenFields = new Set(["table", "dataType", "byteOrder", "objectType", "publish", "alarmWhen", "writable"])
+
+export const isChosenField = (field: string) => chosenFields.has(field)
+
+/**
+ * The scope and field of a form element the person left, from its element id: `device-host` is the device's host,
+ * `point-p3-register` point p3's register. The interval's element is the device's `intervalSeconds`, and both limits
+ * count as the point's `limits`.
+ */
+export const fieldLeft = (elementId: string): { readonly scope: string; readonly field: string } | undefined => {
+  const device = /^device-(\w+)$/.exec(elementId)
+  if (device?.[1] !== undefined)
+    return { scope: "device", field: device[1] === "interval" ? "intervalSeconds" : device[1] }
+  const point = /^point-(p\d+)-(\w+)$/.exec(elementId)
+  if (point?.[1] === undefined || point[2] === undefined) return undefined
+  return { scope: point[1], field: point[2].startsWith("limit") ? "limits" : point[2] }
+}
+
+/** A field key that stands for every field of a scope: a test or a save asked for them all. */
+const EVERY_FIELD = "*"
+
+/**
+ * Every field of the device and of each point it has now, as touched: a test or a save asked for all of them. A point
+ * added after that is new again, and stays quiet until its own fields are left or the next test or save.
+ */
+export const touchingAll = (touched: Touched, draft: DeviceDraft): Touched => {
+  const next = new Set(touched)
+  next.add(touchedKey("device", EVERY_FIELD))
+  for (const point of draft.points) next.add(touchedKey(point.key, EVERY_FIELD))
+  return next
+}
+
+/**
  * The issues to show under the fields: every one of a device or point the file has already, but of a new one only
- * those of the fields typed in, unless `all` (a test or a save asked for everything). A new point does not flash red
- * about an id still being derived or an address not typed yet. `quiet` says whether any were held back, so the page
- * can say why Save waits.
+ * those of the fields a person has left (blur) or chose, and all of a scope once a test or a save asked for them
+ * (`touchingAll`), or of every scope when `all`. A new point does not flash red about an id still being derived or an
+ * address not typed yet. `quiet` says whether any were held back, so the page can say why Save waits.
  */
 export const visibleIssues = (
   issues: DeviceIssues,
@@ -466,7 +502,7 @@ export const visibleIssues = (
     isNew
       ? Object.fromEntries(
           Object.entries(byField).filter(([field]) => {
-            const shown = touched.has(touchedKey(scope, field))
+            const shown = touched.has(touchedKey(scope, field)) || touched.has(touchedKey(scope, EVERY_FIELD))
             if (!shown) quiet = true
             return shown
           })
@@ -563,6 +599,38 @@ export const alarmChoices: ReadonlyArray<{ readonly value: AlarmWhenChoice; read
   { value: "on", label: "Alarm when on (true, 1)" },
   { value: "off", label: "Alarm when off (false, 0)" }
 ]
+
+/**
+ * What the Address field says for a table: the address is counted from 0, and a register map's 5- or 6-digit
+ * numbers carry the table in their first digit (Modbus Application Protocol 1.1b3, 4.4: each table starts at 1 in
+ * that numbering, so its first entry is address 0).
+ */
+export const registerHint = (table: string) => {
+  switch (table) {
+    case "coil":
+      return "Counted from 0: 00001 in a register map is 0."
+    case "discrete":
+      return "Counted from 0: 10001 in a register map is 0."
+    case "input":
+      return "Counted from 0: 30001 in a register map is 0, 30101 is 100."
+    default:
+      return "Counted from 0: 40001 in a register map is 0, 40101 is 100."
+  }
+}
+
+/** Whether a point has a unit to show: a bit (a coil, a discrete input, a binary object, a bool) has none. */
+export const takesUnit = (protocol: EditableProtocol, point: PointDraft) => !isBoolean(protocol, point)
+
+/** A slug as the gateway takes an id (packages/core Point.ts `Slug`). */
+const isSlug = (typed: string) => /^[a-z0-9][a-z0-9_-]*$/.test(typed) && typed.length <= 64
+
+/**
+ * The device as a test reads it. Reading needs the host or instance and the points, not the device's id, so an id
+ * still being typed (empty, or not a slug yet) is replaced by a valid one for the test: the test runs, and the id's
+ * own issue stays under its field for the save.
+ */
+export const forTest = (draft: DeviceDraft): DeviceDraft =>
+  isSlug(draft.id.trim()) ? draft : { ...draft, id: slugify(draft.id) || "new-device" }
 
 /** Whether a Modbus point reads bits (a coil or discrete input), which have no type, byte order or scaling. */
 export const readsBits = (point: PointDraft) => point.table === "coil" || point.table === "discrete"

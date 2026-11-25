@@ -508,7 +508,8 @@ const BufferDetails = ({ status, view }: { readonly status: GatewayStatus; reado
           gateway&apos;s disk and sends them once the broker is back.
         </p>
         <p className="text-sm text-muted-foreground">
-          To add one, put a <code className="font-mono">buffer</code> block in the config and restart the gateway.
+          To add one, put a <code className="font-mono">buffer</code> block in the settings file and restart the
+          gateway.
         </p>
         <Link className="text-sm underline-offset-4 hover:underline" href="/settings/">
           Settings →
@@ -706,7 +707,7 @@ const Overview = ({
         label="Devices"
         note={note(
           status.devices.length === 0
-            ? "no devices in the config yet"
+            ? "no devices on this gateway yet"
             : failing > 0
               ? `devices answering, ${failing} failing`
               : ok === status.devices.length

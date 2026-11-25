@@ -6,6 +6,7 @@
  * The version changes only when a list that worked stops working or means something else; a new optional
  * column keeps it.
  */
+import type { PointsListFormat } from "@ot-gateway/api"
 import { ByteOrder, DataType } from "@ot-gateway/core"
 import { toCsv } from "./Csv.ts"
 import { columnAliases, columnName } from "./PointsList.ts"
@@ -309,6 +310,14 @@ export const pointsListTemplate = () => {
   const names = pointsListColumns.map((column) => column.name)
   return toCsv([names, ...templateRows.map((row) => names.map((name) => row[name] ?? ""))])
 }
+
+/** The format for the status page (`GET /api/points/format`): the template and the columns, without aliases. */
+export const pointsListFormat = (): PointsListFormat => ({
+  version: pointsListVersion,
+  template: pointsListTemplate(),
+  rules: pointsListRules,
+  columns: pointsListColumns
+})
 
 /** The columns of a header the format does not know, as written. */
 export const unknownColumns = (header: ReadonlyArray<string>) => {

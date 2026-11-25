@@ -22,7 +22,10 @@ import {
   deviceIndex,
   devicesOf,
   type EditableProtocol,
+  fieldLeft,
+  forTest,
   isBoolean,
+  isChosenField,
   isDeviceChanged,
   newDevice,
   newPoint,
@@ -31,11 +34,14 @@ import {
   pointSource,
   publishModes,
   readsBits,
+  registerHint,
   slugify,
   tables,
   takesLimits,
+  takesUnit,
   type Touched,
   touching,
+  touchingAll,
   unitChoices,
   visibleIssues,
   withDevice,
@@ -86,7 +92,8 @@ const Messages = ({
   readonly messages?: ReadonlyArray<string> | undefined
   readonly hint?: string | undefined
 }) => (
-  <div id={id} className="text-xs">
+  // One line kept free under every field, so a message that comes or goes does not move the form under the pointer.
+  <div id={id} className="min-h-4 text-xs">
     {(messages ?? []).map((message) => (
       <p className="text-destructive" key={message}>
         {message}
@@ -307,7 +314,7 @@ const PointFields = ({
             label="Address"
             value={point.register}
             numeric
-            hint="Counted from 0: 40101 in a register map is often 100."
+            hint={registerHint(point.table)}
             issues={issues["register"]}
             onChange={set("register")}
             disabled={disabled}
@@ -346,7 +353,8 @@ const PointFields = ({
           />
         </>
       )}
-      {bits ? null : (
+      {/* A bit has no unit; a unit the file gives one anyway still shows when the check names it. */}
+      {!takesUnit(protocol, point) && issues["unit"] === undefined ? null : (
         <TextField
           id={id("unit")}
           label="Unit"
@@ -615,10 +623,10 @@ export const DeviceEditor = ({
   const [deviceTest, setDeviceTest] = useState<TestState | undefined>(undefined)
   const [pointTests, setPointTests] = useState<Readonly<Record<string, TestState>>>({})
   const [confirmRemove, setConfirmRemove] = useState(false)
-  /** A new device's untouched fields stay quiet until a test or a save asks for them. */
-  const [attempted, setAttempted] = useState(false)
   const [token, setToken] = useState(() => readToken() ?? "")
   const checkRun = useRef(0)
+  /** Counts the changes to the form: a test that comes back after one read fields that are no longer there. */
+  const edits = useRef(0)
 
   const load = () => {
     setForm({ _tag: "loading" })
@@ -634,7 +642,7 @@ export const DeviceEditor = ({
         })
       const index = deviceId === undefined ? -1 : (deviceIndex(result.success.text, deviceId) ?? -1)
       if (deviceId !== undefined && index < 0)
-        return setForm({ _tag: "unreadable", message: `The config file has no device ${deviceId} any more.` })
+        return setForm({ _tag: "unreadable", message: `This gateway has no device ${deviceId} any more.` })
       const found = index < 0 ? undefined : devices[index]
       const draft = found === undefined ? (initial ?? newDevice(protocol)) : deviceDraft(found)
       if (draft === undefined)
@@ -688,31 +696,55 @@ export const DeviceEditor = ({
   const { draft } = form
   const pending = candidate !== undefined && checked?.candidate !== candidate
   const issues = checked !== undefined && checked.candidate === candidate ? checked.issues : []
-  const byField = visibleIssues(deviceIssues(issues, form.index, draft), draft, touched, attempted)
+  const byField = visibleIssues(deviceIssues(issues, form.index, draft), draft, touched, false)
   const changed = isDeviceChanged(draft)
   const busy = saving._tag === "saving"
   const testing = deviceTest?._tag === "running" || Object.values(pointTests).some((test) => test._tag === "running")
-  const setDraft = (next: DeviceDraft) => setForm({ ...form, draft: next })
-  const set = (field: keyof DeviceDraft) => (value: string) => {
-    setTouched(touching(touched, "device", field, false))
-    setDraft({ ...draft, [field]: value })
+  /**
+   * The form with `next`, and the test results it makes stale gone: the device's always (it reads every point),
+   * one point's when only that point changed (`point`), every point's when a device field did.
+   */
+  const setDraft = (next: DeviceDraft, point?: string) => {
+    edits.current++
+    setForm({ ...form, draft: next })
+    setDeviceTest(undefined)
+    if (point === undefined) setPointTests({})
+    else setPointTests((tests) => Object.fromEntries(Object.entries(tests).filter(([key]) => key !== point)))
   }
+  const set = (field: keyof DeviceDraft) => (value: string) => setDraft({ ...draft, [field]: value })
   const setPoint = (position: number, point: PointDraft, field: string) => {
-    setTouched(touching(touched, point.key, field, point.autoId))
-    setDraft({ ...draft, points: draft.points.map((existing, index) => (index === position ? point : existing)) })
+    // A typed field shows its issues once it is left (`leave`); a choice, at once.
+    if (isChosenField(field)) setTouched(touching(touched, point.key, field, point.autoId))
+    setDraft(
+      { ...draft, points: draft.points.map((existing, index) => (index === position ? point : existing)) },
+      point.key
+    )
+  }
+  /** A field was left: its issues show from now on (a point's name also its id, while the id follows the name). */
+  const leave = (elementId: string) => {
+    const left = fieldLeft(elementId)
+    if (left === undefined) return
+    const autoId = draft.points.find((point) => point.key === left.scope)?.autoId ?? false
+    setTouched((current) => touching(current, left.scope, left.field, autoId))
   }
 
   /** Read the device (every point) or one point with the form as it is, and show what came back where it belongs. */
   const runTest = (position?: number) => {
     if (candidate === undefined) return
-    setAttempted(true)
+    setTouched((current) => touchingAll(current, draft))
+    // The device's id is not needed to read it: one still being typed does not hold the test back.
+    const tested = withDevice(form.text, form.index, forTest(draft))
+    if (tested === undefined) return
     const point = position === undefined ? undefined : draft.points[position]
     const running: TestState = { _tag: "running" }
     if (point === undefined) setDeviceTest(running)
     else setPointTests((tests) => ({ ...tests, [point.key]: running }))
-    void Effect.runPromise(testRead(candidate, form.index, position === undefined ? undefined : [position])).then(
+    const version = edits.current
+    void Effect.runPromise(testRead(tested, form.index, position === undefined ? undefined : [position])).then(
       (outcome) => {
-        if (outcome._tag === "invalid") setChecked({ candidate, issues: outcome.issues })
+        // The form changed while the test ran: its result is about fields that are gone, and was cleared then.
+        if (edits.current !== version) return
+        if (outcome._tag === "invalid" && tested === candidate) setChecked({ candidate, issues: outcome.issues })
         const done: TestState = { _tag: "done", outcome }
         if (point === undefined) setDeviceTest(done)
         else setPointTests((tests) => ({ ...tests, [point.key]: done }))
@@ -756,10 +788,12 @@ export const DeviceEditor = ({
   return (
     <form
       className="grid gap-5"
+      // React's blur bubbles: a field left anywhere in the form may show its issues from now on.
+      onBlur={(event) => leave(event.target.id)}
       onSubmit={(event) => {
         event.preventDefault()
         // Fields held back show what keeps the save; nothing is sent with issues.
-        if (issues.length > 0) return setAttempted(true)
+        if (issues.length > 0) return setTouched((current) => touchingAll(current, draft))
         save(candidate, false)
       }}
     >
@@ -770,7 +804,10 @@ export const DeviceEditor = ({
       </datalist>
       <section className="grid gap-3" aria-labelledby="device-heading">
         <h3 id="device-heading" className="font-medium">
-          {form.isNew ? `New ${protocolName[draft.protocol] ?? draft.protocol} device` : draft.id || "Device"}
+          {/* The saved id, not the one being typed: the heading names the device being edited. */}
+          {form.isNew
+            ? `New ${protocolName[draft.protocol] ?? draft.protocol} device`
+            : `Editing ${deviceId ?? draft.id}`}
         </h3>
         <div className="grid gap-3 sm:grid-cols-2">
           <TextField
@@ -980,7 +1017,7 @@ export const DeviceEditor = ({
         </div>
       ) : outcome._tag === "invalid" ? (
         <p className="text-sm text-destructive" role="alert">
-          Not saved: the config has problems, shown above.
+          Not saved: the settings have problems, shown above.
         </p>
       ) : outcome._tag === "saved" ? null : (
         <p className="text-sm break-words text-destructive" role="alert">

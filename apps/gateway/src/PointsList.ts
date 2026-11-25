@@ -489,9 +489,11 @@ const toDevice = Effect.fnUntraced(function* (
   name: string,
   rows: ReadonlyArray<Row>,
   inConfig: ReadonlySet<string>,
-  listed: Map<string, string>
+  listed: Map<string, string>,
+  /** What the id is made from, when not the name: another id the status page gave the device. */
+  idFrom: string = name
 ) {
-  const id = slugify(name)
+  const id = slugify(idFrom)
   if (id === "") return yield* fail(`device "${name}": its name has no letters or digits`)
   if (inConfig.has(id)) return yield* fail(`device id "${id}" is already in the config`)
   const earlier = listed.get(id)
@@ -629,24 +631,50 @@ export interface CheckedDevice {
 }
 
 /**
+ * What the status page changes about one device of a list before adding it, the file left as it is: the id it gets,
+ * and the host (Modbus TCP) or address (BACnet/IP) of every row of it. Empty values are left out.
+ */
+export interface DeviceOverride {
+  readonly id?: string | undefined
+  readonly host?: string | undefined
+  readonly address?: string | undefined
+}
+
+/** The rows of a device with an override's host and address in place of the file's. */
+const overriddenRows = (rows: ReadonlyArray<Row>, override: DeviceOverride): ReadonlyArray<Row> => {
+  const replaced = new Map<string, string>()
+  for (const column of ["host", "address"] as const) {
+    const value = override[column]?.trim()
+    if (value !== undefined && value !== "") replaced.set(column, value)
+  }
+  if (replaced.size === 0) return rows
+  return rows.map((row) => ({ line: row.line, get: (column) => replaced.get(column) ?? row.get(column) }))
+}
+
+/**
  * The devices of a points list, each checked on its own with the rules of `devicesFromPointsList` (which stops at
  * the first mistake), for the status page: it shows every device with its mistake and adds the ones without. A
- * mistake in the list as a whole (its header, a row without a device) still fails.
+ * mistake in the list as a whole (its header, a row without a device) still fails. `overrides`, by the device's name
+ * as the list writes it, give a device another id, host or address than the file does.
  */
 export const checkPointsListByDevice = Effect.fn("checkPointsListByDevice")(function* (
   text: string,
   existing: ReadonlyArray<string> = [],
-  profiles: ReadonlyMap<string, Profile> = new Map()
+  profiles: ReadonlyMap<string, Profile> = new Map(),
+  overrides: ReadonlyMap<string, DeviceOverride> = new Map()
 ) {
   const groups = yield* groupRows(text, profiles)
   const inConfig = new Set(existing)
   const listed = new Map<string, string>()
-  return yield* Effect.forEach(groups, (group) =>
-    Effect.map(
+  return yield* Effect.forEach(groups, (group) => {
+    const override = overrides.get(group.name)
+    const id = override?.id?.trim()
+    const rows = override === undefined ? group.rows : overriddenRows(group.rows, override)
+    return Effect.map(
       group.expansionError === undefined
-        ? Effect.result(toDevice(group.name, group.rows, inConfig, listed))
+        ? Effect.result(toDevice(group.name, rows, inConfig, listed, id === undefined || id === "" ? group.name : id))
         : Effect.succeed(Result.fail(group.expansionError)),
       (result): CheckedDevice => ({ name: group.name, lines: group.lines, result })
     )
-  )
+  })
 })

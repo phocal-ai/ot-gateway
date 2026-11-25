@@ -1,5 +1,14 @@
 import { describe, expect, it } from "@effect/vitest"
-import { deviceAddress, duration, formatSetting, sectionTitle, settingLabel } from "../src/lib/settings.ts"
+import {
+  deviceAddress,
+  duration,
+  editAccessLine,
+  fileName,
+  formatSetting,
+  sectionTitle,
+  settingLabel,
+  splitTuning
+} from "../src/lib/settings.ts"
 
 describe("formatSetting", () => {
   it("shows durations, yes and no, amounts and names as people read them", () => {
@@ -54,5 +63,35 @@ describe("duration", () => {
   it("picks the unit", () => {
     expect(duration(1500)).toBe("1.5 s")
     expect(duration(5_400_000)).toBe("1.5 h")
+  })
+})
+
+describe("splitTuning", () => {
+  it("puts request pacing, sizes and retries under Advanced and keeps the rest in order", () => {
+    const entries = [{ key: "host" }, { key: "requestGapMs" }, { key: "unitId" }, { key: "maxRegistersPerRead" }]
+    expect(splitTuning(entries)).toEqual({
+      main: [{ key: "host" }, { key: "unitId" }],
+      advanced: [{ key: "requestGapMs" }, { key: "maxRegistersPerRead" }]
+    })
+  })
+})
+
+describe("fileName", () => {
+  it("shows a path by its last part, with either slash and a trailing one", () => {
+    expect(fileName("/var/lib/ot-gateway/buffer.db")).toBe("buffer.db")
+    expect(fileName("C:\\data\\history.db")).toBe("history.db")
+    expect(fileName("/srv/web/")).toBe("web")
+    expect(fileName("plain.db")).toBe("plain.db")
+  })
+})
+
+describe("editAccessLine", () => {
+  it("says why editing is allowed: a token on the network, or loopback only", () => {
+    expect(editAccessLine({ enabled: true, auth: "token" })).toContain("OT_GATEWAY_EDIT_TOKEN")
+    expect(editAccessLine({ enabled: true, auth: "none" })).toContain("127.0.0.1")
+  })
+
+  it("says nothing while editing is off: the reason and the fix say it then", () => {
+    expect(editAccessLine({ enabled: false, auth: "none" })).toBeUndefined()
   })
 })
