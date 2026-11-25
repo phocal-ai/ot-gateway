@@ -1,6 +1,6 @@
 # The MQTT contract
 
-> **Status: draft (design note).** This page proposes contract version 1.0 for review. It is not on the docs site yet; once the open questions below are settled it becomes the reference page, and the design sections move to the pull request that adds it.
+> **Status: draft (design note).** This page proposes contract version 1.0 for review. It is not in the docs site's navigation yet; once it is accepted it becomes the reference page, and the design sections move to the pull request that adds it.
 
 What a consumer sees on the broker is the product (VISION.md, principle 3). This page says what that is: every topic the gateway publishes or listens on, the shape of every payload, and the rules for changing them. Each payload has a JSON Schema, so a consumer or an agent knows what arrives without reading the code.
 
@@ -30,11 +30,15 @@ The schemas are in [`docs/mqtt-contract/v1/`](mqtt-contract/v1/), one file per m
 
 All times are Unix milliseconds, whole numbers, from the gateway's wall clock.
 
+On an MQTT 3.1.1 broker (`mqtt.version`), commands lose the two MQTT 5 features: correlation data and message expiry. A result can then be matched to its command only by its topic and its time, and a command waits at most the gateway's own 10 seconds.
+
 ## Design
 
 ### One source: Effect Schemas in core
 
-The contract is `packages/core/src/Contract.ts`: an Effect Schema per message, the topic table, `contractMessageOf(topic)` and `decodeContractMessage`. The JSON Schemas are generated from it (`Schema.toJsonSchemaDocument`, draft 2020-12) and checked in under `docs/mqtt-contract/v<major>/` by `pnpm --filter @ot-gateway/core contract:write`, so they can be linked and read without running anything.
+The contract is `packages/core/src/Contract.ts`: an Effect Schema per message, the topic table, `contractMessageOf(topic)` and `decodeContractMessage`. The JSON Schemas are generated from it (`Schema.toJsonSchemaDocument`, draft 2020-12) and checked in under `docs/mqtt-contract/v<major>/` by `pnpm --filter @ot-gateway/core contract:write`, so they can be linked and read without running anything. The project site serves the same files (`apps/site/scripts/content.ts` copies them), and each schema's `$id` is its address there, e.g. `https://ot-gateway.vercel.app/mqtt-contract/v1/value.schema.json`.
+
+The status page names topics with the same table: `topicKind` in `@ot-gateway/api` is `contractMessageOf` from `@ot-gateway/core/Contract`, so the page and the contract cannot disagree on what a topic carries.
 
 The payload builders (`ValueMessage` and `metaPayload` in `Pipeline.ts`, `closeWindow` in `Publish.ts`, `onlinePayload` in `Health.ts`, the result in `Command.ts`) stay as they are. The contract does not replace them; it checks them.
 
@@ -77,12 +81,14 @@ The contract has its own version, `major.minor` (`contractVersion`, now `1.0`), 
 - A gateway says which version it speaks in its online health message (`"contract": "1.0"`): one retained field per gateway, readable on MQTT 3.1.1 too. A consumer checks the major and ignores the minor. An MQTT 5 user property on every message was the alternative; it costs bytes on every value and does not exist on 3.1.1.
 - A major version is announced one minor release ahead, in the release notes and in this page. Whether a gateway can publish both majors for a transition is left until there is a 2.0.
 
-## Open questions
+## Decisions
 
-1. ~~**Announce the version on the wire?**~~ Decided: `"contract"` in the online health message (see "Versioning").
-2. **A stable `$id`.** The schemas use `ot-gateway/mqtt-contract/1.0/<message>` for now. A real URL needs a home: the project site could serve `docs/mqtt-contract/` as static files (`/mqtt-contract/v1/value.schema.json`).
-3. **The slug pattern is missing from the generated JSON Schemas.** Effect's generator keeps the `maxLength: 64` of `Slug` but not its pattern. Worth checking whether that is the custom message on `isPattern`, before consumers rely on it.
-4. **`host.throttled` as free strings or an enum.** The four Raspberry Pi conditions are known (`THROTTLE_CONDITIONS` in `apps/gateway/src/Host.ts`) but live in the app, not core. An enum makes a new condition a minor version; strings make it nothing.
-5. **An aggregate point in the simulation.** Its config has sample and change points only, so the aggregate form is covered by unit tests but not by a whole run. Adding one to a meter changes the simulation's numbers, so it is its own change.
-6. **One topic classifier.** `topicKind` in `packages/api/src/Status.ts` and `contractMessageOf` do nearly the same thing; the status page's could use the contract's.
-7. **MQTT 3.1.1.** Correlation data and message expiry are MQTT 5 only. On a 3.1.1 broker a result cannot be matched to its command except by topic and time; the reference page should say so.
+Settled in review of this draft:
+
+1. **The version is on the wire** in the online health message, `"contract": "1.0"` (see "Versioning").
+2. **Each schema has a stable `$id`**: its URL on the project site, under `/mqtt-contract/v<major>/`.
+3. **Slugs keep their pattern** in the generated JSON Schemas. Effect exports a pattern only when the regular expression has the `u` flag, so `Slug`'s has it now; the health message's device map is keyed by plain strings, since a refined key would leave the device schema out.
+4. **`host.throttled` stays free strings.** A new Raspberry Pi condition changes no contract version.
+5. **An aggregate point in the simulation** is a follow-up of its own: it changes the simulation's numbers. Aggregates are covered by the unit tests until then.
+6. **One topic classifier**: the status page uses the contract's.
+7. **MQTT 3.1.1** limits are stated under "Messages".

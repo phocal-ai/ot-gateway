@@ -1,2 +1,4 @@
 .vercel
 .env*
+# Copied from docs/mqtt-contract by scripts/content.ts
+public/mqtt-contract

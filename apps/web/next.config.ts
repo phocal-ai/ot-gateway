@@ -10,8 +10,9 @@ const config: NextConfig = {
   // Each page as `<route>/index.html`, which the gateway's static server finds for `/points` (it redirects to
   // `/points/`); `points.html` would fall through to the SPA fallback and show the status page.
   trailingSlash: true,
-  // `@ot-gateway/api` is TypeScript source in the workspace, like every OT Gateway package.
-  transpilePackages: ["@ot-gateway/api"],
+  // `@ot-gateway/api` is TypeScript source in the workspace, like every OT Gateway package; it reads the MQTT
+  // contract's topic table from `@ot-gateway/core/Contract`.
+  transpilePackages: ["@ot-gateway/api", "@ot-gateway/core"],
   // Types are checked by the repo's `pnpm typecheck` (TypeScript 7 with the Effect language service).
   typescript: { ignoreBuildErrors: true },
   images: { unoptimized: true },

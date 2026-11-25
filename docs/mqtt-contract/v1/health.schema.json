@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ot-gateway/mqtt-contract/1.0/health",
+  "$id": "https://ot-gateway.vercel.app/mqtt-contract/v1/health.schema.json",
   "anyOf": [
     {
       "type": "object",
@@ -27,7 +27,45 @@
         },
         "devices": {
           "type": "object",
-          "additionalProperties": true,
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": ["starting", "ok", "failing"],
+                "description": "starting until the device's first cycle ends, then whether its last read worked."
+              },
+              "lastSuccess": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "The last successful read (Unix ms)."
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "timeout",
+                  "connection",
+                  "protocol",
+                  "invalid-response",
+                  "configuration",
+                  "not-implemented",
+                  "cycle-timeout",
+                  "crashed"
+                ],
+                "description": "Why the device is failing, while failing."
+              },
+              "failingSince": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "The first failure of the current run (Unix ms), while failing."
+              }
+            },
+            "required": ["status"],
+            "additionalProperties": true,
+            "title": "Device health"
+          },
           "description": "Every configured device, by id."
         },
         "host": {

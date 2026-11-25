@@ -17,7 +17,8 @@ import { Publish } from "./Publish.ts"
  */
 export const Slug = Schema.String.pipe(
   Schema.check(
-    Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/, {
+    // The u flag lets the pattern into generated JSON Schemas (Effect exports only u-flagged patterns).
+    Schema.isPattern(/^[a-z0-9][a-z0-9_-]*$/u, {
       message:
         "Expected a slug: lowercase letters, digits, - and _, starting with a letter or digit (site-1, not Site 1)"
     }),

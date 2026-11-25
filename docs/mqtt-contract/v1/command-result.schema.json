@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ot-gateway/mqtt-contract/1.0/command-result",
+  "$id": "https://ot-gateway.vercel.app/mqtt-contract/v1/command-result.schema.json",
   "anyOf": [
     {
       "type": "object",

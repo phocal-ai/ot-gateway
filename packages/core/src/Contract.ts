@@ -27,6 +27,9 @@ import { Publish } from "./Publish.ts"
  */
 export const contractVersion = "1.0"
 
+/** Where the project site serves the JSON Schemas (`apps/site/scripts/content.ts` copies them): each one's `$id`. */
+export const contractSchemaBaseUrl = "https://ot-gateway.vercel.app/mqtt-contract"
+
 /** Where the JSON Schemas are checked in, from the repository's root: one folder per major version. */
 export const contractSchemaDirectory = `docs/mqtt-contract/v${contractVersion.split(".")[0]}`
 
@@ -203,7 +206,10 @@ export const OnlineHealthPayload = Schema.Struct({
   ts: UnixMillis.annotate({
     description: "When this message was written (Unix ms): it advances with every heartbeat."
   }),
-  devices: Schema.Record(Slug, DeviceHealthPayload).annotate({ description: "Every configured device, by id." }),
+  // Keyed by String, not Slug: a refined key leaves the values out of the generated JSON Schema. Ids are slugs anyway.
+  devices: Schema.Record(Schema.String, DeviceHealthPayload).annotate({
+    description: "Every configured device, by id."
+  }),
   host: Schema.optionalKey(HostHealthPayload)
 }).annotate({ title: "Gateway online" })
 export type OnlineHealthPayload = typeof OnlineHealthPayload.Type
@@ -379,7 +385,7 @@ export const contractJsonSchemas = (): Record<ContractMessage, Record<string, un
     })
     return {
       $schema: "https://json-schema.org/draft/2020-12/schema",
-      $id: `ot-gateway/mqtt-contract/${contractVersion}/${message}`,
+      $id: `${contractSchemaBaseUrl}/v${contractVersion.split(".")[0]}/${message}.schema.json`,
       ...generated.schema,
       "x-ot-gateway-contract": contractVersion,
       ...(Object.keys(generated.definitions).length === 0 ? {} : { $defs: generated.definitions })

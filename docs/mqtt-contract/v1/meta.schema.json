@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "ot-gateway/mqtt-contract/1.0/meta",
+  "$id": "https://ot-gateway.vercel.app/mqtt-contract/v1/meta.schema.json",
   "type": "object",
   "properties": {
     "name": {
@@ -99,6 +99,7 @@
     },
     "gateway": {
       "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
       "maxLength": 64,
       "description": "The id of the gateway that publishes the point. Absent from releases before it was added."
     }
