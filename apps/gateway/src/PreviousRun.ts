@@ -43,25 +43,32 @@ export const runFilePath = (
 export const trackRun = Effect.fn("trackRun")(function* (file: string, started: number) {
   const fs = yield* FileSystem.FileSystem
   const warn = (what: string) => (error: { readonly message: string }) =>
-    Effect.logWarning(`could not ${what} ${file}, so the next start cannot tell how this run ended`).pipe(
+    Effect.logWarning(`could not ${what} ${file}`).pipe(Effect.annotateLogs({ error: error.message }))
+  const timedOut = { message: `no answer within ${RUN_FILE_DEADLINE}` }
+  const unread = warn("read")
+  const unwritten = (error: { readonly message: string }) =>
+    Effect.logWarning(`could not write ${file}, so the next start cannot tell how this run ended`).pipe(
       Effect.annotateLogs({ error: error.message })
     )
-  const timedOut = { message: `no answer within ${RUN_FILE_DEADLINE}` }
   const previous = yield* fs.readFileString(file).pipe(
     Effect.map(decodeRun),
     Effect.catchReason("PlatformError", "NotFound", () => Effect.succeedNone),
-    Effect.catchTag("PlatformError", (error) => warn("read")(error).pipe(Effect.as(Option.none<PreviousRun>()))),
+    Effect.catchTag("PlatformError", (error) => unread(error).pipe(Effect.as(Option.none<PreviousRun>()))),
     Effect.timeoutOrElse({
       duration: RUN_FILE_DEADLINE,
-      orElse: () => warn("read")(timedOut).pipe(Effect.as(Option.none<PreviousRun>()))
+      orElse: () => unread(timedOut).pipe(Effect.as(Option.none<PreviousRun>()))
     })
   )
+  // Written beside the file and renamed over it, so a write cut short (by the deadline, or the power) leaves the
+  // run file as it was rather than empty or half-written.
+  const pending = `${file}.tmp`
   const write = (run: PreviousRun) =>
     fs
-      .writeFileString(file, `${JSON.stringify(run)}\n`)
+      .writeFileString(pending, `${JSON.stringify(run)}\n`)
       .pipe(
-        Effect.catchTag("PlatformError", warn("write")),
-        Effect.timeoutOrElse({ duration: RUN_FILE_DEADLINE, orElse: () => warn("write")(timedOut) })
+        Effect.andThen(fs.rename(pending, file)),
+        Effect.catchTag("PlatformError", unwritten),
+        Effect.timeoutOrElse({ duration: RUN_FILE_DEADLINE, orElse: () => unwritten(timedOut) })
       )
   yield* write({ started })
   yield* Effect.addFinalizer((exit) =>

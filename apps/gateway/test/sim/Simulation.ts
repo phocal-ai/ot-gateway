@@ -41,7 +41,7 @@ import { TestClock } from "effect/testing"
 import { mkdtempSync, rmSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { openDatabase } from "@ot-gateway/buffer"
 import { classifySqliteError, SqlError } from "effect/sql/SqlError"
 import { runGateway } from "../../src/Gateway.ts"
@@ -413,6 +413,9 @@ const steppedClock = (clock: Clock.Clock, offset: () => number): Clock.Clock => 
   sleep: (duration) => clock.sleep(duration)
 })
 
+/** The run file and the file it is written to before the rename over it (`PreviousRun.ts`). */
+const ours = (path: string) => basename(path) === RUN_FILE || basename(path) === `${RUN_FILE}.tmp`
+
 /**
  * The real file system, except that the gateway's run file (`PreviousRun.ts`) lives in `files`, which outlives the
  * gateway's restarts. Real asynchronous file I/O takes real time, and while the gateway waits on it virtual time
@@ -421,25 +424,45 @@ const steppedClock = (clock: Clock.Clock, offset: () => number): Clock.Clock => 
  */
 const runFileInMemory =
   (files: Map<string, string>) =>
-  (fs: FileSystem.FileSystem): FileSystem.FileSystem => ({
-    ...fs,
-    readFileString: (path, encoding) => {
-      if (!path.endsWith(RUN_FILE)) return fs.readFileString(path, encoding)
-      const data = files.get(path)
-      return data === undefined
-        ? Effect.fail(
+  (fs: FileSystem.FileSystem): FileSystem.FileSystem => {
+    return {
+      ...fs,
+      readFileString: (path, encoding) => {
+        if (!ours(path)) return fs.readFileString(path, encoding)
+        const data = files.get(path)
+        return data === undefined
+          ? Effect.fail(
+              PlatformError.systemError({
+                _tag: "NotFound",
+                module: "FileSystem",
+                method: "readFileString",
+                pathOrDescriptor: path
+              })
+            )
+          : Effect.succeed(data)
+      },
+      writeFileString: (path, data, options) =>
+        ours(path) ? Effect.sync(() => void files.set(path, data)) : fs.writeFileString(path, data, options),
+      rename: (from, to) => {
+        if (!ours(from)) return fs.rename(from, to)
+        const data = files.get(from)
+        if (data === undefined) {
+          return Effect.fail(
             PlatformError.systemError({
               _tag: "NotFound",
               module: "FileSystem",
-              method: "readFileString",
-              pathOrDescriptor: path
+              method: "rename",
+              pathOrDescriptor: from
             })
           )
-        : Effect.succeed(data)
-    },
-    writeFileString: (path, data, options) =>
-      path.endsWith(RUN_FILE) ? Effect.sync(() => void files.set(path, data)) : fs.writeFileString(path, data, options)
-  })
+        }
+        return Effect.sync(() => {
+          files.delete(from)
+          files.set(to, data)
+        })
+      }
+    }
+  }
 
 /** Let real I/O (the outbox's file checks) finish between steps of virtual time. */
 const realTick = Effect.promise(() => new Promise<void>((resolve) => setImmediate(resolve)))
