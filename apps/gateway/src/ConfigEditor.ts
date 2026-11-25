@@ -20,7 +20,7 @@ import {
   type EditStatus
 } from "@ot-gateway/api"
 import type { GatewayConfig } from "@ot-gateway/core"
-import { Config, Effect, Option, type Redacted, Result, Semaphore } from "effect"
+import { Config, Effect, Fiber, Option, type Redacted, Result, Semaphore } from "effect"
 import { makeConfigStore } from "./ConfigStore.ts"
 import { type EditAccess, editAccess, editToken } from "./EditGuard.ts"
 
@@ -67,6 +67,9 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
   const access = editAccess(deps.bindAddress, token)
   // One save at a time, from the check of the ETag to the end of the apply.
   const saving = yield* Semaphore.make(1)
+  // A save outlives the request that started it: the gateway's scope owns it, so a timeout or a closed tab cannot
+  // stop it between the write and the restore.
+  const scope = yield* Effect.scope
 
   /** The variable `mqtt.passwordEnv` names and whether it is set; never its value. */
   const password = Effect.gen(function* () {
@@ -100,20 +103,13 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
         )
       )
 
-  const save = Effect.fn("ConfigEditor.save")(function* (text: string, etag: string) {
+  const saveAndApply = Effect.fn("ConfigEditor.saveAndApply")(function* (text: string, etag: string) {
     const editable = yield* store.editability
     if (!editable.writable) return yield* new EditingDisabled({ message: `${editable.reason} ${editable.fix}` })
     const saved = yield* store.save(text, etag)
-    const applied = yield* deps
-      .apply(deps.file.resolve(saved.config))
-      .pipe(Effect.result, Effect.timeoutOption(APPLY_TIMEOUT))
-    if (Option.isNone(applied)) {
-      return yield* new ConfigApplyFailed({
-        message: `The config is saved, and the gateway is still applying it after ${APPLY_TIMEOUT}. Reload the page in a minute: the events say whether it was applied.`
-      })
-    }
-    if (Result.isSuccess(applied.value)) {
-      const change = applied.value.success
+    const applied = yield* deps.apply(deps.file.resolve(saved.config)).pipe(Effect.result)
+    if (Result.isSuccess(applied)) {
+      const change = applied.success
       // Writes are a decision (VISION.md): the line says which points take commands now, and within what.
       const writes = change.changes.filter((line) => line.startsWith("write"))
       if (writes.length > 0) {
@@ -123,7 +119,7 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
       }
       return { etag: saved.etag, applied: change }
     }
-    const failed = applied.value.failure
+    const failed = applied.failure
     // The previous config runs again: so the file says what runs, it gets the previous text back.
     const restored = yield* Effect.result(store.restore(saved.previous))
     return yield* new ConfigApplyFailed({
@@ -132,6 +128,17 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
         : `${failed.message} Putting the previous config back into ${store.path} failed too (${restored.failure.message}); ${store.path}.bak has it.`
     })
   }, Semaphore.withPermit(saving))
+
+  const save = Effect.fn("ConfigEditor.save")(function* (text: string, etag: string) {
+    const running = yield* Effect.forkIn(saveAndApply(text, etag), scope)
+    const outcome = yield* Fiber.await(running).pipe(Effect.timeoutOption(APPLY_TIMEOUT))
+    if (Option.isNone(outcome)) {
+      return yield* new ConfigApplyFailed({
+        message: `The config is saved, and the gateway is still applying it after ${APPLY_TIMEOUT}. If it does not start, the previous config runs again and ${store.path} gets it back. Reload the page in a minute: the events say which.`
+      })
+    }
+    return yield* outcome.value
+  })
 
   return {
     access,
