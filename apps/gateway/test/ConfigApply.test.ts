@@ -268,7 +268,7 @@ describe("applying a config saved from the status page", () => {
 
       const again = yield* read(port)
       const saved = yield* save(port, configText(port, { bacnet: { port: 47831 } }), again.body["etag"])
-      expect(saved.status).toBe(200)
+      expect(saved.status, String(saved.body["message"])).toBe(200)
       expect(saved.body).toMatchObject({ applied: { changes: ["BACnet/IP: port"], restartNeeded: [] } })
       expect(yield* bindable(47831)).toBe(false)
       expect(yield* bindable(47808)).toBe(true)
