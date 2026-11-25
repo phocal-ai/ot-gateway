@@ -14,6 +14,8 @@ describe("Node's warnings", () => {
       isSqliteExperimentalWarning(warning("ExperimentalWarning", "Type Stripping is an experimental feature"))
     ).toBe(false)
     expect(isSqliteExperimentalWarning(warning("DeprecationWarning", "SQLite something is deprecated"))).toBe(false)
+    // Another experimental SQLite feature, should Node name one, is news and prints.
+    expect(isSqliteExperimentalWarning(warning("ExperimentalWarning", "SQLite sessions are experimental"))).toBe(false)
     expect(isSqliteExperimentalWarning("SQLite is an experimental feature")).toBe(false)
   })
 
