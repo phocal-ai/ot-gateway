@@ -140,7 +140,14 @@ Project hooks in `.claude/settings.json` back this up:
 
 - After every Write or Edit, oxfmt formats the file and oxlint's findings for it come back to you. Fix them while the file is still in view.
 - At the end of a turn with uncommitted changes, `pnpm check` runs and blocks the stop if it fails.
-- `npm` and `yarn` commands are denied; use pnpm.
+- `npm` and `yarn` commands are denied (`permissions.deny`, not a hook: a `PreToolUse` hook on Bash stops `/ship` and `/steward` from watching a pull request); use pnpm.
+
+## Pull requests
+
+- `/code-review` before pushing. `REVIEW.md` holds the review rules for Code Review and PR Steward; local `/code-review` reads only this file, so keep the two in step.
+- `/steward` watches an open pull request (failing checks, conflicts, review comments) until it is merged or closed. `.claude/skills/steward/SKILL.md` says how pull requests here are kept. `/ship` does not commit in a public repository, so commit and open the pull request yourself, then run `/steward` from a separate worktree.
+- `.claude/skills/verify/SKILL.md` runs the demo and checks a change end to end.
+- A pattern becomes a rule in one of these files after it shows up on two pull requests, committed by hand.
 
 ## Quickstart
 

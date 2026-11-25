@@ -1,23 +1,43 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "deny": [
+      "Bash(npm install:*)",
+      "Bash(npm i:*)",
+      "Bash(npm add:*)",
+      "Bash(npm ci:*)",
+      "Bash(npm run:*)",
+      "Bash(npm exec:*)",
+      "Bash(npm test:*)",
+      "Bash(npm start:*)",
+      "Bash(npm remove:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(yarn install:*)",
+      "Bash(yarn i:*)",
+      "Bash(yarn add:*)",
+      "Bash(yarn ci:*)",
+      "Bash(yarn run:*)",
+      "Bash(yarn exec:*)",
+      "Bash(yarn test:*)",
+      "Bash(yarn start:*)",
+      "Bash(yarn remove:*)",
+      "Bash(yarn uninstall:*)"
+    ]
+  },
   "enabledPlugins": {
     "vercel@claude-plugins-official": false,
     "convex@claude-plugins-official": false
   },
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/enforce-pnpm.sh", "timeout": 10 }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
-          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format-and-lint.sh", "timeout": 30 }
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/format-and-lint.sh",
+            "timeout": 30
+          }
         ]
       }
     ],
