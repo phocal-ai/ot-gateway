@@ -377,16 +377,58 @@ export const decodeContractMessage = (
 // JSON Schema
 
 /** The contract's JSON Schemas, one document per message, as `ot-gateway contract --json` would print them. */
+/**
+ * A `reason` may gain values in a minor version, so the published schemas take any string there and list the known
+ * values as `examples`. The strict decode the tests run keeps the closed list, so a new reason still needs the
+ * contract changed first. Statuses stay closed: a new one is a major version.
+ */
+const openReasons = (node: unknown, key?: string): unknown => {
+  if (Array.isArray(node)) return node.map((item) => openReasons(item))
+  if (typeof node !== "object" || node === null) return node
+  const entries = Object.entries(node)
+  const known = key === "reason" ? enumValues(node) : undefined
+  if (known !== undefined) {
+    const description = "description" in node && typeof node.description === "string" ? `${node.description} ` : ""
+    return {
+      type: "string",
+      description: `${description}A later minor version may add reasons: treat an unknown one as a generic failure.`,
+      examples: known
+    }
+  }
+  return Object.fromEntries(
+    entries.map(([name, value]) => [
+      name,
+      name === "properties" && typeof value === "object" && value !== null
+        ? Object.fromEntries(
+            Object.entries(value).map(([property, schema]) => [property, openReasons(schema, property)])
+          )
+        : openReasons(value)
+    ])
+  )
+}
+
+/** The values a generated `enum`, or an `anyOf` of them, allows; undefined when the node is not one. */
+const enumValues = (node: object): ReadonlyArray<unknown> | undefined => {
+  if ("enum" in node && Array.isArray(node.enum)) return node.enum
+  if (!("anyOf" in node) || !Array.isArray(node.anyOf)) return undefined
+  const lists = node.anyOf.map((member: unknown) =>
+    typeof member === "object" && member !== null ? enumValues(member) : undefined
+  )
+  return lists.every((list) => list !== undefined) ? lists.flat() : undefined
+}
+
 export const contractJsonSchemas = (): Record<ContractMessage, Record<string, unknown>> => {
   const document = (message: ContractMessage) => {
     const generated = Schema.toJsonSchemaDocument(contractMessages[message], {
       // Input is closed (the guard refuses anything else); output stays open for later minor versions.
       onExcessProperty: message === "command" ? "error" : "ignore"
     })
+    const open = openReasons(generated.schema)
+    const opened = typeof open === "object" && open !== null ? open : {}
     return {
       $schema: "https://json-schema.org/draft/2020-12/schema",
       $id: `${contractSchemaBaseUrl}/v${contractVersion.split(".")[0]}/${message}.schema.json`,
-      ...generated.schema,
+      ...opened,
       "x-ot-gateway-contract": contractVersion,
       ...(Object.keys(generated.definitions).length === 0 ? {} : { $defs: generated.definitions })
     }

@@ -44,7 +44,8 @@
         },
         "reason": {
           "type": "string",
-          "enum": [
+          "description": "A later minor version may add reasons: treat an unknown one as a generic failure.",
+          "examples": [
             "retained",
             "expired",
             "unknown-point",
@@ -79,7 +80,8 @@
         },
         "reason": {
           "type": "string",
-          "enum": [
+          "description": "timeout means the device did not answer in time and may still have applied the write. A later minor version may add reasons: treat an unknown one as a generic failure.",
+          "examples": [
             "timeout",
             "connection",
             "protocol",
@@ -87,8 +89,7 @@
             "configuration",
             "not-implemented",
             "device-unavailable"
-          ],
-          "description": "timeout means the device did not answer in time and may still have applied the write."
+          ]
         },
         "message": {
           "type": "string",

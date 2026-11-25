@@ -76,7 +76,7 @@ The contract has its own version, `major.minor` (`contractVersion`, now `1.0`), 
 
 - **Minor** (1.0 → 1.1): only additions a consumer can ignore. A new optional field, a new value of a `reason`, a new topic under `$gateway` or a new `$`-suffix.
 - **Major** (1.x → 2.0): anything else. Removing or renaming a field or topic level, changing a type, unit or meaning, making a field required, or a new required topic level.
-- A consumer treats an unknown `reason` as "failing" or "rejected for another reason", and ignores fields it does not know.
+- A consumer treats an unknown `reason` as "failing" or "rejected for another reason", and ignores fields it does not know. So the published schemas take any string as a `reason` and list the known ones as `examples`, while the gateway's own strict tests keep the closed list. Statuses (`online`, `ok`, `written`, …) stay closed: a new one is a major version.
 - The JSON Schemas for each major live in their own folder (`v1/`, later `v2/`), each carrying `x-ot-gateway-contract` with the exact version.
 - A gateway says which version it speaks in its online health message (`"contract": "1.0"`): one retained field per gateway, readable on MQTT 3.1.1 too. A consumer checks the major and ignores the minor. An MQTT 5 user property on every message was the alternative; it costs bytes on every value and does not exist on 3.1.1.
 - A major version is announced one minor release ahead, in the release notes and in this page. Whether a gateway can publish both majors for a transition is left until there is a 2.0.

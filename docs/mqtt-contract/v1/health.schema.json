@@ -43,7 +43,8 @@
               },
               "reason": {
                 "type": "string",
-                "enum": [
+                "description": "Why the device is failing, while failing. A later minor version may add reasons: treat an unknown one as a generic failure.",
+                "examples": [
                   "timeout",
                   "connection",
                   "protocol",
@@ -52,8 +53,7 @@
                   "not-implemented",
                   "cycle-timeout",
                   "crashed"
-                ],
-                "description": "Why the device is failing, while failing."
+                ]
               },
               "failingSince": {
                 "type": "integer",
@@ -126,8 +126,8 @@
         },
         "reason": {
           "type": "string",
-          "enum": ["shutdown", "connection-lost"],
-          "description": "shutdown when the gateway stopped cleanly; connection-lost from the MQTT last will."
+          "description": "shutdown when the gateway stopped cleanly; connection-lost from the MQTT last will. A later minor version may add reasons: treat an unknown one as a generic failure.",
+          "examples": ["shutdown", "connection-lost"]
         }
       },
       "required": ["status", "reason"],

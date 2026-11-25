@@ -137,6 +137,12 @@ describe("MQTT contract", () => {
     expect(contractJsonSchemas().meta["additionalProperties"]).toBe(true)
   })
 
+  it("publishes reasons open, so a minor version can add one, and keeps them closed for the gateway", () => {
+    const failed = { status: "failed", reason: "busy", message: "", ts: 0 }
+    expect(valid("command-result", JSON.stringify(failed))).toBe(false)
+    expect(JSON.stringify(contractJsonSchemas()["command-result"])).not.toMatch(/"enum":\["timeout"/)
+  })
+
   it("matches the JSON Schemas checked in (pnpm --filter @ot-gateway/core contract:write)", () => {
     const directory = join(import.meta.dirname, "..", "..", "..", contractSchemaDirectory)
     for (const [message, schema] of Object.entries(contractJsonSchemas())) {
