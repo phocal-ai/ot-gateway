@@ -41,7 +41,7 @@ One minute, no devices needed. With [Docker Desktop](https://www.docker.com/prod
 docker run --rm -it -p 127.0.0.1:8080:8080 ghcr.io/phocal-ai/ot-gateway demo
 ```
 
-Or from a checkout, with Node.js 22.18 or newer (24 LTS recommended) and pnpm 10:
+Or from a checkout, with Node.js 22.18 or newer (24 LTS recommended) and pnpm 10 (`sudo npm install -g pnpm@10` on Node 25 or later, which no longer include corepack):
 
 ```bash
 git clone https://github.com/phocal-ai/ot-gateway
@@ -272,7 +272,7 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | Package                                       | What it does                                                                                                  | Status  |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------- |
 | [`@ot-gateway/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service              | Working |
-| [`@ot-gateway/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                                  | Working |
+| [`@ot-gateway/simulator`](packages/simulator) | Simulated devices (sine, ramp, daily, constant) for tests and demos                                           | Working |
 | [`@ot-gateway/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server, with writes                             | Working |
 | [`@ot-gateway/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order           | Working |
 | [`@ot-gateway/mqtt`](packages/mqtt)           | MQTT 5 and 3.1.1: codecs, client with reconnect, keep alive and subscriptions, `Publisher` layer, test broker | Working |

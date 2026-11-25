@@ -1,20 +1,34 @@
 "use client"
 /**
- * Adding the devices of a points list (CSV, the columns `ot-gateway points schema` describes) or a BACnet EDE file
- * from the browser: pick or drop the file, the gateway checks it as `ot-gateway import --dry-run` does and says, device
- * by device, what it would add or what keeps a device out (with the line), and Add writes the config file and
- * applies it without a restart. Nothing is added before Add.
+ * Adding the devices of a points list (CSV) or a BACnet EDE file from the browser: pick or drop the file, the gateway
+ * checks it as `ot-gateway import --dry-run` does and says, device by device, what it would add or what keeps a device
+ * out (with the line), and Add writes the config file and applies it without a restart. Nothing is added before Add.
+ *
+ * Without a terminal: the panel offers the template to download and says what each column means, from the gateway's
+ * one description of the format (`/api/points/format`). A device whose id is taken on this gateway, or whose host is
+ * wrong, gets another id, host or address here, without editing the file; the list is checked again with them.
  */
-import type { EditStatus, ImportCheck } from "@ot-gateway/api"
+import type { EditStatus, ImportCheck, ImportDevice, PointsListFormat } from "@ot-gateway/api"
 import { MAX_IMPORT_BYTES } from "@ot-gateway/api"
 import { Effect } from "effect"
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { hourMinute } from "@/lib/editor"
 import { fetchConfigFile, readToken, storeToken } from "@/lib/editor-api"
 import { formatNumber } from "@/lib/format"
-import { applyImport, checkImport, type Outcome } from "@/lib/setup-api"
+import {
+  columnNotes,
+  type DeviceChange,
+  type DeviceChanges,
+  emptyChange,
+  pageError,
+  renamesOf,
+  scopeLabel,
+  templateHref,
+  whereLabel
+} from "@/lib/import"
+import { applyImport, checkImport, fetchPointsListFormat, type Outcome } from "@/lib/setup-api"
 import { protocolName, settle } from "@/lib/status"
 
 interface Picked {
@@ -38,36 +52,140 @@ const lineList = (lines: ReadonlyArray<number>) => {
   return lines.length === 1 ? `line ${first}` : `lines ${first}–${last}`
 }
 
-/** The check's answer, device by device. */
-const CheckList = ({ check }: { readonly check: ImportCheck }) => (
+/** The id and host (or address) a device of the list gets instead of the file's, checked again with Check again. */
+const ChangeForm = ({
+  device,
+  change,
+  onChange,
+  onCheck,
+  onClose,
+  disabled
+}: {
+  readonly device: ImportDevice
+  readonly change: DeviceChange
+  readonly onChange: (change: DeviceChange) => void
+  readonly onCheck: () => void
+  readonly onClose: () => void
+  readonly disabled: boolean
+}) => {
+  const key = `import-${device.lines[0] ?? 0}`
+  return (
+    <div className="mt-1 grid gap-2 sm:grid-cols-2">
+      <div className="grid min-w-0 gap-1">
+        <label className="text-xs font-medium" htmlFor={`${key}-id`}>
+          Id on this gateway
+        </label>
+        <Input
+          id={`${key}-id`}
+          value={change.id}
+          placeholder={device.id === "" ? "meter-2" : `${device.id}-2`}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => onChange({ ...change, id: event.target.value })}
+          disabled={disabled}
+        />
+      </div>
+      <div className="grid min-w-0 gap-1">
+        <label className="text-xs font-medium" htmlFor={`${key}-where`}>
+          {whereLabel(device.protocol)} <span className="font-normal text-muted-foreground">(optional)</span>
+        </label>
+        <Input
+          id={`${key}-where`}
+          value={change.where}
+          placeholder={device.protocol === "bacnet-ip" ? "192.168.1.40" : "192.168.1.30"}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(event) => onChange({ ...change, where: event.target.value })}
+          disabled={disabled}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground sm:col-span-2">
+        For every row of {device.name}; the file stays as it is. Empty fields keep what the file says.
+      </p>
+      <div className="flex flex-wrap gap-2 sm:col-span-2">
+        <Button size="sm" variant="outline" onClick={onCheck} disabled={disabled}>
+          Check again
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onClose} disabled={disabled}>
+          Close
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** The check's answer, device by device, each with a form to give it another id or host. */
+const CheckList = ({
+  check,
+  changes,
+  open,
+  onOpen,
+  onChange,
+  onCheck,
+  disabled
+}: {
+  readonly check: ImportCheck
+  readonly changes: DeviceChanges
+  /** The device whose change form is open, by its name in the list. */
+  readonly open: string | undefined
+  readonly onOpen: (name: string | undefined) => void
+  readonly onChange: (name: string, change: DeviceChange) => void
+  readonly onCheck: () => void
+  readonly disabled: boolean
+}) => (
   <div className="grid gap-2 text-sm">
     {check.error === undefined ? null : <p className="break-words text-destructive">{check.error}</p>}
     {check.devices.length === 0 ? null : (
       <ul className="grid gap-1.5">
         {check.devices.map((device) => (
           <li key={`${device.name}-${device.lines[0] ?? 0}`} className="grid gap-0.5 rounded-md border px-3 py-2">
-            <p className="flex flex-wrap items-baseline gap-x-2">
-              <span aria-hidden className={device.error === undefined ? "text-success" : "text-destructive"}>
-                {device.error === undefined ? "✓" : "✗"}
-              </span>
-              <span className="font-medium break-all">{device.name}</span>
-              <span className="text-xs text-muted-foreground">
-                {[
-                  device.protocol === undefined ? undefined : (protocolName[device.protocol] ?? device.protocol),
-                  device.address,
-                  plural(device.points, "point"),
-                  lineList(device.lines)
-                ]
-                  .filter((part) => part !== undefined && part !== "")
-                  .join(" · ")}
-              </span>
-            </p>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-2">
+              <p className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                <span aria-hidden className={device.error === undefined ? "text-success" : "text-destructive"}>
+                  {device.error === undefined ? "✓" : "✗"}
+                </span>
+                <span className="font-medium break-all">{device.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {[
+                    device.id === "" ? undefined : `id ${device.id}`,
+                    device.protocol === undefined ? undefined : (protocolName[device.protocol] ?? device.protocol),
+                    device.address,
+                    plural(device.points, "point"),
+                    lineList(device.lines)
+                  ]
+                    .filter((part) => part !== undefined && part !== "")
+                    .join(" · ")}
+                </span>
+              </p>
+              {open === device.name ? null : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="-my-1 h-7 px-2 text-xs"
+                  onClick={() => onOpen(device.name)}
+                  disabled={disabled}
+                  aria-label={`Change id or host of ${device.name}`}
+                >
+                  Change id or host
+                </Button>
+              )}
+            </div>
             {device.error === undefined ? null : (
               <p className="text-xs break-words text-destructive">
                 <span className="sr-only">Not added: </span>
-                {device.error}
+                {pageError(device.error)}
               </p>
             )}
+            {open === device.name ? (
+              <ChangeForm
+                device={device}
+                change={changes[device.name] ?? emptyChange}
+                onChange={(change) => onChange(device.name, change)}
+                onCheck={onCheck}
+                onClose={() => onOpen(undefined)}
+                disabled={disabled}
+              />
+            ) : null}
           </li>
         ))}
       </ul>
@@ -85,6 +203,73 @@ const CheckList = ({ check }: { readonly check: ImportCheck }) => (
   </div>
 )
 
+/** The template to download and what each column means, or the commands that print them when the gateway did not say. */
+const FormatHelp = ({ format }: { readonly format: Outcome<PointsListFormat> | undefined }) => {
+  if (format === undefined) return null
+  if (format._tag !== "ok")
+    return (
+      <p className="text-xs text-muted-foreground">
+        <code className="font-mono">ot-gateway points template</code> prints a list to fill in;{" "}
+        <code className="font-mono">ot-gateway points schema</code> describes its columns.
+      </p>
+    )
+  const { template, rules, columns } = format.value
+  const scopes = ["any", "modbus-tcp", "bacnet-ip"] as const
+  return (
+    <div className="grid gap-2">
+      <p>
+        <a
+          className="text-sm underline underline-offset-4"
+          href={templateHref(template)}
+          download="points.csv"
+          type="text/csv"
+        >
+          Download a template (CSV)
+        </a>
+        <span className="text-xs text-muted-foreground">
+          {" "}
+          with every column and example rows: fill it in with a spreadsheet, one row per value.
+        </span>
+      </p>
+      <details className="text-xs">
+        <summary className="cursor-pointer text-sm text-muted-foreground">What the columns mean</summary>
+        <div className="mt-2 grid gap-3">
+          <ul className="list-disc pl-5 text-muted-foreground">
+            {rules.map((rule) => (
+              <li key={rule}>{rule}</li>
+            ))}
+          </ul>
+          {scopes.map((scope) => (
+            <div key={scope} className="grid gap-1">
+              <p className="font-medium">{scopeLabel[scope]}</p>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+                {columns
+                  .filter((column) => column.scope === scope)
+                  .map((column) => {
+                    const notes = columnNotes(column)
+                    return (
+                      <div className="contents" key={column.name}>
+                        <dt className="font-mono">{column.name}</dt>
+                        <dd className="break-words text-muted-foreground">
+                          {column.description}
+                          {notes.length === 0 ? "" : ` (${notes.join("; ")})`}
+                        </dd>
+                      </div>
+                    )
+                  })}
+              </dl>
+            </div>
+          ))}
+          <p className="text-muted-foreground">
+            On a command line, <code className="font-mono">ot-gateway points template</code> and{" "}
+            <code className="font-mono">ot-gateway points schema</code> print the same.
+          </p>
+        </div>
+      </details>
+    </div>
+  )
+}
+
 export const ImportPanel = ({
   edit,
   onDone
@@ -97,7 +282,22 @@ export const ImportPanel = ({
   const [dragging, setDragging] = useState(false)
   const [addFailed, setAddFailed] = useState<string | undefined>(undefined)
   const [token, setToken] = useState(() => readToken() ?? "")
+  const [changes, setChanges] = useState<DeviceChanges>({})
+  const [open, setOpen] = useState<string | undefined>(undefined)
+  const [format, setFormat] = useState<Outcome<PointsListFormat> | undefined>(undefined)
+  const [rechecking, setRechecking] = useState(false)
   const input = useRef<HTMLInputElement>(null)
+
+  // The template and the columns, once, when the panel opens.
+  useEffect(() => {
+    let cancelled = false
+    void Effect.runPromise(fetchPointsListFormat).then((outcome) => {
+      if (!cancelled) setFormat(outcome)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const pick = (file: File | undefined) => {
     setAddFailed(undefined)
@@ -108,6 +308,8 @@ export const ImportPanel = ({
         message: `${file.name} is ${formatNumber(Math.round(file.size / 1024))} KiB; a points list may be at most ${formatNumber(MAX_IMPORT_BYTES / 1024)} KiB.`
       })
     setState({ _tag: "reading", name: file.name })
+    setChanges({})
+    setOpen(undefined)
     if (edit.auth === "token") storeToken(token)
     void file
       .text()
@@ -118,6 +320,20 @@ export const ImportPanel = ({
       )
   }
 
+  /** The file checked again with the changes typed so far. */
+  const recheck = (file: Picked, check: ImportCheck) => {
+    if (edit.auth === "token") storeToken(token)
+    setAddFailed(undefined)
+    setRechecking(true)
+    void Effect.runPromise(checkImport(file.text, file.name, renamesOf(changes, check.devices))).then((outcome) => {
+      setRechecking(false)
+      // The list stays as it was when the check did not come back; the problem shows above Add.
+      if (outcome._tag !== "ok") return setAddFailed(`not checked again: ${outcome.message}`)
+      setState({ _tag: "checked", file, outcome })
+      setOpen(undefined)
+    })
+  }
+
   const add = (file: Picked, check: ImportCheck) => {
     if (edit.auth === "token") storeToken(token)
     setAddFailed(undefined)
@@ -126,7 +342,9 @@ export const ImportPanel = ({
       .then((current) =>
         current._tag === "Failure"
           ? ({ _tag: "failed", message: current.failure.message } as const)
-          : Effect.runPromise(applyImport(file.text, file.name, current.success.etag))
+          : Effect.runPromise(
+              applyImport(file.text, file.name, current.success.etag, renamesOf(changes, check.devices))
+            )
       )
       .then((outcome) => {
         if (outcome._tag === "ok") {
@@ -144,7 +362,7 @@ export const ImportPanel = ({
                 "; "
               )
             : outcome._tag === "conflict"
-              ? "The config file changed meanwhile; check the file again, then add."
+              ? "The settings changed meanwhile; check the file again, then add."
               : outcome.message
         )
       })
@@ -157,7 +375,7 @@ export const ImportPanel = ({
       : state._tag === "checked" && state.outcome._tag === "ok"
         ? { file: state.file, check: state.outcome.value }
         : undefined
-  const adding = state._tag === "adding"
+  const adding = state._tag === "adding" || rechecking
   return (
     <div className="grid gap-3">
       <div
@@ -191,11 +409,8 @@ export const ImportPanel = ({
             event.target.value = ""
           }}
         />
-        <p className="text-xs text-muted-foreground">
-          <code className="font-mono">ot-gateway points template</code> prints a list to fill in;{" "}
-          <code className="font-mono">ot-gateway points schema</code> describes its columns. Nothing is added before you
-          choose Add.
-        </p>
+        <p className="text-xs text-muted-foreground">Nothing is added before you choose Add.</p>
+        <FormatHelp format={format} />
       </div>
       {state._tag === "reading" ? (
         <p className="text-sm text-muted-foreground" role="status">
@@ -212,7 +427,15 @@ export const ImportPanel = ({
       ) : null}
       {checked === undefined ? null : (
         <section className="grid gap-3" aria-label={`What ${checked.file.name} adds`}>
-          <CheckList check={checked.check} />
+          <CheckList
+            check={checked.check}
+            changes={changes}
+            open={open}
+            onOpen={setOpen}
+            onChange={(name, change) => setChanges((current) => ({ ...current, [name]: change }))}
+            onCheck={() => recheck(checked.file, checked.check)}
+            disabled={adding}
+          />
         </section>
       )}
       {edit.auth === "token" ? (
@@ -245,11 +468,13 @@ export const ImportPanel = ({
             onClick={() => add(checked.file, checked.check)}
             disabled={adding || checked.check.adds.devices === 0}
           >
-            {adding
-              ? "Adding and applying…"
-              : checked.check.adds.devices === 0
-                ? "Nothing to add"
-                : `Add ${plural(checked.check.adds.devices, "device")} with ${plural(checked.check.adds.points, "point")}`}
+            {rechecking
+              ? "Checking again…"
+              : adding
+                ? "Adding and applying…"
+                : checked.check.adds.devices === 0
+                  ? "Nothing to add"
+                  : `Add ${plural(checked.check.adds.devices, "device")} with ${plural(checked.check.adds.points, "point")}`}
           </Button>
         )}
         <Button size="sm" variant="ghost" onClick={() => onDone(undefined)} disabled={adding}>

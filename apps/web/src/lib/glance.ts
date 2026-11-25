@@ -12,6 +12,7 @@ import {
   type PointInfo,
   type PointReading
 } from "@ot-gateway/api"
+import type { PageEvent } from "./events"
 import { type LivePoint, pointKey } from "./points"
 import { clockTime, freshness, lateAfterMs } from "./status"
 
@@ -201,3 +202,95 @@ export const alarmCount = (active: number, lastKnown = 0) =>
  */
 export const alarmNote = (alarm: ShownAlarm, active: number) =>
   alarm.lastKnown === undefined ? undefined : active === 0 ? alarm.lastKnown : `last known active, ${alarm.lastKnown}`
+
+/** How long the banner keeps an alarm that cleared: an alarm that comes and goes keeps its line instead of flickering. */
+export const CLEARED_SHOWN_MS = 5 * 60_000
+/** The window the banner counts an alarm's trips in: the gateway's own for a flapping alarm (`alarm-flapping`). */
+export const TRIPS_WINDOW_MS = 15 * 60_000
+
+/** How often an alarm tripped in the last `TRIPS_WINDOW_MS`, and whether the gateway calls it flapping. */
+export interface AlarmTrips {
+  readonly raised: number
+  readonly flapping: boolean
+}
+
+/**
+ * How often an alarm point tripped in the last `TRIPS_WINDOW_MS`, from `events` (oldest first), and whether the
+ * gateway calls it flapping (an `alarm-flapping` with no `alarm-settled` after it). While it flaps the gateway counts
+ * its trips rather than listing each, so its `alarm-flapping` count stands in for the listed ones then. A first read
+ * or a read after an outage is no trip.
+ */
+export const alarmTrips = (
+  events: ReadonlyArray<PageEvent>,
+  device: string,
+  point: string,
+  now: number
+): AlarmTrips => {
+  let raised = 0
+  let flapping: number | undefined
+  for (const event of events) {
+    if (event.type === "alarm-flapping" && event.device === device && event.point === point) flapping = event.raised
+    else if (event.type === "alarm-settled" && event.device === device && event.point === point) flapping = undefined
+    else if (
+      event.type === "alarm-raised" &&
+      event.device === device &&
+      event.point === point &&
+      event.first !== true &&
+      event.afterOutage !== true &&
+      event.at > now - TRIPS_WINDOW_MS
+    )
+      raised++
+  }
+  return flapping === undefined ? { raised, flapping: false } : { raised: Math.max(raised, flapping), flapping: true }
+}
+
+/**
+ * An alarm the banner keeps after it went off, so an alarm that comes and goes does not make the banner flicker:
+ * cleared at `clearedAt` within the last `CLEARED_SHOWN_MS`, or one the gateway calls flapping.
+ */
+export interface ClearedAlarm extends AlarmTrips {
+  readonly point: PointInfo
+  readonly clearedAt?: number
+}
+
+/**
+ * The alarm points that are off now but went off a moment ago or keep coming and going (`ClearedAlarm`), the latest
+ * cleared first. `shown`, the ones the banner lists as active, are left out.
+ */
+export const clearedAlarms = (
+  points: ReadonlyArray<PointInfo>,
+  shown: ReadonlyArray<ShownAlarm>,
+  events: ReadonlyArray<PageEvent>,
+  now: number
+): ReadonlyArray<ClearedAlarm> => {
+  const active = new Set(shown.map((alarm) => pointKey(alarm.point)))
+  const cleared: Array<ClearedAlarm> = []
+  for (const point of points) {
+    if (!isAlarm(point) || active.has(pointKey(point))) continue
+    const trips = alarmTrips(events, point.device, point.id, now)
+    const last = events.findLast(
+      (event) => event.type === "alarm-cleared" && event.device === point.device && event.point === point.id
+    )
+    const clearedAt = last !== undefined && last.at > now - CLEARED_SHOWN_MS ? last.at : undefined
+    if (clearedAt === undefined && !trips.flapping) continue
+    cleared.push({ point, ...(clearedAt === undefined ? {} : { clearedAt }), ...trips })
+  }
+  return cleared.toSorted((left, right) => (right.clearedAt ?? now) - (left.clearedAt ?? now))
+}
+
+/** How often an alarm tripped, from two trips on: "raised 3 times in 15 min"; "flapping, raised 6 times in 15 min". */
+export const tripsNote = (trips: AlarmTrips) =>
+  trips.flapping
+    ? `flapping, raised ${trips.raised} times in 15 min`
+    : trips.raised >= 2
+      ? `raised ${trips.raised} times in 15 min`
+      : undefined
+
+/** What the banner says after a cleared alarm's name: "cleared 14:06:32, raised 3 times in 15 min"; "off now, flapping, …". */
+export const clearedNote = (alarm: ClearedAlarm, now: number) =>
+  [alarm.clearedAt === undefined ? "off now" : `cleared ${clockTime(alarm.clearedAt, now)}`, tripsNote(alarm)]
+    .filter((part) => part !== undefined)
+    .join(", ")
+
+/** The banner's headline for alarms that are only cleared a moment ago: "1 alarm cleared recently". */
+export const clearedCount = (count: number) => `${alarmsText(count)} cleared recently`

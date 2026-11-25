@@ -1,7 +1,8 @@
 /** Drawing a history: where lines break, and the ticks on both axes. */
 import { describe, expect, it } from "@effect/vitest"
 import {
-  axisFrom,
+  historyFrom,
+  bucketSpan,
   bucketTime,
   chartGaps,
   failuresOf,
@@ -11,6 +12,7 @@ import {
   heldUntil,
   nearest,
   segments,
+  switchTimes,
   timeLabel,
   timeTicks,
   valueTicks
@@ -81,9 +83,37 @@ describe("timeLabel and bucketTime", () => {
     expect(bucketTime(afternoon, 60_000)).toMatch(/14:05$/)
     expect(timeLabel(new Date(2026, 10, 5, 0, 30).getTime(), 900_000)).toBe("00:30")
   })
+
+  it("give a bucket's hover its whole span, so the time under the pointer is inside it", () => {
+    const start = new Date(2026, 10, 5, 14, 4, 45).getTime()
+    expect(bucketSpan(start, 15_000)).toMatch(/14:04:45–14:05:00$/)
+    expect(bucketSpan(new Date(2026, 10, 5, 14, 4).getTime(), 60_000)).toMatch(/14:04–14:05$/)
+  })
 })
 
-describe("axisFrom", () => {
+describe("switchTimes", () => {
+  it("lists an on/off point's switches newest first, each with how long it held", () => {
+    const to = 1_000_000
+    const changes = [
+      { t: 100_000, value: 0 },
+      { t: 400_000, value: 1 },
+      { t: 430_000, value: 0 },
+      { t: 900_000, value: 1 }
+    ]
+    expect(switchTimes(changes, to)).toEqual([
+      { at: 900_000, on: true, forMs: 100_000, current: true },
+      { at: 430_000, on: false, forMs: 470_000, current: false },
+      { at: 400_000, on: true, forMs: 30_000, current: false }
+    ])
+  })
+
+  it("does not count the first read in the range as a switch", () => {
+    expect(switchTimes([{ t: 100, value: 1 }], 1000)).toEqual([])
+    expect(switchTimes([], 1000)).toEqual([])
+  })
+})
+
+describe("historyFrom", () => {
   const to = 10_000_000
   const from = to - 3_600_000
   const step = 15_000
@@ -91,23 +121,25 @@ describe("axisFrom", () => {
 
   it("starts where the gateway started when its history begins there", () => {
     const startedAt = to - 600_000
-    expect(axisFrom(series([startedAt, startedAt + step]), startedAt)).toBe(startedAt)
+    expect(historyFrom(series([startedAt, startedAt + step]), startedAt)).toBe(startedAt)
   })
 
-  it("keeps a few minutes of room for a line that just began", () => {
+  it("begins at the gateway's start however recent, as the chart draws the whole range and marks the rest", () => {
     const startedAt = to - 30_000
-    expect(axisFrom(series([startedAt]), startedAt)).toBe(to - 300_000)
+    expect(historyFrom(series([startedAt]), startedAt)).toBe(startedAt)
+    // A first bucket that starts on its edge a little before the start.
+    expect(historyFrom(series([startedAt - 5_000]), startedAt)).toBe(startedAt - 5_000)
   })
 
   it("keeps the whole range when older history leaves a gap where the gateway was off", () => {
     const startedAt = to - 600_000
-    expect(axisFrom(series([from, startedAt]), startedAt)).toBe(from)
+    expect(historyFrom(series([from, startedAt]), startedAt)).toBe(from)
   })
 
   it("keeps the whole range for a gateway that started before it, or without reads", () => {
-    expect(axisFrom(series([to - 600_000]), from - 1)).toBe(from)
-    expect(axisFrom(series([]), to - 600_000)).toBe(from)
-    expect(axisFrom(series([to - 600_000]), undefined)).toBe(from)
+    expect(historyFrom(series([to - 600_000]), from - 1)).toBe(from)
+    expect(historyFrom(series([]), to - 600_000)).toBe(from)
+    expect(historyFrom(series([to - 600_000]), undefined)).toBe(from)
   })
 })
 

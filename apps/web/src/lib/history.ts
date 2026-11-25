@@ -2,7 +2,7 @@
  * A point's history for the point panel: fetched from `/api/history`, and the pure parts of drawing it (ranges,
  * ticks, gaps), kept here so they are tested without a browser.
  */
-import { type HistoryBucket, type HistorySeries, OtGatewayApi, readGaps } from "@ot-gateway/api"
+import { type HistoryBucket, type HistoryChange, type HistorySeries, OtGatewayApi, readGaps } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { FetchHttpClient } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -41,11 +41,23 @@ export interface GatewayClock {
  */
 export const gatewayTime = (clock: GatewayClock, monotonicNow: number) => clock.now + (monotonicNow - clock.at)
 
-/** The last `range` of a point, up to `now` (the gateway's time, see `gatewayTime`); `off` when the gateway keeps no history. */
-export const fetchHistory = (device: string, point: string, range: Range, now: number) =>
+/**
+ * The last `range` of a point, up to `now` (the gateway's time, see `gatewayTime`); `off` when the gateway keeps no
+ * history. `changes`: also when its value changed (a switch's or an alarm's times, `switchTimes`).
+ */
+export const fetchHistory = (device: string, point: string, range: Range, now: number, changes = false) =>
   gateway.pipe(
     Effect.flatMap((client) =>
-      client.status.history({ query: { device, point, from: now - range.ms, to: now, buckets: BUCKETS } })
+      client.status.history({
+        query: {
+          device,
+          point,
+          from: now - range.ms,
+          to: now,
+          buckets: BUCKETS,
+          ...(changes ? { changes: "true" as const } : {})
+        }
+      })
     ),
     Effect.map((series): PointHistory => ({ _tag: "series", series })),
     Effect.catchTags({
@@ -140,20 +152,18 @@ export const bucketTime = (at: number, stepMs: number) =>
     ...(stepMs < 60_000 ? { second: "2-digit" as const } : {})
   })
 
-/** The shortest time axis: a line that just began still gets a few minutes of room. */
-const MIN_AXIS_MS = 300_000
-
 /**
- * Where the time axis starts. A gateway that started within the range has no history before it unless an earlier
- * run left some: when the first bucket is from this run, the axis starts where the gateway started (at most
- * `MIN_AXIS_MS` before `to`), so five minutes of data fill the chart instead of its right edge. When there is older
- * history the axis keeps the whole range, so the time the gateway was off stays a gap.
+ * Where the history in the range begins. A gateway that started within the range has no history before it unless an
+ * earlier run left some: when the first bucket is from this run, it begins where the gateway started (or its first
+ * bucket, if that starts a little earlier on a bucket edge). The chart still draws the whole range and marks the
+ * stretch before this as "no history", so the axis is the window the range buttons say. When there is older history
+ * it begins at the range's start, so the time the gateway was off stays a gap.
  */
-export const axisFrom = (series: HistorySeries, startedAt: number | undefined) => {
+export const historyFrom = (series: HistorySeries, startedAt: number | undefined) => {
   const first = series.buckets[0]
   if (startedAt === undefined || first === undefined || startedAt <= series.from) return series.from
   if (first.t < startedAt - series.stepMs) return series.from
-  return Math.max(series.from, Math.min(startedAt, first.t, series.to - MIN_AXIS_MS))
+  return Math.max(series.from, Math.min(startedAt, first.t))
 }
 
 /** The bucket nearest to `at`, for the hover. */
@@ -222,7 +232,7 @@ export interface ChartGap {
  * that ends at `startedAt` (within a step, as bucket edges fall) or spans it: up to the start, that the gateway
  * restarted then; the rest after the start is a stretch of its own when it breaks the line, else part of this one.
  * A stretch that ends earlier, inside an older run: no cause, as the page has no events from it. Nothing before
- * `from`: an axis that starts where the gateway started (`axisFrom`) already says so in its note, so that gets no
+ * `from`: a history that begins where the gateway started (`historyFrom`) is marked "no history" before it, so that gets no
  * band.
  *
  * With `readGapMs` (`readGapMs` of the device's poll interval), two buckets close enough to keep the line whole whose
@@ -360,3 +370,46 @@ export const gapSentence = (gap: ChartGap, device: string, to: number) => {
 
 /** The gap that `at` falls in, for the hover. */
 export const gapAt = (gaps: ReadonlyArray<ChartGap>, at: number) => gaps.find((gap) => gap.from <= at && at < gap.to)
+
+/** A switch of an on/off point: when it turned on (or off) and how long it stayed so. */
+export interface Switch {
+  readonly at: number
+  readonly on: boolean
+  readonly forMs: number
+  /** It is still so at the end of the range: `forMs` is so far. */
+  readonly current: boolean
+}
+
+/**
+ * The switches of an on/off point from its history's `changes` (oldest first; the first one is its first read in the
+ * range, which is no switch), newest first: each with how long it held, up to the next one or the range's end `to`.
+ */
+export const switchTimes = (changes: ReadonlyArray<HistoryChange>, to: number): ReadonlyArray<Switch> => {
+  const switches: Array<Switch> = []
+  for (let index = 1; index < changes.length; index++) {
+    const change = changes[index]
+    if (change === undefined) continue
+    const next = changes[index + 1]
+    switches.push({
+      at: change.t,
+      on: change.value !== 0,
+      forMs: Math.max(0, (next?.t ?? to) - change.t),
+      current: next === undefined
+    })
+  }
+  return switches.toReversed()
+}
+
+/**
+ * A bucket's span for the hover: "Wed 14:04:45–14:05:00", from its start to its end (a bucket holds the reads of
+ * `[t, t + stepMs)`, and its dot sits in its middle), so the time under the pointer falls inside what it says.
+ */
+export const bucketSpan = (at: number, stepMs: number) => {
+  const end = new Date(at + stepMs).toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+    ...(stepMs < 60_000 ? { second: "2-digit" as const } : {})
+  })
+  return `${bucketTime(at, stepMs)}–${end}`
+}

@@ -64,3 +64,12 @@ describe("documented install lines", () => {
     expect(without, `downloads without ${retries}`).toEqual([])
   })
 })
+
+describe("install.sh", () => {
+  it("finds a way to run pnpm before the first change to the system", () => {
+    const script = read("packaging/install.sh")
+    expect(script.indexOf("pnpm_cmd=(")).toBeGreaterThan(-1)
+    expect(script.indexOf("pnpm_cmd=(")).toBeLessThan(script.indexOf("useradd"))
+    expect(script).not.toContain("corepack pnpm install")
+  })
+})

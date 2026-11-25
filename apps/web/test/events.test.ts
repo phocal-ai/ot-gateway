@@ -66,7 +66,7 @@ describe("eventSentence", () => {
   it("says what happened in plain words", () => {
     expect(eventSentence(started)).toBe("Gateway started (0.9.0, 3 devices)")
     expect(eventSentence(failing)).toBe("energy-meter stopped answering: connection refused by 127.0.0.1:5020")
-    expect(eventSentence(recovered)).toBe("energy-meter answering again after 61 s")
+    expect(eventSentence(recovered)).toBe("energy-meter answering again after 1 min 1 s")
     expect(eventSentence(brokerGone)).toBe("Broker disconnected: connection closed by the peer")
     expect(eventSentence(brokerBack)).toBe("Broker back after 20 s, 55 values from the buffer on their way")
     expect(eventSentence(drained)).toBe("Buffer emptied: every value kept while the broker was away reached it")
@@ -216,7 +216,7 @@ describe("alarm events", () => {
         },
         names
       )
-    ).toBe("Alarm cleared after 61 s: Main breaker tripped on energy-meter")
+    ).toBe("Alarm cleared after 1 min 1 s: Main breaker tripped on energy-meter")
   })
 
   it("word a state found changed when the device answered again as the CLI does, in neither red nor green", () => {

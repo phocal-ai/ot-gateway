@@ -28,7 +28,14 @@ import { get } from "node:http"
 import { createServer } from "node:net"
 import type { HostSnapshot } from "../src/Host.ts"
 import { configView } from "../src/ConfigView.ts"
-import { historyHandler, makeStatusState, serveStatus, webBuildStale } from "../src/Status.ts"
+import {
+  historyHandler,
+  isServedHost,
+  machineHostNames,
+  makeStatusState,
+  serveStatus,
+  webBuildStale
+} from "../src/Status.ts"
 import { GatewayEvents, gatewayEventsLayer, makeGatewayEvents } from "../src/Events.ts"
 
 const config = parseConfig(
@@ -628,6 +635,27 @@ describe("status", () => {
     })
   )
 
+  it.live("bound to the network, answers IP addresses and its own names, and refuses other DNS names", () =>
+    Effect.gen(function* () {
+      const parsed = yield* config
+      const port = yield* freePort
+      const state = makeStatusState(parsed, makeHealthRegistry(["meter"]), 500)
+      const server = yield* serveStatus(
+        { bindAddress: "0.0.0.0", port, webRoot: "/nonexistent", hostNames: ["gateway.site.lan"] },
+        state
+      ).pipe(Effect.provide([NodeServices.layer, gatewayEventsLayer()]), Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      for (const host of [`192.168.1.40:${port}`, `127.0.0.1:${port}`, `gateway.site.lan:${port}`, "[fe80::1]:80"]) {
+        expect([host, (yield* responseFor(port, host)).status]).toEqual([host, 200])
+      }
+      for (const host of [`rebind.example:${port}`, `192.168.1.40.rebind.example`, "gateway.site.lan.evil.example"]) {
+        expect([host, (yield* responseFor(port, host)).status]).toEqual([host, 421])
+      }
+      expect((yield* responseFor(port, "rebind.example")).body).toContain("status.hostNames")
+      yield* Fiber.interrupt(server)
+    })
+  )
+
   it.live("serves a point's history on /api/history, and says why when it cannot", () =>
     Effect.gen(function* () {
       const parsed = yield* config
@@ -749,6 +777,53 @@ describe("the running gateway's delivery counts", () => {
       expect(meta?.lost).toBe(0)
     }).pipe(Effect.scoped, Effect.provide([NodeServices.layer, FetchHttpClient.layer]))
   )
+})
+
+describe("isServedHost", () => {
+  const machine = machineHostNames("Gateway-Pi")
+  const lan = { bindAddress: "0.0.0.0", hostNames: ["Plant.Example.", "gw"] }
+  it("knows this machine by its host name and under .local", () => {
+    expect(machine).toEqual(["gateway-pi", "gateway-pi.local"])
+    expect(machineHostNames("pi.office.lan")).toEqual(["pi.office.lan", "pi", "pi.local"])
+    expect(machineHostNames("")).toEqual([])
+  })
+  it("on the network, answers IP addresses, localhost, its own names and the listed ones, in any case", () => {
+    for (const host of [
+      "10.0.0.5",
+      "10.0.0.5:8080",
+      "[::1]",
+      "[2001:db8::1]:8080",
+      "localhost:1",
+      "GATEWAY-PI.local",
+      "plant.example:8080",
+      "plant.example.",
+      "gw"
+    ]) {
+      expect([host, isServedHost(host, lan, machine)]).toEqual([host, true])
+    }
+  })
+  it("on the network, refuses any other name and malformed hosts", () => {
+    for (const host of [
+      "evil.example",
+      "10.0.0.5.evil.example",
+      "plant.example.evil",
+      "gateway-pi.evil",
+      "[::1",
+      "[evil]",
+      "10.0.0.5:0",
+      "10.0.0.5:abc",
+      "a@b",
+      ""
+    ]) {
+      expect([host, isServedHost(host, lan, machine)]).toEqual([host, false])
+    }
+  })
+  it("on loopback, ignores hostNames and the machine's names: loopback names only", () => {
+    const loopback = { bindAddress: "127.0.0.1", hostNames: ["plant.example"] }
+    expect(isServedHost("plant.example", loopback, machine)).toBe(false)
+    expect(isServedHost("gateway-pi.local", loopback, machine)).toBe(false)
+    expect(isServedHost("localhost:3000", loopback, machine)).toBe(true)
+  })
 })
 
 describe("webBuildStale", () => {

@@ -37,10 +37,9 @@
           "id": "energy-today",
           "name": "PV inverter energy today",
           "unit": "unit:KiloW-HR",
-          "waveform": "ramp",
+          "waveform": "daily",
           "min": 0,
           "max": 40,
-          "periodSeconds": 120,
           "semantics": {
             "brick": "Energy_Sensor",
             "haystack": ["pv", "elec", "energy", "sensor"]

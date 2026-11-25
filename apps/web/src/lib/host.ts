@@ -92,3 +92,32 @@ export const powerLabel = (host: HostStatus) => {
   if (conditions.length > 0) return `slowed down (${conditions.join(", ").replaceAll("_", " ")})`
   return "ok"
 }
+
+const listed = (words: ReadonlyArray<string>) =>
+  words.length <= 1 ? (words[0] ?? "") : `${words.slice(0, -1).join(", ")} and ${words.at(-1)}`
+
+/**
+ * What the machine's sample measures, for the line over its details while nothing is wrong: only what it can tell.
+ * Power only on a Raspberry Pi, heat only where there is a temperature sensor, disk only with a buffer on it, and
+ * the load once the gateway has run its first minute (`WARM_UP_MS`). "Nothing needs a look: disk and load are fine."
+ */
+export const machineFine = (host: HostStatus, upMs: number) => {
+  const measured = [
+    ...(host.throttled === undefined ? [] : ["power"]),
+    ...(host.temperatureC === undefined ? [] : ["heat"]),
+    ...(host.diskFreeBytes === undefined ? [] : ["disk"]),
+    ...(upMs < WARM_UP_MS ? [] : ["load"])
+  ]
+  const checked =
+    measured.length === 0
+      ? "Nothing needs a look."
+      : `Nothing needs a look: ${listed(measured)} ${measured.length === 1 ? "is" : "are"} fine.`
+  return upMs < WARM_UP_MS ? `${checked} The load counts once the gateway has run a minute.` : checked
+}
+
+/** What the machine cannot tell, said as such rather than left out: no temperature sensor, not a Raspberry Pi. */
+export const NOT_MEASURED = {
+  temperature: "not measured on this machine (no temperature sensor)",
+  power: "not measured (only a Raspberry Pi reports it)",
+  disk: "not measured (no buffer on disk)"
+} as const

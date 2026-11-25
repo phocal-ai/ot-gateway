@@ -108,3 +108,11 @@ describe("the env file", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })
+
+describe("envFileText", () => {
+  it("names this machine's time zone for the container, and leaves UTC or an unknown zone out", () => {
+    expect(envFileText(undefined, "Europe/Vienna")).toContain("\nTZ=Europe/Vienna\n")
+    expect(envFileText(undefined, "UTC")).not.toContain("TZ=")
+    expect(envFileText(undefined)).not.toContain("TZ=")
+  })
+})

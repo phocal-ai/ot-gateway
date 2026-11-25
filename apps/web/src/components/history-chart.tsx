@@ -6,13 +6,17 @@
  * device was failing, the reads came back with a restart of the gateway), also in a line under the chart and on hover.
  * A point read on change of value has no reads while it keeps still: that is no gap, and its line holds its value as
  * steps up to its next change (and on to the end while its device answers).
+ *
+ * The axis always spans the range chosen (15 min is 15 minutes, 1 h an hour): a gateway that started within it has no
+ * history before its start, and that stretch is hatched and labelled "no history" rather than cropped away. An on/off
+ * point lists its latest switches under the chart (from the history's `changes`), the rest behind "more".
  */
 import type { HistorySeries } from "@ot-gateway/api"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useState } from "react"
 import { formatNumber } from "@/lib/format"
 import {
-  axisFrom,
-  bucketTime,
+  historyFrom,
+  bucketSpan,
   chartGaps,
   type Failure,
   gapAt,
@@ -20,17 +24,21 @@ import {
   heldUntil,
   nearest,
   segments,
+  type Switch,
+  switchTimes,
   timeLabel,
   timeTicks,
   valueTicks
 } from "@/lib/history"
-import { clockTime, formatValue, unitLabel } from "@/lib/status"
+import { clockTime, duration, formatValue, unitLabel } from "@/lib/status"
 
 const HEIGHT = 150
 // Room at the top for the unit over the value axis.
 const margin = { top: 20, right: 12, bottom: 22, left: 48 }
 /** Gaps the line under the chart names, newest first; the rest are counted. */
 const GAPS_LISTED = 3
+/** Switches of an on/off point listed under the chart, newest first; the rest open with "more". */
+const SWITCHES_LISTED = 4
 
 /** The element's width, following resizes. */
 const useWidth = () => {
@@ -64,7 +72,7 @@ export const HistoryChart = ({
   readonly unit: string | undefined
   readonly boolean: boolean
   readonly label: string
-  /** When the gateway started (its `since`): a history that begins there starts the axis there (`axisFrom`). */
+  /** When the gateway started (its `since`): a history that begins there has "no history" before it (`historyFrom`). */
   readonly startedAt: number | undefined
   /** The point's device, to say which one was not answering in a gap. */
   readonly device: string
@@ -77,8 +85,12 @@ export const HistoryChart = ({
 }) => {
   const [ref, width] = useWidth()
   const [hover, setHover] = useState<number | undefined>(undefined)
+  const hatch = useId()
   const { buckets, stepMs, to } = series
-  const from = axisFrom(series, startedAt)
+  // The axis spans the whole range asked for; reads begin at `readsFrom` (the gateway's start, when its history
+  // begins there), and the stretch before it is marked "no history".
+  const from = series.from
+  const readsFrom = historyFrom(series, startedAt)
   const lows = buckets.map((bucket) => bucket.min)
   const highs = buckets.map((bucket) => bucket.max)
   const ticks = boolean ? [0, 1] : valueTicks(Math.min(...lows), Math.max(...highs))
@@ -89,7 +101,7 @@ export const HistoryChart = ({
   const y = (value: number) =>
     margin.top + ((yMax - value) / (yMax - yMin || 1)) * (HEIGHT - margin.top - margin.bottom)
   const time = timeTicks(from, to)
-  const gaps = chartGaps(series, from, { startedAt, failures, cov, readGapMs })
+  const gaps = chartGaps(series, readsFrom, { startedAt, failures, cov, readGapMs })
   // On change of value the line holds across a stretch without reads (only a gap breaks it), as steps; the band of
   // each bucket's range stays where reads are.
   const runs = segments(buckets, stepMs, cov ? gaps : undefined)
@@ -111,6 +123,9 @@ export const HistoryChart = ({
   }
   const listed = gaps.toReversed().slice(0, GAPS_LISTED)
   const units = unitLabel(unit)
+  // The stretch before the first reads of this history: from the left edge to where the gateway started.
+  const before = readsFrom > from ? { left: plotLeft, right: Math.max(plotLeft, x(readsFrom - stepMs / 2)) } : undefined
+  const switches = boolean && series.changes !== undefined ? switchTimes(series.changes.list, to) : undefined
 
   return (
     <div ref={ref} className="relative">
@@ -129,11 +144,38 @@ export const HistoryChart = ({
           onPointerMove={(event) => {
             const box = event.currentTarget.getBoundingClientRect()
             const fraction = (event.clientX - box.left - margin.left) / plotWidth
-            setHover(fraction < 0 || fraction > 1 ? undefined : from + fraction * (to - from) - stepMs / 2)
+            const at = from + fraction * (to - from)
+            setHover(fraction < 0 || fraction > 1 || at < readsFrom ? undefined : at - stepMs / 2)
           }}
           role="img"
           width={width}
         >
+          <defs>
+            <pattern height={6} id={hatch} patternTransform="rotate(45)" patternUnits="userSpaceOnUse" width={6}>
+              <line stroke="var(--muted-foreground)" strokeOpacity={0.25} strokeWidth={2} x1={0} x2={0} y1={0} y2={6} />
+            </pattern>
+          </defs>
+          {before === undefined ? null : (
+            <g>
+              <rect
+                fill={`url(#${hatch})`}
+                height={HEIGHT - margin.top - margin.bottom}
+                width={before.right - before.left}
+                x={before.left}
+                y={margin.top}
+              />
+              {before.right - before.left < 64 ? null : (
+                <text
+                  className="fill-muted-foreground text-[11px]"
+                  textAnchor="middle"
+                  x={(before.left + before.right) / 2}
+                  y={margin.top + (HEIGHT - margin.top - margin.bottom) / 2 + 4}
+                >
+                  no history
+                </text>
+              )}
+            </g>
+          )}
           {boolean || units === "" ? null : (
             <text className="fill-muted-foreground text-[11px]" textAnchor="end" x={margin.left - 6} y={11}>
               {units}
@@ -238,9 +280,13 @@ export const HistoryChart = ({
           )}
         </svg>
       )}
-      {from > series.from && startedAt !== undefined ? (
-        <p className="mt-1 text-xs text-muted-foreground">
-          The gateway started at {clockTime(startedAt, to)}: there is no history before that.
+      {before !== undefined && startedAt !== undefined ? (
+        <p className="mt-1 flex items-baseline gap-1.5 text-xs text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className="inline-block size-2.5 shrink-0 rounded-[2px] bg-[repeating-linear-gradient(45deg,var(--muted-foreground)_0_1.5px,transparent_1.5px_4px)] opacity-50"
+          />
+          No history before {clockTime(startedAt, to)}: the gateway started then.
         </p>
       ) : null}
       {listed.length === 0 ? null : (
@@ -261,6 +307,15 @@ export const HistoryChart = ({
           ) : null}
         </ul>
       )}
+      {switches === undefined ? (
+        boolean && buckets.length > 0 ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Switch times are kept for the last day: pick 24 h or less.
+          </p>
+        ) : null
+      ) : (
+        <SwitchList switches={switches} truncated={series.changes?.truncated === true} to={to} />
+      )}
       {hoveredGap === undefined || hover === undefined ? null : (
         <div
           className="pointer-events-none absolute top-0 z-10 max-w-64 rounded-md border bg-card px-2.5 py-1.5 text-xs text-muted-foreground shadow-md"
@@ -277,7 +332,7 @@ export const HistoryChart = ({
             minWidth: 150
           }}
         >
-          <div className="text-muted-foreground tabular-nums">{bucketTime(hovered.t, stepMs)}</div>
+          <div className="text-muted-foreground tabular-nums">{bucketSpan(hovered.t, stepMs)}</div>
           <div className="font-mono tabular-nums">
             {format(hovered.avg, boolean)} {boolean ? "" : units}
           </div>
@@ -291,6 +346,57 @@ export const HistoryChart = ({
             {formatNumber(hovered.count)} {hovered.count === 1 ? "read" : "reads"}
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+const SwitchRow = ({ entry, to }: { readonly entry: Switch; readonly to: number }) => (
+  <li className="flex items-baseline gap-2 tabular-nums">
+    <span className="font-mono">{clockTime(entry.at, to)}</span>
+    <span aria-hidden="true">→</span>
+    <span className={`w-6 ${entry.on ? "font-medium text-foreground" : ""}`}>{entry.on ? "on" : "off"}</span>
+    <span>{entry.current ? `${duration(entry.forMs)} so far` : `for ${duration(entry.forMs)}`}</span>
+  </li>
+)
+
+/**
+ * An on/off point's latest switches, newest first: when, to on or off, and how long it stayed so. The first few show;
+ * the rest open with "more". A range with more changes than the gateway lists (`truncated`) says so, since the ones
+ * it leaves out are the latest.
+ */
+const SwitchList = ({
+  switches,
+  truncated,
+  to
+}: {
+  readonly switches: ReadonlyArray<Switch>
+  readonly truncated: boolean
+  readonly to: number
+}) => {
+  if (switches.length === 0) return <p className="mt-1 text-xs text-muted-foreground">No switches in this range.</p>
+  const shown = switches.slice(0, SWITCHES_LISTED)
+  const rest = switches.slice(SWITCHES_LISTED)
+  return (
+    <div className="mt-2 text-xs text-muted-foreground">
+      <p className="font-medium text-foreground">Switches</p>
+      {truncated ? <p>More changes than the gateway lists for this range: pick a shorter one for the latest.</p> : null}
+      <ul className="mt-0.5 grid gap-0.5">
+        {shown.map((entry) => (
+          <SwitchRow entry={entry} key={entry.at} to={to} />
+        ))}
+      </ul>
+      {rest.length === 0 ? null : (
+        <details className="mt-0.5">
+          <summary className="cursor-pointer select-none hover:text-foreground">
+            {rest.length} more {rest.length === 1 ? "switch" : "switches"}
+          </summary>
+          <ul className="mt-0.5 grid gap-0.5">
+            {rest.map((entry) => (
+              <SwitchRow entry={entry} key={entry.at} to={to} />
+            ))}
+          </ul>
+        </details>
       )}
     </div>
   )

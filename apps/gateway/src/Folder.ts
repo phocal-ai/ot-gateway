@@ -30,11 +30,16 @@ export interface FolderFiles {
  * The env file's text: the password variable, empty, when the broker needs a login, and the telemetry
  * variables commented out, so the operator finds where both go without reading the docs first.
  */
-export const envFileText = (passwordEnv: string | undefined) =>
+export const envFileText = (passwordEnv: string | undefined, timeZone?: string) =>
   [
     "# Secrets and settings for this gateway, kept out of ot-gateway.json. Docker Compose and ot-gateway read",
     "# this file; keep it yours alone (chmod 600) and out of git.",
     ...(passwordEnv === undefined ? [] : ["", "# The MQTT broker password.", `${passwordEnv}=`]),
+    // A container knows no time zone of its host (mounting /etc/localtime does not reach Node), so the gateway's own
+    // log lines would be in UTC while the ot-gateway command shows this machine's time.
+    ...(timeZone === undefined || timeZone === "" || timeZone === "UTC"
+      ? []
+      : ["", "# This machine's time zone (IANA), so the gateway's log lines show its clock time.", `TZ=${timeZone}`]),
     "",
     "# Telemetry: uncomment and fill in to send traces, metrics and logs over OTLP (observability/README.md).",
     "# OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com/otlp",
@@ -55,7 +60,7 @@ export const envFileText = (passwordEnv: string | undefined) =>
 export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
   configPath: string,
   config: GatewayConfig,
-  options: { readonly dryRun?: boolean } = {}
+  options: { readonly dryRun?: boolean; readonly timeZone?: string } = {}
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -76,6 +81,6 @@ export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
   if (noCompose === undefined) {
     yield* create(path.join(folder, "compose.yaml"), yield* fs.readFileString(composeTemplatePath), 0o644)
   }
-  yield* create(path.join(folder, "ot-gateway.env"), envFileText(config.mqtt.passwordEnv), 0o600)
+  yield* create(path.join(folder, "ot-gateway.env"), envFileText(config.mqtt.passwordEnv, options.timeZone), 0o600)
   return { written, kept, noCompose } satisfies FolderFiles
 })

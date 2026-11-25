@@ -1,7 +1,8 @@
 /**
  * The setup requests (`/api/test/broker`, `/api/test/read`, `/api/import/check`, `/api/import/apply`), through the
  * typed client for `OtGatewayApi`. They are writes as far as the gateway's guard goes (they connect to devices), so
- * every one carries the same headers as a save. Each comes back as an outcome the page shows as it is.
+ * every one carries the same headers as a save. Each comes back as an outcome the page shows as it is. The points
+ * list's format (`/api/points/format`) is a plain GET.
  */
 import type {
   BrokerTest,
@@ -10,6 +11,8 @@ import type {
   DiscoveredObjects,
   ImportApplied,
   ImportCheck,
+  ImportRename,
+  PointsListFormat,
   ReadTest
 } from "@ot-gateway/api"
 import { OtGatewayApi } from "@ot-gateway/api"
@@ -87,10 +90,21 @@ export const testBroker = (text: string) =>
     25
   )
 
-export const checkImport = (text: string, name: string) =>
+/** The points list's template and columns, for the upload panel. */
+export const fetchPointsListFormat = settled<PointsListFormat>(
+  setup().pipe(
+    Effect.flatMap((client) => client.pointsListFormat()),
+    Effect.map((value): Outcome<PointsListFormat> => ({ _tag: "ok", value }))
+  ),
+  5
+)
+
+const withRenames = (renames: ReadonlyArray<ImportRename>) => (renames.length === 0 ? {} : { renames })
+
+export const checkImport = (text: string, name: string, renames: ReadonlyArray<ImportRename> = []) =>
   settled<ImportCheck>(
     setup().pipe(
-      Effect.flatMap((client) => client.importCheck({ payload: { text, name } })),
+      Effect.flatMap((client) => client.importCheck({ payload: { text, name, ...withRenames(renames) } })),
       Effect.map((value): Outcome<ImportCheck> => ({ _tag: "ok", value })),
       Effect.catchTags({
         EditingDisabled: (error) => Effect.succeed(failed<ImportCheck>(error.message)),
@@ -101,10 +115,10 @@ export const checkImport = (text: string, name: string) =>
   )
 
 /** Adding waits for the gateway to apply the new config, as a save does. */
-export const applyImport = (text: string, name: string, etag: string) =>
+export const applyImport = (text: string, name: string, etag: string, renames: ReadonlyArray<ImportRename> = []) =>
   settled<ImportApplied>(
     setup().pipe(
-      Effect.flatMap((client) => client.importApply({ payload: { text, name, etag } })),
+      Effect.flatMap((client) => client.importApply({ payload: { text, name, etag, ...withRenames(renames) } })),
       Effect.map((value): Outcome<ImportApplied> => ({ _tag: "ok", value })),
       Effect.catchTags({
         ImportInvalid: (error) =>

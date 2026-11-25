@@ -14,7 +14,7 @@ One image runs on any Linux edge box with Docker, a Raspberry Pi 4 or 5 as much 
 mkdir -p ~/ot-gateway && cd ~/ot-gateway
 ```
 
-`ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login and the telemetry variables commented out. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
+`ot-gateway init .` in that folder asks a few questions and writes all of it: `ot-gateway.json`, `compose.yaml`, and `ot-gateway.env` (yours alone) with an empty line for the broker password when the broker needs a login, this machine's time zone (`TZ=Europe/Vienna`, so the gateway's own log lines show local time: a container is in UTC otherwise, and mounting `/etc/localtime` does not change that) and the telemetry variables commented out. For a folder made before, add the `TZ=` line yourself and run `docker compose up -d`. It never replaces a `compose.yaml` or `ot-gateway.env` that is already there. With Node.js on the machine, `ot-gateway` is `npx ot-gateway` ([The CLI from npm](#the-cli-from-npm)). Without it (a Raspberry Pi has none), the image is the CLI, with the same commands:
 
 ```bash
 mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway && . ~/.profile
@@ -26,7 +26,7 @@ The first line installs the command, without `sudo` ([`packaging/ot-gateway`](..
 Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.13.2/packaging/compose.yaml
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.14.0/packaging/compose.yaml
 ```
 
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
@@ -50,7 +50,7 @@ Without Compose, the same as one command, from the same folder:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v "$PWD:/etc/ot-gateway" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.13.2 /etc/ot-gateway/ot-gateway.json
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.14.0 /etc/ot-gateway/ot-gateway.json
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -69,7 +69,7 @@ The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose doe
 
 ### systemd, without Docker
 
-Needs Node.js 22.18 or later (24 LTS recommended) and systemd. From a checkout:
+Needs Node.js 22.18 or later (24 LTS recommended), systemd and pnpm 10 (on Node 25 or later, which no longer include corepack: `sudo npm install -g pnpm@10`). From a checkout:
 
 ```bash
 pnpm --filter @ot-gateway/web build
@@ -135,10 +135,10 @@ A change by hand is read when the gateway starts: the gateway does not watch the
 
 The Settings tab's Gateway, Broker and BACnet/IP cards have an Edit button: site, building, gateway id, health interval, broker URL, user name, client id and MQTT version; the gateway's BACnet/IP port, broadcast address, BBMD, the address it listens on, reply timeout, retries and how long change subscriptions last (`/settings/?bacnet=1`; the card shows while there is no BACnet device yet too, since finding devices uses it). Its Devices card adds a Modbus TCP or BACnet/IP device with its points, finds BACnet devices on the network, edits or removes one, and adds the devices of a points list or an EDE file ([Devices in the status page](#devices-in-the-status-page)). The gateway checks every form as you type (the same check as `ot-gateway check`, each problem under its field), and Save writes the config file and applies it without a restart. The other blocks (`buffer`, `history`, `status`) and simulated devices are still changed in the file, for now.
 
-- **The file stays the source of truth.** The page reads the file as it is on disk, and a save replaces it whole: the new text goes to `ot-gateway.json.tmp`, is flushed to disk and renamed over the file, so a power cut leaves the old file or the new one, never half of one. The previous version is kept as `ot-gateway.json.bak`, with the file's permissions; to go back, copy it over the file and restart the gateway. A save is refused when the file changed since the page read it (an edit by hand, another browser): nothing is written, and the page offers to load the file again.
+- **The file stays the source of truth.** The page reads the file as it is on disk, and a save replaces it whole: the new text goes to `ot-gateway.json.tmp`, is flushed to disk and renamed over the file, so a power cut leaves the old file or the new one, never half of one. The previous version is kept as `ot-gateway.json.bak`, with the file's permissions; to go back, copy it over the file and restart the gateway. A save is refused when the file changed since the page read it (an edit by hand, another browser): nothing is written, and the page offers to load the file again. A save whose apply takes longer than the page waits keeps going in the gateway, and if the config then does not start, the file still gets the previous text back.
 - **Applied in the running process.** The devices, the broker connection and the outbox stop cleanly (what waits in the outbox stays in its file) and start again with the new config; the status page, its events and the history stay up. When the broker settings changed, the new config counts as applied only once the broker accepts it (10 s at most). When the BACnet/IP settings changed, or the first BACnet device is added, the BACnet/IP socket is opened again on the new port at once, and the config counts as applied only once it is open (5 s at most): a port another program holds rolls the save back with the reason. A config that does not start (the outbox's file cannot be opened, the broker refuses the connection, the BACnet/IP port is taken) is rolled back: the previous config runs again, the file gets its previous text back, and the page shows why. Either way there is an event (`config-applied` or `config-apply-failed`, in `ot-gateway events` and on the Status tab), a log line and the `ot_gateway_config_applies_total` metric by outcome. The status page's own address (`status`) and the history (`history`) are saved but take effect at the next restart, and the page says so.
 - **What a new site or building leaves behind.** Values go to the new topics at once, and the old health topic gets the gateway's clean `offline`. The retained `$meta` and health messages under the old site stay on the broker until something clears them (`ot-gateway publish <topic> --retain`). Telemetry's `site` and `building` attributes follow the new config, but the OpenTelemetry resource keeps the values it started with until a restart.
-- **Secrets stay in `ot-gateway.env`.** The page never sees or sends the broker password: it shows only whether the variable `mqtt.passwordEnv` names is set.
+- **Secrets stay in `ot-gateway.env`.** The page never sees or sends the broker password: it shows only whether the variable `mqtt.passwordEnv` names is set. The page keeps the password variable the gateway started with, or removes it; naming another variable is a hand edit of `ot-gateway.json` (after setting it in `ot-gateway.env`) and a restart.
 - **Who may save.** Every request that changes something must come from the page itself: an `Origin` header that matches the address the request went to (a page on another site cannot fake it) and the `X-OT-Gateway: 1` header (which a cross-site page cannot send without a CORS preflight, never granted). With the status page on loopback (`127.0.0.1`, the default), reached on the machine or through an SSH tunnel, that is enough. Bound to the LAN (`status.bindAddress: "0.0.0.0"`), editing is off unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env` (a long random secret: `openssl rand -hex 32`); the page then asks for it once and sends it as `Authorization: Bearer <token>`, keeping it in the browser tab until it closes. The token protects writes only; anyone who can reach the page can still read it.
 - **Where it can save.** The gateway's user must be able to write the file and its folder (for the `.tmp` and the `.bak`). With Docker Compose that is the folder mount in `compose.yaml` (below); the container's user is 1000, the first user of a Pi, so a folder owned by another user keeps the page read-only. Under systemd, `/etc/ot-gateway` belongs to root and the page stays read-only: edit the file as above. When the page cannot save, the Settings tab says why and what to change instead of showing Edit, and so does `GET /api/config/edit`.
 
@@ -146,14 +146,14 @@ The Settings tab's Gateway, Broker and BACnet/IP cards have an Edit button: site
 
 - **The first run.** While the config has no devices, the Status tab shows a guide in three steps: the broker (connected, or "Test the connection" and a link to its form, `/settings/?broker=1`), the devices (Add Modbus device, Find BACnet devices, Upload a points list or EDE file) and the first values, which show as they arrive and name a device that fails. After the first save it stays above the overview until you close it. Below it, "Other ways" names the AI agent and the command line.
 - **Add a device.** "Add Modbus device" asks for an id, host, port and unit id; "Add BACnet device" for the device instance and, when it is not in the gateway's subnet, its address (`ip` or `ip:port`). Each point takes a name (its id follows the name until you change it), where it is read (a Modbus table, address and data type, or a BACnet object type and instance) and a unit (`kW`, `°C`, or a QUDT name such as `unit:KiloW`; the common symbols are written to the file as their QUDT names). Scaling, word order and how values are sent (every read, on change with a deadband, sampled or averaged) are under each point's "Scaling, word order and sending". A bit (a coil, a discrete input, a binary or multi-state object) can be marked as an alarm when on or when off; the Status tab then names it in red while it is. A device or point the form did not change is written back exactly as the file has it, settings the form does not show included. Links open the form: `/settings/?add=modbus-tcp`, `/settings/?add=bacnet-ip`, `/settings/?edit=<device id>`; a device's side panel on the Status tab links to its form.
-- **Find BACnet devices.** "Find BACnet devices" (`/settings/?find=1`) asks every device in the gateway's subnet who it is (Who-Is, 3 s), or one address (`ip` or `ip:port`) for a device on another subnet or port, and lists what answers: instance, address, name, and a device instance the config already has. Pick reads the device's object list (the first 300 objects, with names, units and present values): inputs and values are ticked, the ones already configured are not. "Continue with N points" opens the device form with them filled in, ids from their names, to test and save. A device behind a BACnet router answers without an address of its own: add it with "Add BACnet device". Finding uses a UDP socket of its own (the BACnet/IP card's port, 47808 by default, when the gateway reads no BACnet device, a free port otherwise) and the card's broadcast address; when no device answers, the panel links to the card, within 13 s for devices and 25 s for objects, and only one search or test runs at a time.
+- **Find BACnet devices.** "Find BACnet devices" (`/settings/?find=1`) asks every device in the gateway's subnet who it is (Who-Is, 3 s), or one address (`ip` or `ip:port`) for a device on another subnet or port, and lists what answers: instance, address, name, and a device instance the config already has. Pick reads the device's object list (the first 300 objects, with names, units and present values): inputs and values are ticked, the ones already configured are not. "Continue with N points" opens the device form with them filled in, ids from their names, to test and save. A device behind a BACnet router answers without an address of its own: add it with "Add BACnet device". Finding uses a UDP socket of its own (the BACnet/IP card's port, 47808 by default, when the gateway reads no BACnet device, a free port otherwise) and the card's broadcast address; when no device answers, or a broadcast cannot be sent from this machine (a container without a route to the broadcast address: the panel says to enter the device's address instead), the panel links to the card, within 13 s for devices and 25 s for objects, and only one search or test runs at a time.
 - **Commands.** A point is read-only until "Allow commands…" in its form: Modbus holding registers and coils, BACnet outputs and values. A numeric point takes the lowest and highest value a command may set first, and the confirmation names the point, where it is on the device and its `…/$set` topic. Save writes `writable: true` with the `limits`; every command then goes through the command guard and is logged, as for a point written in the file. The `config-applied` event and a warning in the log name each point that takes commands now (with its limits), whose limits changed and which no longer takes any. The page itself never writes a value. "Make it read-only" takes `writable` and `limits` out again.
 - **Test before saving.** "Test the device" reads every point once (up to 25) with the settings as typed, and Test on a point reads that point: the value as it would be published, scaled and with its unit, or why not and what to check (the same hints as the device panel). A test only reads, over a connection of its own, within 12 s; the broker card's "Test the connection" connects with a client id of its own and sends one message to itself, within 22 s. One test runs at a time, and the same device or broker is not asked again within a second. Many Modbus devices take one or two clients: when a device refuses the test's connection while the gateway holds one to it, the result says so: it is no change, not missing reads (the gateway's connection is not touched). A BACnet device without an address is found by broadcast, which the test can only hear when the gateway does not hold UDP 47808 itself; the result says when to give the address instead.
-- **Upload a points list.** "Upload a points list" takes the CSV that `ot-gateway points template` writes (`ot-gateway points schema` describes its columns) or a BACnet EDE file, by picking or dropping it. The gateway checks it as `ot-gateway import --dry-run` does and lists it device by device: what each adds (protocol, address, points, the lines of the file) or what keeps it out, naming the line. For an EDE file the lines are those of the points list it was translated into, and what is not a point (schedules, trend logs) is named as skipped. Add adds the devices without a mistake, after the ones already in the config, and applies them; a device whose id is already in the config is left out. At most 2 MiB.
+- **Upload a points list.** "Upload a points list" takes the CSV that `ot-gateway points template` writes or a BACnet EDE file, by picking or dropping it. Without a terminal, "Download a template (CSV)" in the panel gives the same template, and "What the columns mean" lists every column with its default and allowed values (`GET /api/points/format`). The gateway checks the file as `ot-gateway import --dry-run` does and lists it device by device: what each adds (protocol, address, points, the lines of the file) or what keeps it out, naming the line. For an EDE file the lines are those of the points list it was translated into, and what is not a point (schedules, trend logs) is named as skipped. "Change id or host" on a device gives it another id (one whose id the gateway has already, say) and another host (Modbus TCP) or address (BACnet/IP) for all its rows, without editing the file; the list is checked again with them. Add adds the devices without a mistake, after the ones already in the config, and applies them; a device whose id is already in the config and was not given another is left out. At most 2 MiB. There is no test button per uploaded device: add it, then test it in its form.
 - **Remove a device** with "Remove device" in its form, after a confirmation. The previous file is the `.bak`, as for every save.
 - Every save restarts the gateway's devices, as any applied config does: each device is read again within its first poll.
 
-The API behind the tests and the upload, for scripts, with the same headers as a save: `POST /api/test/read` with `{"text", "device": <index>, "points"?: [<index>]}` (`{"device", "protocol", "target", "ok", "error"?, "note"?, "points": [{"id", "name", "value"?, "raw"?, "unit"?, "error"?}], "durationMs"}`; `text` is the whole candidate config, `device` its index in `devices`), `POST /api/test/broker` with `{"text"}` (`{"ok", "broker", "protocolVersion"?, "roundTripMs"?, "warnings", "error"?}`), `POST /api/import/check` with `{"text", "name"?}` (`{"format", "notes", "error"?, "devices": [{"name", "id", "protocol"?, "address"?, "lines", "points", "error"?}], "adds": {"devices", "points"}}`) and `POST /api/import/apply` with `{"text", "name"?, "etag"}` (`{"etag", "applied", "devices", "points", "skipped"}`). Finding devices: `POST /api/discover/devices` with `{"address"?, "seconds"?}` (`{"asked", "devices": [{"instance", "address"?, "name"?, "conflicts", "configured"?}], "more", "note"?, "durationMs"}`; at most 200 devices, `seconds` 1 to 10) and `POST /api/discover/objects` with `{"instance", "address"}` (`{"instance", "address", "name", "id", "listed", "objects": [{"objectType", "instance", "name", "id", "unit"?, "value"?, "configured"}], "durationMs"}`; 502 when the device does not answer). A test that cannot run with the candidate is 400 with its issues, a second test or search at once 429.
+The API behind the tests and the upload, for scripts, with the same headers as a save: `POST /api/test/read` with `{"text", "device": <index>, "points"?: [<index>]}` (`{"device", "protocol", "target", "ok", "error"?, "note"?, "points": [{"id", "name", "value"?, "raw"?, "unit"?, "error"?}], "durationMs"}`; `text` is the whole candidate config, `device` its index in `devices`), `POST /api/test/broker` with `{"text"}` (`{"ok", "broker", "protocolVersion"?, "roundTripMs"?, "warnings", "error"?}`), `POST /api/import/check` with `{"text", "name"?, "renames"?: [{"name", "id"?, "host"?, "address"?}]}` (`{"format", "notes", "error"?, "devices": [{"name", "id", "protocol"?, "address"?, "lines", "points", "error"?}], "adds": {"devices", "points"}}`; a rename's `name` is a device as the check named it) and `POST /api/import/apply` with `{"text", "name"?, "etag", "renames"?}` (`{"etag", "applied", "devices", "points", "skipped"}`). `GET /api/points/format` (no headers needed) answers `{"version", "template", "rules", "columns": [{"name", "scope", "required", "description", "default"?, "values"?}]}`. Finding devices: `POST /api/discover/devices` with `{"address"?, "seconds"?}` (`{"asked", "devices": [{"instance", "address"?, "name"?, "conflicts", "configured"?}], "more", "note"?, "durationMs"}`; at most 200 devices, `seconds` 1 to 10) and `POST /api/discover/objects` with `{"instance", "address"}` (`{"instance", "address", "name", "id", "listed", "objects": [{"objectType", "instance", "name", "id", "unit"?, "value"?, "configured"}], "durationMs"}`; 502 when the device does not answer). A test that cannot run with the candidate is 400 with its issues, a second test or search at once 429.
 
 ```bash
 curl -s -X POST http://127.0.0.1:8080/api/test/read -H 'Origin: http://127.0.0.1:8080' -H 'X-OT-Gateway: 1' \
@@ -176,7 +176,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/config/file -H 'Origin: http://127.0.0.
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.13.2
+git fetch --tags && git checkout v0.14.0
 ```
 
 ```bash
@@ -192,7 +192,7 @@ Read the release notes for config changes first. If the new version refuses the 
 With Docker Compose, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
-sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.13.2/' compose.yaml && docker compose up -d
+sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.14.0/' compose.yaml && docker compose up -d
 ```
 
 ### From a `compose.yaml` that mounts the config file (v0.12.0 and earlier)
@@ -233,11 +233,11 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.13.2/packaging/compose.yaml && docker compose create
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.14.0/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
-docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.13.2 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.14.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
 ```
 
 ```bash
@@ -282,14 +282,14 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.13.2 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.14.0 --check /etc/ot-gateway/gateway.json
 ```
 
 Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.13.2 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.14.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -304,7 +304,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.13.2
+git fetch --tags && git checkout v0.14.0
 ```
 
 ```bash
@@ -479,7 +479,7 @@ energy-meter/breaker-tripped (Breaker tripped): 1 min buckets from every read
 
 All times are Unix ms on the gateway's wall clock; `now` in an answer is the gateway's clock when it answered. The CLI's `--json` adds a local ISO string next to each (`atLocal`, see [The CLI from npm](#the-cli-from-npm)); the API does not.
 
-- `GET /api/status[?points=none]`: `{site, building, id, since, now, broker, buffer?, host?, devices: [{id, protocol, host?, status, pollIntervalMs, reason?, failingSince?, lastError?, failures?, lastSuccess?, pointCount, points: [{id, name, unit?, writable, value?, ts?, alarmWhen?, alarmActive?}]}], alarms?: [{device, point, alarmWhen, active?, since?, raised, flapping, pattern?}], commands}`; `alarms` lists every alarm point, also with `points=none`, `raised` counting the last 15 minutes.
+- `GET /api/status[?points=none][&alarms=none]`: `{site, building, id, since, now, broker, buffer?, host?, devices: [{id, protocol, host?, status, pollIntervalMs, reason?, failingSince?, lastError?, failures?, lastSuccess?, pointCount, points: [{id, name, unit?, writable, value?, ts?, alarmWhen?, alarmActive?}]}], alarms?: [{device, point, alarmWhen, active?, since?, raised, flapping, pattern?}], commands}`; `alarms` lists every alarm point, also with `points=none` (not with `alarms=none`, which the status page asks for as it reads alarm values from `/api/values`; an older gateway ignores the parameter), `raised` counting the last 15 minutes.
 - `GET /api/points`: `{points: [{device, id, name, unit?, writable, topic, source, read, cov, publish, limits?, scaling?, brick?, haystack?}]}`, every configured point in config order.
 - `GET /api/values?points=device/point,...`: `{readings: [{device, point, value?, ts?}]}`.
 - `GET /api/messages`: `{messages: [{topic, payload, truncated, retained, at, count, delivered, notSent, lost}], droppedTopics}`, sorted by topic.

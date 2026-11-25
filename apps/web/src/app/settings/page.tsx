@@ -14,7 +14,7 @@
  * `?upload=1`, `?broker=1` opens the Broker card's form and `?bacnet=1` the BACnet/IP card's. A panel or form opened
  * this way, or from another panel, is scrolled into view with its first field focused.
  */
-import type { ConfigView, EditStatus } from "@ot-gateway/api"
+import type { ConfigEntry, ConfigView, EditStatus } from "@ot-gateway/api"
 import Link from "next/link"
 import { useEffect, useRef, useState } from "react"
 import { DeviceEditor } from "@/components/device-editor"
@@ -29,11 +29,65 @@ import { type EditCard, isEditCard } from "@/lib/editor"
 import { guideStarted } from "@/lib/first-run"
 import { fetchEditStatus } from "@/lib/editor-api"
 import { formatNumber } from "@/lib/format"
-import { deviceAddress, deviceColumns, duration, formatSetting, sectionTitle, settingLabel } from "@/lib/settings"
+import {
+  deviceAddress,
+  deviceColumns,
+  duration,
+  editAccessLine,
+  fileName,
+  formatSetting,
+  isPathSetting,
+  sectionTitle,
+  settingLabel,
+  splitTuning
+} from "@/lib/settings"
 import { fetchConfig, protocolName, settle } from "@/lib/status"
 
-/** The file's name without its folder: the backup sits next to the file, so its whole path says nothing new. */
-const fileName = (path: string) => path.split(/[/\\]/).at(-1) ?? path
+/** A long path in short: the whole of it on request, so a narrow card does not wrap a folder name over lines. */
+const PathDetails = ({ path }: { readonly path: string }) => (
+  <details className="text-xs">
+    <summary className="cursor-pointer text-muted-foreground">Full path</summary>
+    <code className="font-mono break-all">{path}</code>
+  </details>
+)
+
+/** One setting of a card: its label and value, a file by its name with the whole path behind a toggle. */
+const SettingRow = ({ entry }: { readonly entry: ConfigEntry }) => (
+  <div className="contents">
+    <dt className="text-muted-foreground" title={entry.key}>
+      {settingLabel(entry.key)}
+    </dt>
+    <dd className="min-w-0 text-right break-words">
+      {isPathSetting(entry.key) && typeof entry.value === "string" ? (
+        <details>
+          <summary className="cursor-pointer font-mono" title={entry.value}>
+            {fileName(entry.value)}
+          </summary>
+          <code className="font-mono text-xs break-all">{entry.value}</code>
+        </details>
+      ) : (
+        formatSetting(entry.key, entry.value)
+      )}
+    </dd>
+  </div>
+)
+
+/** Settings on one line: "Label: value · Label: value". */
+const describe = (entries: ReadonlyArray<ConfigEntry>) =>
+  entries.map((entry) => `${settingLabel(entry.key)}: ${formatSetting(entry.key, entry.value)}`).join(" · ")
+
+/** Protocol tuning (pacing, request sizes, retries): collapsed, since the defaults suit nearly every device. */
+const Advanced = ({ entries }: { readonly entries: ReadonlyArray<ConfigEntry> }) =>
+  entries.length === 0 ? null : (
+    <details className="mt-3 text-sm">
+      <summary className="cursor-pointer text-muted-foreground">Advanced</summary>
+      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2">
+        {entries.map((entry) => (
+          <SettingRow key={entry.key} entry={entry} />
+        ))}
+      </dl>
+    </details>
+  )
 
 /** Try again after this long when the config did not come. */
 const RETRY_MS = 5000
@@ -281,11 +335,19 @@ const SettingsPage = () => {
         ) : canEdit ? (
           <>
             <p>Change the settings here; they apply at once.</p>
+            <p className="text-xs text-muted-foreground">{editAccessLine(edit)}</p>
             {edit.path.trim() === "" ? null : (
-              <p className="text-xs break-words text-muted-foreground">
-                Saved to <code className="font-mono">{edit.path}</code>, the previous version kept as{" "}
-                <code className="font-mono">{fileName(edit.path)}.bak</code> next to it.
-              </p>
+              <div className="text-xs break-words text-muted-foreground">
+                <p>
+                  Saved to{" "}
+                  <code className="font-mono" title={edit.path}>
+                    {fileName(edit.path)}
+                  </code>
+                  , the previous version kept as <code className="font-mono">{fileName(edit.path)}.bak</code> next to
+                  it.
+                </p>
+                <PathDetails path={edit.path} />
+              </div>
             )}
           </>
         ) : (
@@ -322,24 +384,22 @@ const SettingsPage = () => {
                 ) : section.entries === undefined ? (
                   <p className="text-sm text-muted-foreground">{BACNET_UNUSED}</p>
                 ) : (
-                  <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
-                    {section.entries.map((entry) => (
-                      <div className="contents" key={entry.key}>
-                        <dt className="text-muted-foreground" title={entry.key}>
-                          {settingLabel(entry.key)}
-                        </dt>
-                        <dd className="min-w-0 text-right break-words">{formatSetting(entry.key, entry.value)}</dd>
-                      </div>
-                    ))}
-                    {section.key === "mqtt" && edit?.password !== undefined ? (
-                      <div className="contents">
-                        <dt className="text-muted-foreground">Password</dt>
-                        <dd className="min-w-0 text-right break-words">
-                          {edit.password.set ? "set" : "not set"} ({edit.password.variable})
-                        </dd>
-                      </div>
-                    ) : null}
-                  </dl>
+                  <>
+                    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
+                      {splitTuning(section.entries).main.map((entry) => (
+                        <SettingRow key={entry.key} entry={entry} />
+                      ))}
+                      {section.key === "mqtt" && edit?.password !== undefined ? (
+                        <div className="contents">
+                          <dt className="text-muted-foreground">Password</dt>
+                          <dd className="min-w-0 text-right break-words">
+                            {edit.password.set ? "set" : "not set"} ({edit.password.variable})
+                          </dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    <Advanced entries={splitTuning(section.entries).advanced} />
+                  </>
                 )}
               </CardContent>
             </Card>
@@ -420,7 +480,7 @@ const SettingsPage = () => {
           <p className="p-5 text-sm text-muted-foreground">
             {canEdit
               ? "No devices yet: add one, find BACnet devices, or upload a points list."
-              : "The config has no devices."}
+              : "No devices on this gateway yet."}
           </p>
         ) : (
           <Table>
@@ -441,10 +501,9 @@ const SettingsPage = () => {
             <TableBody>
               {devices.map((device) => {
                 const interval = device.entries.find((entry) => entry.key === "pollIntervalMs")?.value
-                const others = device.entries
-                  .filter((entry) => !deviceColumns.has(entry.key))
-                  .map((entry) => `${settingLabel(entry.key)}: ${formatSetting(entry.key, entry.value)}`)
-                  .join(" · ")
+                const { main, advanced } = splitTuning(device.entries.filter((entry) => !deviceColumns.has(entry.key)))
+                const others = describe(main)
+                const tuning = describe(advanced)
                 return (
                   <TableRow key={device.id}>
                     <TableCell className="max-w-56 pl-5">
@@ -461,11 +520,18 @@ const SettingsPage = () => {
                       {typeof interval === "number" ? duration(interval) : "–"}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{formatNumber(device.pointCount)}</TableCell>
-                    <TableCell
-                      className="hidden max-w-md truncate text-xs text-muted-foreground lg:table-cell"
-                      title={others}
-                    >
-                      {others}
+                    <TableCell className="hidden max-w-md text-xs text-muted-foreground lg:table-cell">
+                      {others === "" ? null : (
+                        <p className="truncate" title={others}>
+                          {others}
+                        </p>
+                      )}
+                      {tuning === "" ? null : (
+                        <details>
+                          <summary className="cursor-pointer">Advanced</summary>
+                          <p className="whitespace-normal">{tuning}</p>
+                        </details>
+                      )}
                     </TableCell>
                     {canEdit ? (
                       <TableCell className="pr-2 text-right sm:pr-5">

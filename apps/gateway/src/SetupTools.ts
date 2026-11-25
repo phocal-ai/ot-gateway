@@ -19,6 +19,7 @@ import {
   type ImportCheck,
   type ImportDevice,
   ImportInvalid,
+  type ImportRename,
   MAX_TEST_POINTS,
   type PointTest,
   type ReadFailure,
@@ -44,7 +45,7 @@ import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Duration, Effect, type FileSystem, Option, type Path, Result, Schema, Semaphore } from "effect"
 import { dirname } from "node:path"
 import { checkBroker } from "./Broker.ts"
-import type { ConfigEditor } from "./ConfigEditor.ts"
+import { type ConfigEditor, pageIssues } from "./ConfigEditor.ts"
 import { checkConfigText } from "./ConfigStore.ts"
 import { pointsListFromText } from "./Import.ts"
 import { checkPointsListByDevice, type PointsListDevice, profileNames } from "./PointsList.ts"
@@ -68,11 +69,16 @@ export interface SetupTools {
     device: number,
     points: ReadonlyArray<number> | undefined
   ) => Effect.Effect<ReadTest, TestBusy | TestInvalid>
-  readonly importCheck: (text: string, name: string | undefined) => Effect.Effect<ImportCheck, ConfigUnreadableOf>
+  readonly importCheck: (
+    text: string,
+    name: string | undefined,
+    renames?: ReadonlyArray<ImportRename>
+  ) => Effect.Effect<ImportCheck, ConfigUnreadableOf>
   readonly importApply: (
     text: string,
     name: string | undefined,
-    etag: string
+    etag: string,
+    renames?: ReadonlyArray<ImportRename>
   ) => Effect.Effect<ImportApplied, ImportInvalid | Effect.Error<ReturnType<ConfigEditor["save"]>>>
   /** BACnet devices that answer Who-Is, broadcast or at one address (PageDiscovery.ts). */
   readonly discoverDevices: (
@@ -337,6 +343,8 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
 
   const testBroker = Effect.fn("Setup.testBroker")(function* (text: string) {
     const config = yield* candidateBroker(text)
+    const refused = pageIssues(config, deps.running())
+    if (refused.length > 0) return yield* new TestInvalid({ message: "Fix the fields marked first.", issues: refused })
     return yield* gate(
       `the broker at ${config.mqtt.url}`,
       checkBroker(config, deps.network).pipe(
@@ -469,6 +477,9 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
           `profile "${name}" is a file; on this page a points list names profiles from the library only (ot-gateway profiles list). Import it with ot-gateway import instead.`
         )
       }
+      if (!/^[a-z0-9][a-z0-9._-]*$/i.test(name) || name.includes("..")) {
+        return Result.fail(`profile "${name}" is not a library id (ot-gateway profiles list names them)`)
+      }
       const profile = yield* Effect.result(resolveProfile(name, { relativeTo: dirname(deps.configPath) }))
       if (Result.isFailure(profile)) return Result.fail(profile.failure.message)
       profiles.set(name, profile.success)
@@ -477,7 +488,11 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
   })
 
   /** What an uploaded file adds to the config file as it is now, device by device, and the config with them. */
-  const checkUpload = Effect.fnUntraced(function* (text: string, name: string | undefined) {
+  const checkUpload = Effect.fnUntraced(function* (
+    text: string,
+    name: string | undefined,
+    renames: ReadonlyArray<ImportRename> = []
+  ) {
     const file = yield* deps.editor.file
     const source = name ?? "the file"
     const read = yield* Effect.result(pointsListFromText(text, source))
@@ -493,7 +508,8 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
     )
     const profiles = yield* profilesOf(list)
     if (Result.isFailure(profiles)) return empty(format, notes, profiles.failure)
-    const checked = yield* Effect.result(checkPointsListByDevice(list, existing, profiles.success))
+    const overrides = new Map(renames.map(({ name: device, ...override }) => [device, override]))
+    const checked = yield* Effect.result(checkPointsListByDevice(list, existing, profiles.success, overrides))
     if (Result.isFailure(checked)) return empty(format, notes, checked.failure.message)
     // Each device that passed the list's rules also passes the gateway's schema, or is marked with what it breaks.
     const schemaErrors = new Map<number, string>()
@@ -565,12 +581,21 @@ export const makeSetupTools = Effect.fn("makeSetupTools")(function* (deps: {
     return result
   })
 
-  const importCheck = Effect.fn("Setup.importCheck")(function* (text: string, name: string | undefined) {
-    return (yield* checkUpload(text, name)).check
+  const importCheck = Effect.fn("Setup.importCheck")(function* (
+    text: string,
+    name: string | undefined,
+    renames?: ReadonlyArray<ImportRename>
+  ) {
+    return (yield* checkUpload(text, name, renames)).check
   }, Effect.provideContext(files))
 
-  const importApply = Effect.fn("Setup.importApply")(function* (text: string, name: string | undefined, etag: string) {
-    const { check, merged } = yield* checkUpload(text, name)
+  const importApply = Effect.fn("Setup.importApply")(function* (
+    text: string,
+    name: string | undefined,
+    etag: string,
+    renames?: ReadonlyArray<ImportRename>
+  ) {
+    const { check, merged } = yield* checkUpload(text, name, renames)
     if (check.error !== undefined) return yield* new ImportInvalid({ message: check.error })
     if (merged === undefined) {
       return yield* new ImportInvalid({ message: "No device in the file can be added; the check says why." })
