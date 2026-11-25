@@ -229,13 +229,57 @@ export class ImportInvalid extends Schema.TaggedError<ImportInvalid>()(
   { httpApiStatus: 400 }
 ) {}
 
+/**
+ * A change the page makes to one device of an uploaded list before it is added, without editing the file: another
+ * id (for a device whose id is taken on this gateway), and another host (Modbus TCP) or address (BACnet/IP) for
+ * every row of it. `name` is the device as the list names it, as the check reported it.
+ */
+export const ImportRename = Schema.Struct({
+  name: Schema.String.pipe(Schema.check(Schema.isMaxLength(255))),
+  id: Schema.optionalKey(Schema.String.pipe(Schema.check(Schema.isMaxLength(64)))),
+  host: Schema.optionalKey(Schema.String.pipe(Schema.check(Schema.isMaxLength(255)))),
+  address: Schema.optionalKey(Schema.String.pipe(Schema.check(Schema.isMaxLength(64))))
+})
+export type ImportRename = typeof ImportRename.Type
+
+/** The most renames one upload carries: one per device, and a list has a few hundred devices at most. */
+export const MAX_IMPORT_RENAMES = 1000
+
 const ImportUpload = Schema.Struct({
   text: Schema.String.pipe(Schema.check(Schema.isMaxLength(MAX_IMPORT_BYTES))),
   /** The file's name, for the notes. */
-  name: Schema.optionalKey(Schema.String.pipe(Schema.check(Schema.isMaxLength(255))))
+  name: Schema.optionalKey(Schema.String.pipe(Schema.check(Schema.isMaxLength(255)))),
+  /** Devices to add under another id, host or address than the file gives them. */
+  renames: Schema.optionalKey(Schema.Array(ImportRename).pipe(Schema.check(Schema.isMaxLength(MAX_IMPORT_RENAMES))))
 })
 
+/** One column of the points list, as `ot-gateway points schema` describes it. */
+export const PointsListColumn = Schema.Struct({
+  name: Schema.String,
+  /** The rows it applies to: every row (`any`), or the rows of one protocol. */
+  scope: Schema.Literals(["any", "modbus-tcp", "bacnet-ip"]),
+  required: Schema.Boolean,
+  description: Schema.String,
+  default: Schema.optionalKey(Schema.Union([Schema.String, Schema.Number])),
+  values: Schema.optionalKey(Schema.Array(Schema.String))
+})
+export type PointsListColumn = typeof PointsListColumn.Type
+
+/**
+ * The points list's format, for a page without a terminal: the template `ot-gateway points template` prints (CSV
+ * to download and fill in), the rules every list follows, and its columns.
+ */
+export const PointsListFormat = Schema.Struct({
+  version: Schema.Number,
+  template: Schema.String,
+  rules: Schema.Array(Schema.String),
+  columns: Schema.Array(PointsListColumn)
+})
+export type PointsListFormat = typeof PointsListFormat.Type
+
 export class SetupGroup extends HttpApiGroup.make("setup")
+  /** A GET: the format is no secret and changes nothing, so it passes no edit guard. */
+  .add(HttpApiEndpoint.get("pointsListFormat", "/api/points/format", { success: PointsListFormat }))
   .add(
     HttpApiEndpoint.post("testBroker", "/api/test/broker", {
       payload: Schema.Struct({ text: CandidateText }),

@@ -86,7 +86,18 @@ const nameOf = (client: BacnetClient, at: DeviceAddress, instance: number) =>
     )
 
 const socketFailed = (message: string) =>
-  new DiscoveryFailed({ message: `No UDP port for BACnet discovery: ${message}` })
+  new DiscoveryFailed({
+    message: `The gateway could not open a UDP port to search for BACnet devices (${message}). Check the BACnet/IP port in the settings, and that no other program on this machine holds it.`
+  })
+
+/**
+ * What to do when Who-Is could not be sent at all (the socket opened, the send failed): a broadcast address this
+ * machine cannot send to, which a container or a host without a route to it refuses, or an address without a route.
+ */
+export const unsentNote = (asked: string, broadcast: boolean, detail: string) =>
+  broadcast
+    ? `Broadcast discovery isn't possible from here: this machine did not let the gateway send to ${asked} (${detail}). Enter the device's address instead, e.g. 192.168.1.40:47808, or set the BACnet broadcast address to this subnet's (e.g. 192.168.1.255).`
+    : `The gateway could not send to ${asked} (${detail}). Check the address, and that this machine has a route to it.`
 
 /** Where a request is asked: `ip` or `ip:port`, checked; a typed refusal otherwise. */
 const parseAddress = (address: string) => {
@@ -118,10 +129,17 @@ export const makePageDiscovery = (deps: {
       "BACnet discovery",
       Effect.gen(function* () {
         const { client, ownPort } = yield* openClient(config, usesPort, deps.network)
-        const answered = yield* client.discover({
-          within: listen,
-          ...(target === undefined ? {} : { target: { address: target.address } })
-        })
+        const sent = yield* Effect.result(
+          client.discover({
+            within: listen,
+            ...(target === undefined ? {} : { target: { address: target.address } })
+          })
+        )
+        // The port opened but Who-Is could not go out: no device can answer, and the note says what to do instead.
+        if (Result.isFailure(sent)) {
+          return { answered: [], listed: [], names: [], ownPort, unsent: sent.failure.message }
+        }
+        const answered = sent.success
         const listed = answered.slice(0, MAX_DISCOVERED_DEVICES)
         const names = yield* Effect.forEach(
           listed,
@@ -133,7 +151,7 @@ export const makePageDiscovery = (deps: {
             orElse: () => Effect.succeed(listed.map(() => Option.none<string>()))
           })
         )
-        return { answered, listed, names, ownPort }
+        return { answered, listed, names, ownPort, unsent: undefined }
       }).pipe(
         Effect.scoped,
         Effect.timeoutOrElse({
@@ -160,11 +178,13 @@ export const makePageDiscovery = (deps: {
     const note =
       devices.length > 0
         ? undefined
-        : target !== undefined
-          ? `No device answered at ${asked}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
-          : found.ownPort
-            ? `No device answered. The BACnet port ${config.bacnet.port} is in use (by the gateway or another program), so this search listened on another port and may not hear answers to a broadcast. Ask a device at its address (ip or ip:port) instead.`
-            : `No device answered the broadcast to ${asked}. Set the BACnet broadcast address to this subnet's (e.g. 192.168.1.255), check that devices on other subnets have a BBMD, or ask a device at its address.`
+        : found.unsent !== undefined
+          ? unsentNote(asked, target === undefined, found.unsent)
+          : target !== undefined
+            ? `No device answered at ${asked}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
+            : found.ownPort
+              ? `No device answered. The BACnet port ${config.bacnet.port} is in use (by the gateway or another program), so this search listened on another port and may not hear answers to a broadcast. Ask a device at its address (ip or ip:port) instead.`
+              : `No device answered the broadcast to ${asked}. Set the BACnet broadcast address to this subnet's (e.g. 192.168.1.255), check that devices on other subnets have a BBMD, or ask a device at its address.`
     const finished = yield* monotonicMillis
     const result: DiscoveredDevices = {
       asked,

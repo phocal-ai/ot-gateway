@@ -38,6 +38,7 @@ import { GatewayLogs, makeGatewayLogs } from "./LogRing.ts"
 import type { HostSnapshot } from "./Host.ts"
 import { makeMessageMinutes } from "./MessageWindow.ts"
 import { pointCatalog } from "./PointCatalog.ts"
+import { pointsListFormat } from "./PointsSchema.ts"
 import {
   bufferDisabled,
   bufferDrained,
@@ -601,6 +602,7 @@ export const serveStatus = (
         HttpApiBuilder.group(OtGatewayApi, "setup", (handlers) =>
           setup === undefined
             ? handlers
+                .handle("pointsListFormat", () => Effect.succeed(pointsListFormat()))
                 .handle("testBroker", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
                 .handle("testRead", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
                 .handle("importCheck", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
@@ -608,10 +610,13 @@ export const serveStatus = (
                 .handle("discoverDevices", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
                 .handle("discoverObjects", () => Effect.fail(new EditingDisabled({ message: noEditor.reason })))
             : handlers
+                .handle("pointsListFormat", () => Effect.succeed(pointsListFormat()))
                 .handle("testBroker", ({ payload }) => setup.testBroker(payload.text))
                 .handle("testRead", ({ payload }) => setup.testRead(payload.text, payload.device, payload.points))
-                .handle("importCheck", ({ payload }) => setup.importCheck(payload.text, payload.name))
-                .handle("importApply", ({ payload }) => setup.importApply(payload.text, payload.name, payload.etag))
+                .handle("importCheck", ({ payload }) => setup.importCheck(payload.text, payload.name, payload.renames))
+                .handle("importApply", ({ payload }) =>
+                  setup.importApply(payload.text, payload.name, payload.etag, payload.renames)
+                )
                 .handle("discoverDevices", ({ payload }) => setup.discoverDevices(payload.address, payload.seconds))
                 .handle("discoverObjects", ({ payload }) => setup.discoverObjects(payload.instance, payload.address))
         )
