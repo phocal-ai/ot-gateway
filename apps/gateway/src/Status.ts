@@ -29,6 +29,8 @@ import {
   ValuesQueryInvalid
 } from "@ot-gateway/api"
 import type { History } from "@ot-gateway/history"
+import { isIP } from "node:net"
+import * as os from "node:os"
 import type { ConfigEditor } from "./ConfigEditor.ts"
 import type { SetupTools } from "./SetupTools.ts"
 import { configView } from "./ConfigView.ts"
@@ -724,6 +726,18 @@ const isLoopbackIpv4 = (name: string) => {
 /** A port in a Host header: digits only, 1-65535. */
 const isValidPort = (port: string) => /^\d{1,5}$/.test(port) && Number(port) >= 1 && Number(port) <= 65535
 
+/** A Host header split into its name (lower case, IPv6 in brackets) and port, or undefined when it is malformed. */
+const parseHost = (host: string): { readonly name: string } | undefined => {
+  const bracketEnd = host.startsWith("[") ? host.indexOf("]") : -1
+  if (host.startsWith("[") && bracketEnd < 0) return undefined
+  const colon = host.indexOf(":")
+  const nameEnd = bracketEnd >= 0 ? bracketEnd + 1 : colon >= 0 ? colon : host.length
+  const name = host.slice(0, nameEnd).toLowerCase()
+  const rest = host.slice(nameEnd)
+  if (name === "" || (rest !== "" && !(rest.startsWith(":") && isValidPort(rest.slice(1))))) return undefined
+  return { name }
+}
+
 /**
  * Whether a Host header names this machine by a loopback name (`localhost`,
  * `127.x.x.x`, `[::1]` or the bind address), with any valid port or none.
@@ -731,34 +745,55 @@ const isValidPort = (port: string) => /^\d{1,5}$/.test(port) && Number(port) >= 
  * forwards from another local port.
  */
 export const isLoopbackHost = (host: string, bindAddress: string): boolean => {
-  const bracketEnd = host.startsWith("[") ? host.indexOf("]") : -1
-  if (host.startsWith("[") && bracketEnd < 0) return false
-  const colon = host.indexOf(":")
-  const nameEnd = bracketEnd >= 0 ? bracketEnd + 1 : colon >= 0 ? colon : host.length
-  const name = host.slice(0, nameEnd).toLowerCase()
-  const rest = host.slice(nameEnd)
-  if (rest !== "" && !(rest.startsWith(":") && isValidPort(rest.slice(1)))) return false
+  const parsed = parseHost(host)
+  if (parsed === undefined) return false
   const bindName = (bindAddress.includes(":") ? `[${bindAddress}]` : bindAddress).toLowerCase()
+  const { name } = parsed
   return name === "localhost" || name === "[::1]" || isLoopbackIpv4(name) || name === bindName
 }
 
+/** The names this machine answers to on its own: its host name, and that name under `.local` (mDNS). */
+export const machineHostNames = (hostname: string = os.hostname()): ReadonlyArray<string> => {
+  const name = hostname.toLowerCase().replace(/\.$/, "")
+  if (name === "") return []
+  const short = name.split(".")[0] ?? name
+  return [...new Set([name, short, `${short}.local`])]
+}
+
 /**
- * On a loopback address, answer only requests for a loopback host name. A
- * web page in a browser on the gateway's machine could otherwise point a DNS
- * name of its own at 127.0.0.1 and read the API (DNS rebinding). Bound to
- * another address, the page is meant for the network, and any host goes.
+ * Whether the page answers a request for this Host header. On loopback: loopback names only. Bound to the network:
+ * an IP address (which no one can point at another machine), `localhost`, this machine's own names, or a name the
+ * config lists in `status.hostNames`. Any other DNS name is refused, because a web page in a browser on the network
+ * could otherwise point a name of its own at this gateway and read its API (DNS rebinding).
  */
-const hostCheck = (settings: StatusSettings) => {
-  if (!isLoopbackAddress(settings.bindAddress)) return Layer.empty
+export const isServedHost = (
+  host: string,
+  settings: Pick<StatusSettings, "bindAddress" | "hostNames">,
+  machineNames: ReadonlyArray<string>
+): boolean => {
+  if (isLoopbackAddress(settings.bindAddress)) return isLoopbackHost(host, settings.bindAddress)
+  const parsed = parseHost(host)
+  if (parsed === undefined) return false
+  const name = parsed.name.replace(/\.$/, "")
+  if (name === "localhost" || isIP(name) === 4) return true
+  if (name.startsWith("[") && name.endsWith("]") && isIP(name.slice(1, -1)) === 6) return true
+  const named = (settings.hostNames ?? []).map((listed) => listed.toLowerCase().replace(/\.$/, ""))
+  return machineNames.includes(name) || named.includes(name)
+}
+
+/** Refuses a request whose Host header the page does not answer to (`isServedHost`), before any handler. */
+const hostCheck = (settings: StatusSettings, machineNames: ReadonlyArray<string> = machineHostNames()) => {
   // A fixed message: the Host header is not echoed back.
-  const misdirected =
-    `Misdirected request: open the status page as http://127.0.0.1:${settings.port} or ` +
-    `http://localhost:${settings.port} (an SSH tunnel to it works on any local port)`
+  const misdirected = isLoopbackAddress(settings.bindAddress)
+    ? `Misdirected request: open the status page as http://127.0.0.1:${settings.port} or ` +
+      `http://localhost:${settings.port} (an SSH tunnel to it works on any local port)`
+    : `Misdirected request: open the status page by this machine's IP address (http://<ip>:${settings.port}) or ` +
+      `its host name. To open it by another name, add that name to status.hostNames in the config.`
   return HttpRouter.middleware(
     (httpEffect) =>
       Effect.gen(function* () {
         const request = yield* HttpServerRequest.HttpServerRequest
-        if (isLoopbackHost(request.headers.host ?? "", settings.bindAddress)) return yield* httpEffect
+        if (isServedHost(request.headers.host ?? "", settings, machineNames)) return yield* httpEffect
         return HttpServerResponse.text(misdirected, { status: 421 })
       }),
     { global: true }

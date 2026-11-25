@@ -355,7 +355,21 @@ export const StatusSettings = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed(8080))
   ),
   /** The built web app (`apps/web/out`, the default). Without it only the API is served. */
-  webRoot: Schema.optionalKey(Schema.NonEmptyString)
+  webRoot: Schema.optionalKey(Schema.NonEmptyString),
+  /**
+   * DNS names the page is opened by when it listens on the network, besides IP addresses and this machine's own
+   * host name: any other name is refused (DNS rebinding). Unused on loopback.
+   */
+  hostNames: Schema.optionalKey(
+    Schema.Array(
+      Schema.String.pipe(
+        Schema.check(
+          Schema.isMaxLength(253),
+          Schema.isPattern(/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*\.?$/i)
+        )
+      )
+    ).pipe(Schema.check(Schema.isMaxLength(32)))
+  )
 })
 export type StatusSettings = typeof StatusSettings.Type
 
