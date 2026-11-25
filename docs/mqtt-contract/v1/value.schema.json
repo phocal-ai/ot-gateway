@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ot-gateway/mqtt-contract/1.0/value",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "description": "The time-weighted average, so a consumer that only reads value gets a sensible number. For a binary point, the last value."
+        },
+        "min": {
+          "type": "number",
+          "description": "The lowest read in the window. Numeric points only."
+        },
+        "max": {
+          "type": "number",
+          "description": "The highest read in the window. Numeric points only."
+        },
+        "avg": {
+          "type": "number",
+          "description": "Time-weighted average over the time the device answered. For a binary point, the share of that time it was true, from 0 to 1."
+        },
+        "last": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "description": "The last value read in, or carried into, the window."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Reads in the window. 0 when the value held unchanged through it."
+        },
+        "from": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Start of the window (Unix ms); later than to minus the interval when partial."
+        },
+        "to": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "End of the window (Unix ms), aligned to the clock: a multiple of the interval."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "Equal to to."
+        },
+        "partial": {
+          "type": "boolean",
+          "enum": [true],
+          "description": "The gateway started inside the window, so it covers only from from."
+        },
+        "unit": {
+          "type": "string",
+          "description": "QUDT unit identifier, e.g. unit:DEG_C, as the point's config says."
+        }
+      },
+      "required": ["value", "avg", "last", "count", "from", "to", "ts"],
+      "additionalProperties": true,
+      "title": "Aggregate value",
+      "description": "A point's value in publish mode aggregate: one message per clock-aligned window. Published with QoS 1, not retained."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "description": "A finite number in engineering units (after scaling), or true or false for a binary point. A multi-state point publishes its state as a whole number from 1. Never NaN, Infinity or a string: a reading that is not a finite number is not published."
+        },
+        "unit": {
+          "type": "string",
+          "description": "QUDT unit identifier, e.g. unit:DEG_C, as the point's config says."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the device was read (Unix ms). Not when the message was sent: a value buffered through a broker outage arrives late with the time it was read."
+        }
+      },
+      "required": ["value", "ts"],
+      "additionalProperties": true,
+      "title": "Value",
+      "description": "A point's value, in publish modes sample and change: one read. Published with QoS 1, not retained."
+    }
+  ],
+  "title": "Value message",
+  "description": "The payload on site/building/device/point. Its point's $meta says which form: publish.mode aggregate sends the aggregate form, sample and change the plain one.",
+  "x-ot-gateway-contract": "1.0"
+}

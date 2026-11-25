@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ot-gateway/mqtt-contract/1.0/health",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["online"]
+        },
+        "since": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the gateway started (Unix ms)."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When this message was written (Unix ms): it advances with every heartbeat."
+        },
+        "devices": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Every configured device, by id."
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "memoryBytes": {
+              "type": "number",
+              "description": "Resident memory of the gateway process, in bytes."
+            },
+            "eventLoopLagMs": {
+              "type": "number",
+              "description": "The longest the event loop was late in the last minute, in ms."
+            },
+            "clockSteps": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991,
+              "description": "Wall-clock steps (NTP setting the time) since the gateway started."
+            },
+            "temperatureC": {
+              "type": "number",
+              "description": "CPU temperature, where the host has a thermal zone."
+            },
+            "throttled": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Power or thermal conditions a Raspberry Pi reported in about the last minute; empty when none."
+            },
+            "throttledWatched": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "The conditions the Pi lets the gateway see."
+            },
+            "diskFreeBytes": {
+              "type": "number",
+              "description": "Free space on the buffer's filesystem, in bytes."
+            }
+          },
+          "required": ["memoryBytes", "eventLoopLagMs", "clockSteps"],
+          "additionalProperties": true,
+          "title": "Host health"
+        }
+      },
+      "required": ["status", "since", "ts", "devices"],
+      "additionalProperties": true,
+      "title": "Gateway online"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["offline"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["shutdown", "connection-lost"],
+          "description": "shutdown when the gateway stopped cleanly; connection-lost from the MQTT last will."
+        }
+      },
+      "required": ["status", "reason"],
+      "additionalProperties": true,
+      "title": "Gateway offline"
+    }
+  ],
+  "title": "Gateway health",
+  "description": "The payload on site/building/$gateway/<id>/health, retained with QoS 1: online on connect, after a device's status changes and on every heartbeat (health.intervalMs), offline on a clean stop or as the last will.",
+  "x-ot-gateway-contract": "1.0"
+}

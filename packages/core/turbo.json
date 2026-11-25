@@ -3,7 +3,7 @@
   "extends": ["//"],
   "tasks": {
     "test": {
-      "inputs": ["src/**", "test/**", "../../docs/configuration.md"]
+      "inputs": ["src/**", "test/**", "../../docs/configuration.md", "../../docs/mqtt-contract/**"]
     }
   }
 }

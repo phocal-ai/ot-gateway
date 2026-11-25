@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ot-gateway/mqtt-contract/1.0/meta",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "The point's name, for people."
+    },
+    "unit": {
+      "type": "string",
+      "description": "QUDT unit identifier, e.g. unit:DEG_C, as the point's config says."
+    },
+    "writable": {
+      "type": "boolean",
+      "description": "Whether the point takes commands on its $set topic."
+    },
+    "publish": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["sample"]
+            },
+            "intervalMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 86400000
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["aggregate"]
+            },
+            "intervalMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 86400000
+            }
+          },
+          "required": ["mode", "intervalMs"],
+          "additionalProperties": true
+        },
+        {
+          "type": "object",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": ["change"]
+            },
+            "deadband": {
+              "type": "number",
+              "minimum": 0
+            },
+            "maxSilenceMs": {
+              "type": "integer",
+              "minimum": 1000,
+              "maximum": 86400000
+            }
+          },
+          "required": ["mode"],
+          "additionalProperties": true
+        }
+      ],
+      "description": "How the point's values go out: sample, aggregate or change."
+    },
+    "cov": {
+      "type": "boolean",
+      "enum": [true],
+      "description": "The point is read by BACnet change of value: values come when the device reports a change."
+    },
+    "semantics": {
+      "type": "object",
+      "properties": {
+        "brick": {
+          "type": "string"
+        },
+        "haystack": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "alarmWhen": {
+      "type": "string",
+      "enum": ["on", "off"],
+      "description": "The point is an alarm, active when its value is on (true, not 0) or off."
+    },
+    "gateway": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "The id of the gateway that publishes the point. Absent from releases before it was added."
+    }
+  },
+  "required": ["name", "writable", "publish"],
+  "additionalProperties": true,
+  "title": "Point metadata",
+  "description": "A point's description on site/building/device/point/$meta. Published retained with QoS 1 when the gateway starts; an empty retained message clears it when the point leaves the config.",
+  "x-ot-gateway-contract": "1.0"
+}

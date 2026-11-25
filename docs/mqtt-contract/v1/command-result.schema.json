@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ot-gateway/mqtt-contract/1.0/command-result",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["written"]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The value written, as sent."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the gateway decided (Unix ms)."
+        }
+      },
+      "required": ["status", "value", "ts"],
+      "additionalProperties": true,
+      "title": "Command written",
+      "description": "The device accepted the write."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["rejected"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "retained",
+            "expired",
+            "unknown-point",
+            "not-writable",
+            "invalid-payload",
+            "wrong-type",
+            "out-of-range"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Why, in one line, for people."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the gateway decided (Unix ms)."
+        }
+      },
+      "required": ["status", "reason", "message", "ts"],
+      "additionalProperties": true,
+      "title": "Command rejected",
+      "description": "The gateway refused the command; no device saw it."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["failed"]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "timeout",
+            "connection",
+            "protocol",
+            "invalid-response",
+            "configuration",
+            "not-implemented",
+            "device-unavailable"
+          ],
+          "description": "timeout means the device did not answer in time and may still have applied the write."
+        },
+        "message": {
+          "type": "string",
+          "description": "What went wrong, in one line, for people."
+        },
+        "ts": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991,
+          "description": "When the gateway decided (Unix ms)."
+        }
+      },
+      "required": ["status", "reason", "message", "ts"],
+      "additionalProperties": true,
+      "title": "Command failed",
+      "description": "The command passed every check, but the write did not succeed."
+    }
+  ],
+  "title": "Command result",
+  "description": "One per command whose topic can name a point, on site/building/device/point/$set/result with the command's correlation data. QoS 1, not retained, and never buffered: delivered now or not at all.",
+  "x-ot-gateway-contract": "1.0"
+}

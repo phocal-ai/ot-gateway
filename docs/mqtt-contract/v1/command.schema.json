@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ot-gateway/mqtt-contract/1.0/command",
+  "type": "object",
+  "properties": {
+    "value": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The value to write, in engineering units: true or false for a binary point, a whole number from 1 for a multi-state one, a number within the point's limits otherwise. null releases a BACnet point's priority slot."
+    }
+  },
+  "required": ["value"],
+  "additionalProperties": false,
+  "title": "Command",
+  "description": "Sent to site/building/device/point/$set, live (never retained), to a point whose $meta says writable. Exactly {\"value\": …}: anything else is rejected as invalid-payload. MQTT 5 correlation data is echoed on the result, and a message expiry shortens how long the command may wait.",
+  "x-ot-gateway-contract": "1.0"
+}

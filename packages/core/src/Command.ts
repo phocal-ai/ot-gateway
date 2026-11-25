@@ -27,6 +27,7 @@
 import { Clock, Duration, Effect, Metric, Schema, type Scope } from "effect"
 import type { Device } from "./Config.ts"
 import type { Driver, WriteValue } from "./Driver.ts"
+import type { DriverError } from "./Errors.ts"
 import { monotonicMillis } from "./Monotonic.ts"
 import { type AnyPoint, bacnetValueKind, type Scaling, Slug } from "./Point.ts"
 import { Publisher } from "./Publisher.ts"
@@ -81,7 +82,12 @@ export type RejectReason =
 export type CommandOutcome =
   | { readonly status: "written"; readonly value: WriteValue }
   | { readonly status: "rejected"; readonly reason: RejectReason; readonly message: string }
-  | { readonly status: "failed"; readonly reason: string; readonly message: string }
+  | {
+      readonly status: "failed"
+      /** The driver's reason (`timeout` when the device did not answer in time), or `device-unavailable`. */
+      readonly reason: DriverError["reason"] | "device-unavailable"
+      readonly message: string
+    }
 
 /**
  * The command payload; it is MQTT input, so it is decoded, not trusted. Only
