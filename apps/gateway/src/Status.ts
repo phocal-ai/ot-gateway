@@ -163,7 +163,7 @@ export interface StatusState {
     outcome: CommandOutcome
   ) => void
   /** The whole status; `"none"` leaves out every point (each device keeps its `pointCount`). */
-  readonly snapshot: (points?: "all" | "none") => Effect.Effect<GatewayStatus>
+  readonly snapshot: (points?: "all" | "none", alarms?: "all" | "none") => Effect.Effect<GatewayStatus>
   /** The last reads of the points named by comma-separated `device/point` keys, configured ones only. */
   readonly values: (keys: string) => Effect.Effect<PointReadings, ValuesQueryInvalid>
   readonly messages: Effect.Effect<Messages>
@@ -285,7 +285,7 @@ export const makeStatusState = (
       })
       if (commands.length > RECENT_COMMANDS) commands.length = RECENT_COMMANDS
     },
-    snapshot: (points = "all") =>
+    snapshot: (points = "all", withAlarms = "all") =>
       Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis
         const connected = (yield* Metric.value(Metric.withAttributes(mqttConnected, attributes))).value === 1
@@ -297,7 +297,7 @@ export const makeStatusState = (
           bufferDropReasons.map((reason) => [reason, total(bufferDropped.id, { reason })])
         )
         const dropped = Object.values(droppedBy).reduce((sum, count) => sum + count, 0)
-        const alarmPoints = alarms?.snapshot()
+        const alarmPoints = points === "all" || withAlarms === "all" ? alarms?.snapshot() : undefined
         // Only for the points asked for: a lookup per point, by device then point, without a key string each.
         const alarmOf = new Map<string, Map<string, AlarmStatus>>()
         if (points === "all") {
@@ -378,7 +378,9 @@ export const makeStatusState = (
             ? {}
             : { host: { version: host.version, node: process.versions.node, ...sample } }),
           devices,
-          ...(alarmPoints === undefined || alarmPoints.length === 0 ? {} : { alarms: alarmPoints }),
+          ...(withAlarms !== "all" || alarmPoints === undefined || alarmPoints.length === 0
+            ? {}
+            : { alarms: alarmPoints }),
           commands: [...commands]
         }
       }),
@@ -471,7 +473,7 @@ export const switchableStatus = (initial: StatusState) => {
     recordBrokerConnection: (at, connection) => current.recordBrokerConnection(at, connection),
     recordBrokerFailure: (at, error) => current.recordBrokerFailure(at, error),
     recordCommand: (at, command, outcome) => current.recordCommand(at, command, outcome),
-    snapshot: (points) => Effect.suspend(() => current.snapshot(points)),
+    snapshot: (points, withAlarms) => Effect.suspend(() => current.snapshot(points, withAlarms)),
     values: (keys) => Effect.suspend(() => current.values(keys)),
     messages: Effect.suspend(() => current.messages),
     messagesWindow: (since) => Effect.suspend(() => current.messagesWindow(since)),
@@ -568,7 +570,7 @@ export const serveStatus = (
       Layer.provide(
         HttpApiBuilder.group(OtGatewayApi, "status", (handlers) =>
           handlers
-            .handle("status", ({ query }) => state.snapshot(query.points))
+            .handle("status", ({ query }) => state.snapshot(query.points, query.alarms))
             .handle("values", ({ query }) => state.values(query.points))
             .handle("events", ({ query }) => events.log(query))
             .handle("messages", () => state.messages)

@@ -51,6 +51,7 @@ const configText = (
     site?: string
     id?: string
     clientId?: string
+    passwordEnv?: string
     buffer?: string
     /** The `bacnet` block, and a BACnet device with it. */
     bacnet?: Record<string, unknown>
@@ -61,7 +62,11 @@ const configText = (
       site: changes.site ?? "s",
       building: "b",
       ...(changes.id === undefined ? {} : { id: changes.id }),
-      mqtt: { url: `mqtt://${BROKER}:1883`, clientId: changes.clientId ?? "gw" },
+      mqtt: {
+        url: `mqtt://${BROKER}:1883`,
+        clientId: changes.clientId ?? "gw",
+        ...(changes.passwordEnv === undefined ? {} : { passwordEnv: changes.passwordEnv })
+      },
       buffer: { path: changes.buffer ?? "./buffer.sqlite" },
       status: { port, webRoot: "/nonexistent" },
       ...(changes.bacnet === undefined ? {} : { bacnet: changes.bacnet }),
@@ -178,6 +183,23 @@ describe("applying a config saved from the status page", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("keeps the running password variable: a save naming another one is refused and the file is unchanged", () =>
+    Effect.gen(function* () {
+      const { fs, path, port, running } = yield* startGateway({ brokerUp: true })
+      const before = yield* read(port)
+      const refused = yield* save(port, configText(port, { passwordEnv: "OTHER_VARIABLE" }), before.body["etag"])
+      expect(refused.status).toBe(400)
+      expect(refused.body).toMatchObject({ _tag: "ConfigInvalid", issues: [{ path: ["mqtt", "passwordEnv"] }] })
+      expect(yield* fs.readFileString(path)).toBe(configText(port, {}))
+      const checked = yield* call(port, "POST", "/api/config/check", {
+        body: { text: configText(port, { passwordEnv: "OTHER_VARIABLE" }) },
+        headers: pageHeaders(port)
+      })
+      expect(checked.body).toMatchObject({ valid: false, issues: [{ path: ["mqtt", "passwordEnv"] }] })
+      yield* Fiber.interrupt(running)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.effect("rolls a config back that does not start: the previous one runs, the file holds it again", () =>
     Effect.gen(function* () {
       const { fs, path, port, control, running } = yield* startGateway({ brokerUp: true })
@@ -246,7 +268,8 @@ describe("applying a config saved from the status page", () => {
 
       const again = yield* read(port)
       const saved = yield* save(port, configText(port, { bacnet: { port: 47831 } }), again.body["etag"])
-      expect(saved.status).toBe(200)
+      // The message is in the object so a failure says why the move was refused.
+      expect({ status: saved.status, message: saved.body["message"] }).toEqual({ status: 200, message: undefined })
       expect(saved.body).toMatchObject({ applied: { changes: ["BACnet/IP: port"], restartNeeded: [] } })
       expect(yield* bindable(47831)).toBe(false)
       expect(yield* bindable(47808)).toBe(true)

@@ -59,10 +59,11 @@ const withinThreeSeconds = <A, E extends { readonly message: string }, R>(reques
 
 /**
  * The status, for the whole page: health, broker, buffer, host and commands, without each point's value (that is
- * a megabyte every poll at 10,000 points). The points page asks for the values of the rows it shows.
+ * a megabyte every poll at 10,000 points). The points page asks for the values of the rows it shows. Without the alarm list too: the page reads alarm
+ * values from `/api/values`, and the list is one object per alarm point on every poll.
  */
 export const fetchStatus: Effect.Effect<GatewayStatus, StatusUnavailable> = gateway.pipe(
-  Effect.flatMap((client) => client.status.status({ query: { points: "none" } })),
+  Effect.flatMap((client) => client.status.status({ query: { points: "none", alarms: "none" } })),
   Effect.provide(FetchHttpClient.layer),
   withinThreeSeconds
 )
@@ -230,12 +231,15 @@ export const clockTime = (at: number, now: number) => {
 }
 
 /**
- * How long something lasted, to the precision that matters: seconds under two minutes ("61 s"), then minutes
- * ("3 min"), hours and minutes ("2 h 5 min"), days and hours ("3 d 4 h").
+ * How long something lasted, to the precision that matters: seconds under a minute ("45 s"), minutes and seconds
+ * under ten ("1 min 57 s", "3 min"), as `preciseDuration` in @ot-gateway/api says it for the CLI; then minutes
+ * ("12 min"), hours and minutes ("2 h 5 min"), days and hours ("3 d 4 h").
  */
 export const duration = (ms: number) => {
   const seconds = Math.max(0, Math.round(ms / 1000))
-  if (seconds < 120) return `${seconds} s`
+  if (seconds < 60) return `${seconds} s`
+  if (seconds < 600)
+    return seconds % 60 === 0 ? `${seconds / 60} min` : `${Math.floor(seconds / 60)} min ${seconds % 60} s`
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes} min`
   const hours = Math.floor(minutes / 60)

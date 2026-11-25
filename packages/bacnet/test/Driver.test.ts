@@ -16,6 +16,7 @@ import {
   batchSizeFor,
   ConfirmedService,
   decodeFrame,
+  decodeReadProperty,
   encodeErrorBody,
   ErrorClass,
   ErrorCode,
@@ -154,6 +155,22 @@ describe("point values", () => {
     expect(batchSizeFor(65_535)).toBe(66)
   })
 })
+
+/** An older device: the wildcard device instance is an object it does not have (it predates clause 15.5.1.1.1). */
+const withoutWildcard = (device: SimulatedDevice, request: Apdu): Apdu | undefined => {
+  if (request._tag === "ConfirmedRequest" && request.service === ConfirmedService.ReadProperty) {
+    const decoded = decodeReadProperty(request.body)
+    if (Result.isSuccess(decoded) && decoded.success.object.instance === 4_194_303) {
+      return {
+        _tag: "Error",
+        invokeId: request.invokeId,
+        service: request.service,
+        body: encodeErrorBody({ errorClass: ErrorClass.object, errorCode: ErrorCode["unknown-object"] })
+      }
+    }
+  }
+  return answer(device, request)
+}
 
 describe("BACnet driver over UDP", () => {
   it.live("finds the device and reads every point, binary objects as booleans", () =>
@@ -334,6 +351,48 @@ describe("BACnet driver over UDP", () => {
       expect(sent).toBe(2)
       expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({ reason: "timeout" })
       expect(whoIs).toBe(sent)
+    })
+  )
+
+  it.live("refuses another device at the configured address instead of reading its values", () =>
+    Effect.gen(function* () {
+      let reads = 0
+      // Device 2001 answers at the address; the config says 2002.
+      const { client, config } = yield* setUp([supplyTemp], {
+        requestTimeout: "150 millis",
+        respond: (device, request) => {
+          if (request._tag === "ConfirmedRequest" && request.service === ConfirmedService.ReadPropertyMultiple) reads++
+          return answer(device, request)
+        }
+      })
+      const at = config.address ?? ""
+      const driver = yield* makeBacnetDriverFromClient({ ...config, deviceInstance: 2002 }, client)
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({
+        _tag: "DriverError",
+        reason: "configuration",
+        message: `the device at ${at} is device 2001, not device 2002`
+      })
+      // Asked again the next cycle, and still not read.
+      expect(yield* driver.readAll.pipe(Effect.flip)).toMatchObject({ reason: "configuration" })
+      expect(reads).toBe(0)
+      // Nothing is written to it either.
+      expect(yield* driver.write("supply-temp", 1).pipe(Effect.flip)).toMatchObject({ reason: "connection" })
+    })
+  )
+
+  it.live("tells another device from an older one without the wildcard device instance", () =>
+    Effect.gen(function* () {
+      const { client, simulated, config } = yield* setUp([supplyTemp], { respond: withoutWildcard })
+      setPresentValue(simulated, { objectType: "analog-input", instance: 1 }, { type: "real", value: 29 })
+      const at = config.address ?? ""
+      const other = yield* makeBacnetDriverFromClient({ ...config, deviceInstance: 2002 }, client)
+      expect(yield* other.readAll.pipe(Effect.flip)).toMatchObject({
+        reason: "configuration",
+        message: `the device at ${at} is not device 2002: it has no device object 2002`
+      })
+      // The right instance reads as before.
+      const own = yield* makeBacnetDriverFromClient(config, client)
+      expect((yield* own.readAll).map((reading) => reading.value)).toEqual([29])
     })
   )
 

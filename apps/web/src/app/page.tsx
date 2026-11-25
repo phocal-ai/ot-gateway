@@ -39,6 +39,12 @@ import { statusOf, useValues } from "@/components/live"
 import {
   alarmCount,
   alarmNote,
+  alarmTrips,
+  type ClearedAlarm,
+  clearedAlarms,
+  clearedCount,
+  clearedNote,
+  tripsNote,
   glanceKeys,
   glancePoints,
   alarmWhen,
@@ -48,7 +54,7 @@ import {
   type ShownAlarm,
   shownAlarms
 } from "@/lib/glance"
-import { machineCard, machineProblems, powerLabel } from "@/lib/host"
+import { machineCard, machineFine, machineProblems, NOT_MEASURED, powerLabel } from "@/lib/host"
 import { deviceAddress } from "@/lib/device"
 import {
   deviceEvents,
@@ -61,6 +67,7 @@ import {
   isIncident,
   type KnownEvents,
   latestEvents,
+  type PageEvent,
   nothingYet,
   type PointNames,
   sharedCauseNotes,
@@ -334,6 +341,7 @@ const OverviewCard = ({
         <CardDescription>
           <button
             aria-haspopup="dialog"
+            aria-label={`${label}: ${title}, ${note}. Details`}
             className="outline-none after:absolute after:inset-0 after:rounded-xl focus-visible:after:ring-2 focus-visible:after:ring-ring"
             onClick={onOpen}
             type="button"
@@ -556,17 +564,21 @@ const BufferDetails = ({ status, view }: { readonly status: GatewayStatus; reado
 
 const ms = (value: number) => `${formatNumber(Math.round(value))} ms`
 
+/** A reading the machine cannot give, said as such (`NOT_MEASURED`), muted. */
+const notMeasured = (text: string) => <span className="text-muted-foreground">{text}</span>
+
 /** The machine's last sample: its problems in machineProblems' words first, then every reading calmly. */
 const MachineDetails = ({ status }: { readonly status: GatewayStatus }) => {
   const { host } = status
   if (host === undefined)
     return <p className="text-sm text-muted-foreground">The gateway samples the machine every 15 s; no sample yet.</p>
-  const problems = machineProblems(host, status.now - status.since)
+  const upMs = status.now - status.since
+  const problems = machineProblems(host, upMs)
   const power = powerLabel(host)
   return (
     <>
       {problems.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing needs a look: power, heat, disk and load are fine.</p>
+        <p className="text-sm text-muted-foreground">{machineFine(host, upMs)}</p>
       ) : (
         <ul className="flex flex-col gap-1 text-sm text-amber-700 dark:text-amber-300">
           {problems.map((problem) => (
@@ -580,9 +592,17 @@ const MachineDetails = ({ status }: { readonly status: GatewayStatus }) => {
           ["Memory", formatBytes(host.memoryBytes)],
           ["JavaScript heap", formatBytes(host.heapBytes)],
           ["Event-loop lag", `${ms(host.eventLoopLagMs.p99)} (p99), up to ${ms(host.eventLoopLagMs.max)}`],
-          host.temperatureC !== undefined && ["Temperature", `${Math.round(host.temperatureC)} °C`],
-          power !== undefined && ["Power supply", power],
-          host.diskFreeBytes !== undefined && ["Disk free", formatBytes(host.diskFreeBytes)],
+          [
+            "Temperature",
+            host.temperatureC === undefined
+              ? notMeasured(NOT_MEASURED.temperature)
+              : `${Math.round(host.temperatureC)} °C`
+          ],
+          ["Power supply", power === undefined ? notMeasured(NOT_MEASURED.power) : power],
+          [
+            "Disk free",
+            host.diskFreeBytes === undefined ? notMeasured(NOT_MEASURED.disk) : formatBytes(host.diskFreeBytes)
+          ],
           host.openFds !== undefined && ["Open files", formatNumber(host.openFds)],
           ["Clock steps", formatNumber(host.clockSteps)],
           ["Version", <span className="font-mono">{host.version}</span>],
@@ -667,6 +687,7 @@ const Overview = ({
               {named.shown.map((device) => (
                 <li className="min-w-0 truncate" key={device.id}>
                   <a
+                    aria-label={`${device.id}: ${device.why}, open the device`}
                     className="text-destructive underline-offset-4 hover:underline"
                     href={`?${new URLSearchParams({ device: device.id }).toString()}`}
                     onClick={(event) => {
@@ -759,14 +780,40 @@ const MachineNotice = ({ host, upMs }: { readonly host: HostStatus; readonly upM
   )
 }
 
+/** An alarm point in the banner: its name, a link to it on the Points tab, and its device. */
+const AlarmPoint = ({ point }: { readonly point: PointInfo }) => (
+  <>
+    <Link
+      className="underline-offset-4 hover:underline"
+      href={`/points/${filterToSearch({ query: "", device: point.device }, pointKey(point))}`}
+      title={pointKey(point)}
+    >
+      {point.name}
+    </Link>{" "}
+    <span className="font-mono text-xs opacity-80">on {point.device}</span>
+  </>
+)
+
 /**
  * The alarm points that are on (lib/glance.ts), above everything else: how many, and each by name with its device,
  * a link to the point on the Points tab. An alarm whose value is stale (its device does not answer) is listed muted,
  * as its value is, and counted apart: it is only last known to be active. Without one known to be on now, the banner
- * is muted too.
+ * is muted too. An alarm that cleared a moment ago, or keeps coming and going, stays listed muted after them with when
+ * it cleared and how often it tripped (`clearedAlarms`), so an alarm that flaps does not make the banner appear and
+ * vanish and push the cards under it up and down.
  */
-const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<ShownAlarm> }) => {
-  if (alarms.length === 0) return null
+const AlarmNotice = ({
+  alarms,
+  cleared,
+  events,
+  now
+}: {
+  readonly alarms: ReadonlyArray<ShownAlarm>
+  readonly cleared: ReadonlyArray<ClearedAlarm>
+  readonly events: ReadonlyArray<PageEvent>
+  readonly now: number
+}) => {
+  if (alarms.length === 0 && cleared.length === 0) return null
   const lastKnown = alarms.filter((alarm) => alarm.lastKnown !== undefined).length
   const active = alarms.length - lastKnown
   return (
@@ -776,29 +823,32 @@ const AlarmNotice = ({ alarms }: { readonly alarms: ReadonlyArray<ShownAlarm> })
       }`}
       role={active > 0 ? "alert" : "status"}
     >
-      <p className="font-semibold">{alarmCount(active, lastKnown)}</p>
+      <p className="font-semibold">
+        {alarms.length === 0 ? clearedCount(cleared.length) : alarmCount(active, lastKnown)}
+      </p>
       <ul className="flex flex-col gap-0.5">
         {alarms.map((alarm) => {
           const { point } = alarm
           const why = alarmNote(alarm, active)
+          const trips = tripsNote(alarmTrips(events, point.device, point.id, now))
+          const note = [why, trips].filter((part) => part !== undefined).join("; ")
           return (
             <li
               className={`min-w-0 truncate ${why === undefined ? "" : "text-muted-foreground"}`}
               data-stale={why === undefined ? undefined : ""}
               key={pointKey(point)}
             >
-              <Link
-                className="underline-offset-4 hover:underline"
-                href={`/points/${filterToSearch({ query: "", device: point.device }, pointKey(point))}`}
-                title={pointKey(point)}
-              >
-                {point.name}
-              </Link>{" "}
-              <span className="font-mono text-xs opacity-80">on {point.device}</span>
-              {why === undefined ? null : <span>: {why}</span>}
+              <AlarmPoint point={point} />
+              {note === "" ? null : <span>: {note}</span>}
             </li>
           )
         })}
+        {cleared.map((alarm) => (
+          <li className="min-w-0 truncate text-muted-foreground" data-cleared="" key={pointKey(alarm.point)}>
+            <AlarmPoint point={alarm.point} />
+            <span>: {clearedNote(alarm, now)}</span>
+          </li>
+        ))}
       </ul>
     </div>
   )
@@ -833,6 +883,7 @@ const useGlance = (
   if (catalog === undefined) return undefined
   return {
     glance: { byDevice, readings, unreachable },
+    points: catalog.points,
     alarms:
       status === undefined ? [] : shownAlarms(catalog.points, readings, devicesById(status), status.now, unreachable)
   }
@@ -1077,11 +1128,17 @@ const StatusView = () => {
     if (next !== undefined) setOpened(next.id)
   }
   const configDevice = config?.devices.find((candidate) => candidate.id === opened)
+  const thisRun = known?.since === status.since ? known.events : []
 
   return (
     <>
       {status.host === undefined ? null : <MachineNotice host={status.host} upMs={status.now - status.since} />}
-      <AlarmNotice alarms={glance?.alarms ?? []} />
+      <AlarmNotice
+        alarms={glance?.alarms ?? []}
+        cleared={glance === undefined ? [] : clearedAlarms(glance.points, glance.alarms, thisRun, status.now)}
+        events={thisRun}
+        now={status.now}
+      />
       {showsGuide(status.devices.length, guide) ? <FirstRun onClose={() => setGuide(false)} status={status} /> : null}
       {status.devices.length === 0 ? null : (
         <>
