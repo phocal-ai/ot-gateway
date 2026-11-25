@@ -61,7 +61,9 @@ const bacnetSource = (point: BacnetPoint) =>
 const simulatedSource = (point: SimulatedPoint) =>
   point.waveform === "constant"
     ? `constant ${point.min}`
-    : `${point.waveform} ${point.min} to ${point.max} · ${durationLabel(point.periodSeconds * 1000)}`
+    : point.waveform === "daily"
+      ? `daily ${point.min} to ${point.max} · from local midnight`
+      : `${point.waveform} ${point.min} to ${point.max} · ${durationLabel(point.periodSeconds * 1000)}`
 
 /** Each point of a device with where it is read. */
 const sourcedPoints = (device: Device): ReadonlyArray<readonly [AnyPoint, string]> => {

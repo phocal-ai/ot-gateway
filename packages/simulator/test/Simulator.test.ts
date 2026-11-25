@@ -33,6 +33,24 @@ describe("waveformValue", () => {
     // 8 * (0.5 + 0.5 * sin(2π * 4 / 60)) is 5.62694…, published as 5.627.
     expect(waveformValue(inverter, 4_000)).toBe(5.627)
   })
+  it("daily counts the day so far: never down within a day, from min at local midnight to max at the next", () => {
+    const today = { ...base, waveform: "daily" as const, min: 0, max: 40 }
+    const midnight = new Date(2026, 10, 25).getTime()
+    const next = new Date(2026, 10, 26).getTime()
+    expect(waveformValue(today, midnight)).toBe(0)
+    let previous = -1
+    // Every 2 s for the first ten minutes (a poll interval), then every 7 min to the end of the day.
+    for (let timeMs = midnight; timeMs < next; timeMs += timeMs < midnight + 600_000 ? 2_000 : 420_000) {
+      const value = waveformValue(today, timeMs)
+      expect(value).toBeGreaterThanOrEqual(previous)
+      expect(value).toBeLessThanOrEqual(40)
+      previous = value
+    }
+    expect(waveformValue(today, next - 1_000)).toBeCloseTo(40, 2)
+    expect(waveformValue(today, midnight + (next - midnight) / 2)).toBeCloseTo(20, 2)
+    // It starts again only at the next local midnight.
+    expect(waveformValue(today, next)).toBe(0)
+  })
   it("constant stays at min", () => {
     expect(waveformValue({ ...base, waveform: "constant" }, 12_345)).toBe(10)
   })

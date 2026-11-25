@@ -261,10 +261,14 @@ export const BacnetPoint = Schema.Struct({
 )
 export type BacnetPoint = typeof BacnetPoint.Type
 
-/** A simulated point, used in tests and demos. */
+/**
+ * A simulated point, used in tests and demos. `ramp` climbs and wraps every period; `daily` is a counter of the day
+ * so far ("energy today"): it climbs from `min` at local midnight to `max` at the next one and never goes back
+ * within a day.
+ */
 export const SimulatedPoint = Schema.Struct({
   ...PointFields,
-  waveform: Schema.Literals(["sine", "ramp", "constant"]),
+  waveform: Schema.Literals(["sine", "ramp", "daily", "constant"]),
   min: Schema.Finite,
   max: Schema.Finite,
   periodSeconds: Schema.Finite.pipe(Schema.withDecodingDefaultKey(Effect.succeed(60)))

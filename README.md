@@ -272,7 +272,7 @@ The gateway exports traces, metrics and logs over OTLP when the standard OpenTel
 | Package                                       | What it does                                                                                                  | Status  |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------- |
 | [`@ot-gateway/core`](packages/core)           | Point model, config schema, normalization, topics, polling pipeline, health, `Publisher` service              | Working |
-| [`@ot-gateway/simulator`](packages/simulator) | Simulated devices (sine, ramp, constant) for tests and demos                                                  | Working |
+| [`@ot-gateway/simulator`](packages/simulator) | Simulated devices (sine, ramp, daily, constant) for tests and demos                                           | Working |
 | [`@ot-gateway/modbus`](packages/modbus)       | Modbus TCP: codec, read planner, client, driver and simulator server, with writes                             | Working |
 | [`@ot-gateway/buffer`](packages/buffer)       | Store-and-forward: SQLite outbox that keeps values during broker outages and delivers them in order           | Working |
 | [`@ot-gateway/mqtt`](packages/mqtt)           | MQTT 5 and 3.1.1: codecs, client with reconnect, keep alive and subscriptions, `Publisher` layer, test broker | Working |
