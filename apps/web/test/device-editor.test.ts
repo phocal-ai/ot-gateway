@@ -19,7 +19,13 @@ import {
   withDevice,
   canWrite,
   discoveredDevice,
+  fieldLeft,
+  forTest,
   isBoolean,
+  isChosenField,
+  registerHint,
+  takesUnit,
+  touchingAll,
   pickedByDefault,
   takesLimits,
   touching,
@@ -287,6 +293,63 @@ describe("visibleIssues", () => {
     const shown = visibleIssues(issuesOf(draft), draft, new Set(), false)
     expect(shown.device["host"]).toEqual(["a host, without a port"])
     expect(shown.quiet).toBe(false)
+  })
+})
+
+describe("fields left and asked for", () => {
+  it("knows a field from its element id, the interval and both limits included", () => {
+    expect(fieldLeft("device-host")).toEqual({ scope: "device", field: "host" })
+    expect(fieldLeft("device-interval")).toEqual({ scope: "device", field: "intervalSeconds" })
+    expect(fieldLeft("point-p3-register")).toEqual({ scope: "p3", field: "register" })
+    expect(fieldLeft("point-p3-limitMax")).toEqual({ scope: "p3", field: "limits" })
+    expect(fieldLeft("unit-choices")).toBeUndefined()
+  })
+
+  it("shows a choice's issue at once and a typed field's only once left", () => {
+    expect(isChosenField("table")).toBe(true)
+    expect(isChosenField("register")).toBe(false)
+  })
+
+  it("shows every issue of the points there at a test or save, and none of a point added after", () => {
+    const draft = newDevice("modbus-tcp")
+    const [point] = draft.points
+    if (point === undefined) throw new Error("one point")
+    const touched = touchingAll(new Set(), draft)
+    const shown = visibleIssues(issuesOf(draft), draft, touched, false)
+    expect(shown.points[point.key]).toEqual({ id: ["Expected a slug"], register: ["Expected number"] })
+    const later = { ...draft, points: [...draft.points, newPoint("modbus-tcp")] }
+    const added = later.points[1]
+    if (added === undefined) throw new Error("two points")
+    expect(visibleIssues(issuesOf(later), later, touched, false).points[added.key] ?? {}).toEqual({})
+  })
+})
+
+describe("address hints and units", () => {
+  it("names each table's first register-map number as address 0", () => {
+    expect(registerHint("holding")).toContain("40001 in a register map is 0")
+    expect(registerHint("holding")).toContain("40101 is 100")
+    expect(registerHint("input")).toContain("30001 in a register map is 0")
+    expect(registerHint("coil")).toContain("00001 in a register map is 0")
+    expect(registerHint("discrete")).toContain("10001 in a register map is 0")
+  })
+
+  it("gives bits no unit: coils, discrete inputs and binary objects", () => {
+    expect(takesUnit("modbus-tcp", { ...newPoint("modbus-tcp"), table: "coil" })).toBe(false)
+    expect(takesUnit("modbus-tcp", { ...newPoint("modbus-tcp"), table: "holding" })).toBe(true)
+    expect(takesUnit("bacnet-ip", { ...newPoint("bacnet-ip"), objectType: "binary-input" })).toBe(false)
+    expect(takesUnit("bacnet-ip", { ...newPoint("bacnet-ip"), objectType: "analog-input" })).toBe(true)
+  })
+})
+
+describe("forTest", () => {
+  it("tests a device whose id is still being typed under a valid one", () => {
+    expect(forTest({ ...newDevice("modbus-tcp"), id: "Heat Pump" }).id).toBe("heat-pump")
+    expect(forTest({ ...newDevice("modbus-tcp"), id: "" }).id).toBe("new-device")
+  })
+
+  it("keeps a valid id as it is", () => {
+    const draft = { ...newDevice("modbus-tcp"), id: "meter-1" }
+    expect(forTest(draft)).toBe(draft)
   })
 })
 

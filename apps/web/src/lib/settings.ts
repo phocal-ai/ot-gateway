@@ -3,7 +3,7 @@
  * values as people read them ("5 s", "yes", "10,000 messages"). A setting this file does not know yet still shows,
  * under its key in words, so a new config field is never hidden.
  */
-import type { ConfigEntry } from "@ot-gateway/api"
+import type { ConfigEntry, EditStatus } from "@ot-gateway/api"
 
 type Json = ConfigEntry["value"]
 
@@ -114,3 +114,43 @@ export const deviceAddress = (protocol: string, entries: ReadonlyArray<ConfigEnt
 
 /** A device's settings shown in their own columns, and so left out of its other settings. */
 export const deviceColumns = new Set(["host", "port", "unitId", "deviceInstance", "address", "pollIntervalMs"])
+
+/**
+ * Protocol tuning: how requests are paced, sized and retried. Their defaults suit nearly every device, so the page
+ * shows them under "Advanced" instead of next to the settings people set up a site with.
+ */
+const tuningKeys = new Set([
+  "requestGapMs",
+  "maxRegistersPerRead",
+  "maxBitsPerRead",
+  "cycleTimeoutMs",
+  "requestTimeoutMs",
+  "retries",
+  "covLifetimeSeconds"
+])
+
+export const isTuning = (key: string) => tuningKeys.has(key)
+
+/** Settings in two groups: the ones to show, and the protocol tuning to show under "Advanced". */
+export const splitTuning = <A extends { readonly key: string }>(entries: ReadonlyArray<A>) => ({
+  main: entries.filter((entry) => !isTuning(entry.key)),
+  advanced: entries.filter((entry) => isTuning(entry.key))
+})
+
+/** Settings whose value is a file or folder: shown by its last part, the whole path on request. */
+export const isPathSetting = (key: string) => key === "path" || key === "webRoot"
+
+/** The file's (or folder's) name without the folders it is in. */
+export const fileName = (path: string) => path.split(/[/\\]/).findLast((part) => part !== "") ?? path
+
+/**
+ * Who may edit on this page, and why, for the Settings tab: from the gateway's edit status, which knows how the page
+ * is reached (a loopback address, or a token for the network). Undefined while editing is off: the reason and the fix
+ * say it then. Never a secret: the token's variable is named, never its value.
+ */
+export const editAccessLine = (edit: Pick<EditStatus, "enabled" | "auth">): string | undefined => {
+  if (!edit.enabled) return undefined
+  return edit.auth === "token"
+    ? "Anyone on the network can open this page, so changes need the edit token (OT_GATEWAY_EDIT_TOKEN in ot-gateway.env); the first save asks for it."
+    : "You can edit because the page listens on this machine only (127.0.0.1): it is opened on the gateway itself or through an SSH tunnel, and no one else on the network reaches it."
+}

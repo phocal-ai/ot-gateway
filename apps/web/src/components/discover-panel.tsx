@@ -49,7 +49,7 @@ const DeviceRow = ({
       <p className="text-xs break-words text-muted-foreground">
         Device {device.instance}
         {device.address === undefined ? "" : ` at ${device.address}`}
-        {device.configured === undefined ? "" : ` · in the config as ${device.configured}`}
+        {device.configured === undefined ? "" : ` · on this gateway as ${device.configured}`}
       </p>
       {device.conflicts.length > 0 ? (
         <p className="text-xs break-words text-destructive">
@@ -243,10 +243,20 @@ export const DiscoverPanel = ({
         </p>
       ) : null}
       {found === undefined ? null : found._tag !== "ok" ? (
-        <Problem outcome={found} />
+        <div className="grid gap-2">
+          <Problem outcome={found} />
+          {/* The search could not run (no UDP port): the BACnet/IP settings are what to change. */}
+          {found._tag === "failed" ? (
+            <div>
+              <Button size="sm" variant="outline" onClick={onBacnetSettings}>
+                Change the BACnet/IP settings
+              </Button>
+            </div>
+          ) : null}
+        </div>
       ) : (
         <div className="grid gap-2" role="status">
-          {/* Without devices the gateway's note starts with "No device answered" and says what to check. */}
+          {/* Without devices the gateway's note says why (no answer, or a broadcast this machine cannot send) and what to do. */}
           {found.value.devices.length === 0 && found.value.note !== undefined ? (
             <>
               <p className="text-sm break-words">{found.value.note}</p>

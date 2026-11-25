@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Input, NativeSelect } from "@/components/ui/input"
 import {
   type EditCard,
+  type EditField,
   editFields,
   type EditValues,
   hourMinute,
@@ -23,6 +24,7 @@ import {
   withValues
 } from "@/lib/editor"
 import { checkConfig, fetchConfigFile, readToken, type SaveOutcome, saveConfig, storeToken } from "@/lib/editor-api"
+import { splitTuning } from "@/lib/settings"
 import { type Outcome, testBroker } from "@/lib/setup-api"
 import { settle } from "@/lib/status"
 
@@ -168,6 +170,57 @@ export const EditForm = ({
   }
 
   const outcome = saving._tag === "done" ? saving.outcome : undefined
+  const fields = splitTuning(editFields[card])
+  const renderField = (field: EditField) => {
+    const id = `edit-${card}-${field.key}`
+    const fieldIssues = byField[field.key] ?? []
+    const value = form.values[field.key] ?? ""
+    return (
+      <div className="grid gap-1.5" key={field.key}>
+        <label className="text-sm font-medium" htmlFor={id}>
+          {field.label}
+          {field.optional ? <span className="font-normal text-muted-foreground"> (optional)</span> : null}
+        </label>
+        {field.kind === "choice" ? (
+          <NativeSelect
+            id={id}
+            value={value === "" ? "auto" : value}
+            onChange={(event) => setValue(field.key, event.target.value)}
+            disabled={busy}
+          >
+            {field.choices?.map((choice) => (
+              <option key={choice.value} value={choice.value}>
+                {choice.label}
+              </option>
+            ))}
+          </NativeSelect>
+        ) : (
+          <Input
+            id={id}
+            value={value}
+            inputMode={field.kind === "number" ? "numeric" : undefined}
+            placeholder={field.placeholder}
+            autoComplete="off"
+            spellCheck={false}
+            aria-invalid={fieldIssues.length > 0}
+            aria-describedby={`${id}-help`}
+            onChange={(event) => setValue(field.key, event.target.value)}
+            disabled={busy}
+          />
+        )}
+        <div id={`${id}-help`} className="text-xs">
+          {fieldIssues.map((message) => (
+            <p className="text-destructive" key={message}>
+              {message}
+            </p>
+          ))}
+          {fieldIssues.length === 0 && field.hint !== undefined ? (
+            <p className="text-muted-foreground">{field.hint}</p>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
   return (
     <form
       className="grid gap-4"
@@ -176,56 +229,14 @@ export const EditForm = ({
         save()
       }}
     >
-      {editFields[card].map((field) => {
-        const id = `edit-${card}-${field.key}`
-        const fieldIssues = byField[field.key] ?? []
-        const value = form.values[field.key] ?? ""
-        return (
-          <div className="grid gap-1.5" key={field.key}>
-            <label className="text-sm font-medium" htmlFor={id}>
-              {field.label}
-              {field.optional ? <span className="font-normal text-muted-foreground"> (optional)</span> : null}
-            </label>
-            {field.kind === "choice" ? (
-              <NativeSelect
-                id={id}
-                value={value === "" ? "auto" : value}
-                onChange={(event) => setValue(field.key, event.target.value)}
-                disabled={busy}
-              >
-                {field.choices?.map((choice) => (
-                  <option key={choice.value} value={choice.value}>
-                    {choice.label}
-                  </option>
-                ))}
-              </NativeSelect>
-            ) : (
-              <Input
-                id={id}
-                value={value}
-                inputMode={field.kind === "number" ? "numeric" : undefined}
-                placeholder={field.placeholder}
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={fieldIssues.length > 0}
-                aria-describedby={`${id}-help`}
-                onChange={(event) => setValue(field.key, event.target.value)}
-                disabled={busy}
-              />
-            )}
-            <div id={`${id}-help`} className="text-xs">
-              {fieldIssues.map((message) => (
-                <p className="text-destructive" key={message}>
-                  {message}
-                </p>
-              ))}
-              {fieldIssues.length === 0 && field.hint !== undefined ? (
-                <p className="text-muted-foreground">{field.hint}</p>
-              ) : null}
-            </div>
-          </div>
-        )
-      })}
+      {fields.main.map(renderField)}
+      {fields.advanced.length === 0 ? null : (
+        // Protocol tuning, collapsed: the defaults suit nearly every site. Open when one of them has a problem.
+        <details open={fields.advanced.some((field) => (byField[field.key] ?? []).length > 0)}>
+          <summary className="cursor-pointer text-sm text-muted-foreground">Advanced</summary>
+          <div className="mt-3 grid gap-4">{fields.advanced.map(renderField)}</div>
+        </details>
+      )}
       {card === "mqtt" && edit.password !== undefined ? (
         <p className="text-xs text-muted-foreground">
           The password stays in <code className="font-mono">ot-gateway.env</code> ({edit.password.variable}, now{" "}
@@ -294,7 +305,7 @@ export const EditForm = ({
           </div>
         </div>
       ) : outcome._tag === "invalid" ? (
-        <p className="text-sm text-destructive">Not saved: the config has problems, shown above.</p>
+        <p className="text-sm text-destructive">Not saved: the settings have problems, shown above.</p>
       ) : outcome._tag === "saved" ? null : (
         <p className="text-sm break-words text-destructive">
           {outcome._tag === "refused" ? "Refused: " : "Not applied: "}
