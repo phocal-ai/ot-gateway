@@ -26,7 +26,9 @@ import {
   discover,
   type DiscoverOptions,
   discoverToPointsList,
+  discoveryDefaults,
   draftDevices,
+  pointsListNext,
   draftPointsList,
   pointColumn,
   withoutDeviceName,
@@ -594,4 +596,21 @@ describe("discover --points-list", () => {
       expect(yield* fs.exists(path)).toBe(false)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
+})
+
+describe("discover without a config", () => {
+  it.effect("asks with the BACnet/IP defaults and no devices", () =>
+    Effect.gen(function* () {
+      const config = yield* discoveryDefaults
+      expect(config.bacnet).toMatchObject({ port: 47808, broadcastAddress: "255.255.255.255" })
+      expect(config.devices).toEqual([])
+    })
+  )
+
+  it("names init --points as the next step, not import", () => {
+    expect(pointsListNext("found list.csv", { noConfig: true })).toBe("ot-gateway init . --points 'found list.csv'")
+    expect(pointsListNext("points.csv", { configPath: "ot-gateway.json" })).toBe(
+      "ot-gateway import points.csv ot-gateway.json"
+    )
+  })
 })

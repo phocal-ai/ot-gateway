@@ -32,7 +32,7 @@ import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { dirname, join } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
+import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -177,9 +177,12 @@ const jsonFlag = Flag.Boolean("json").pipe(
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-/** With --json, a failure is JSON on stdout as well; it still fails, so the exit code stays 1. */
+/**
+ * With --json, a failure is JSON on stdout as well; it still fails, so the exit code stays 1. A command that prints
+ * JSON lines (`watch`) passes `lines`, so its failure is one line too and the output stays NDJSON to the end.
+ */
 const jsonFailure =
-  (json: boolean, fields: Readonly<Record<string, unknown>> = {}) =>
+  (json: boolean, fields: Readonly<Record<string, unknown>> = {}, options: { readonly lines?: boolean } = {}) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     json
       ? effect.pipe(
@@ -187,7 +190,8 @@ const jsonFailure =
             // The address a flag named stays as given; the error's (the config's status page) fills in a null.
             const { url, ...known } = failureFields(error)
             const asked = typeof fields["url"] === "string" ? {} : url === undefined ? {} : { url }
-            return printJson({ ok: false, ...fields, ...asked, error: errorText(error), ...known })
+            const failure = { ok: false, ...fields, ...asked, error: errorText(error), ...known }
+            return options.lines === true ? printResult(JSON.stringify(failure)) : printJson(failure)
           })
         )
       : effect
@@ -209,9 +213,11 @@ const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfi
   ).pipe(Effect.provide(telemetryLayer(config, version)))
 })
 
+const DEFAULT_CONFIG = "ot-gateway.json"
+
 const configPath = Argument.String("config").pipe(
   Argument.withDescription("Path of the gateway's JSON config"),
-  Argument.withDefault("ot-gateway.json")
+  Argument.withDefault(DEFAULT_CONFIG)
 )
 
 const run = Command.make("run", { config: configPath }, ({ config }) =>
@@ -284,6 +290,23 @@ const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ c
 export const pointsListOutcome = (json: boolean) => (written: PointsListWritten) =>
   json ? printJson({ ok: true, ...written }) : Effect.void
 
+/**
+ * The config `discover` asks with. No config yet is the usual first step, so with none in this folder it asks with
+ * the BACnet/IP defaults and says so. A config named elsewhere that is not there, or one that is wrong, still fails:
+ * a typo must not scan with other settings than the config's.
+ */
+const configForDiscovery = Effect.fn("configForDiscovery")(function* (path: string) {
+  const loaded = yield* loadConfig(path).pipe(
+    Effect.map(Option.some),
+    Effect.catchTag("ConfigFileError", (error) =>
+      error.code === "no-config" && path === DEFAULT_CONFIG ? Effect.succeedNone : Effect.fail(error)
+    )
+  )
+  if (Option.isSome(loaded)) return { config: loaded.value, noConfig: false }
+  yield* Console.error(`no ${path} here: asking with the BACnet/IP defaults (UDP 47808, broadcast 255.255.255.255)`)
+  return { config: yield* discoveryDefaults, noConfig: true }
+})
+
 const discoverCommand = Command.make(
   "discover",
   {
@@ -312,11 +335,13 @@ const discoverCommand = Command.make(
       if (append && Option.isNone(pointsList)) {
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
-      const decoded = yield* loadConfig(config)
+      const found = yield* configForDiscovery(config)
+      const decoded = found.config
       const options = {
         address: Option.getOrUndefined(address),
         append,
-        configPath: config,
+        configPath: found.noConfig ? undefined : config,
+        noConfig: found.noConfig,
         command: yield* invocation
       }
       return Option.isSome(pointsList)
@@ -328,7 +353,7 @@ const discoverCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "Find BACnet devices through the config's bacnet settings and print a draft of their devices entries, read-only"
+    "Find BACnet devices through the config's bacnet settings (the defaults when there is no config yet) and print a draft of their devices entries, read-only"
   ),
   Command.withExamples([
     { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
@@ -763,7 +788,7 @@ const watchCommand = Command.make(
         json,
         untilValues
       })
-    ).pipe(jsonFailure(json, { path: config }))
+    ).pipe(jsonFailure(json, { path: config }, { lines: true }))
 ).pipe(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
   Command.withExamples([
@@ -777,12 +802,16 @@ const watchCommand = Command.make(
 
 /**
  * `broker`'s report, as JSON or text, then a failure when its message did not come back, so the exit code is 1.
- * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON.
+ * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON; a
+ * failed report carries the failure's `code` and `hint` as any other failure's JSON does.
  */
 export const brokerOutcome = (json: boolean) =>
   Effect.fnUntraced(function* (report: BrokerReport) {
-    yield* json ? printJson(report) : Console.log(formatBrokerReport(report))
-    if (!report.ok) return yield* roundTripFailure(report)
+    const failure = report.ok ? undefined : roundTripFailure(report)
+    yield* json
+      ? printJson(failure === undefined ? report : { ...report, code: failure.code, hint: failure.hint })
+      : Console.log(formatBrokerReport(report))
+    if (failure !== undefined) return yield* failure
   })
 
 const brokerCommand = Command.make("broker", { config: configPath, json: jsonFlag }, ({ config, json }) =>

@@ -404,7 +404,12 @@ describe("broker", () => {
       yield* Effect.flip(brokerOutcome(true)(noRoundTrip))
       const lines = yield* TestConsole.logLines
       expect(lines).toHaveLength(1)
-      expect(JSON.parse(String(lines[0]))).toMatchObject({ ok: false, roundTripTopic: noRoundTrip.roundTripTopic })
+      expect(JSON.parse(String(lines[0]))).toMatchObject({
+        ok: false,
+        roundTripTopic: noRoundTrip.roundTripTopic,
+        code: "no-round-trip",
+        hint: expect.stringContaining("s/b/#")
+      })
     }).pipe(Effect.provide(TestConsole.layer))
   )
 

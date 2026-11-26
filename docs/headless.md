@@ -150,13 +150,13 @@ Or the same columns as JSON, which a program writes without CSV's quoting traps:
 
 You do not always have to write it by hand:
 
-| What you have                        | How it becomes a points list                                                                                                                                                                                                         |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| BACnet devices on the network        | `init … --devices discover` in step 4 finds them and needs no list. To trim the draft first: `init … --devices none`, then `ot-gateway discover --points-list points.csv` in the folder, delete rows, `ot-gateway import points.csv` |
-| A BACnet EDE file                    | `import` and `init --points` read it as it is                                                                                                                                                                                        |
-| A Modbus device with a known profile | one row with `profile` and `point` `*` takes all its registers                                                                                                                                                                       |
-| A Modbus register you are unsure of  | `ot-gateway probe <host> <register> --json` reads it once and returns a row to copy                                                                                                                                                  |
-| A PDF, a spreadsheet, anything else  | an AI agent translates it into these columns; step 3 checks its work                                                                                                                                                                 |
+| What you have                        | How it becomes a points list                                                                                                                                                                            |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BACnet devices on the network        | `init … --devices discover` in step 4 finds them and needs no list. To trim the draft first: `ot-gateway discover --points-list points.csv` (no config needed), delete rows, then step 3 with that list |
+| A BACnet EDE file                    | `import` and `init --points` read it as it is                                                                                                                                                           |
+| A Modbus device with a known profile | one row with `profile` and `point` `*` takes all its registers                                                                                                                                          |
+| A Modbus register you are unsure of  | `ot-gateway probe <host> <register> --json` reads it once and returns a row to copy                                                                                                                     |
+| A PDF, a spreadsheet, anything else  | an AI agent translates it into these columns; step 3 checks its work                                                                                                                                    |
 
 No list makes a point writable. Writes are set in the config, on purpose.
 
@@ -295,7 +295,8 @@ It logs in as the gateway will, sends one message and waits for it to come back,
 | `broker-timeout`       | something is in the way, or answers other than MQTT                | a firewall, the wrong port, or TLS on one side only (`mqtts://`, 8883)                          |
 | `broker-login-refused` | the broker refused the username or password                        | check `mqtt.username` and the password in `ot-gateway.env`                                      |
 | `broker-refused`       | the broker refused for another reason, which it names              | read `hint`: it carries the broker's own words                                                  |
-| no `code`, `ok: false` | connected, but the message did not come back; `warnings[]` says so | the broker's access rules must allow this user to publish and subscribe under `site/building/#` |
+| `no-round-trip`        | connected, but the message did not come back; `warnings[]` says so | the broker's access rules must allow this user to publish and subscribe under `site/building/#` |
+| `password-unset`       | the config names a password variable that has no value             | put the password in `ot-gateway.env`; nothing was sent                                          |
 
 ## 7. Run it
 
@@ -332,7 +333,7 @@ This is the test that the setup is done. It subscribes at your broker, prints ev
 }
 ```
 
-When a point stays silent it waits for the slowest poll interval plus 30 seconds (at least 60 seconds, or `--seconds N`), then exits with 1. After the summary line comes one more JSON object, over several lines, that names the points:
+When a point stays silent it waits for the slowest poll interval plus 30 seconds (at least 60 seconds, or `--seconds N`), then exits with 1. After the summary line comes one more line, the failure, that names the points (spread out here to read). Once the watch has started, every line it prints is one JSON object, to the end, so `tail -n 1` is the outcome:
 
 ```json
 {
@@ -448,6 +449,7 @@ docker compose up -d
 if ot-gateway watch --until-values --json > watch.ndjson; then
   echo "every point has a value on the broker"
 else
+  tail -n 1 watch.ndjson | jq '{code, missing, hint}'
   ot-gateway status --json \
     | jq '{code, error, hint, problem, devices: [.devices[]? | select(.status != "ok") | {id, lastError, hints}]}'
   exit 1

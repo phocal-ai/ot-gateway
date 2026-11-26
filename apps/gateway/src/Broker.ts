@@ -29,7 +29,8 @@ const ROUND_TRIP_TIMEOUT = "5 seconds"
  * Why a broker command failed, for scripts and agents (`code` in `--json`): nothing answered at the address
  * (`broker-unreachable`), something did but not in time (`broker-timeout`), the broker turned the login away
  * (`broker-login-refused`) or the connection (`broker-refused`), the round trip's message did not come back
- * (`no-round-trip`), or the broker went away during a `watch` (`broker-lost`).
+ * (`no-round-trip`), the broker went away during a `watch` (`broker-lost`), or the password variable the config
+ * names is not set (`password-unset`), so nothing was sent.
  */
 export const BrokerFailureCode = Schema.Literals([
   "broker-unreachable",
@@ -37,7 +38,8 @@ export const BrokerFailureCode = Schema.Literals([
   "broker-login-refused",
   "broker-refused",
   "no-round-trip",
-  "broker-lost"
+  "broker-lost",
+  "password-unset"
 ])
 export type BrokerFailureCode = typeof BrokerFailureCode.Type
 
@@ -63,7 +65,18 @@ export const brokerClient = Effect.fn("brokerClient")(function* (
   network?: Pick<Network, "tcp">
 ) {
   const address = yield* parseBrokerUrl(settings.url)
-  const password = yield* readBrokerPassword(settings)
+  const password = yield* readBrokerPassword(settings).pipe(
+    // The message already says where the password goes, for the status page, which shows only the message.
+    Effect.catchTag("MqttSettingsError", (error) =>
+      Effect.fail(
+        new BrokerCommandError({
+          message: error.message,
+          code: "password-unset",
+          hint: `put the broker password in ot-gateway.env next to the config (${settings.passwordEnv ?? "NAME"}=...), or in /etc/ot-gateway/gateway.env under systemd`
+        })
+      )
+    )
+  )
   const openTimeout = "10 seconds"
   const socket = network
     ? yield* network.tcp({ host: address.host, port: address.port, openTimeout })

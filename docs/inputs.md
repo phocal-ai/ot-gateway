@@ -189,4 +189,6 @@ The points list, the status page and the config file describe the same settings,
 | `publish`, `publish_s`, `deadband` | Send, Every (seconds), Smallest change | `publish`: `mode`, `intervalMs`; `deadband`        |
 | `unit`, `scale`, `offset`, `alarm` | Unit, Multiply by, Then add, Alarm     | `unit`, `scaling`: `factor`, `offset`; `alarmWhen` |
 
+The status page shows the first column too: each field of the device form has its points list column on the right, in grey.
+
 Mind the word "address": for a Modbus point it is the register, for a BACnet device it is the IP address. The [configuration reference](configuration.md) has every config key.
