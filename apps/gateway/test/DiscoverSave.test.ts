@@ -7,8 +7,9 @@ import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem } from "effect"
 import { diffConfigs, formatDiff, sideOfConfig } from "../src/Diff.ts"
-import { mergeDevices, mergeDiscovered, saveDiscovered } from "../src/DiscoverSave.ts"
-import type { DraftedDevice } from "../src/Init.ts"
+import { mergeDevices, mergeDiscovered, writeMerged } from "../src/DiscoverSave.ts"
+import { savedLines } from "../src/Cli.ts"
+import { type DraftedDevice, simulatedDevice } from "../src/Init.ts"
 
 const base = {
   site: "plant-3",
@@ -87,14 +88,15 @@ describe("mergeDevices", () => {
   })
 })
 
-describe("saveDiscovered", () => {
-  it.effect("writes the merged config, and refuses what would not decode without touching the file", () =>
+describe("mergeDiscovered and writeMerged", () => {
+  it.effect("write the merged config, and refuse what would not decode or changed meanwhile, the file untouched", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const folder = yield* fs.makeTempDirectoryScoped()
       const path = `${folder}/ot-gateway.json`
       yield* fs.writeFileString(path, `${JSON.stringify(base, null, 2)}\n`)
-      yield* saveDiscovered(path, yield* fs.readFileString(path), [newDevice])
+      const first = yield* fs.readFileString(path)
+      yield* writeMerged(path, first, yield* mergeDiscovered(path, first, [newDevice]))
       const saved = yield* parseConfig(yield* fs.readFileString(path))
       expect(saved.devices.map((device) => device.id)).toEqual(["demo-room", "ahu-1"])
 
@@ -104,15 +106,16 @@ describe("saveDiscovered", () => {
         ...newPoint,
         points: [{ id: "room-temperature", name: "Room temperature", objectType: "analog-value", instance: 9 }]
       }
-      const refused = yield* saveDiscovered(path, before, [duplicate]).pipe(Effect.flip)
+      const refused = yield* mergeDiscovered(path, before, [duplicate]).pipe(Effect.flip)
       expect(refused.message).toContain("nothing was saved")
       expect(yield* fs.readFileString(path)).toBe(before)
 
-      // Changed while discover asked (the status page saved it): refused, not merged into.
+      // Changed while discover asked (merged before the save question, the status page saved meanwhile): refused.
       const asRead = yield* fs.readFileString(path)
-      yield* fs.writeFileString(path, asRead.replace('"main"', '"north"'))
       const another: DraftedDevice = { ...newDevice, id: "ahu-2", deviceInstance: 2002 }
-      const conflict = yield* saveDiscovered(path, asRead, [another]).pipe(Effect.flip)
+      const merged = yield* mergeDiscovered(path, asRead, [another])
+      yield* fs.writeFileString(path, asRead.replace('"main"', '"north"'))
+      const conflict = yield* writeMerged(path, asRead, merged).pipe(Effect.flip)
       expect(conflict.message).toContain("changed while discover ran")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
@@ -131,6 +134,23 @@ describe("mergeDiscovered", () => {
         "  + plant-3/main/demo-room/temperature-setpoint  new topic",
         "1 new"
       ])
+    })
+  )
+})
+
+describe("savedLines", () => {
+  it.effect("says how often each saved device is read and what is writable, from the config as saved", () =>
+    Effect.gen(function* () {
+      const fileText = JSON.stringify(base)
+      const merged = yield* mergeDiscovered("ot-gateway.json", fileText, [newPoint, simulatedDevice])
+      expect(savedLines(merged.config, merged.added, merged.extended)).toEqual([
+        "✓ added sim-1: read every 2 s, none writable",
+        "✓ added points to demo-room: read every 5 s, none writable",
+        "  a setpoint becomes writable on the status page or in the config, with the limits commands may set"
+      ])
+      const setpoint = { ...newPoint.points[0], writable: true, limits: { min: 15, max: 30 } }
+      const saved = yield* parseConfig(JSON.stringify({ ...base, devices: [{ ...newPoint, points: [setpoint] }] }))
+      expect(savedLines(saved, ["demo-room"], [])).toEqual(["✓ added demo-room: read every 5 s, 1 writable"])
     })
   )
 })

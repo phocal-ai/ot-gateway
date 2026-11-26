@@ -501,9 +501,10 @@ const discoverModbusCommand = Command.make(
 )
 
 /**
- * `discover` for a person at a terminal: Who-Is on this network (the one picked when there are several), the points
- * and writable setpoints to keep, the read interval, then a save into the config (devices it has get the new
- * points), and the offer to start. When nobody answers: one device by address, a Modbus scan, a points list.
+ * `discover` for a person at a terminal: what to look for (BACnet/IP on this network, the one picked when there are
+ * several, a Modbus scan, one device by address, a points list), the points to read, what the save changes on the
+ * broker when the config has devices already, the save (devices it has get the new points), then read once, start
+ * or done.
  */
 const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, address: string | undefined) {
   const fs = yield* FileSystem.FileSystem
@@ -517,7 +518,7 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
   const broadcast = unset && address === undefined ? yield* broadcastAddress(lans, {}) : undefined
   const asked =
     broadcast === undefined ? config : { ...config, bacnet: { ...config.bacnet, broadcastAddress: broadcast } }
-  const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), address)
+  const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), { address })
   if (picked.length === 0) return yield* Console.log(`nothing to save; ${path} is as it was`)
   const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
   const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
@@ -536,20 +537,55 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
   })
   if (!save) return yield* Console.log(`nothing saved; ${path} is as it was`)
   yield* writeMerged(path, fileText, merged)
-  yield* Console.log(
-    [
-      "",
-      ...merged.added.map((id) => `✓ added ${id}`),
-      ...merged.extended.map((id) => `✓ added points to ${id}`),
-      "  read every 5 s unless the device sends changes; none writable until you make a setpoint writable (status page or config)",
-      ""
-    ].join("\n")
-  )
+  yield* Console.log(["", ...savedLines(merged.config, merged.added, merged.extended), ""].join("\n"))
   return yield* afterSave(merged.config, path, argument)
 })
 
+/**
+ * What the save added, one line per device: how often it is read and how many points commands may write, from the
+ * saved config (a points list or the simulated device brings its own), and how to make a setpoint writable.
+ */
+export const savedLines = (
+  saved: GatewayConfig,
+  added: ReadonlyArray<string>,
+  extended: ReadonlyArray<string>
+): ReadonlyArray<string> => {
+  const describe = (id: string) => {
+    const device = saved.devices.find((each) => each.id === id)
+    if (device === undefined) return { text: "", writable: 0 }
+    const writable = device.points.filter((point) => point.writable).length
+    return {
+      text: `read every ${device.pollIntervalMs / 1000} s, ${writable === 0 ? "none" : writable} writable`,
+      writable
+    }
+  }
+  const lines = [
+    ...added.map((id) => ({ verb: `added ${id}`, ...describe(id) })),
+    ...extended.map((id) => ({ verb: `added points to ${id}`, ...describe(id) }))
+  ]
+  const hint = lines.every((line) => line.writable === 0)
+    ? ["  a setpoint becomes writable on the status page or in the config, with the limits commands may set"]
+    : []
+  return [...lines.map((line) => `✓ ${line.verb}: ${line.text}`), ...hint]
+}
+
 /** What the end of discover offers: read every point once, start the gateway here, or stop. */
 type AfterSave = "read" | "start" | "done"
+
+/** Every point of `saved` read once, the report printed; a read that cannot start says why and returns to the menu. */
+const readEveryPoint = Effect.fn("readEveryPoint")(
+  function* (saved: GatewayConfig) {
+    const devices = yield* selectDevices(saved, [])
+    const count = devices.reduce((sum, device) => sum + device.points.length, 0)
+    yield* Console.error(`\nreading ${count} point${count === 1 ? "" : "s"} once …`)
+    // The report says what failed and why; the drivers' warnings would only repeat it.
+    const report = yield* readOnce(saved, devices).pipe(Effect.provideService(References.MinimumLogLevel, "Error"))
+    yield* Console.log(`${formatReadReport(report)}\n`)
+  },
+  Effect.catchTag("ReadError", (error) =>
+    Console.error(`✗ ${error.message}${error.hint === undefined ? "" : `\n  ${error.hint}`}\n`)
+  )
+)
 
 /** After a save: read once (as often as wanted), start the gateway in this terminal, or the commands for later. */
 const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: string, argument: string) {
@@ -584,12 +620,7 @@ const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: 
       yield* Console.log(`\nstatus page: http://127.0.0.1:${saved.status?.port ?? 8080}   Ctrl-C stops the gateway\n`)
       return yield* runConfigured(saved, path).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
     }
-    const devices = yield* selectDevices(saved, [])
-    const count = devices.reduce((sum, device) => sum + device.points.length, 0)
-    yield* Console.error(`\nreading ${count} point${count === 1 ? "" : "s"} once …`)
-    // The report says what failed and why; the drivers' warnings would only repeat it.
-    const report = yield* readOnce(saved, devices).pipe(Effect.provideService(References.MinimumLogLevel, "Error"))
-    yield* Console.log(`${formatReadReport(report)}\n`)
+    yield* readEveryPoint(saved)
   }
 })
 

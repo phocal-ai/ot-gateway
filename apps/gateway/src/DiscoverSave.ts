@@ -135,15 +135,3 @@ export const writeMerged = Effect.fn("writeMerged")(function* (path: string, fil
     })
   )
 })
-
-/** Saves `picked` into the config at `path`: `mergeDiscovered`, then `writeMerged`, nothing written on a failure. */
-export const saveDiscovered = Effect.fn("saveDiscovered")(function* (
-  path: string,
-  fileText: string,
-  picked: ReadonlyArray<InitDevice>,
-  broadcastAddress?: string
-) {
-  const merged = yield* mergeDiscovered(path, fileText, picked, broadcastAddress)
-  yield* writeMerged(path, fileText, merged)
-  return merged
-})

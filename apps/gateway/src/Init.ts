@@ -471,15 +471,16 @@ const validDeviceAddress = (value: string) =>
 /**
  * Discovery for a person at the terminal: what to look for first (BACnet/IP by default, a Modbus TCP scan, one
  * BACnet device by its address, a points list, the simulated device), then the points to read. When nothing was
- * found or picked, the same ways again, or none for now. `firstAddress` asks that device straight away.
+ * found or picked, the same ways again, or none for now. `start` skips the first question: `address` asks that
+ * device straight away, `whoIs` (init's `--devices discover`) asks the network.
  */
 export const discoverInteractively = Effect.fn("discoverInteractively")(function* (
   probe: GatewayConfig,
   modbusRange: () => string,
-  firstAddress?: string
+  start: { readonly address?: string | undefined; readonly whoIs?: boolean } = {}
 ) {
-  let address: string | undefined = firstAddress
-  let way: Way = address === undefined ? yield* firstWay : "address"
+  let address: string | undefined = start.address
+  let way: Way = address !== undefined ? "address" : start.whoIs === true ? "bacnet" : yield* firstWay
   while (true) {
     if (way === "none") return []
     if (way === "simulated") return [simulatedDevice]
@@ -523,7 +524,7 @@ const devicesFrom = Effect.fn("devicesFrom")(function* (
   if (source === "simulated") return [simulatedDevice]
   if (source === "list") return yield* flags.points === undefined ? devicesFromList : devicesFromFlag(flags.points)
   const probe = yield* Schema.decodeUnknownEffect(GatewayConfig)(initConfig(answers, []))
-  if (flags.yes !== true) return yield* discoverInteractively(probe, modbusRange)
+  if (flags.yes !== true) return yield* discoverInteractively(probe, modbusRange, { whoIs: true })
   const drafts = yield* discoverDrafts(probe)
   // A device needs a point: one without (no readable objects, or more than one address answered) is left out.
   const usable = drafts.filter((draft) => draft.points.length > 0)
