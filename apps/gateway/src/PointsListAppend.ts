@@ -160,7 +160,8 @@ export const appendToPointsList = (
     if (known !== undefined) return known
     const listed = instance === "" ? undefined : byInstance.get(String(Number(instance)))
     let name = listed ?? device
-    if (listed === undefined && names.has(slugify(device))) {
+    // Without a device instance (a Modbus row) the same name is the same device: its rows are compared by point.
+    if (listed === undefined && instance !== "" && names.has(slugify(device))) {
       name = `${device}-${instance}`
       for (let n = 2; names.has(slugify(name)); n++) name = `${device}-${instance}-${n}`
     }

@@ -78,7 +78,7 @@ Every row answers the same three questions: which value is it, where is the devi
 | `unit_id`    | default 1       | the Modbus unit id, for a device behind a Modbus gateway                                              |
 | `byte_order` | default ABCD    | the order of the bytes in a value wider than one register                                             |
 
-`register` and `type` come from the register map in the device's manual. Not sure of one? `ot-gateway probe 192.168.1.50 100` reads the register once and shows what every type and byte order would give, so you can pick the one that matches the device's display. For a device with a profile (`ot-gateway profiles list`), one row with a `profile` and `"point": "*"` takes all its registers, and you look nothing up.
+Don't know a device's address or unit id? `ot-gateway discover modbus 192.168.1.0/24` finds the Modbus TCP devices on a range, read-only, and `--points-list` drafts a row for each. `register` and `type` come from the register map in the device's manual. Not sure of one? `ot-gateway probe 192.168.1.50 100` reads the register once and shows what every type and byte order would give, so you can pick the one that matches the device's display. For a device with a profile (`ot-gateway profiles list`), one row with a `profile` and `"point": "*"` takes all its registers, and you look nothing up.
 
 ### A BACnet/IP row
 

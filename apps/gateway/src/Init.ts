@@ -1,7 +1,8 @@
 /**
  * `ot-gateway init`: a few questions, then a config that `check` accepts. It asks for the site and building
  * (the first two topic segments), the broker, and where the devices come from: a simulated device to try
- * things with, the BACnet devices that answer a Who-Is (drafted read-only, as `discover` does), or none yet.
+ * things with, the BACnet devices that answer a Who-Is (drafted read-only, as `discover` does), or none yet. When
+ * no BACnet device answers, the other ways include a Modbus TCP scan of a range (as `discover modbus` does).
  *
  * The answers become the config in `initConfig`, a pure function, and the result is decoded with the gateway's
  * own schema before anything is written, so `init` never leaves a config that `run` refuses. An existing file
@@ -19,7 +20,16 @@ import { parseDeviceAddress } from "@ot-gateway/bacnet"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { devicesFromFile } from "./Import.ts"
 import { shellArgument } from "./Output.ts"
-import { type PointsListDevice, PointsListIssue } from "./PointsList.ts"
+import {
+  foundUnits,
+  formatScan,
+  MODBUS_PORT,
+  modbusDraftPointsList,
+  modbusRangeHint,
+  parseRange,
+  scanModbus
+} from "./ModbusDiscover.ts"
+import { devicesFromPointsList, type PointsListDevice, PointsListIssue } from "./PointsList.ts"
 
 /** A simulated device with two points, to see values flow before any real device is connected. */
 export const simulatedDevice = {
@@ -478,7 +488,7 @@ const pickPoints = Effect.fn("pickPoints")(function* (drafts: ReadonlyArray<Draf
 })
 
 /** The other ways to devices, when no BACnet device answered Who-Is. */
-type OtherWay = "again" | "address" | "list" | "simulated" | "none"
+type OtherWay = "again" | "address" | "modbus" | "list" | "simulated" | "none"
 
 const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
   {
@@ -487,6 +497,11 @@ const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
     description: "ip or ip:port, for a device on another subnet or another port"
   },
   { title: "Search again", value: "again", description: "once the device is on and on this network" },
+  {
+    title: "Scan for Modbus TCP devices",
+    value: "modbus",
+    description: "ask a range of addresses on port 502, read-only, as discover modbus does"
+  },
   {
     title: "From a points list",
     value: "list",
@@ -498,10 +513,75 @@ const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
 
 const otherWays = Prompt.Select<OtherWay>({ message: "No BACnet device answered. What now?", choices: otherWayChoices })
 
+/** The other ways when a Modbus scan found nothing to read. */
+const otherWaysAfterModbus = Prompt.Select<OtherWay>({
+  message: "No Modbus device to read. What now?",
+  choices: otherWayChoices
+})
+
 /** The other ways when the operator picked none of the points found. */
 const otherWaysAfterPicking = Prompt.Select<OtherWay>({
   message: "No point picked. What now?",
   choices: otherWayChoices
+})
+
+/** The /24 of the first LAN this machine is on, to scan for Modbus devices; a common one without a LAN. */
+export const suggestedModbusRange = (lans: ReadonlyArray<LanInterface>) => {
+  const [first] = lans
+  return first === undefined ? "192.168.1.0/24" : `${first.address.split(".").slice(0, 3).join(".")}.0/24`
+}
+
+const validModbusRange = (value: string) => {
+  const targets = parseRange(value)
+  return Result.isSuccess(targets) ? Effect.succeed(value) : Effect.fail(`${targets.failure}; ${modbusRangeHint}`)
+}
+
+/**
+ * The Modbus way to devices: scan a range (read-only, rate-limited, `discover modbus`), and draft each unit that
+ * answered with a register as a device with that one placeholder point, to replace with the datasheet's registers.
+ */
+const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (suggested: string) {
+  const range = yield* Prompt.String({
+    message: "Addresses to scan for Modbus TCP (a network, first-last, or one address)",
+    default: suggested,
+    validate: validModbusRange
+  })
+  const targets = parseRange(range)
+  if (Result.isFailure(targets)) return []
+  yield* Console.error(`  asking ${targets.success.length} address(es) on port ${MODBUS_PORT}, read-only`)
+  const report = yield* scanModbus(
+    { range, targets: targets.success },
+    {
+      onDone: (done, total) =>
+        total >= 20 && (done === total || done % Math.ceil(total / 10) === 0)
+          ? Console.error(`  ${done}/${total} addresses asked`)
+          : Effect.void
+    }
+  )
+  yield* Console.error(
+    formatScan(report)
+      .split("\n")
+      .filter((line) => !line.startsWith("next:") && !line.startsWith("--points-list"))
+      .map((line) => `  ${line}`.trimEnd())
+      .join("\n")
+  )
+  const units = foundUnits(report)
+  const readable = units.filter((unit) => unit.table !== undefined)
+  if (readable.length < units.length) {
+    yield* Console.error(
+      `  ${units.length - readable.length} unit(s) left out, register 0 refused on both tables: draft them with ot-gateway discover modbus ${shellArgument(range)} --points-list modbus.csv and fill in their registers from the datasheet`
+    )
+  }
+  if (readable.length === 0) return []
+  const devices = yield* devicesFromPointsList(modbusDraftPointsList(readable)).pipe(
+    Effect.catchTag("PointsListError", (error) => Console.error(`  ${error.message}`).pipe(Effect.as([])))
+  )
+  if (devices.length > 0) {
+    yield* Console.error(
+      `  ${devices.length} device(s) drafted, each with one placeholder point (register 0 as uint16): set their registers from the datasheet on the status page, or in a points list (ot-gateway probe <host> <register> shows how one reads)`
+    )
+  }
+  return devices
 })
 
 const validDeviceAddress = (value: string) =>
@@ -514,9 +594,30 @@ const validDeviceAddress = (value: string) =>
  * found. When nobody answers, discovery cannot run (another program holds UDP 47808), or they pick no point, the
  * other ways: one device by its address, again, a points list, the simulated device, or none yet.
  */
-const discoverInteractively = Effect.fn("discoverInteractively")(function* (probe: GatewayConfig) {
+const discoverInteractively = Effect.fn("discoverInteractively")(function* (
+  probe: GatewayConfig,
+  modbusRange: () => string
+) {
   let address: string | undefined = undefined
+  let modbus = false
   while (true) {
+    if (modbus) {
+      modbus = false
+      const devices = yield* devicesFromModbusScan(modbusRange())
+      if (devices.length > 0) return devices
+      const after = yield* otherWaysAfterModbus
+      if (after === "modbus") {
+        modbus = true
+        continue
+      }
+      if (after === "simulated") return [simulatedDevice]
+      if (after === "none") return []
+      if (after === "list") return yield* devicesFromList
+      address =
+        after === "again"
+          ? undefined
+          : yield* Prompt.String({ message: "Device address (ip or ip:port)", validate: validDeviceAddress })
+    }
     const drafts: ReadonlyArray<DraftedDevice> = yield* discoverDrafts(
       probe,
       undefined,
@@ -533,6 +634,10 @@ const discoverInteractively = Effect.fn("discoverInteractively")(function* (prob
     if (next === "simulated") return [simulatedDevice]
     if (next === "none") return []
     if (next === "list") return yield* devicesFromList
+    if (next === "modbus") {
+      modbus = true
+      continue
+    }
     address =
       next === "again"
         ? undefined
@@ -541,12 +646,17 @@ const discoverInteractively = Effect.fn("discoverInteractively")(function* (prob
 })
 
 /** The devices for the chosen source; discovery asks through the network in `answers`. */
-const devicesFrom = Effect.fn("devicesFrom")(function* (source: DeviceSource, answers: InitAnswers, flags: InitFlags) {
+const devicesFrom = Effect.fn("devicesFrom")(function* (
+  source: DeviceSource,
+  answers: InitAnswers,
+  flags: InitFlags,
+  modbusRange: () => string
+) {
   if (source === "none") return []
   if (source === "simulated") return [simulatedDevice]
   if (source === "list") return yield* flags.points === undefined ? devicesFromList : devicesFromFlag(flags.points)
   const probe = yield* Schema.decodeUnknownEffect(GatewayConfig)(initConfig(answers, []))
-  if (flags.yes !== true) return yield* discoverInteractively(probe)
+  if (flags.yes !== true) return yield* discoverInteractively(probe, modbusRange)
   const drafts = yield* discoverDrafts(probe)
   // A device needs a point: one without (no readable objects, or more than one address answered) is left out.
   const usable = drafts.filter((draft) => draft.points.length > 0)
@@ -595,7 +705,9 @@ export const runInit = Effect.fn("runInit")(function* (
     broadcastAddress(lans(), flags).pipe(Effect.map((address) => ({ ...answersSoFar, broadcastAddress: address })))
   const beforeDevices =
     source === "discover" ? yield* network(answers) : { ...answers, broadcastAddress: flags.broadcast }
-  const devices: ReadonlyArray<InitDevice> = yield* devicesFrom(source, beforeDevices, flags)
+  const devices: ReadonlyArray<InitDevice> = yield* devicesFrom(source, beforeDevices, flags, () =>
+    suggestedModbusRange(lans())
+  )
   // A BACnet device without an address is found by broadcast at run time, so the list needs the right network too.
   const located = (device: InitDevice) => device.protocol !== "bacnet-ip" || "address" in device
   const networked =

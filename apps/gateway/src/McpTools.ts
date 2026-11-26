@@ -327,6 +327,27 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ config, address }) => ["discover", config, flag("address", address)]
   }),
   defineTool({
+    name: "discover_modbus",
+    title: "Find Modbus TCP devices",
+    description:
+      "Find Modbus TCP devices and their unit ids on a range of addresses (192.168.1.0/24, 192.168.1.10-40, an address; at most a /22), read-only (one register read per unit) and rate-limited. Returns each unit with its draft points list row, the addresses that answered without a unit with a hint (a Modbus gateway: ask again with unitIds 1-247), and next. Scan only a range the user named or confirmed",
+    input: {
+      range: text("The addresses to ask: an address, host:port, a network, first-last, or several comma-separated"),
+      port: Schema.optionalKey(count("The TCP port where the range gives none (default 502)", 1, 65_535)),
+      unitIds: optionalText("The unit ids to ask on each address, as 1, 1,2,5 or 1-247 (default 1, then 255 and 0)"),
+      rate: Schema.optionalKey(count("At most this many requests a second across the scan (default 20)", 1, 200))
+    },
+    annotations: asks,
+    argv: ({ range, port, unitIds, rate }) => [
+      "discover",
+      "modbus",
+      range,
+      flag("port", port),
+      flag("unit-ids", unitIds),
+      flag("rate", rate)
+    ]
+  }),
+  defineTool({
     name: "probe",
     title: "Probe Modbus registers",
     description:
