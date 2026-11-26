@@ -23,6 +23,7 @@ describe("loadConfig", () => {
       expect(error._tag).toBe("ConfigFileError")
       expect(error.message).toContain("no config at does-not-exist/ot-gateway.json")
       expect(error.message).toContain("run ot-gateway init")
+      expect(error._tag === "ConfigFileError" && error.code).toBe("no-config")
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
@@ -49,6 +50,12 @@ describe("loadConfig", () => {
       expect(error.message).toContain(`at ["site"]`)
       expect(error.message).toContain(`at ["devices"][0]["pollIntervall"]`)
       expect(error.message).toContain(`at ["devices"][0]["points"][0]["dataType"]`)
+      // The same mistakes one by one, for check --json: an agent reads the path rather than the text.
+      expect(error._tag === "ConfigFileError" && error.code).toBe("invalid-config")
+      const issues = error._tag === "ConfigFileError" ? (error.issues ?? []) : []
+      expect(issues.map((issue) => issue.path)).toEqual(
+        expect.arrayContaining(["site", "devices.0.pollIntervall", "devices.0.points.0.dataType"])
+      )
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
