@@ -243,7 +243,9 @@ describe("chaos: client over UDP", () => {
   it.live("a request that finds no free invoke ID fails within its timeout instead of queueing", () =>
     Effect.gen(function* () {
       const silent = yield* peer()
-      const client = yield* startClient({ requestTimeout: "1 second", retries: 0 })
+      // The timeout is long against the scheduling delay of 1024 fibers on a busy runner, so the bounds below
+      // keep a margin of a whole second on each side instead of a few hundred milliseconds.
+      const client = yield* startClient({ requestTimeout: "2 seconds", retries: 0 })
       const started = Date.now()
       // Four times the 256 invoke IDs, all to a device that never answers.
       const timed = yield* Effect.forEach(
@@ -263,12 +265,12 @@ describe("chaos: client over UDP", () => {
       )
       const elapsed = Date.now() - started
       const results = timed.map(({ result }) => result)
-      // Queued, the last quarter would wait three timeouts first and end after four seconds.
-      expect(elapsed).toBeLessThan(3000)
-      // Each request, its wait for an invoke ID included, ends near its 1 s deadline: one that gets an ID
-      // freed just before its deadline must not start a fresh 1 s exchange on top (two seconds in all).
-      // The bound sits midway: a CI runner busy with every package's tests delays timers by ~350 ms.
-      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(1600)
+      // Queued, the last quarter would wait three timeouts first and end after eight seconds.
+      expect(elapsed).toBeLessThan(5000)
+      // Each request, its wait for an invoke ID included, ends near its 2 s deadline: one that gets an ID
+      // freed just before its deadline must not start a fresh 2 s exchange on top (four seconds in all).
+      // The bound sits midway, so a busy CI runner delaying timers by several hundred ms stays inside it.
+      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(3000)
       expect(
         results.some(
           (result) =>
