@@ -121,7 +121,7 @@ describe("the repository's docs", () => {
       "index",
       ...pages.slice(1).map((page) => page.slug)
     ])
-    expect(listed.slice(0, 4)).toEqual(["---Start here---", "index", "how-it-works", "first-building"])
+    expect(listed.slice(0, 4)).toEqual(["---Start here---", "index", "how-it-works", "inputs"])
     expect(listed).toContain("---Reference---")
   })
 

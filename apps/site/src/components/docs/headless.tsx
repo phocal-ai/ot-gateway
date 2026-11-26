@@ -16,17 +16,7 @@ import {
   SquareTerminal
 } from "lucide-react"
 import type * as React from "react"
-
-/** The frame every diagram of the docs sits in; `not-prose` keeps the page's text styles out. */
-const Figure = ({ label, children }: { readonly label: string; readonly children: React.ReactNode }) => (
-  <figure aria-label={label} className="viz not-prose my-6">
-    {children}
-  </figure>
-)
-
-const Eyebrow = ({ children }: { readonly children: React.ReactNode }) => (
-  <p className="text-fd-muted-foreground text-xs font-medium tracking-wide uppercase">{children}</p>
-)
+import { Eyebrow, Figure } from "./figure.tsx"
 
 const Mono = ({ children }: { readonly children: React.ReactNode }) => (
   <code className="font-mono text-[0.8rem] font-medium">{children}</code>
