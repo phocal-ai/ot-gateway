@@ -183,9 +183,12 @@ const jsonFailure =
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     json
       ? effect.pipe(
-          Effect.tapError((error) =>
-            printJson({ ok: false, ...fields, error: errorText(error), ...failureFields(error) })
-          )
+          Effect.tapError((error) => {
+            // The address a flag named stays as given; the error's (the config's status page) fills in a null.
+            const { url, ...known } = failureFields(error)
+            const asked = typeof fields["url"] === "string" ? {} : url === undefined ? {} : { url }
+            return printJson({ ok: false, ...fields, ...asked, error: errorText(error), ...known })
+          })
         )
       : effect
 
