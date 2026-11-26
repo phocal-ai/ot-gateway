@@ -59,16 +59,17 @@ Two checks, both in `pnpm test`, so in CI and in Turborepo's cache:
 
 The second check found one thing on its first run: the simulation's clock gave fractional milliseconds (jittered sleeps move the test clock between two), so `ts` was not always a whole number. The gateway reads time through `Clock.currentTimeMillis`, which is `Date.now()` in production and always whole, so the fix is in the simulation's clock, which now floors as `Date.now()` does. The contract keeps the promise that times are integers.
 
-### Printed by the CLI (next step, not in this draft)
+### Printed by the CLI
 
 ```bash
 ot-gateway contract                  # the topic table and each message in short, for people
-ot-gateway contract --json           # {version, topics, schemas}: everything, for agents
-ot-gateway contract value --json     # one message's JSON Schema
+ot-gateway contract health           # one message's fields: type, optional or not, what each is
+ot-gateway contract --json           # {ok, version, url, topics, schemas}: everything, for agents
+ot-gateway contract value --json     # one message's JSON Schema, the same document as v1/value.schema.json
 ot-gateway watch --check             # check what arrives against the contract, live, one line per message off it
 ```
 
-`contract` needs no config and no broker. `watch --check` is the same strict decode the tests use, pointed at a real broker: the quickest way to tell whether a site's consumer or a second publisher is the one sending something odd.
+`contract` needs no config and no broker, and reads everything it prints from the schemas in core. `watch --check` is the same strict decode the tests use, pointed at a real broker, for every topic under the config's site and building (other applications' topics are left alone, and so is an empty message that clears a retained topic): the quickest way to tell whether a site's consumer or a second publisher is the one sending something odd. A message with several forms (a sample or an aggregate value, health online or offline) is reported against the form it comes closest to. With `--seconds` it exits with 1 when one was off (`off-contract`) or none arrived to check (`nothing-checked`); a gateway newer than the CLI can trip it with a field a later minor version added, which the health message's `contract` shows.
 
 ## Versioning
 

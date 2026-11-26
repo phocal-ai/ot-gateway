@@ -8,9 +8,19 @@
  * A retained message the broker keeps from another gateway, or for a device or point the config does not have
  * (an old config's, say), is marked with whose it is (`"stale"` in JSON), and the first one prints, once, how to
  * clear it: `ot-gateway publish <topic> --retain`.
+ *
+ * With `--check` it checks every message under the config's site and building against the MQTT contract instead
+ * (`ot-gateway contract`), with the same strict decode the gateway's own tests use, and prints only the ones off it,
+ * each with what is wrong; a watch that ends by itself then fails when one was.
  */
 import {
+  contractMessageOf,
+  contractMessages,
+  contractTopics,
+  contractVersion,
   covPointIds,
+  decodeContractMessage,
+  type ContractMessage,
   type Device,
   type GatewayConfig,
   monotonicMillis,
@@ -18,8 +28,9 @@ import {
   windowIntervalMs
 } from "@ot-gateway/core"
 import { type InboundMessage, topicMatches } from "@ot-gateway/mqtt"
-import { Console, Deferred, Duration, Effect, Schema } from "effect"
+import { Console, Deferred, Duration, Effect, Exit, Schema } from "effect"
 import { BrokerCommandError, brokerClient, firstDialOf } from "./Broker.ts"
+import { configIssues } from "./ConfigStore.ts"
 import { withoutControls } from "./Discover.ts"
 import { localTime, printResult } from "./Output.ts"
 import { metaGateway } from "./StaleMeta.ts"
@@ -81,11 +92,15 @@ export const formatMessage = (
   return `${time} ${retained}${withoutControls(message.topic)} ${payload}`
 }
 
-/** One message as a JSON line: the payload parsed when it is JSON, as the gateway's own messages are, whole. */
+/**
+ * One message as a JSON line: the payload parsed when it is JSON, as the gateway's own messages are, whole. With
+ * `--check`, `contract` says which message it should be and what is wrong with it.
+ */
 export const messageRecord = (
   message: Pick<InboundMessage, "topic" | "payload" | "retain">,
   at: Date,
-  stale?: string
+  stale?: string,
+  contract?: ContractViolation
 ) => {
   let payload: unknown = message.payload
   try {
@@ -98,9 +113,73 @@ export const messageRecord = (
     topic: message.topic,
     retained: message.retain,
     ...(stale === undefined ? {} : { stale }),
+    ...(contract === undefined ? {} : { contract }),
     payload
   })
 }
+
+/** A message off the contract: which message its topic says it is, and every mistake, with where it is. */
+export interface ContractViolation {
+  readonly message: ContractMessage
+  readonly issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>
+}
+
+/** The contract messages that are retained: an empty payload on their topics clears what the broker kept. */
+const retainedMessages = new Set(contractTopics.filter((topic) => topic.retained).map((topic) => topic.message))
+
+/**
+ * Checks one message against the contract, strictly (a field the contract does not have is a mistake too): what
+ * is wrong with it, `"ok"` when nothing is, or undefined when it is not the contract's to check. That is a topic
+ * outside the config's site and building (another application's) or one no contract message has (the broker
+ * check's `$gateway/<id>/check/…`). An empty payload on a retained message's topic clears it, which is allowed.
+ */
+export const contractViolation = (
+  config: Pick<GatewayConfig, "site" | "building">,
+  message: Pick<InboundMessage, "topic" | "payload">
+): ContractViolation | "ok" | undefined => {
+  const [site, building] = message.topic.split("/")
+  if (site !== config.site || building !== config.building) return undefined
+  const kind = contractMessageOf(message.topic)
+  if (kind === undefined) return undefined
+  if (message.payload === "" && retainedMessages.has(kind)) return "ok"
+  if (Exit.isSuccess(decodeContractMessage(kind, message.payload))) return "ok"
+  // A message with several forms (a value, sample or aggregate; health, online or offline) is measured against the
+  // form it comes closest to: the mistakes of every form at once would mostly be about the forms it is not.
+  const schema = contractMessages[kind]
+  const forms: ReadonlyArray<Schema.Codec<unknown, unknown>> = "members" in schema ? schema.members : [schema]
+  const candidates = forms.map((form) => {
+    const decoded = Schema.decodeUnknownExit(Schema.fromJsonString(form), {
+      onExcessProperty: "error",
+      errors: "all"
+    })(message.payload)
+    const error = Exit.findErrorOption(decoded)
+    return error._tag === "Some"
+      ? configIssues(error.value.issue).map((issue) =>
+          issue.path.length === 0 ? { message: issue.message } : { path: issue.path.join("."), message: issue.message }
+        )
+      : []
+  })
+  const closest = candidates.reduce((best, issues) => (issues.length < best.length ? issues : best))
+  return { message: kind, issues: closest.length === 0 ? [{ message: "does not decode" }] : closest }
+}
+
+/** What is wrong with a message, on one line: `value: ts: Expected an integer, got 1.5`. */
+export const describeViolation = (violation: ContractViolation) =>
+  `off contract (${violation.message}): ${violation.issues
+    .map((issue) => withoutControls(issue.path === undefined ? issue.message : `${issue.path}: ${issue.message}`))
+    .join("; ")}`
+
+/** How many messages `--check` looked at, and how many were off the contract. */
+export interface ContractSummary {
+  readonly event: "contract"
+  readonly version: string
+  readonly checked: number
+  readonly off: number
+}
+
+/** `-- 120 message(s) checked against the MQTT contract 1.0: 2 off it`. */
+export const formatContractSummary = (summary: ContractSummary) =>
+  `-- ${summary.checked} message(s) checked against the MQTT contract ${summary.version}: ${summary.off === 0 ? "all on it" : `${summary.off} off it`}`
 
 /**
  * What arrived for one device's points: the configured points that sent a value, the ones that did not, and the
@@ -252,6 +331,12 @@ export interface WatchOptions {
    * `seconds` (or `untilValuesSeconds`): for an agent checking that a new gateway's values arrive.
    */
   readonly untilValues?: boolean | undefined
+  /**
+   * Check every message under the config's site and building against the MQTT contract and print only those off
+   * it (`contractViolation`); a watch that ends by itself fails when one was (`off-contract`), or when none
+   * arrived to check (`nothing-checked`).
+   */
+  readonly check?: boolean | undefined
 }
 
 /**
@@ -272,6 +357,9 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
   const arrivals = pointArrivals(config, filter)
   const allArrived = yield* Deferred.make<void>()
   const untilValues = options.untilValues === true
+  const check = options.check === true
+  let checked = 0
+  let offContract = 0
   if (untilValues && !arrivals.expects) {
     return yield* new WatchError({
       message: `${filter} covers none of the config's points, so --until-values has nothing to wait for`,
@@ -295,7 +383,7 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
         }
         everConnected = true
         yield* Console.error(
-          `watching ${filter} on ${config.mqtt.url} (${seconds === undefined ? "Ctrl-C to stop" : untilValues ? `until every point sent a value, at most ${seconds} s` : `for ${seconds} s`})`
+          `${check ? `checking ${filter} against the MQTT contract ${contractVersion}, printing only what is off it,` : `watching ${filter}`} on ${config.mqtt.url} (${seconds === undefined ? "Ctrl-C to stop" : untilValues ? `until every point sent a value, at most ${seconds} s` : `for ${seconds} s`})`
         )
       }),
     // Every failed redial calls this; only the first of an outage is printed. Before the first connect, `--seconds`
@@ -312,10 +400,22 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
         const stale = staleReason(config, message)
         const at = new Date()
         messages += 1
-        yield* json ? printResult(messageRecord(message, at, stale)) : Console.log(formatMessage(message, at, stale))
+        const violation = check ? contractViolation(config, message) : undefined
+        if (violation !== undefined) checked += 1
+        const off = violation !== undefined && violation !== "ok"
+        if (off) offContract += 1
+        // With --check only the messages off the contract are printed, and only theirs need the hint below.
+        const printed = !check || off
+        if (!check) {
+          yield* json ? printResult(messageRecord(message, at, stale)) : Console.log(formatMessage(message, at, stale))
+        } else if (off) {
+          yield* json
+            ? printResult(messageRecord(message, at, stale, violation))
+            : Console.log(`${formatMessage(message, at, stale)}\n  ${describeViolation(violation)}`)
+        }
         // After the message is out, so the summary that this may end the watch with comes after it.
         if (arrivals.record(message)) yield* Deferred.succeed(allArrived, undefined)
-        if (stale !== undefined && !hinted) {
+        if (stale !== undefined && printed && !hinted) {
           hinted = true
           yield* Console.error(clearHint)
         }
@@ -337,29 +437,56 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
       hint: "the broker or the network went away during the watch: ot-gateway broker checks the connection"
     })
   }
-  if (!arrivals.expects) return
+  // The points' summary first, then the contract's: with --check, the last line before a failure is the contract's.
   const elapsed = Math.round(((yield* monotonicMillis) - started) / 1000)
-  const summary = watchSummary(arrivals.devices(), elapsed, messages)
-  yield* json ? printResult(JSON.stringify(summary)) : Console.log(formatSummary(summary))
+  const summary = arrivals.expects ? watchSummary(arrivals.devices(), elapsed, messages) : undefined
+  if (summary !== undefined) {
+    yield* json ? printResult(JSON.stringify(summary)) : Console.log(formatSummary(summary))
+  }
+  if (check) {
+    const checkedSummary: ContractSummary = { event: "contract", version: contractVersion, checked, off: offContract }
+    yield* json ? printResult(JSON.stringify(checkedSummary)) : Console.log(formatContractSummary(checkedSummary))
+  }
+  const offLine = `${offContract} of ${checked} message(s) under ${config.site}/${config.building} were off the MQTT contract ${contractVersion}`
   // Points that send only on change may stay quiet, but not every one of them: then nothing shows the gateway works.
-  const nothing = summary.arrived === 0
-  if (untilValues && (summary.missing > 0 || nothing)) {
+  const nothing = summary !== undefined && summary.arrived === 0
+  if (untilValues && summary !== undefined && (summary.missing > 0 || nothing)) {
     const silent = (device: DeviceArrivals) => (nothing ? [...device.missing, ...device.onChange] : device.missing)
+    const missingLine = nothing
+      ? `no point sent a value within ${seconds} s`
+      : `${summary.missing} of ${summary.points} point(s) sent no value within ${seconds} s`
+    // Missing values win the code, since they are what to fix first; the message still says the contract was broken.
     return yield* new WatchError({
-      message: nothing
-        ? `no point sent a value within ${seconds} s`
-        : `${summary.missing} of ${summary.points} point(s) sent no value within ${seconds} s`,
+      message: check && offContract > 0 ? `${missingLine}; and ${offLine}` : missingLine,
       code: "values-missing",
       missing: summary.devices.flatMap((device) => silent(device).map((point) => `${device.id}/${point}`)),
       hint: "ot-gateway status says why a device fails (it must be running: ot-gateway run, or docker compose up -d); a point that never changes and publishes on change only sends its first value at start"
     })
   }
+  if (check && offContract > 0) {
+    return yield* new WatchError({
+      message: offLine,
+      code: "off-contract",
+      hint: "each one is printed with what is wrong; ot-gateway contract <message> lists the fields. A gateway newer than this CLI may send fields a later contract version added: compare the contract in its health message"
+    })
+  }
+  // A check of nothing is no pass: the gateway is not running, or --topic is outside the site and building.
+  if (check && checked === 0) {
+    return yield* new WatchError({
+      message: `no message under ${config.site}/${config.building} arrived within ${seconds} s, so nothing was checked against the MQTT contract`,
+      code: "nothing-checked",
+      hint: "is the gateway running (ot-gateway status)? --check looks only at topics under the config's site and building; the gateway's retained $meta and health arrive at once when it has published them"
+    })
+  }
 }, Effect.scoped)
 
-/** A `watch --until-values` that has nothing to wait for, or whose points did not all send a value in time. */
+/**
+ * A `watch --until-values` that has nothing to wait for, or whose points did not all send a value in time; or a
+ * `watch --check` that saw a message off the contract, or no message to check at all.
+ */
 export class WatchError extends Schema.TaggedError<WatchError>()("WatchError", {
   message: Schema.String,
-  code: Schema.Literals(["nothing-to-wait-for", "values-missing"]),
+  code: Schema.Literals(["nothing-to-wait-for", "values-missing", "off-contract", "nothing-checked"]),
   missing: Schema.optionalKey(Schema.Array(Schema.String)),
   hint: Schema.optionalKey(Schema.String)
 }) {}
