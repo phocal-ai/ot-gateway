@@ -1,6 +1,7 @@
 import { pageSchema } from "fumadocs-core/source/schema"
 import { defineConfig, defineDocs } from "fumadocs-mdx/config"
 import { z } from "zod"
+import { remarkSiteDiagram } from "./src/content/diagrams.ts"
 
 /** The docs pages are generated from the repository's Markdown by scripts/content.ts. */
 export const docs = defineDocs({
@@ -17,4 +18,9 @@ export const docs = defineDocs({
   }
 })
 
-export default defineConfig({})
+export default defineConfig({
+  mdxOptions: {
+    // A ```mermaid block that names a site diagram is drawn by that React component (src/content/diagrams.ts).
+    remarkPlugins: [remarkSiteDiagram]
+  }
+})

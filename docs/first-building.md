@@ -1,6 +1,6 @@
 # Your first building
 
-From the list of values you want to values arriving on your broker, in five steps. You need the demo running once first ([quick start](../README.md#quick-start)), so you know what success looks like.
+From the list of values you want to values arriving on your broker, in five steps. For a script or an AI agent, with no questions asked, the same path is [Headless setup](headless.md). You need the demo running once first ([quick start](../README.md#quick-start)), so you know what success looks like.
 
 ## 1. Write down your points
 
