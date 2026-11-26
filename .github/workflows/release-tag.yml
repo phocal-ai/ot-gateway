@@ -8,7 +8,8 @@ name: Release tag
 # published. Without the secret the job fails and says to push the tag by hand.
 #
 # A push to main whose pinned tag already exists tags nothing: on the commit it names, it is a re-run; on another, the
-# pins were not moved (an urgent fix, say), and the job says so without failing.
+# pins were not moved (an urgent fix, say), and the job warns without failing. It runs for main only, a manual start
+# too, so a tag never lands on a commit Image and Package would refuse to publish.
 on:
   push:
     branches: [main]
@@ -23,6 +24,7 @@ concurrency:
 
 jobs:
   tag:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -45,8 +47,8 @@ jobs:
         run: |
           set -euo pipefail
           tag=$(sed -nE 's/.*OT_GATEWAY_TAG:-(v[^}]+)}.*/\1/p' packaging/compose.yaml | head -n 1)
-          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
-            echo "::error::packaging/compose.yaml pins '$tag', which is not a release tag (vX.Y.Z or vX.Y.Z-rc.N)."
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::packaging/compose.yaml pins '$tag', which is not a release tag (vX.Y.Z or vX.Y.Z-rc.N, as ReleasePins.test.ts checks)."
             exit 1
           fi
 
@@ -55,7 +57,7 @@ jobs:
             if [ "$existing" = "$GITHUB_SHA" ]; then
               echo "$tag already tags $GITHUB_SHA."
             else
-              echo "::notice::$tag already exists on ${existing:0:7}, so this push to main tags nothing. To release it, move the pins to a new tag in a pull request into dev and merge dev into main."
+              echo "::warning::$tag already exists on ${existing:0:7}, so this push to main tags and publishes nothing. If this was a release, the pins were not moved: move them to the new tag in a pull request into dev, then merge dev into main again."
             fi
             exit 0
           fi
@@ -63,5 +65,8 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
-          git push origin "refs/tags/$tag"
+          if ! git push origin "refs/tags/$tag"; then
+            echo "::error::Could not push $tag with ROUTINE_TOKEN (expired, or missing the Contents or Workflows permission). Push it by hand: git tag -a $tag -m $tag $GITHUB_SHA && git push origin $tag"
+            exit 1
+          fi
           echo "::notice::Tagged $GITHUB_SHA as $tag; Image and Package publish it."
