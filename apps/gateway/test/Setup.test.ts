@@ -12,10 +12,10 @@ import { makeMemoryNetwork, type ModbusPoint, parseConfig } from "@ot-gateway/co
 import { makeRegisterBank, makeSimulatorControl, serveModbus, setPointValue } from "@ot-gateway/modbus"
 import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
 import { Effect, Fiber, FileSystem, Schema } from "effect"
-import { TestClock } from "effect/testing"
 import { createServer } from "node:net"
 import { runGateway } from "../src/Gateway.ts"
 import { configFileSource } from "../src/LoadConfig.ts"
+import { settle, whileTimePasses } from "./support/VirtualTime.ts"
 
 const BROKER = "10.0.0.2"
 const METER = "10.0.0.3"
@@ -33,21 +33,6 @@ const freePort = Effect.promise(
       })
     })
 )
-
-const settle = (steps: number) =>
-  Effect.gen(function* () {
-    for (let step = 0; step < steps; step++) {
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
-      yield* TestClock.adjust("500 millis")
-    }
-  })
-
-const whileTimePasses = <A>(request: () => Promise<A>) =>
-  Effect.gen(function* () {
-    const fiber = yield* Effect.promise(request).pipe(Effect.forkScoped)
-    for (let step = 0; step < 200 && fiber.pollUnsafe() === undefined; step++) yield* settle(1)
-    return yield* Fiber.join(fiber)
-  })
 
 interface Reply {
   readonly status: number
