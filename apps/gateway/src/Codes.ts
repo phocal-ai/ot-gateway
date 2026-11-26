@@ -506,6 +506,22 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway --help"
   },
   {
+    code: "deadline",
+    area: "cli",
+    reportedBy: ["mcp"],
+    meaning: "A tool call took longer than its deadline (15 minutes, its wait for a turn included) and was stopped.",
+    fix: "Ask for less at once: fewer points or devices, a shorter --seconds for watch. What it printed before it stopped comes first in the result.",
+    next: "ot-gateway status"
+  },
+  {
+    code: "bug",
+    area: "cli",
+    reportedBy: ["mcp"],
+    meaning: "A command failed in a way it does not expect, a bug in ot-gateway; the error carries the whole cause.",
+    fix: "Please report it, with the error and the file ot-gateway support writes.",
+    next: "ot-gateway support"
+  },
+  {
     code: "unknown-code",
     area: "cli",
     reportedBy: ["explain"],

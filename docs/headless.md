@@ -495,6 +495,16 @@ In Claude Code, the `/setup` skill does the same with more care for the edges ([
 For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start with `npx ot-gateway --help`.
 ```
 
+### As MCP tools
+
+An agent that does not run a shell (a desktop chat app, an IDE assistant) reaches the same commands through `ot-gateway mcp`, a Model Context Protocol server on stdio. Start it in the gateway's folder, so `ot-gateway.json` is found as it is for the CLI:
+
+```bash
+claude mcp add ot-gateway -- npx ot-gateway mcp   # Claude Code; other clients take the same command
+```
+
+Each tool is a command with `--json`, and its result is that command's JSON (as `structuredContent` too when it is one object), `isError` when the command exits with 1 or 2: `check`, `doctor`, `broker`, `status`, `events`, `logs`, `history`, `messages`, `read`, `write`, `watch` (for `seconds`, 1 to 300), `discover`, `probe`, `import` (`dryRun` unless told otherwise), `points_schema`, `contract`, `profiles_list`, `profiles_show`, `explain` and `support` (the report as text, no file written). Their arguments are the command's flags in camelCase (`failOnAlarm`, `untilValues`, `unitId`); `tools/list` gives each one's JSON Schema. An argument the tool does not know, or one that starts with `-`, is refused with `code: "usage"`, so no argument becomes a flag. `write` is the one tool that changes a device, and it goes through the running gateway's command guard as `ot-gateway write` does: writable points only, within their limits, always logged. Commands that ask questions or run until stopped (`init`, `run`, `demo`, `simulate`) are not tools; `publish` is not one either. A call runs at most 15 minutes, its wait for a turn included, four at a time (`import` and `write` one at a time), and a call the client cancels is stopped.
+
 ## Reference: what `--json` returns
 
 Every result that can fail has `ok`. `status`, `events`, `logs`, `history` and `messages` give each time twice: as Unix milliseconds and, under the same key with `Local` added, in the machine's local time with its UTC offset. A `watch` line's `at` is an ISO time in UTC.
