@@ -111,9 +111,19 @@ describe("mcp tools", () => {
     )
   })
 
-  it("mark write as the one tool that changes a device", () => {
+  it("mark write, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
-    expect(changing).toEqual(["write"])
+    expect(changing).toEqual(["write", "restart", "down", "upgrade"])
+  })
+
+  it("passes up and upgrade's flags as flags", () => {
+    expect(argvOf("up", { config: "site/ot-gateway.json", timeout: 60 })).toEqual(
+      Exit.succeed(["up", "site/ot-gateway.json", "--timeout=60"])
+    )
+    expect(argvOf("upgrade", { check: true, to: "v0.16.0" })).toEqual(
+      Exit.succeed(["upgrade", "--check", "--to=v0.16.0"])
+    )
+    expect(Exit.isFailure(argvOf("upgrade", { to: "--force" }))).toBe(true)
   })
 })
 

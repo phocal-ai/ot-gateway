@@ -230,7 +230,8 @@ const instructions = [
   "Each tool is an ot-gateway command with --json; its result is that command's JSON, and isError when the command failed (with code and hint, what to do next).",
   "Start with doctor when something is wrong, status for a running gateway, read to read points once without one.",
   "Paths are relative to the folder the server was started in; config defaults to ./ot-gateway.json.",
-  "write changes a device: only writable points, within their limits, through the running gateway."
+  "write changes a device: only writable points, within their limits, through the running gateway.",
+  "up, restart, down and upgrade run the gateway under Docker Compose on this machine, and wait until values flow."
 ].join(" ")
 
 /** The tool as `tools/list` has it. */

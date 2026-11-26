@@ -102,6 +102,16 @@ const flagText = (description: string) => Schema.optionalKey(Schema.String.annot
 const count = (description: string, minimum: number, maximum: number) =>
   Schema.Int.check(Schema.isBetween({ minimum, maximum })).annotate({ description })
 
+/** Changes what runs on this machine (Docker), and asks the gateway afterwards. */
+const deploys: ToolAnnotations = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true
+}
+
+const waitSeconds = count("Seconds to wait until every point has a value (default 120)", 1, 3600)
+
 const configArgument = optionalText("Path of the gateway's JSON config (default ./ot-gateway.json)")
 const urlArgument = flagText("Ask the status page at this address instead of the one the config gives")
 const pointsArgument = (what: string) =>
@@ -426,6 +436,59 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     input: { profile: text("A profile id, or a path ending in .json") },
     annotations: local,
     argv: ({ profile }) => ["profiles", "show", profile]
+  }),
+  defineTool({
+    name: "up",
+    title: "Start the gateway",
+    description:
+      "Start the gateway of the config's folder with Docker Compose (writes compose.yaml when the folder has none) and wait until every point has a value. Linux with Docker only. isError with code, hint and next when values do not flow",
+    input: { config: configArgument, timeout: Schema.optionalKey(waitSeconds) },
+    annotations: deploys,
+    argv: ({ config, timeout }) => ["up", config, flag("timeout", timeout)]
+  }),
+  defineTool({
+    name: "restart",
+    title: "Restart the gateway",
+    description:
+      "Recreate the gateway's container (it reads the config and ot-gateway.env again) and wait until every point has a value. Values stop for the seconds of the restart",
+    input: { config: configArgument, timeout: Schema.optionalKey(waitSeconds) },
+    annotations: { ...deploys, destructiveHint: true },
+    argv: ({ config, timeout }) => ["restart", config, flag("timeout", timeout)]
+  }),
+  defineTool({
+    name: "down",
+    title: "Stop the gateway",
+    description:
+      "Stop the gateway of the config's folder (docker compose down): no values are read or published until it is started again. The outbox and history stay",
+    input: { config: configArgument },
+    annotations: { ...deploys, destructiveHint: true },
+    argv: ({ config }) => ["down", config]
+  }),
+  defineTool({
+    name: "upgrade",
+    title: "Upgrade the gateway",
+    description:
+      "Move the gateway of the config's folder to the newest release (or to): pull it, check the config with it, switch compose.yaml's tag, wait until values flow again, and go back to the old release when they do not (code upgrade-rolled-back). check: only say whether a newer release is out",
+    input: {
+      config: configArgument,
+      check: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Only say whether a newer release is out; change nothing" })
+      ),
+      to: Schema.optionalKey(
+        Schema.String.check(
+          Schema.isPattern(/^[\w][\w.-]{0,127}$/, { message: "a release tag such as v0.16.0" })
+        ).annotate({ description: "The release to move to (v0.16.0), an older one too; the newest when left out" })
+      ),
+      timeout: Schema.optionalKey(waitSeconds)
+    },
+    annotations: { ...deploys, destructiveHint: true },
+    argv: ({ config, check, to, timeout }) => [
+      "upgrade",
+      config,
+      flag("check", check),
+      flag("to", to),
+      flag("timeout", timeout)
+    ]
   })
 ]
 

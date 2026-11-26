@@ -36,7 +36,7 @@ import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
 import { basename, dirname, join, resolve } from "node:path"
 import { folderConfigName, composeTemplatePath } from "./Folder.ts"
-import { gatewayVersionOf, parseRelease, type Release, versionName } from "./GatewayRelease.ts"
+import { gatewayVersionOf, parseRelease, versionName } from "./GatewayRelease.ts"
 import { type ExpectedGateway, gatewayName, statusUrlOf } from "./GatewayTarget.ts"
 import { dockerDesktopNote } from "./Init.ts"
 import { loadConfig } from "./LoadConfig.ts"
@@ -758,7 +758,9 @@ export const upgrade = Effect.fn("upgrade")(function* (target: string, options: 
           Effect.mapError(
             (error) =>
               new DeployFailed({
-                ...error,
+                code: error.code,
+                message: error.message,
+                ...(error.hint === undefined ? {} : { hint: error.hint }),
                 next: `${options.cli} upgrade${resolve(options.cwd) === paths.folder ? "" : ` ${shellArgument(paths.config)}`} --to <tag>`
               })
           )
