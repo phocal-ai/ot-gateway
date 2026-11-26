@@ -323,7 +323,11 @@ export const mcpTools: ReadonlyArray<McpTool> = [
       "Read Modbus TCP registers once (read-only) and return every type and byte order they read as, with a points list row",
     input: {
       host: text("host or host:port of the Modbus TCP device"),
-      register: count("The first register, as the device's register map numbers it", 0, 65_535),
+      register: count(
+        "The first register's 0-based address, as the points list's register column: a datasheet's 40101 is usually holding register 100",
+        0,
+        65_535
+      ),
       unitId: Schema.optionalKey(count("The Modbus unit id (default 1)", 0, 255)),
       table: Schema.optionalKey(
         Schema.Literals(probeTables).annotate({ description: "The register table (default holding)" })

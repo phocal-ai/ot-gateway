@@ -7,7 +7,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Console, Effect, Exit, Predicate, Sink, Stream } from "effect"
 import * as Stdio from "effect/Stdio"
 import { runCli } from "../src/Cli.ts"
-import { lineConsole, PROTOCOL_VERSIONS, runTool, serveMcp, type RunCommand } from "../src/Mcp.ts"
+import { boundedLines, lineConsole, PROTOCOL_VERSIONS, runTool, serveMcp, type RunCommand } from "../src/Mcp.ts"
 import { mcpTools, toolNamesUnique } from "../src/McpTools.ts"
 import { printJson } from "../src/Output.ts"
 
@@ -219,6 +219,50 @@ describe("mcp server", () => {
       expect(byId(messages, 1)).toMatchObject({
         result: { isError: true, structuredContent: { ok: false, code: "unreachable" } }
       })
+    })
+  )
+})
+
+describe("mcp server limits", () => {
+  it.effect("cuts lines across chunks and drops one that is too long without keeping it", () =>
+    Effect.gen(function* () {
+      const lines = yield* Stream.make("ab", "c\r\nde", "fghij", "k\nxy\n", "z").pipe(
+        boundedLines(4),
+        Stream.runCollect
+      )
+      expect(lines.map((line) => (typeof line === "string" ? line : "TOO LONG"))).toEqual([
+        "abc",
+        "TOO LONG",
+        "xy",
+        "z"
+      ])
+    })
+  )
+
+  it.effect("refuses a second call under an id still running, and runs changing tools one at a time", () =>
+    Effect.gen(function* () {
+      let running = 0
+      let most = 0
+      const counting: RunCommand<never> = (argv) =>
+        Effect.gen(function* () {
+          running += 1
+          most = Math.max(most, running)
+          yield* Effect.yieldNow
+          yield* Effect.yieldNow
+          running -= 1
+          yield* printJson({ ok: true, argv })
+        })
+      const messages = yield* serve(
+        [
+          request(1, "tools/call", { name: "import", arguments: { pointsList: "a.csv", dryRun: false } }),
+          request(2, "tools/call", { name: "import", arguments: { pointsList: "b.csv", dryRun: false } }),
+          request(2, "tools/call", { name: "import", arguments: { pointsList: "c.csv", dryRun: false } })
+        ],
+        counting
+      )
+      expect(most).toBe(1)
+      expect(byId(messages, 1)).toMatchObject({ result: { isError: false } })
+      expect(messages.filter((message) => Predicate.isObject(message) && "error" in message)).toHaveLength(1)
     })
   )
 })

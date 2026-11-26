@@ -32,7 +32,7 @@ import { CliError } from "effect/cli"
 import { Stdio } from "effect/Stdio"
 import { format } from "node:util"
 import { type McpTool, toolNamesUnique } from "./McpTools.ts"
-import { isUsageError, ResultConsole, usageFailure } from "./Output.ts"
+import { failureFields, isUsageError, ResultConsole, usageFailure } from "./Output.ts"
 
 /** The protocol versions this server speaks, newest first; a client asking another gets the newest. */
 export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"] as const
@@ -147,47 +147,66 @@ export const toolResult = (text: string, isError: boolean): ToolResult => {
 }
 
 /**
+ * Waits for a call's turn before its command runs (a permit of `MAX_CALLS`, and one change at a time for a tool
+ * that changes something). The wait is inside the call's deadline.
+ */
+export type Turn = <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+
+const noWait: Turn = (effect) => effect
+
+/** What a call that ran out of time ends with: not an error of the command's own. */
+const deadlineReached = Symbol("deadlineReached")
+
+/** The JSON for a call stopped at the deadline. */
+const deadlineFailure = (argv: ReadonlyArray<string>) => ({
+  ok: false,
+  code: "deadline",
+  error: `${argv.join(" ")} took longer than ${Duration.format(CALL_DEADLINE)}, its turn included, and was stopped`
+})
+
+/**
  * Runs one command with `--json` and returns what it printed as a tool result. Its result lines are collected;
  * everything else it prints goes to `log` (stderr). A command that printed nothing on stdout (a usage mistake, a
- * defect, the deadline) gets a JSON failure in the same shape as the CLI's, `{ok: false, code, error, hint}`.
+ * defect) gets a JSON failure in the same shape as the CLI's, `{ok: false, code, error, hint}`; one stopped at the
+ * deadline gets it after what it printed.
  */
 export const runTool = <R>(
   run: RunCommand<R>,
   argv: ReadonlyArray<string>,
-  log: Console.Console
+  log: Console.Console,
+  turn: Turn = noWait
 ): Effect.Effect<ToolResult, never, R> =>
   Effect.suspend(() => {
     const out: Array<string> = []
-    return run([...argv, "--json"]).pipe(
-      Effect.provideService(
-        ResultConsole,
-        lineConsole((line) => out.push(line))
-      ),
-      Effect.provideService(Console.Console, log),
-      Effect.timeout(CALL_DEADLINE),
+    return turn(
+      run([...argv, "--json"]).pipe(
+        Effect.provideService(
+          ResultConsole,
+          lineConsole((line) => out.push(line))
+        ),
+        Effect.provideService(Console.Console, log)
+      )
+    ).pipe(
+      Effect.timeoutOrElse({ duration: CALL_DEADLINE, orElse: () => Effect.succeed(deadlineReached) }),
       Effect.exit,
       Effect.map((exit) => {
+        if (Exit.isSuccess(exit) && exit.value === deadlineReached) {
+          return toolResult([...out, JSON.stringify(deadlineFailure(argv))].join("\n"), true)
+        }
         if (out.length > 0) return toolResult(out.join("\n"), Exit.isFailure(exit))
         if (Exit.isSuccess(exit)) return toolResult(JSON.stringify({ ok: true }), false)
-        return toolResult(JSON.stringify(silentFailure(exit.cause, argv)), true)
+        return toolResult(JSON.stringify(silentFailure(exit.cause)), true)
       })
     )
   })
 
-/** The JSON for a command that failed without printing it: a usage mistake, the deadline, or a bug. */
-const silentFailure = (cause: Cause.Cause<unknown>, argv: ReadonlyArray<string>) => {
+/** The JSON for a command that failed without printing it: a usage mistake, or a bug. */
+const silentFailure = (cause: Cause.Cause<unknown>) => {
   const error = Cause.findErrorOption(cause)
   if (Option.isSome(error)) {
     if (CliError.isCliError(error.value) && isUsageError(error.value)) return usageFailure(error.value)
-    if (Cause.isTimeoutError(error.value)) {
-      return {
-        ok: false,
-        code: "deadline",
-        error: `${argv.join(" ")} took longer than ${Duration.format(CALL_DEADLINE)} and was stopped`
-      }
-    }
     if (Predicate.hasProperty(error.value, "message") && typeof error.value.message === "string") {
-      return { ok: false, error: error.value.message }
+      return { ok: false, ...failureFields(error.value), error: error.value.message }
     }
   }
   return {
@@ -254,7 +273,12 @@ export const answer = <R>(server: McpServer<R>, message: Message & { readonly id
 }
 
 /** The answer to `tools/call`: the command's result, or an error for a call that names no tool. */
-export const callTool = <R>(server: McpServer<R>, id: RequestId, params: unknown): Effect.Effect<Response, never, R> =>
+export const callTool = <R>(
+  server: McpServer<R>,
+  id: RequestId,
+  params: unknown,
+  turnFor: (tool: McpTool) => Turn = () => noWait
+): Effect.Effect<Response, never, R> =>
   Effect.gen(function* () {
     const call = decodeCall(params ?? {})
     if (Option.isNone(call)) return failure(id, RpcError.invalidParams, "tools/call takes {name, arguments}")
@@ -274,8 +298,51 @@ export const callTool = <R>(server: McpServer<R>, id: RequestId, params: unknown
         toolResult(JSON.stringify({ ok: false, code: "usage", error: `${tool.name}: ${argv.failure.message}` }), true)
       )
     }
-    return result(id, yield* runTool(server.run, argv.success, server.log))
+    const outcome = yield* runTool(server.run, argv.success, server.log, turnFor(tool)).pipe(
+      Effect.tap((done) => Effect.annotateCurrentSpan({ "mcp.isError": done.isError })),
+      Effect.withSpan("mcp.tools/call", { attributes: { "mcp.tool": tool.name } })
+    )
+    return result(id, outcome)
   })
+
+/** A line longer than `MAX_LINE`, dropped without being kept whole. */
+const tooLong = Symbol("tooLong")
+
+/**
+ * Text cut into lines (`\n` or `\r\n`), each at most `max` characters: a longer one is dropped as it arrives and
+ * stands as `tooLong`, so a client that never sends a newline cannot fill memory.
+ */
+export const boundedLines =
+  (max: number) =>
+  <E, R>(text: Stream.Stream<string, E, R>): Stream.Stream<string | typeof tooLong, E, R> =>
+    text.pipe(
+      Stream.mapAccum(
+        (): { readonly buffer: string; readonly overflow: boolean } => ({ buffer: "", overflow: false }),
+        (state, chunk) => {
+          const pieces = chunk.split("\n")
+          const lines: Array<string | typeof tooLong> = []
+          let { buffer, overflow } = state
+          for (const [index, piece] of pieces.entries()) {
+            if (index === pieces.length - 1) {
+              buffer = overflow ? "" : buffer + piece
+              if (buffer.length > max) {
+                buffer = ""
+                overflow = true
+              }
+              continue
+            }
+            const line = (buffer + piece).replace(/\r$/, "")
+            lines.push(overflow || line.length > max ? tooLong : line)
+            buffer = ""
+            overflow = false
+          }
+          return [{ buffer, overflow }, lines] as const
+        },
+        {
+          onHalt: ({ buffer, overflow }) => (overflow ? [tooLong] : buffer === "" ? [] : [buffer.replace(/\r$/, "")])
+        }
+      )
+    )
 
 /**
  * Serves `server` on stdin and stdout until stdin closes, then waits for the calls in flight. Each response is one
@@ -298,12 +365,19 @@ export const serveMcp = <R>(server: McpServer<R>) =>
       )
       const calls = yield* FiberMap.make<RequestId, void, never>()
       const turns = yield* Semaphore.make(MAX_CALLS)
+      // Tools that change something (import into the config, write) run one at a time: two imports at once would
+      // both write the config's temporary file and one could undo the other.
+      const changes = yield* Semaphore.make(1)
+      const turnFor =
+        (tool: McpTool): Turn =>
+        (effect) =>
+          tool.annotations.readOnlyHint ? turns.withPermit(effect) : turns.withPermit(changes.withPermit(effect))
 
-      const receive = (line: string): Effect.Effect<void, never, R> => {
-        if (line.trim() === "") return Effect.void
-        if (line.length > MAX_LINE) {
+      const receive = (line: string | typeof tooLong): Effect.Effect<void, never, R> => {
+        if (line === tooLong) {
           return send(failure(null, RpcError.parse, `a message longer than ${MAX_LINE} characters`))
         }
+        if (line.trim() === "") return Effect.void
         const json = decodeLine(line)
         if (Exit.isFailure(json)) return send(failure(null, RpcError.parse, "not JSON"))
         const decoded = decodeMessage(json.value)
@@ -324,17 +398,20 @@ export const serveMcp = <R>(server: McpServer<R>) =>
         }
         const id = message.id
         if (message.method !== "tools/call") return send(answer(server, { ...message, id }))
-        // Interrupted when cancelled: MCP has no response for a cancelled request.
-        return FiberMap.run(
-          calls,
-          id,
-          turns.withPermit(callTool(server, id, message.params)).pipe(Effect.flatMap(send))
-        ).pipe(Effect.asVoid)
+        // Another call in flight under the same id would be interrupted and never answered: refuse this one.
+        return Effect.flatMap(FiberMap.has(calls, id), (inFlight) =>
+          inFlight
+            ? send(failure(id, RpcError.invalidRequest, `a call with id ${id} is still running`))
+            : // Interrupted when cancelled: MCP has no response for a cancelled request.
+              FiberMap.run(calls, id, callTool(server, id, message.params, turnFor).pipe(Effect.flatMap(send))).pipe(
+                Effect.asVoid
+              )
+        )
       }
 
       yield* stdio.stdin.pipe(
         Stream.decodeText(),
-        Stream.splitLines,
+        boundedLines(MAX_LINE),
         Stream.runForEach(receive),
         Effect.catchTag("PlatformError", (error) =>
           Effect.sync(() => server.log.error(`ot-gateway mcp: stdin failed: ${error.message}`))
