@@ -20,13 +20,13 @@
  */
 import type { ConfigView, PointInfo } from "@ot-gateway/api"
 import { type GatewayConfig, healthTopic } from "@ot-gateway/core"
-import { Effect } from "effect"
+import { Effect, type FileSystem } from "effect"
 import { configView } from "./ConfigView.ts"
-import { gatewayName, targetOf } from "./GatewayTarget.ts"
+import { DEFAULT_STATUS_URL, gatewayName, targetOf } from "./GatewayTarget.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import { shellArgument } from "./Output.ts"
 import { pointCatalog } from "./PointCatalog.ts"
-import { askGateway, fetchGatewayStatus } from "./StatusReport.ts"
+import { askGateway, fetchGatewayStatus, type GatewayAnswerUnreadable, GatewayUnreachable } from "./StatusReport.ts"
 
 /** One side of the comparison: a gateway's identity, its points, and its settings by key. */
 export interface DiffSide {
@@ -72,7 +72,13 @@ export interface WritableTopic {
 
 export interface MetaChange {
   readonly topic: string
-  /** The `$meta` fields that change: name, unit, source, publish, scaling, alarmWhen, brick, haystack. */
+  /** The retained `$meta` fields that change: name, unit, publish, cov, alarmWhen, brick, haystack, gateway. */
+  readonly fields: ReadonlyArray<string>
+}
+
+export interface ValueChange {
+  readonly topic: string
+  /** What changes what the values mean on the same topic: `source` (register, object), `scaling`. */
   readonly fields: ReadonlyArray<string>
 }
 
@@ -84,10 +90,16 @@ export interface ConfigDiff {
   readonly moved: ReadonlyArray<MovedTopic>
   readonly writable: ReadonlyArray<WritableTopic>
   readonly meta: ReadonlyArray<MetaChange>
+  readonly values: ReadonlyArray<ValueChange>
   /** Settings whose values change, as `section: key, key` (`mqtt: url`, `device meter: host`). */
   readonly settings: ReadonlyArray<string>
   /** The health topic, when the gateway's site, building or id changes. */
   readonly health?: { readonly from: string; readonly to: string }
+  /**
+   * Whether the broker's address changes: then every retained message of before stays on the old broker, and
+   * `stale` lists them all.
+   */
+  readonly brokerChanged: boolean
   /** Retained topics that nobody clears: each `$meta` that stays, and the old health topic. */
   readonly stale: ReadonlyArray<string>
 }
@@ -96,7 +108,14 @@ const key = (point: { readonly device: string; readonly id: string }) => `${poin
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 
-const metaFields = ["name", "unit", "source", "publish", "scaling", "alarmWhen", "brick", "haystack"] as const
+/** What a point's retained `$meta` says (Pipeline.ts, `metaPayload`), as the catalog has it; writable apart. */
+const metaFields = ["name", "unit", "publish", "cov", "alarmWhen", "brick", "haystack"] as const
+/** What is not in `$meta` but changes what a topic's values mean. */
+const valueFields = ["source", "scaling"] as const
+
+/** One setting's value in a config view: `mqtt` `url`. */
+const settingOf = (view: ConfigView, section: string, name: string) =>
+  view.sections.find((each) => each.key === section)?.entries.find((entry) => entry.key === name)?.value
 
 /** A device's sources, sorted: a device that arrives with the same ones as one that leaves is that one renamed. */
 const sourcesOf = (points: ReadonlyArray<PointInfo>, device: string) =>
@@ -107,7 +126,6 @@ const sourcesOf = (points: ReadonlyArray<PointInfo>, device: string) =>
       .toSorted()
   )
 
-/** The settings that differ, by key, section by section and device by device; no values. */
 /** The keys whose values differ between two lists of entries. */
 const changedKeys = (
   was: ReadonlyArray<{ readonly key: string; readonly value: unknown }>,
@@ -118,6 +136,7 @@ const changedKeys = (
   return [...new Set([...old.keys(), ...now.keys()])].filter((name) => !sameJson(old.get(name), now.get(name)))
 }
 
+/** The settings that differ, by key, section by section and device by device; no values. */
 const settingsChanges = (before: ConfigView, after: ConfigView): ReadonlyArray<string> => {
   const lines: Array<string> = []
   const sections = new Map(before.sections.map((section) => [section.key, section.entries]))
@@ -191,7 +210,7 @@ export const diffConfigs = (before: DiffSide, after: DiffSide): ConfigDiff => {
     )
     const [match] = candidates
     if (candidates.length === 1 && match !== undefined) {
-      pairs.push({ was: point, is: match, reason: device === point.device ? "point" : "device" })
+      pairs.push({ was: point, is: match, reason: !sameBase ? "site" : device === point.device ? "point" : "device" })
       paired.add(key(point))
       pairedAfter.add(key(match))
     }
@@ -230,30 +249,44 @@ export const diffConfigs = (before: DiffSide, after: DiffSide): ConfigDiff => {
         ...(point.limits === undefined ? {} : { limits: point.limits })
       }))
   ]
+  // Every $meta names its gateway: a new id rewrites each one that stays on its topic.
   const meta = pairs.flatMap(({ was, is }) => {
-    const fields = metaFields.filter((field) => !sameJson(was[field], is[field]))
+    const fields = [
+      ...metaFields.filter((field) => !sameJson(was[field], is[field])),
+      ...(before.id === after.id || was.topic !== is.topic ? [] : ["gateway"])
+    ]
     return fields.length === 0 ? [] : [{ topic: is.topic, fields }]
   })
+  const values = pairs.flatMap(({ was, is }) => {
+    const fields = valueFields.filter((field) => !sameJson(was[field], is[field]))
+    return fields.length === 0 ? [] : [{ topic: is.topic, fields }]
+  })
+  const brokerChanged = !sameJson(settingOf(before.settings, "mqtt", "url"), settingOf(after.settings, "mqtt", "url"))
   const settings = settingsChanges(before.settings, after.settings)
   const oldHealth = healthTopic(before.site, before.building, before.id)
   const newHealth = healthTopic(after.site, after.building, after.id)
   const health = oldHealth === newHealth ? undefined : { from: oldHealth, to: newHealth }
-  const stale = [
-    ...removed.filter((each) => !each.metaCleared).map((each) => `${each.topic}/$meta`),
-    ...moved.filter((each) => !each.metaCleared).map((each) => `${each.from}/$meta`),
-    ...(health === undefined ? [] : [health.from])
-  ]
+  // On another broker, the gateway publishes nothing to the old one again: all it retained there stays.
+  const stale = brokerChanged
+    ? [...before.points.map((point) => `${point.topic}/$meta`), oldHealth]
+    : [
+        ...removed.filter((each) => !each.metaCleared).map((each) => `${each.topic}/$meta`),
+        ...moved.filter((each) => !each.metaCleared).map((each) => `${each.from}/$meta`),
+        ...(health === undefined ? [] : [health.from])
+      ]
   return {
     changed:
-      added.length + removed.length + moved.length + writable.length + meta.length + settings.length > 0 ||
-      health !== undefined,
+      added.length + removed.length + moved.length + writable.length + meta.length + values.length + settings.length >
+        0 || health !== undefined,
     added,
     removed,
     moved,
     writable,
     meta,
+    values,
     settings,
     ...(health === undefined ? {} : { health }),
+    brokerChanged,
     stale
   }
 }
@@ -271,16 +304,32 @@ const limitsText = (limits: { readonly min: number; readonly max: number } | und
 export const clearCommand = (command: string, topic: string, config: string | undefined) =>
   `${command} publish ${shellArgument(topic)} --retain${config === undefined ? "" : ` --config ${shellArgument(config)}`}`
 
+/** How the CLI was run and which configs it compared: what the clear commands name. */
+export interface ClearContext {
+  readonly command: string
+  /** The edited config, unless it is ./ot-gateway.json. */
+  readonly config?: string | undefined
+  /** The config compared against, when it was a file. */
+  readonly against?: string | undefined
+}
+
+/**
+ * The commands that clear what stays: on the edited config's broker, or when the broker changes, on the old one,
+ * which only the old config names. Against a running gateway there is no old file to name: none, and the caller
+ * says how instead.
+ */
+export const clearCommands = (diff: ConfigDiff, context: ClearContext): ReadonlyArray<string> => {
+  const config = diff.brokerChanged ? context.against : context.config
+  if (diff.brokerChanged && config === undefined) return []
+  return diff.stale.map((topic) => clearCommand(context.command, topic, config))
+}
+
 /**
  * The diff for people: one line per topic that changes, marked `+` (new), `-` (silent), `→` (moved), `!` (takes
  * commands now), `~` (its `$meta` changes), then the settings, and last what stays on the broker with the
  * command that clears it. `title` says what was compared with what.
  */
-export const formatDiff = (
-  diff: ConfigDiff,
-  title: string,
-  options: { readonly command: string; readonly config?: string | undefined }
-): string => {
+export const formatDiff = (diff: ConfigDiff, title: string, context: ClearContext): string => {
   const lines = [title]
   if (!diff.changed)
     return [...lines, "✓ nothing changes on the broker: the same topics, writable points and settings"].join("\n")
@@ -297,6 +346,7 @@ export const formatDiff = (
     )
   }
   for (const each of diff.meta) lines.push(`  ~ ${each.topic}  $meta: ${each.fields.join(", ")}`)
+  for (const each of diff.values) lines.push(`  ~ ${each.topic}  values: ${each.fields.join(", ")} (same topic)`)
   if (diff.health !== undefined) lines.push(`  → ${diff.health.from} → ${diff.health.to}  health`)
   for (const each of diff.settings) lines.push(`  ~ ${each}`)
   const counts = [
@@ -307,9 +357,17 @@ export const formatDiff = (
   ].filter((each) => each !== undefined)
   if (counts.length > 0) lines.push(`${counts.join(", ")}; consumers of moved or silent topics must follow`)
   if (diff.stale.length > 0) {
-    lines.push(`✗ ${diff.stale.length} retained message(s) stay on the broker after the change; clear each with:`)
-    for (const topic of diff.stale.slice(0, 10)) lines.push(`  ${clearCommand(options.command, topic, options.config)}`)
-    if (diff.stale.length > 10) lines.push(`  … and ${diff.stale.length - 10} more (--json lists them all)`)
+    const where = diff.brokerChanged ? "the old broker" : "the broker"
+    const commands = clearCommands(diff, context)
+    if (commands.length === 0) {
+      lines.push(
+        `✗ ${diff.stale.length} retained message(s) stay on ${where}; clear each there with ${context.command} publish <topic> --retain --config <the config from before> (--json lists them)`
+      )
+    } else {
+      lines.push(`✗ ${diff.stale.length} retained message(s) stay on ${where} after the change; clear each with:`)
+      for (const each of commands.slice(0, 10)) lines.push(`  ${each}`)
+      if (commands.length > 10) lines.push(`  … and ${commands.length - 10} more (--json lists them all)`)
+    }
   }
   return lines.join("\n")
 }
@@ -345,10 +403,25 @@ export const diffReport = Effect.fn("diffReport")(function* (
     const before = sideOfConfig(yield* loadConfig(options.against))
     return { path, against: { file: options.against }, diff: diffConfigs(before, after) } satisfies DiffReport
   }
-  const { url } = yield* targetOf(path, config, options.url)
-  const status = yield* fetchGatewayStatus(url, "none")
-  const catalog = yield* askGateway(url, (client) => client.status.points())
-  const settings = yield* askGateway(url, (client) => client.status.config())
+  // The running gateway may serve its page where the edited file no longer says: --url, or --against, then.
+  const url =
+    options.url ?? (config.status === undefined ? DEFAULT_STATUS_URL : (yield* targetOf(path, config, undefined)).url)
+  const ask = <A>(answer: Effect.Effect<A, GatewayUnreachable | GatewayAnswerUnreadable, FileSystem.FileSystem>) =>
+    answer.pipe(
+      Effect.catchTag("GatewayUnreachable", (error) =>
+        Effect.fail(
+          new GatewayUnreachable({
+            url: error.url,
+            message: error.message,
+            code: error.code,
+            hint: `${error.hint}. If the edit moved the status page, name the running one with --url; without a running gateway, compare with the file from before: --against ${path}.bak`
+          })
+        )
+      )
+    )
+  const status = yield* ask(fetchGatewayStatus(url, "none"))
+  const catalog = yield* ask(askGateway(url, (client) => client.status.points()))
+  const settings = yield* ask(askGateway(url, (client) => client.status.config()))
   const before = { site: status.site, building: status.building, id: status.id, points: catalog.points, settings }
   return {
     path,

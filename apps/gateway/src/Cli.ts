@@ -43,7 +43,7 @@ import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
-import { clearCommand, diffReport, diffTitle, formatDiff } from "./Diff.ts"
+import { clearCommands, diffReport, diffTitle, formatDiff } from "./Diff.ts"
 import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -1164,15 +1164,26 @@ const diffCommand = Command.make(
   },
   ({ config, against, url, json }) =>
     Effect.gen(function* () {
+      if (against !== undefined && url !== undefined) {
+        return yield* new UsageMistake({
+          message: "--against compares with a file and --url with a running gateway: give one of them",
+          code: "usage",
+          missing: [],
+          hint: "ot-gateway diff --help"
+        })
+      }
       const report = yield* diffReport(config, { against, url })
-      const command = yield* invocation
-      const configArg = config === DEFAULT_CONFIG ? undefined : config
-      const next = report.diff.stale.map((topic) => ({
-        command: clearCommand(command, topic, configArg),
+      const context = {
+        command: yield* invocation,
+        config: config === DEFAULT_CONFIG ? undefined : config,
+        against
+      }
+      const next = clearCommands(report.diff, context).map((command) => ({
+        command,
         description: "After the change: clear a retained message nobody publishes any more"
       }))
       if (json) return yield* printJson({ ok: true, path: config, against: report.against, ...report.diff, next })
-      yield* Console.log(formatDiff(report.diff, diffTitle(report), { command, config: configArg }))
+      yield* Console.log(formatDiff(report.diff, diffTitle(report), context))
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(

@@ -5,7 +5,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect } from "effect"
-import { clearCommand, diffConfigs, formatDiff, sideOfConfig } from "../src/Diff.ts"
+import { clearCommand, clearCommands, diffConfigs, formatDiff, sideOfConfig } from "../src/Diff.ts"
 
 const meter = {
   protocol: "modbus-tcp",
@@ -94,6 +94,16 @@ describe("diffConfigs", () => {
     })
   )
 
+  it.effect("says the site moved a point renamed in the same edit", () =>
+    Effect.gen(function* () {
+      const before = yield* side([ahu])
+      const after = yield* side([{ ...ahu, points: [{ ...ahu.points[0], id: "sp" }] }], { site: "t" })
+      expect(diffConfigs(before, after).moved).toEqual([
+        { from: "s/b/ahu/setpoint", to: "t/b/ahu/sp", reason: "site", metaCleared: false }
+      ])
+    })
+  )
+
   it.effect("names points that take commands now, limits that change and writes turned off", () =>
     Effect.gen(function* () {
       const writable = { ...ahu.points[0], writable: true, limits: { min: 15, max: 25 } }
@@ -129,6 +139,35 @@ describe("diffConfigs", () => {
       const text = formatDiff(diff, "new against old", { command: "ot-gateway" })
       expect(text).toContain("~ s/b/meter/power  $meta: unit")
       expect(text).not.toContain("10.0.1.21")
+    })
+  )
+
+  it.effect("tells a new source or scaling from a $meta change, and a new gateway id rewrites every $meta", () =>
+    Effect.gen(function* () {
+      const before = yield* side([meter])
+      const moved = { ...meter.points[0], address: 42, scaling: { factor: 0.1 } }
+      const diff = diffConfigs(before, yield* side([{ ...meter, points: [moved, meter.points[1]] }]))
+      expect(diff.meta).toEqual([])
+      expect(diff.values).toEqual([{ topic: "s/b/meter/power", fields: ["source", "scaling"] }])
+      const renamed = diffConfigs(before, yield* side([meter], { id: "edge" }))
+      expect(renamed.meta.map((each) => each.fields)).toEqual([["gateway"], ["gateway"]])
+      expect(renamed.stale).toEqual(["s/b/$gateway/main/health"])
+    })
+  )
+
+  it.effect("leaves everything retained on the old broker when the broker changes, cleared with the old config", () =>
+    Effect.gen(function* () {
+      const before = yield* side([ahu])
+      const diff = diffConfigs(before, yield* side([ahu], { url: "mqtt://other" }))
+      expect(diff.brokerChanged).toBe(true)
+      expect(diff.stale).toEqual(["s/b/ahu/setpoint/$meta", "s/b/$gateway/main/health"])
+      expect(clearCommands(diff, { command: "ot-gateway", against: "old.json" })).toEqual([
+        "ot-gateway publish 's/b/ahu/setpoint/$meta' --retain --config old.json",
+        "ot-gateway publish 's/b/$gateway/main/health' --retain --config old.json"
+      ])
+      // Against a running gateway there is no old config to name: no command that would clear the new broker.
+      expect(clearCommands(diff, { command: "ot-gateway" })).toEqual([])
+      expect(formatDiff(diff, "t", { command: "ot-gateway" })).toContain("stay on the old broker")
     })
   )
 })

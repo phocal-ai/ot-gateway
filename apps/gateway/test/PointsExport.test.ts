@@ -124,7 +124,9 @@ describe("exportPointsList", () => {
           cov: false,
           points: [
             { id: "name", name: "Name", objectType: "device", instance: 2001, property: "object-name" },
-            { id: "valve", name: "Valve", objectType: "binary-output", instance: 1, writable: true, priority: 9 }
+            { id: "valve", name: "Valve", objectType: "binary-output", instance: 1, writable: true, priority: 9 },
+            // A priority of a point that takes no writes says nothing; a unit import would rename does.
+            { id: "temp", name: "Temp", unit: "°C", objectType: "analog-input", instance: 2, priority: 10 }
           ]
         },
         {
@@ -134,7 +136,11 @@ describe("exportPointsList", () => {
         }
       ])
       const list = exportPointsList(decoded)
-      expect(list.rows.map((row) => `${row["device"]}/${row["point"]}`)).toEqual(["main-meter/setpoint", "ahu-1/valve"])
+      expect(list.rows.map((row) => `${row["device"]}/${row["point"]}`)).toEqual([
+        "main-meter/setpoint",
+        "ahu-1/valve",
+        "ahu-1/temp"
+      ])
       // The device's publish mode goes on each of its points.
       expect(list.rows[0]).toMatchObject({ publish: "change" })
       expect(list.notCarried.map((note) => [note.kind, note.point ?? note.device, note.skipped])).toEqual([
@@ -148,6 +154,7 @@ describe("exportPointsList", () => {
         ["property", "name", true],
         ["priority", "valve", false],
         ["writable", "valve", false],
+        ["unit", "temp", false],
         ["simulator", "sim", true]
       ])
       const lines = describeNotCarried(list.notCarried)
@@ -156,6 +163,9 @@ describe("exportPointsList", () => {
       )
       expect(lines).toContain(
         "✗ a bit of a register has no column; left out, as the row would read the whole register: main-meter/flag bit 2 of holding 11"
+      )
+      expect(lines).toContain(
+        "! import writes these units as QUDT names; put the QUDT name in the config to keep them alike: ahu-1/temp °C imports as unit:DEG_C"
       )
       expect(lines).toContain("! these device settings have no column: main-meter requestGapMs 100, ahu-1 cov false")
     })

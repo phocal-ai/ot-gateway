@@ -14,12 +14,13 @@ import {
   type BacnetPoint,
   type Device,
   type GatewayConfig,
+  isPresentValue,
   type ModbusDevice,
   type ModbusPoint,
   type Publish
 } from "@ot-gateway/core"
 import { csvLine } from "./Csv.ts"
-import { readableName, readColumns } from "./PointsList.ts"
+import { qudtUnit, readableName, readColumns } from "./PointsList.ts"
 import { slugify } from "./Slug.ts"
 
 /** One row of the list, as the JSON form has it: the columns that have a value, numbers as numbers. */
@@ -37,6 +38,7 @@ export type NotCarriedKind =
   | "priority"
   | "device-publish"
   | "device-setting"
+  | "unit"
   | "id"
 
 /**
@@ -96,6 +98,9 @@ const commonColumns = (
     })
   } else if (point.limits !== undefined) {
     notes.push({ ...at, kind: "limits", detail: `limits ${point.limits.min} to ${point.limits.max}` })
+  }
+  if (point.unit !== undefined && qudtUnit(point.unit) !== point.unit) {
+    notes.push({ ...at, kind: "unit", detail: `${point.unit} imports as ${qudtUnit(point.unit)}` })
   }
   if (point.semantics !== undefined) notes.push({ ...at, kind: "semantics", detail: "semantics (brick, haystack)" })
   if (slugify(point.id) !== point.id) {
@@ -172,7 +177,7 @@ const modbusRows = (device: ModbusDevice, notes: Array<NotCarried>): ReadonlyArr
 
 const bacnetRows = (device: BacnetDevice, notes: Array<NotCarried>): ReadonlyArray<ExportRow> =>
   device.points.flatMap((point) => {
-    if (point.property !== "present-value" && point.property !== "85") {
+    if (!isPresentValue(point)) {
       // Without a property column, the row would read the present value: a different point.
       notes.push({
         kind: "property",
@@ -183,7 +188,8 @@ const bacnetRows = (device: BacnetDevice, notes: Array<NotCarried>): ReadonlyArr
       })
       return []
     }
-    if (point.priority !== DEFAULT_PRIORITY) {
+    // The priority is the slot writes use: of a point that takes none, it says nothing.
+    if (point.writable && point.priority !== DEFAULT_PRIORITY) {
       notes.push({
         kind: "priority",
         device: device.id,
@@ -265,6 +271,7 @@ const kindText: Readonly<Record<NotCarriedKind, string>> = {
   priority: "the write priority has no column",
   "device-publish": "a device's publish mode is written on each of its points",
   "device-setting": "these device settings have no column",
+  unit: "import writes these units as QUDT names; put the QUDT name in the config to keep them alike",
   id: "an id that is not one slugify keeps imports under another id"
 }
 
@@ -278,7 +285,7 @@ export const describeNotCarried = (notes: ReadonlyArray<NotCarried>): ReadonlyAr
     const named = notes
       .filter((note) => note.kind === kind)
       .map((note) =>
-        kind === "writable" || kind === "bit" || kind === "property" || kind === "device-setting"
+        kind === "writable" || kind === "bit" || kind === "property" || kind === "device-setting" || kind === "unit"
           ? `${note.point === undefined ? note.device : `${note.device}/${note.point}`} ${note.detail.replace(/^writable ?/, "")}`.trim()
           : note.point === undefined
             ? note.device
