@@ -78,7 +78,20 @@ Nothing is writable until the config says so, on purpose. In `ot-gateway.json`, 
 
 ```bash
 npx ot-gateway check
+npx ot-gateway read
 ```
+
+`read` asks the device once for each point and exits, without the broker:
+
+```
+demo-room/room-temperature      20.5 °C
+demo-room/temperature-setpoint  21 °C
+demo-room/heating               true
+
+3 point(s) of 1 device(s) read in 42 ms
+```
+
+`read demo-room/temperature-setpoint` reads one point, `--json` gives each value with its unit and topic, or why it failed.
 
 ## 4. Run it
 

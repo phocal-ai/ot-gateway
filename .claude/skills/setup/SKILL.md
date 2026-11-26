@@ -106,6 +106,8 @@ otg import points.csv             # adds the devices to ot-gateway.json
 
 Run `otg check --json` and fix every error it reports (each has its path) until it says `"ok": true`. Show the user the summary: devices, points, warnings. Past a few hundred points read every few seconds, suggest a longer `interval_s` or aggregates.
 
+Then, when the devices are reachable from here, `otg read --json` reads every point once through the gateway's own drivers (read-only, no broker, nothing runs on): per point its `value` and `unit`, or an `error` with its `code`; a device that did not answer has an `error` with `hint` and `checks`, what to check, most likely first. Fix what it reports before step 7 (exit code 1 while a point fails), or note the points the user accepts as failing. `otg read <device>/<point>` reads only those.
+
 ## 7. First run: values must flow
 
 1. Start the gateway in the background from the folder. With Docker Compose on Linux: `docker compose run -d --rm --name ot-gateway-test gateway`, which keeps the outbox in the volume as the real one will. Otherwise (and always on macOS and Windows, step 1) `otg run`, and note its process id (`$!` after `&`) to stop it afterwards with `kill <pid>` (a clean stop: it logs `OT Gateway stopping` and closes the outbox). Either reads `ot-gateway.env` from the folder.

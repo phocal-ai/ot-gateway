@@ -33,7 +33,7 @@ import {
   type BacnetDevice,
   type Device,
   type Driver,
-  type DriverError,
+  DriverError,
   type GatewayConfig,
   type ModbusDevice,
   monotonicMillis,
@@ -158,12 +158,34 @@ const pointResult = (point: Device["points"][number], reading: Reading): PointTe
 /**
  * Every point of `device` read once through `driverFor`: all together first, as the gateway reads them (a block
  * per run of registers), then each point the device did not answer for alone, to say why that one failed.
+ *
+ * With a `deadline` (`{ device, ms }`), every read shares it: the reads together and alone each get what is left of
+ * it, and a point the deadline leaves no time for fails as not asked, while the points read before keep their values.
  */
-const readPoints = Effect.fnUntraced(function* <P extends Device["points"][number]>(
+export const readPoints = Effect.fnUntraced(function* <P extends Device["points"][number]>(
   points: ReadonlyArray<P>,
-  driverFor: (points: ReadonlyArray<P>) => Effect.Effect<Driver, DriverError>
+  driverFor: (points: ReadonlyArray<P>) => Effect.Effect<Driver, DriverError>,
+  deadline?: { readonly device: string; readonly ms: number }
 ) {
-  const together = yield* Effect.result(Effect.flatMap(driverFor(points), (driver) => driver.readAll))
+  const until = deadline === undefined ? undefined : (yield* monotonicMillis) + deadline.ms
+  const expired = () =>
+    new DriverError({
+      device: deadline?.device ?? "",
+      reason: "timeout",
+      message: `no answer within ${Duration.format(Duration.millis(deadline?.ms ?? 0))}`
+    })
+  /** A read of `chosen`, within what is left of the deadline. */
+  const readOf = (chosen: ReadonlyArray<P>) =>
+    Effect.gen(function* () {
+      const read = Effect.flatMap(driverFor(chosen), (driver) => driver.readAll)
+      if (until === undefined) return yield* read
+      const left = until - (yield* monotonicMillis)
+      if (left <= 0) return yield* expired()
+      return yield* read.pipe(
+        Effect.timeoutOrElse({ duration: Duration.millis(left), orElse: () => Effect.fail(expired()) })
+      )
+    })
+  const together = yield* Effect.result(readOf(points))
   // Unreachable: no point alone would do better, and each would wait for the same timeout.
   if (
     Result.isFailure(together) &&
@@ -178,7 +200,7 @@ const readPoints = Effect.fnUntraced(function* <P extends Device["points"][numbe
     Effect.gen(function* () {
       const reading = readings.find((each) => each.pointId === point.id)
       if (reading !== undefined) return pointResult(point, reading)
-      const alone = yield* Effect.result(Effect.flatMap(driverFor([point]), (driver) => driver.readAll))
+      const alone = yield* Effect.result(readOf([point]))
       if (Result.isFailure(alone)) return { id: point.id, name: point.name, error: failureOf(alone.failure) }
       const single = alone.success.find((each) => each.pointId === point.id)
       return single === undefined
@@ -194,7 +216,12 @@ const readPoints = Effect.fnUntraced(function* <P extends Device["points"][numbe
 })
 
 /** A Modbus device read over a connection of the test's own. */
-const testModbus = Effect.fnUntraced(function* (device: ModbusDevice, network: Pick<Network, "tcp"> | undefined) {
+export const testModbus = Effect.fnUntraced(function* (
+  device: ModbusDevice,
+  network: Pick<Network, "tcp"> | undefined,
+  /** The reads' deadline after connecting (`readPoints`); the connection has its own. */
+  deadlineMs?: number
+) {
   const target = { host: device.host, port: device.port, openTimeout: MODBUS_CONNECT_TIMEOUT }
   const socket = yield* network ? network.tcp(target) : NodeSocket.makeNet(target)
   const client = yield* makeModbusClient(socket, {
@@ -203,8 +230,10 @@ const testModbus = Effect.fnUntraced(function* (device: ModbusDevice, network: P
     requestGap: Duration.millis(device.requestGapMs),
     requestTimeout: MODBUS_REQUEST_TIMEOUT
   })
-  return yield* readPoints(device.points, (points) =>
-    Effect.succeed(makeModbusDriverFromClient({ ...device, points }, client))
+  return yield* readPoints(
+    device.points,
+    (points) => Effect.succeed(makeModbusDriverFromClient({ ...device, points }, client)),
+    deadlineMs === undefined ? undefined : { device: device.id, ms: deadlineMs }
   )
 }, Effect.scoped)
 
@@ -233,7 +262,7 @@ const testBacnet = Effect.fnUntraced(function* (
 }, Effect.scoped)
 
 /** Where a device is asked, in the page's words. */
-const targetOf = (device: Device) => {
+export const targetOf = (device: Device) => {
   switch (device.protocol) {
     case "modbus-tcp":
       return `${endpointText(device)}, unit ${device.unitId}`
