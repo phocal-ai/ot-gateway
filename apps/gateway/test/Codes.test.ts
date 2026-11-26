@@ -14,23 +14,28 @@ const troubleshooting = readFileSync(new URL("../../../docs/troubleshooting.md",
 
 const isCode = (word: string) => /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(word)
 
-/** Every literal code in this package's source: on a line that sets `code`, each quoted slug after it. */
+/**
+ * Every literal code in this package's source: each quoted slug after `code: ` on a line, and the first argument of a
+ * helper that makes a coded failure (`failure("points-list-exists", …)`, on its line or the next).
+ */
 const sourceCodes = () =>
   readdirSync(sourceFolder)
     .filter((file) => file.endsWith(".ts"))
-    .flatMap((file) =>
-      readFileSync(new URL(file, sourceFolder), "utf8")
-        .split("\n")
-        .flatMap((line) => {
-          const at = line.search(/\bcode: /)
-          // A command's argument named code is not one.
-          if (at < 0 || /\b(Argument|Flag)\./.test(line)) return []
-          return [...line.slice(at).matchAll(/"([^"]+)"/g)].flatMap((match) => {
-            const word = match[1] ?? ""
-            return isCode(word) ? [{ file, code: word }] : []
-          })
-        })
-    )
+    .flatMap((file) => {
+      const lines = readFileSync(new URL(file, sourceFolder), "utf8").split("\n")
+      return lines.flatMap((line, index) => {
+        const helper = /\bfailure\(\s*$/.test(lines[index - 1] ?? "") ? /^\s*"([^"]+)"/.exec(line) : null
+        const inline = /\bfailure\("([^"]+)"/.exec(line)
+        const helperCodes = [helper?.[1], inline?.[1]].filter((word): word is string => word !== undefined)
+        const at = line.search(/\bcode: /)
+        // A command's argument named code is not one.
+        const coded =
+          at < 0 || /\b(Argument|Flag)\./.test(line)
+            ? []
+            : [...line.slice(at).matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? "")
+        return [...helperCodes, ...coded].filter(isCode).map((code) => ({ file, code }))
+      })
+    })
 
 // Exhaustive by type: a reason added to the gateway without a row here fails the typecheck, and then the test.
 const deviceReasons = {

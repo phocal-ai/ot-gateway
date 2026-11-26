@@ -327,6 +327,39 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway status"
   },
   {
+    code: "none-found",
+    area: "device",
+    reportedBy: ["discover modbus"],
+    meaning:
+      "discover modbus found no Modbus unit on the range: nothing took a connection on the port, or what did answered as no unit.",
+    fix: "Check the range and the port (502 unless the datasheet says otherwise), that this machine reaches that network, and that no firewall drops it; the hint names what answered.",
+    next: "ot-gateway discover modbus <range> --port 502"
+  },
+  {
+    code: "points-list-exists",
+    area: "device",
+    reportedBy: ["discover modbus"],
+    meaning: "The --points-list file exists already, so nothing was written over it.",
+    fix: "Add --append to add the units found to it (rows it has are skipped), or name another file.",
+    next: "ot-gateway discover modbus <range> --points-list points.csv --append"
+  },
+  {
+    code: "points-list-invalid",
+    area: "device",
+    reportedBy: ["discover modbus"],
+    meaning: "The --points-list file to append to is not a points list the CLI can read, so nothing was written.",
+    fix: "Fix the file the message names, or write the units to a new file.",
+    next: "ot-gateway import points.csv --dry-run"
+  },
+  {
+    code: "points-list-ede",
+    area: "device",
+    reportedBy: ["discover modbus"],
+    meaning: "The --points-list file to append to is a BACnet EDE file, not a points list, so nothing was written.",
+    fix: "Turn it into a points list first with ot-gateway points from-ede, then append to that.",
+    next: "ot-gateway points from-ede building.ede.csv"
+  },
+  {
     code: "bacnet-port-in-use",
     area: "device",
     reportedBy: ["doctor"],

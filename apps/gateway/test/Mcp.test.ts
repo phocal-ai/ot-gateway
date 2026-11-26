@@ -58,6 +58,15 @@ const request = (id: number, method: string, params?: unknown) => ({
 const echo: RunCommand<never> = (argv) => printJson({ ok: true, argv })
 
 describe("mcp tools", () => {
+  it("discover_modbus makes the discover modbus command line, read-only and without a file to write", () => {
+    expect(argvOf("discover_modbus", { range: "192.168.1.0/24", unitIds: "1-247", rate: 5 })).toEqual(
+      Exit.succeed(["discover", "modbus", "192.168.1.0/24", "--unit-ids=1-247", "--rate=5"])
+    )
+    expect(Exit.isFailure(argvOf("discover_modbus", { range: "--points-list=x.csv" }))).toBe(true)
+    expect(Exit.isFailure(argvOf("discover_modbus", { range: "10.0.0.1", pointsList: "x.csv" }))).toBe(true)
+    expect(toolNamed("discover_modbus").annotations.readOnlyHint).toBe(true)
+  })
+
   it("have one name each, an object input schema and a description", () => {
     expect(toolNamesUnique(mcpTools)).toBe(true)
     for (const tool of mcpTools) {
