@@ -30,7 +30,7 @@
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
-import { Argument, CliOutput, Command, Flag } from "effect/cli"
+import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
@@ -39,7 +39,17 @@ import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type 
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
+import {
+  initNext,
+  initSummary,
+  initTarget,
+  isEmptyFolder,
+  isInteractive,
+  nextSteps,
+  runInit,
+  sshSession,
+  startNowQuestion
+} from "./Init.ts"
 import { invocation } from "./Invocation.ts"
 import {
   briefPointsListSchemaJson,
@@ -67,7 +77,7 @@ import {
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
-import { ConfigFileError, configFileSource, loadConfig } from "./LoadConfig.ts"
+import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
 import {
   describeProfile,
@@ -545,7 +555,11 @@ const init = Command.make(
         }
       }
       const flags = { ...given, yes: !interactive }
-      const config = yield* initTarget(directory, flags.yes)
+      const fs = yield* FileSystem.FileSystem
+      const empty = directory === undefined && isEmptyFolder(yield* fs.readDirectory("."))
+      if (interactive)
+        yield* Console.error("ot-gateway init: a few questions, then the gateway's folder. Enter takes the default.\n")
+      const config = yield* initTarget(directory, flags.yes, { empty })
       const written = yield* runInit(config, flags)
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun, timeZone: localTimeZone() })
@@ -578,8 +592,23 @@ const init = Command.make(
           [`dry run, nothing written. It would write:`, ...files.written.map((file) => `  ${file}`)].join("\n")
         )
       }
-      yield* Console.log(describeConfig(written))
-      yield* Console.log(nextSteps(config, written, files, context))
+      if (!interactive) {
+        // Scripts and agents get the whole account: the config, every file, the notes and the next commands.
+        yield* Console.log(describeConfig(written))
+        return yield* Console.log(nextSteps(config, written, files, context))
+      }
+      // A person gets a few lines to scan, then the one next step: start it now, as create-cloudflare offers to deploy.
+      // The folder's ot-gateway.env may hold the broker password already (a folder init kept it in).
+      yield* loadFolderEnv(config)
+      const summary = initSummary(config, written, files, context, process.env)
+      yield* Console.log(["", ...summary.lines, ""].join("\n"))
+      const question = startNowQuestion(written, process.env)
+      if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {
+        return yield* Console.log(["", ...summary.later].join("\n"))
+      }
+      const loaded = yield* loadConfig(config)
+      yield* Console.log(`\nstatus page: ${initNext(config, written, files, context).url}   Ctrl-C stops the gateway\n`)
+      return yield* runConfigured(loaded, config).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
@@ -1565,6 +1594,16 @@ export const runCli = (argv: ReadonlyArray<string>) => {
   // `--log-level info` brings them back, since the CLI's own setting is applied inside this one.
   return longRunning.has(args[0] ?? "") ? program : Effect.provideService(program, References.MinimumLogLevel, "Warn")
 }
+
+/**
+ * The arguments to run for `argv` as typed: a bare `ot-gateway` in a terminal with no `ot-gateway.json` here starts
+ * `init`, as a bare `vercel` sets up a project it does not know yet. Without a terminal, or with a config, it stays
+ * `run`, which the image and the systemd unit rely on.
+ */
+export const withFirstRun = (
+  argv: ReadonlyArray<string>,
+  where: { readonly terminal: boolean; readonly configHere: boolean }
+): ReadonlyArray<string> => (argv.length === 0 && where.terminal && !where.configHere ? ["init"] : argv)
 
 /** The commands that run until stopped and log what they do, as the gateway does. */
 const longRunning = new Set(["run", "demo", "simulate"])
