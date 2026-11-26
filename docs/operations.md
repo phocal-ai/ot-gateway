@@ -127,6 +127,8 @@ docker compose run --rm gateway --check /etc/ot-gateway/ot-gateway.json
 docker compose up -d --force-recreate
 ```
 
+`ot-gateway restart` in the folder does both, and waits until every point has a value again.
+
 Under systemd, you can also run `install.sh` again with the new file: it checks it before replacing the old one. To find BACnet devices for the config, stop the gateway first (both need UDP 47808), then run `node apps/gateway/src/main.ts --discover /etc/ot-gateway/gateway.json`.
 
 Before the restart, `ot-gateway diff` shows what the edited file changes on the broker against the gateway running now (its status page): topics that are new, go silent or move (a point or device renamed, found by its register or object; the site or building changed), points that take commands now or no longer do, whose retained `$meta` changes, which topics keep their name but read another register or scaling, and which settings change, by name. A point that leaves keeps its retained `$meta` on the broker when its device leaves too, or when the site, building or gateway id changes, as the gateway clears only its own devices' ghosts: `diff` lists each one with the `ot-gateway publish <topic> --retain` that clears it after the change. When the broker's address changes, everything the gateway retained stays on the old broker: `diff` lists it all, and the clear commands need the config from before. `--against ot-gateway.json.bak` compares with the file before the last save or import instead, without a running gateway (and names it in those commands); `--url` asks a running gateway the edited file no longer points at. `--json` gives `added`, `removed`, `moved`, `writable`, `meta`, `values`, `settings`, `brokerChanged` and `stale`.
@@ -193,7 +195,13 @@ sudo packaging/install.sh
 
 Read the release notes for config changes first. If the new version refuses the config, the installer says so and changes nothing: the old version keeps running with its files and config. Fix the config and run it again.
 
-With Docker Compose, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
+With Docker Compose, `ot-gateway upgrade` in the folder does it all: it finds the newest release (`--to v0.15.0` names one, an older one too), pulls it, checks the config with the new release's own `check` (a config it refuses changes nothing), writes its tag into `compose.yaml`, recreates the container and waits until the points that had a value before have one again from the new release. When they do not come (`--timeout`, 120 s by default), it writes the old tag back, recreates the old release and says why, with the new release's last log line; the exit code is 1 and `--json` has `code: "upgrade-rolled-back"`. `ot-gateway upgrade --check` only says whether a newer release is out. A site without internet can `docker load` the image first: when the pull fails, the copy on the machine is used.
+
+```bash
+ot-gateway upgrade
+```
+
+By hand, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
 sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.15.0/' compose.yaml && docker compose up -d

@@ -21,6 +21,8 @@ pnpm ot-gateway init .                     # questions in (init <folder> makes a
 pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
 pnpm ot-gateway doctor ot-gateway.json     # every check in order (config, broker, gateway, devices, BACnet port, disk, clock), one line each and the next command (--json: findings with code, hint, next; exit 1 when one fails)
+pnpm ot-gateway up                         # the folder's gateway under Docker Compose (compose.yaml written when missing), until every point has a value (down, restart; exit 1 with code, hint, next)
+pnpm ot-gateway upgrade --check            # is a newer release out (upgrade: pull, check the config with it, switch compose.yaml's tag, wait for values, roll back when they do not come)
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim, --append adds to one; works before init, without a config)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in (--protocol modbus|bacnet: only that protocol's columns)
