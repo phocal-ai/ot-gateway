@@ -171,7 +171,7 @@ const CheckList = ({
               )}
             </div>
             {device.error === undefined ? null : (
-              <p className="text-xs break-words text-destructive">
+              <p className="text-xs break-words whitespace-pre-line text-destructive">
                 <span className="sr-only">Not added: </span>
                 {pageError(device.error)}
               </p>

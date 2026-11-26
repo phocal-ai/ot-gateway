@@ -197,6 +197,76 @@ describe("devicesFromPointsList", () => {
     })
   )
 
+  it.effect("names every mistake in one pass, each with its line, column and value, in the order of the lines", () =>
+    Effect.gen(function* () {
+      const list = [
+        "device,point,unit,interval_s,host,register,type,byte_order",
+        "Meter,Active power,kW,5,10.0.0.1,100,float32,CDAB",
+        "Meter,Energy,kWh,5,10.0.0.1,102,uint33,",
+        "Meter,Active power,kW,5,10.0.0.1,104,float32,",
+        "Meter,Voltage,V,5,10.0.0.1,,float32,",
+        "Pump,Speed,rpm,0.01,10.0.0.2,1,int16,",
+        "Valve,Position,%,5,,,,"
+      ].join("\n")
+      const error = yield* Effect.flip(devicesFromPointsList(list))
+      expect(error.issues).toEqual([
+        {
+          line: 3,
+          column: "type",
+          value: "uint33",
+          message:
+            'type "uint33": Expected "int16" | "uint16" | "int32" | "uint32" | "float32" | "int64" | "uint64" | "float64" | "bool"'
+        },
+        {
+          line: 4,
+          column: "point",
+          value: "Active power",
+          message: 'two points of "Meter" are both called active-power, here and on line 2'
+        },
+        { line: 5, column: "register", message: '"Voltage" has a host but no register' },
+        {
+          line: 6,
+          column: "interval_s",
+          value: "0.01",
+          message: 'interval_s "0.01": Expected a value between 0.1 and 86400 (in seconds)'
+        },
+        { message: 'device "Valve": give it a host (Modbus TCP) or a device_instance (BACnet/IP)' }
+      ])
+      expect(error.message.split("\n")).toHaveLength(5)
+      expect(error.message.split("\n")[1]).toBe(
+        'line 4: two points of "Meter" are both called active-power, here and on line 2'
+      )
+    })
+  )
+
+  it.effect("names a profile mistake with the device's other mistakes, and a device value on the row that has it", () =>
+    Effect.gen(function* () {
+      const profiled = yield* Effect.flip(
+        devicesFromPointsList(
+          "device,point,host,register,type,profile\nm,b,,,,nope\nm,c,10.0.0.1,1,uint16x,\nM,a,10.0.0.1,1,uint16,\n"
+        )
+      )
+      expect(profiled.message.split("\n")).toEqual([
+        'line 2: profile "nope" was not loaded',
+        'line 3: type "uint16x": Expected "int16" | "uint16" | "int32" | "uint32" | "float32" | "int64" | "uint64" | "float64" | "bool"',
+        '"m" and "M" are the same device id "m"; use one spelling'
+      ])
+      const interval = yield* Effect.flip(
+        devicesFromPointsList(
+          "device,point,host,register,type,interval_s\nm,a,10.0.0.1,1,uint16,\nm,b,10.0.0.1,2,uint16,0.01\n"
+        )
+      )
+      expect(interval.issues).toEqual([
+        {
+          line: 3,
+          column: "interval_s",
+          value: "0.01",
+          message: 'interval_s "0.01": Expected a value between 0.1 and 86400 (in seconds)'
+        }
+      ])
+    })
+  )
+
   it.effect("reads each point's publish mode, with the deadband as part of change mode", () =>
     Effect.gen(function* () {
       const [device] = yield* devicesFromPointsList(
@@ -296,19 +366,32 @@ describe("devicesFromPointsList", () => {
 
 describe("the units of an import", () => {
   it("names each distinct unit once, with the QUDT name that goes out and how many points", () => {
-    const units = unitsWritten("device,point,unit\nm,p1,kW\nm,p2,kW\nm,p3,°C\nm,p4,unit:BAR\nm,p5,m/s\nm,p6,\n")
+    const units = unitsWritten(
+      "device,point,unit\nm,p1,kW\nm,p2,kW\nm,p3,°C\nm,p4,unit:BAR\nm,p5,m/s\nm,p6,\nm,p7,kWhh\n"
+    )
     expect(units).toEqual([
       { written: "kW", unit: "unit:KiloW", qudt: true, points: 2 },
       { written: "°C", unit: "unit:DEG_C", qudt: true, points: 1 },
       { written: "unit:BAR", unit: "unit:BAR", qudt: true, points: 1 },
-      { written: "m/s", unit: "m/s", qudt: false, points: 1 }
+      { written: "m/s", unit: "m/s", qudt: false, points: 1 },
+      { written: "kWhh", unit: "kWhh", qudt: false, suggestion: "unit:KiloW-HR", points: 1 }
     ])
     expect(describeUnits(units)).toEqual([
       "units, as the $meta of each point carries them (QUDT names):",
       "  kW -> unit:KiloW  (2 points)",
       "  °C -> unit:DEG_C  (1 point)",
       "  unit:BAR  (1 point)",
-      "  m/s  kept as written: no QUDT name known for it; write one (unit:…) if consumers need it  (1 point)"
+      "  m/s  kept as written: no QUDT name known for it; write one (unit:…) if consumers need it  (1 point)",
+      "  kWhh  kept as written: no QUDT name known for it (did you mean unit:KiloW-HR?); write one (unit:…) if consumers need it  (1 point)"
+    ])
+    // A prefix is another unit, not a typo: no suggestion.
+    const prefixed = unitsWritten("device,point,unit\nm,a,mbar\nm,b,hPa\nm,c,GWh\nm,d,kvarh\nm,e,MPa\n")
+    expect(prefixed.map((mapping) => mapping.suggestion)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined
     ])
     expect(unitsWritten("device,point\nm,p\n")).toEqual([])
     expect(describeUnits([])).toEqual([])
@@ -332,7 +415,12 @@ describe("importPointsList", () => {
       const badList = `${directory}/bad.csv`
       yield* fs.writeFileString(badList, "device,point,host,register,type\nMeter 2,p,1.2.3.4,1,float99\n")
       const error = yield* importPointsList(badList, configPath, { dryRun: false }).pipe(Effect.flip)
-      expect(error.message).toContain("nothing was written. Its devices start at devices[3]")
+      expect(error.message).toBe(
+        'line 2: type "float99": Expected "int16" | "uint16" | "int32" | "uint32" | "float32" | "int64" | "uint64" | "float64" | "bool"'
+      )
+      expect(error._tag === "PointsListError" && error.issues).toEqual([
+        expect.objectContaining({ line: 2, column: "type", value: "float99" })
+      ])
       expect(yield* fs.readFileString(configPath)).toBe(written)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
