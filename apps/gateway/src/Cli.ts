@@ -44,7 +44,7 @@ import { Config, Console, Duration, Effect, FileSystem, Option, References, Resu
 import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
-import { saveDiscovered } from "./DiscoverSave.ts"
+import { mergeDiscovered, writeMerged } from "./DiscoverSave.ts"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
@@ -67,7 +67,7 @@ import {
   scanModbus,
   scanToPointsList
 } from "./ModbusDiscover.ts"
-import { clearCommands, diffReport, diffTitle, formatDiff } from "./Diff.ts"
+import { clearCommands, diffConfigs, diffReport, diffTitle, formatDiff, sideOfConfig } from "./Diff.ts"
 import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -519,37 +519,78 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
     broadcast === undefined ? config : { ...config, bacnet: { ...config.bacnet, broadcastAddress: broadcast } }
   const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), address)
   if (picked.length === 0) return yield* Console.log(`nothing to save; ${path} is as it was`)
+  const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
+  const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
+  const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
+  // A config with devices already runs somewhere, perhaps: what the save changes on the broker, as diff shows it.
+  if (config.devices.length > 0) {
+    const diff = diffConfigs(sideOfConfig(merged.before), sideOfConfig(merged.config))
+    yield* Console.log(
+      `\n${formatDiff(diff, "What saving changes on the broker:", { command: cli, config: path === DEFAULT_CONFIG ? undefined : path })}\n`
+    )
+  }
   const points = picked.reduce((total, device) => total + device.points.length, 0)
   const save = yield* Prompt.Confirm({
-    message: `Save ${picked.length} device(s), ${points} point(s), to ${path}?`,
+    message: `Save ${picked.length} device${picked.length === 1 ? "" : "s"} and ${points} point${points === 1 ? "" : "s"} to ${path}?`,
     initial: true
   })
   if (!save) return yield* Console.log(`nothing saved; ${path} is as it was`)
-  const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
-  const merged = yield* saveDiscovered(path, fileText, picked, located ? undefined : broadcast)
-  const saved = yield* loadConfig(path)
-  const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
+  yield* writeMerged(path, fileText, merged)
   yield* Console.log(
     [
       "",
       ...merged.added.map((id) => `✓ added ${id}`),
-      ...merged.extended.map((id) => `✓ added points to ${id} (it keeps its read interval)`),
+      ...merged.extended.map((id) => `✓ added points to ${id}`),
+      "  read every 5 s unless the device sends changes; none writable until you make a setpoint writable (status page or config)",
       ""
     ].join("\n")
   )
-  const question = startNowQuestion(saved, process.env)
-  if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {
-    return yield* Console.log(
-      [
-        "",
-        `read once:    ${cli} read${argument}`,
-        `start it:     ${cli} run${argument}`,
-        `all commands: ${cli} --help`
-      ].join("\n")
-    )
+  return yield* afterSave(merged.config, path, argument)
+})
+
+/** What the end of discover offers: read every point once, start the gateway here, or stop. */
+type AfterSave = "read" | "start" | "done"
+
+/** After a save: read once (as often as wanted), start the gateway in this terminal, or the commands for later. */
+const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: string, argument: string) {
+  const cli = yield* invocation
+  const canStart = startNowQuestion(saved, process.env) !== undefined
+  const choices: ReadonlyArray<Prompt.SelectChoice<AfterSave>> = [
+    { title: "Read every point once", value: "read", description: "see the values now, without a broker" },
+    ...(canStart
+      ? [
+          {
+            title: "Start the gateway here",
+            value: "start" as const,
+            description: "publish to the broker until Ctrl-C, status page included"
+          }
+        ]
+      : []),
+    { title: "Done for now", value: "done", description: `start it later with ${cli} run${argument}` }
+  ]
+  while (true) {
+    const next = yield* Prompt.Select<AfterSave>({ message: "What next?", choices })
+    if (next === "done") {
+      return yield* Console.log(
+        [
+          "",
+          `read once:    ${cli} read${argument}`,
+          `start it:     ${cli} run${argument}   (or in Docker: ${cli} up)`,
+          `all commands: ${cli} --help`
+        ].join("\n")
+      )
+    }
+    if (next === "start") {
+      yield* Console.log(`\nstatus page: http://127.0.0.1:${saved.status?.port ?? 8080}   Ctrl-C stops the gateway\n`)
+      return yield* runConfigured(saved, path).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
+    }
+    const devices = yield* selectDevices(saved, [])
+    const count = devices.reduce((sum, device) => sum + device.points.length, 0)
+    yield* Console.error(`\nreading ${count} point${count === 1 ? "" : "s"} once …`)
+    // The report says what failed and why; the drivers' warnings would only repeat it.
+    const report = yield* readOnce(saved, devices).pipe(Effect.provideService(References.MinimumLogLevel, "Error"))
+    yield* Console.log(`${formatReadReport(report)}\n`)
   }
-  yield* Console.log(`\nstatus page: http://127.0.0.1:${saved.status?.port ?? 8080}   Ctrl-C stops the gateway\n`)
-  return yield* runConfigured(saved, path).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
 })
 
 const discoverCommand = Command.make(
@@ -607,7 +648,7 @@ const discoverCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "Find BACnet devices through the config's bacnet settings. In a terminal: pick their points and writable setpoints and save them into the config. Otherwise (--json, a pipe, no config yet): print a draft of their devices entries; nothing is written"
+    "Find devices. In a terminal: choose BACnet/IP or a Modbus TCP scan (or a points list), pick the points to read, see what changes and save them into the config, then read them once or start the gateway. Otherwise (--json, a pipe, no config yet): print a draft of the BACnet devices' entries; nothing is written"
   ),
   Command.withExamples([
     {

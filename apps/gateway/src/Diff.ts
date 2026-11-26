@@ -355,7 +355,9 @@ export const formatDiff = (diff: ConfigDiff, title: string, context: ClearContex
     diff.moved.length > 0 ? `${diff.moved.length} moved` : undefined,
     diff.writable.length > 0 ? `${diff.writable.length} writable change(s)` : undefined
   ].filter((each) => each !== undefined)
-  if (counts.length > 0) lines.push(`${counts.join(", ")}; consumers of moved or silent topics must follow`)
+  // Only a topic that moves or goes silent asks something of the consumers; new ones they pick up as they like.
+  const follow = diff.moved.length + diff.removed.length > 0 ? "; consumers of moved or silent topics must follow" : ""
+  if (counts.length > 0) lines.push(`${counts.join(", ")}${follow}`)
   if (diff.stale.length > 0) {
     const where = diff.brokerChanged ? "the old broker" : "the broker"
     const commands = clearCommands(diff, context)

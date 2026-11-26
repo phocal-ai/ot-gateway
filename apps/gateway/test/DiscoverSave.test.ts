@@ -6,8 +6,9 @@ import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem } from "effect"
-import { mergeDevices, saveDiscovered } from "../src/DiscoverSave.ts"
-import type { PickedDevice } from "../src/Init.ts"
+import { diffConfigs, formatDiff, sideOfConfig } from "../src/Diff.ts"
+import { mergeDevices, mergeDiscovered, saveDiscovered } from "../src/DiscoverSave.ts"
+import type { DraftedDevice } from "../src/Init.ts"
 
 const base = {
   site: "plant-3",
@@ -25,7 +26,7 @@ const base = {
   ]
 }
 
-const newPoint: PickedDevice = {
+const newPoint: DraftedDevice = {
   protocol: "bacnet-ip",
   id: "demo-room",
   deviceInstance: 1001,
@@ -36,18 +37,15 @@ const newPoint: PickedDevice = {
       name: "Temperature setpoint",
       unit: "unit:DEG_C",
       objectType: "analog-value",
-      instance: 1,
-      writable: true,
-      limits: { min: 15, max: 30 }
+      instance: 1
     }
   ]
 }
 
-const newDevice: PickedDevice = {
+const newDevice: DraftedDevice = {
   protocol: "bacnet-ip",
   id: "ahu-1",
   deviceInstance: 2001,
-  pollIntervalMs: 2000,
   points: [{ id: "supply-temp", name: "Supply temp", objectType: "analog-input", instance: 1 }]
 }
 
@@ -64,12 +62,11 @@ describe("mergeDevices", () => {
         ["demo-room", ["room-temperature", "temperature-setpoint"]],
         ["ahu-1", ["supply-temp"]]
       ])
-      expect(config.devices[1]?.pollIntervalMs).toBe(2000)
     })
   )
 
   it("adds a device that only shares an id under an id of its own, never into the other", () => {
-    const elsewhere: PickedDevice = { ...newPoint, deviceInstance: 1002, address: "192.168.0.172" }
+    const elsewhere: DraftedDevice = { ...newPoint, deviceInstance: 1002, address: "192.168.0.172" }
     const merged = mergeDevices(base, [elsewhere])
     expect(merged.added).toEqual(["demo-room-2"])
     expect(merged.extended).toEqual([])
@@ -103,7 +100,7 @@ describe("saveDiscovered", () => {
 
       // A point id the device has already would make the config invalid: refused, the file as it was.
       const before = yield* fs.readFileString(path)
-      const duplicate: PickedDevice = {
+      const duplicate: DraftedDevice = {
         ...newPoint,
         points: [{ id: "room-temperature", name: "Room temperature", objectType: "analog-value", instance: 9 }]
       }
@@ -114,9 +111,26 @@ describe("saveDiscovered", () => {
       // Changed while discover asked (the status page saved it): refused, not merged into.
       const asRead = yield* fs.readFileString(path)
       yield* fs.writeFileString(path, asRead.replace('"main"', '"north"'))
-      const another: PickedDevice = { ...newDevice, id: "ahu-2", deviceInstance: 2002 }
+      const another: DraftedDevice = { ...newDevice, id: "ahu-2", deviceInstance: 2002 }
       const conflict = yield* saveDiscovered(path, asRead, [another]).pipe(Effect.flip)
       expect(conflict.message).toContain("changed while discover ran")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
+describe("mergeDiscovered", () => {
+  it.effect("decodes the file as it was and as it would be, so their diff is only what discover adds", () =>
+    Effect.gen(function* () {
+      const fileText = JSON.stringify(base)
+      const merged = yield* mergeDiscovered("ot-gateway.json", fileText, [newPoint])
+      const diff = diffConfigs(sideOfConfig(merged.before), sideOfConfig(merged.config))
+      expect(diff.added.map((each) => each.topic)).toEqual(["plant-3/main/demo-room/temperature-setpoint"])
+      expect(diff.settings).toEqual([])
+      expect(formatDiff(diff, "What saving changes on the broker:", { command: "ot-gateway" }).split("\n")).toEqual([
+        "What saving changes on the broker:",
+        "  + plant-3/main/demo-room/temperature-setpoint  new topic",
+        "1 new"
+      ])
+    })
   )
 })
