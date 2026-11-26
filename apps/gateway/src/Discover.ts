@@ -460,7 +460,7 @@ export const pointsListNext = (path: string, options: PointsListOptions) =>
  * `text` at `path` in one step: written next to it under a temporary name, then renamed over it, so an
  * interrupted run leaves the old file or the new one, never half of one. The temporary file goes on failure.
  */
-const writeAtomically = Effect.fn("writeAtomically")(function* (path: string, text: string) {
+export const writeAtomically = Effect.fn("writeAtomically")(function* (path: string, text: string) {
   const fs = yield* FileSystem.FileSystem
   const temporary = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`)
   yield* fs.writeFileString(temporary, text).pipe(

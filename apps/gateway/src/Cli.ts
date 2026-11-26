@@ -7,6 +7,7 @@
  *   ot-gateway check [config]       validate a config without connecting to anything
  *   ot-gateway doctor [config]      every check in order (config, broker, gateway, devices, port, disk, clock), one list
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
+ *   ot-gateway discover modbus <range>  find Modbus TCP devices and unit ids on a range, read-only and rate-limited
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
  *   ot-gateway contract [message]   the MQTT contract: its topics and payloads (--json: the JSON Schemas)
  *   ot-gateway watch [config]       print what arrives at the config's broker (--check: what is off the contract)
@@ -32,7 +33,7 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Duration, Effect, FileSystem, Option, References } from "effect"
+import { Config, Console, Duration, Effect, FileSystem, Option, References, Result } from "effect"
 import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
@@ -41,6 +42,21 @@ import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
+import {
+  DEFAULT_RATE,
+  foundUnits,
+  formatScan,
+  MAX_RATE,
+  MODBUS_PORT,
+  ModbusDiscoverError,
+  modbusRangeHint,
+  nothingFound,
+  parseRange,
+  parseUnitIds,
+  scanJson,
+  scanModbus,
+  scanToPointsList
+} from "./ModbusDiscover.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
@@ -356,6 +372,112 @@ const configForDiscovery = Effect.fn("configForDiscovery")(function* (path: stri
   return { config: yield* discoveryDefaults, noConfig: true }
 })
 
+/** The scan's progress on stderr, at most every tenth of the addresses, so a /24 says where it is. */
+const scanProgress = (done: number, total: number) =>
+  total >= 20 && (done === total || done % Math.ceil(total / 10) === 0)
+    ? Console.error(`  ${done}/${total} addresses asked`)
+    : Effect.void
+
+const modbusUsage = (message: string, hint: string) => new ModbusDiscoverError({ message, code: "usage", hint })
+
+const discoverModbusCommand = Command.make(
+  "modbus",
+  {
+    range: Argument.String("range").pipe(
+      Argument.withDescription(
+        "The addresses to ask: 192.168.1.20, 192.168.1.20:5020, 192.168.1.0/24, 192.168.1.10-40, or several with commas"
+      )
+    ),
+    port: Flag.Int("port").pipe(
+      Flag.withDescription(`The TCP port to ask on, where the range does not give one (${MODBUS_PORT}, Modbus TCP's)`),
+      Flag.withDefault(MODBUS_PORT)
+    ),
+    unitIds: Flag.String("unit-ids").pipe(
+      Flag.withDescription(
+        "The unit ids to ask on each address, as 1, 1,2,5 or 1-247 (behind a Modbus gateway); by default 1, and 255 and 0 when 1 is silent"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    rate: Flag.Int("rate").pipe(
+      Flag.withDescription(`At most this many requests a second across the scan (1 to ${MAX_RATE})`),
+      Flag.withDefault(DEFAULT_RATE)
+    ),
+    pointsList: Flag.String("points-list").pipe(
+      Flag.withDescription("Write the units found as a points list (CSV) to this file, to fill in and import"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    append: Flag.Boolean("append").pipe(
+      Flag.withDescription("Add to the --points-list file when it exists (rows it has are skipped)"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ range, port, unitIds, rate, pointsList, append, json }) =>
+    Effect.gen(function* () {
+      if (append && pointsList === undefined) {
+        return yield* modbusUsage("--append adds to the file --points-list names", "give both")
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return yield* modbusUsage(`--port takes 1 to 65535, not ${port}`, `Modbus TCP is ${MODBUS_PORT}`)
+      }
+      if (!Number.isInteger(rate) || rate < 1 || rate > MAX_RATE) {
+        return yield* modbusUsage(
+          `--rate takes 1 to ${MAX_RATE}, not ${rate}`,
+          `${DEFAULT_RATE} unless the network is slow`
+        )
+      }
+      const targets = parseRange(range, port)
+      if (Result.isFailure(targets)) return yield* modbusUsage(targets.failure, modbusRangeHint)
+      const ids = unitIds === undefined ? undefined : parseUnitIds(unitIds)
+      if (ids !== undefined && Result.isFailure(ids))
+        return yield* modbusUsage(`--unit-ids ${ids.failure}`, "--unit-ids 1-247")
+      const asked = ids === undefined ? undefined : ids.success
+      const perAddress = asked === undefined ? "unit id 1 (255 and 0 where 1 is silent)" : `${asked.length} unit id(s)`
+      yield* Console.error(
+        `asking ${targets.success.length} address(es), ${perAddress} each, at most ${rate} requests a second; read-only`
+      )
+      const report = yield* scanModbus(
+        { range, targets: targets.success, unitIds: asked, rate, askedPort: port },
+        { onDone: scanProgress }
+      )
+      const command = yield* invocation
+      if (pointsList !== undefined) {
+        // A config in this folder takes the list with import; without one, init starts from it.
+        const fs = yield* FileSystem.FileSystem
+        const hasConfig = yield* fs.exists(DEFAULT_CONFIG)
+        const { written, message } = yield* scanToPointsList(report, pointsList, {
+          append,
+          command,
+          noConfig: !hasConfig,
+          configPath: hasConfig ? DEFAULT_CONFIG : undefined
+        })
+        yield* Console.error(message)
+        return yield* json
+          ? printJson({ ...scanJson(report, { command }), points: written, next: written.next ?? null })
+          : Effect.void
+      }
+      if (foundUnits(report).length === 0) return yield* nothingFound(report, { command })
+      yield* json ? printJson(scanJson(report, { command })) : printResult(formatScan(report, { command }))
+    }).pipe(jsonFailure(json, { range }))
+).pipe(
+  Command.withDescription(
+    "Find Modbus TCP devices and their unit ids on a range of addresses, read-only (one register read per unit) and rate-limited, and draft their points list rows"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway discover modbus 192.168.1.0/24", description: "Every address of a /24 on port 502" },
+    {
+      command: "ot-gateway discover modbus 192.168.1.0/24 --points-list modbus.csv",
+      description: "Write the units found as a points list to fill in"
+    },
+    {
+      command: "ot-gateway discover modbus 192.168.1.60 --unit-ids 1-247",
+      description: "The meters behind one Modbus gateway"
+    }
+  ])
+)
+
 const discoverCommand = Command.make(
   "discover",
   {
@@ -415,7 +537,8 @@ const discoverCommand = Command.make(
       command: "ot-gateway discover --address 10.20.3.40:47809",
       description: "Ask one device whose address a device list gives"
     }
-  ])
+  ]),
+  Command.withSubcommands([discoverModbusCommand])
 )
 
 const demo = Command.make(
