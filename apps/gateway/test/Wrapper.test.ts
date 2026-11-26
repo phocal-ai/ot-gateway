@@ -250,7 +250,7 @@ describe("packaging/ot-gateway", () => {
     expect(runCall(result.log)).toMatch(new RegExp(`-w /work ${pinned} --version$`))
   })
 
-  it.each(["demo", "run", "watch"])("names the %s container after the command", (command) => {
+  it.each(["demo", "run", "watch", "simulate"])("names the %s container after the command", (command) => {
     const result = runWrapper([command, "--seconds", "5"], { FAKE_IMAGE_PRESENT: "1" })
     expect(result.status).toBe(0)
     expect(runCall(result.log)).toMatch(new RegExp(`--name ot-gateway-${command} ${image} ${command} --seconds 5$`))
