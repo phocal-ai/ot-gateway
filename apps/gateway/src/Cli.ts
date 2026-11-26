@@ -724,13 +724,26 @@ const watchCommand = Command.make(
       Flag.optional
     ),
     json: Flag.Boolean("json").pipe(
-      Flag.withDescription("One JSON object per message and line (NDJSON): at, topic, retained, payload"),
+      Flag.withDescription(
+        "One JSON object per message and line (NDJSON): at, topic, retained, payload; a watch that ends by itself ends with {event: summary}"
+      ),
+      Flag.withDefault(false)
+    ),
+    untilValues: Flag.Boolean("until-values").pipe(
+      Flag.withDescription(
+        "Stop once every configured point sent a value; exit 1 naming the ones that did not within --seconds (default: the slowest poll interval and 30 s, at least 60 s)"
+      ),
       Flag.withDefault(false)
     )
   },
-  ({ config, topic, seconds, json }) =>
+  ({ config, topic, seconds, json, untilValues }) =>
     Effect.flatMap(loadConfig(config), (decoded) =>
-      watch(decoded, { topic: Option.getOrUndefined(topic), seconds: Option.getOrUndefined(seconds), json })
+      watch(decoded, {
+        topic: Option.getOrUndefined(topic),
+        seconds: Option.getOrUndefined(seconds),
+        json,
+        untilValues
+      })
     ).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
@@ -738,7 +751,8 @@ const watchCommand = Command.make(
     { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
     { command: "ot-gateway watch --topic 'site-1/building-a/heat-pump/#'", description: "Only one device" },
     { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" },
-    { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" }
+    { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" },
+    { command: "ot-gateway watch --until-values --json", description: "Wait until every point sent a value" }
   ])
 )
 
