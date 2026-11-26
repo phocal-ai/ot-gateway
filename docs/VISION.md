@@ -132,7 +132,7 @@ npx ot-gateway status           # one line per device
 - **The points list is the public input format.** Its columns are versioned and documented, and `ot-gateway points schema` prints them, so an agent learns the format from the CLI rather than from the repository. Commas, semicolons or tabs, column names in any order and case. The same columns also read as JSON, an array with one object per point, which a program writes without CSV's quoting traps; `points schema --json-schema` prints its JSON Schema. No `.xlsx`: reading it would need a non-Effect dependency, so Excel lists are saved as CSV.
 - **BACnet often needs no AI.** `discover` writes a draft points list to trim, and EDE files, the CSV export most BACnet engineering tools produce, import directly.
 - **Device profiles for Modbus.** Modbus register maps are vendor PDFs in vendor layouts, which is where AI helps most. To avoid parsing the same meter twice, a profile describes one device model's registers, and a row in the points list names the profile and picks points by name. An AI agent writes a profile from a datasheet once; reviewed profiles go into a shared library, so the common meters need no AI over time. Profiles need a format and a review process before they are accepted from outside.
-- **With AI.** The agent translates the user's list into the standard one and checks it with `npx ot-gateway import --dry-run` until it is clean, then `init` writes the folder and `docker compose up -d` starts it. The prompt to paste is short (read `npx ot-gateway points schema`, translate, check, start) and works in any agent that runs commands; the `/setup` skill is the fuller version for Claude Code, and an MCP server later offers the same commands as tools.
+- **With AI.** The agent translates the user's list into the standard one and checks it with `npx ot-gateway import --dry-run` until it is clean, then `init` writes the folder and `docker compose up -d` starts it. The prompt to paste is short (read `npx ot-gateway points schema`, translate, check, start) and works in any agent that runs commands; the `/setup` skill is the fuller version for Claude Code, and `ot-gateway mcp` offers the same commands as MCP tools.
 - **Writes stay a decision.** No list, profile or AI makes a point writable: that is set in the config, on purpose.
 
 ## Experience: people and agents
@@ -164,7 +164,7 @@ On 2026-11-11 a Raspberry Pi was wiped and set up from scratch twice, by an agen
 - `discover` adding to an existing points list, so one list stays the single source.
 - Every `--json` result carrying the next commands, and CLI errors printed as errors, not log lines.
 - A `dev` preview image published from every merge, for testing on hardware.
-- After v1.0, the MCP server: the same commands as tools, plus a running gateway's status, values and history, for agents that do not run a shell.
+- The MCP server, `ot-gateway mcp`: the same commands as tools, a running gateway's status, events, logs and history among them, for agents that do not run a shell.
 
 ## Positioning
 
@@ -219,7 +219,7 @@ A Raspberry Pi has run the gateway for 12 hours in real time against simulated d
 6. **Set up in the browser.** A technician without AI starts the gateway with one command, opens its status page and sets everything up there, without editing a file or opening a terminal. In stages, all done: the gateway and broker settings on the Settings tab, then devices and points, then discovery, points-list import, commands with limits and a guided first run from the page.
 7. **A first real site** outside the maintainers' own projects, running a release unattended. Its 30 days are the evidence for the 30-day criterion; the lab Pi does not need to run a soak of its own.
 
-After v1.0: an MCP server, so an agent can use the CLI's commands and read a running gateway's status, values and history as tools, a Brick or 223P exporter generated from the config, and loading the config from a database.
+After v1.0: a Brick or 223P exporter generated from the config, and loading the config from a database.
 
 ## Success criteria
 

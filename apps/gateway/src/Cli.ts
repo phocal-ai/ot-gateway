@@ -22,6 +22,7 @@
  *   ot-gateway read [device[/point]] [config]  read every configured point (or the ones named) once, without a running gateway
  *   ot-gateway probe <host[:port]> <register>  read Modbus registers once and show every type and byte order they read as
  *   ot-gateway simulate bacnet      a simulated BACnet/IP device with three objects on the LAN, to try against
+ *   ot-gateway mcp                  these commands as MCP tools over stdio, for agents without a shell (McpTools.ts)
  *
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
@@ -125,9 +126,13 @@ import {
   printJson,
   printResult,
   shellArgument,
+  stderrConsole,
   UsageMistake
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+import type { NodeServices } from "@effect/platform-node/NodeServices"
+import { serveMcp } from "./Mcp.ts"
+import { mcpTools } from "./McpTools.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
 
@@ -1792,6 +1797,32 @@ const doctorCommand = Command.make("doctor", { config: configPath, json: jsonFla
   ])
 )
 
+/**
+ * `mcp`: the commands as MCP tools on stdin and stdout. Its type is written out because a tool call runs `runCli`,
+ * whose type is the CLI's, this command included.
+ */
+const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeServices> =>
+  Effect.gen(function* () {
+    const version = yield* readVersion
+    // stdout is the protocol's: what is printed besides goes to stderr.
+    const log = yield* Console.Console
+    yield* serveMcp({
+      tools: mcpTools,
+      version,
+      run: (argv): Effect.Effect<unknown, unknown, NodeServices> => runCli(argv),
+      log
+    })
+  }).pipe(Effect.updateService(Console.Console, stderrConsole))
+).pipe(
+  Command.withDescription(
+    "Serve these commands as MCP tools over stdio (check, doctor, status, read, write, watch, …), for agents that do not run a shell; each tool's result is the command's --json"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway mcp", description: "Started by an MCP client, in the gateway's folder" },
+    { command: "claude mcp add ot-gateway -- npx ot-gateway mcp", description: "Add it to Claude Code" }
+  ])
+)
+
 const simulate = Command.make("simulate").pipe(
   Command.withDescription("Simulated devices on the network, to try the gateway against without a building"),
   Command.withSubcommands([simulateBacnetCommand])
@@ -1842,7 +1873,8 @@ export const cli = Command.make("ot-gateway").pipe(
     logsCommand,
     readCommand,
     probeCommand,
-    simulate
+    simulate,
+    mcpCommand
   ])
 )
 
@@ -1868,7 +1900,8 @@ const subcommands = new Set([
   "logs",
   "read",
   "probe",
-  "simulate"
+  "simulate",
+  "mcp"
 ])
 
 /**
