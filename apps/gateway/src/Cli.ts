@@ -71,7 +71,7 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { failureLine, localTimeZone, printJson, printResult } from "./Output.ts"
+import { failureFields, failureLine, localTimeZone, printJson, printResult, UsageMistake } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -180,7 +180,11 @@ const jsonFailure =
   (json: boolean, fields: Readonly<Record<string, unknown>> = {}) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     json
-      ? effect.pipe(Effect.tapError((error) => printJson({ ok: false, ...fields, error: errorText(error) })))
+      ? effect.pipe(
+          Effect.tapError((error) =>
+            printJson({ ok: false, ...fields, error: errorText(error), ...failureFields(error) })
+          )
+        )
       : effect
 
 const dryRunFlag = (description: string) =>
@@ -336,6 +340,27 @@ const demo = Command.make(
 const optionalFlag = (name: string, description: string) =>
   Flag.String(name).pipe(Flag.withDescription(description), Flag.optional, Flag.map(Option.getOrUndefined))
 
+/**
+ * What `init` would have asked that no flag answers, as the flags to add: the folder, the site, the broker and where
+ * the devices come from. The building and the rest have defaults that need no cleaning up.
+ */
+export const missingInitAnswers = (
+  directory: string | undefined,
+  given: {
+    readonly site: string | undefined
+    readonly broker: string | undefined
+    readonly points: string | undefined
+    readonly devices: string | undefined
+  }
+): ReadonlyArray<string> => [
+  ...(directory === undefined ? ["<folder> (. for this one)"] : []),
+  ...(given.site === undefined ? ["--site"] : []),
+  ...(given.broker === undefined ? ["--broker"] : []),
+  ...(given.points === undefined && given.devices === undefined
+    ? ["--points <list> or --devices simulated|discover|none"]
+    : [])
+]
+
 const init = Command.make(
   "init",
   {
@@ -358,7 +383,9 @@ const init = Command.make(
     broadcast: optionalFlag("broadcast", "The broadcast address for BACnet discovery, when there are several networks"),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
-      Flag.withDescription("Ask nothing: the defaults for whatever no flag gives (the same without a terminal)"),
+      Flag.withDescription(
+        "Ask nothing: the defaults for whatever no flag gives (without a terminal, init needs this or the flags)"
+      ),
       Flag.withDefault(false)
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false)),
@@ -383,10 +410,18 @@ const init = Command.make(
     Effect.gen(function* () {
       // Without a terminal (an AI agent, a script, CI) there is nobody to answer: ask nothing, as with --yes.
       const interactive = !json && isInteractive(given.yes, process.stdin.isTTY)
-      if (!given.yes && !json && !interactive) {
-        yield* Console.error(
-          "no terminal, so init asks nothing: the flags answer and the defaults fill the rest (--help lists the flags)"
-        )
+      // Nobody to ask and no --yes: writing the defaults would leave a folder of placeholders (my-site, a broker on
+      // localhost, a simulated device) to clean up. A dry run writes nothing, so it may fill them in to show them.
+      if (!interactive && !given.yes && !given.dryRun) {
+        const missing = missingInitAnswers(directory, given)
+        if (missing.length > 0) {
+          return yield* new UsageMistake({
+            code: "missing-answers",
+            message: `no terminal to ask, so init needs its answers as flags: ${missing.join(", ")}; or --yes for the defaults (site my-site, a broker on localhost, a simulated device). Nothing was written`,
+            missing,
+            hint: `${yield* invocation} init site-1 --site site-1 --broker mqtts://broker.example:8883 --points points.csv`
+          })
+        }
       }
       const flags = { ...given, yes: !interactive }
       const config = yield* initTarget(directory, flags.yes)

@@ -14,6 +14,7 @@ import {
   configSummary,
   describeConfig,
   messagesArguments,
+  missingInitAnswers,
   pointsListOutcome,
   refuseConfigAsPayload,
   runCli,
@@ -294,6 +295,48 @@ describe("discover --points-list", () => {
       const error = yield* Effect.flip(runCli(["discover", exampleConfigPath, "--append"]))
       expect(error.message).toContain("--append adds to the file --points-list names")
     }).pipe(Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+})
+
+describe("init without a terminal", () => {
+  it("names what no flag answers: the folder, the site, the broker and where the devices come from", () => {
+    const none = { site: undefined, broker: undefined, points: undefined, devices: undefined }
+    expect(missingInitAnswers(undefined, none)).toEqual([
+      "<folder> (. for this one)",
+      "--site",
+      "--broker",
+      "--points <list> or --devices simulated|discover|none"
+    ])
+    expect(missingInitAnswers("site-1", { ...none, site: "s", broker: "mqtt://b", devices: "none" })).toEqual([])
+    expect(missingInitAnswers(".", { ...none, site: "s", broker: "mqtt://b", points: "p.csv" })).toEqual([])
+  })
+
+  it.effect("refuses to write placeholders, naming the flags as JSON, and writes nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const folder = `${directory}/site-1`
+      const error = yield* Effect.flip(runCli(["init", folder, "--site", "site-1", "--json"]))
+      expect(error._tag).toBe("UsageMistake")
+      const [line] = yield* TestConsole.logLines
+      expect(JSON.parse(String(line))).toMatchObject({
+        ok: false,
+        code: "missing-answers",
+        missing: ["--broker", "--points <list> or --devices simulated|discover|none"]
+      })
+      expect(yield* fs.exists(folder)).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("writes the folder with --yes, and shows the defaults in a dry run", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      yield* runCli(["init", `${directory}/dry`, "--dry-run", "--json"])
+      expect(yield* fs.exists(`${directory}/dry/ot-gateway.json`)).toBe(false)
+      yield* runCli(["init", `${directory}/yes`, "--yes", "--json"])
+      expect(yield* fs.exists(`${directory}/yes/ot-gateway.json`)).toBe(true)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })
 

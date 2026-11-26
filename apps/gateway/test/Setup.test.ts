@@ -486,13 +486,13 @@ describe("adding a points list from the status page", () => {
         devices: [
           { name: "Main meter", id: "main-meter", protocol: "modbus-tcp", lines: [2, 3], points: 2 },
           { name: "Sub meter", lines: [4] },
-          { name: "Third meter", id: "third-meter", lines: [5] }
+          { name: "Third meter", lines: [5] }
         ],
         adds: { devices: 1, points: 2 }
       })
       const devices = checked.body["devices"]
       expect(Array.isArray(devices) && String(devices[1]?.error)).toContain("line 4")
-      expect(Array.isArray(devices) && String(devices[2]?.error)).toContain("address")
+      expect(Array.isArray(devices) && String(devices[2]?.error)).toContain('line 5: register "70000"')
       const file = yield* whileTimePasses(() => request(port, "GET", "/api/config/file", undefined, {}))
       const applied = yield* post(port, "/api/import/apply", {
         text: pointsList,

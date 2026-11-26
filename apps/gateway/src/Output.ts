@@ -4,7 +4,7 @@
  * agent reading stdout always get one parseable document, a usage mistake included.
  */
 import { describeFailure } from "@ot-gateway/core"
-import { Cause, Console, Context, Effect, Result } from "effect"
+import { Cause, Console, Context, Effect, Predicate, Result, Schema } from "effect"
 import type { EventEmitter } from "node:events"
 import { CliError } from "effect/cli"
 
@@ -92,6 +92,38 @@ export const isUsageError = (error: CliError.CliError): error is CliError.ShowHe
 
 /** Exit code of a usage mistake, as most command lines have it; every other failure exits with 1. */
 export const USAGE_EXIT_CODE = 2
+
+/**
+ * A command run without what it needs to do its job, found before it does anything: `init` with no terminal to ask
+ * and no answers given. Like a usage mistake it exits with 2, and its `--json` names the flags that are `missing`.
+ */
+export class UsageMistake extends Schema.TaggedError<UsageMistake>()("UsageMistake", {
+  message: Schema.String,
+  code: Schema.String,
+  missing: Schema.Array(Schema.String),
+  hint: Schema.String
+}) {}
+
+/** Whether a failure exits with 2: a usage mistake the CLI found, or one a command found (`UsageMistake`). */
+export const exitsAsUsage = (error: unknown) =>
+  (CliError.isCliError(error) && isUsageError(error)) || Predicate.isTagged(error, "UsageMistake")
+
+/**
+ * What `--json` prints for an expected failure besides `ok` and `error`: the fields an agent acts on when the
+ * failure has them, `code` (what kind of failure), `issues` (each mistake on its own, with where it is),
+ * `missing` (the flags to add) and `hint` (what to run).
+ */
+export const failureFields = (error: unknown): Readonly<Record<string, unknown>> => {
+  if (!Predicate.isObject(error)) return {}
+  const fields: Record<string, unknown> = {}
+  if (Predicate.hasProperty(error, "code") && typeof error.code === "string") fields["code"] = error.code
+  if (Predicate.hasProperty(error, "issues") && Array.isArray(error.issues) && error.issues.length > 0) {
+    fields["issues"] = error.issues
+  }
+  if (Predicate.hasProperty(error, "missing") && Array.isArray(error.missing)) fields["missing"] = error.missing
+  if (Predicate.hasProperty(error, "hint") && typeof error.hint === "string") fields["hint"] = error.hint
+  return fields
+}
 
 /** What `--json` prints for a usage mistake. */
 export const usageFailure = (error: CliError.ShowHelp) => ({

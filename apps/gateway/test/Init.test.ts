@@ -231,7 +231,7 @@ describe("initNext", () => {
         "ot-gateway import site-1/points.csv site-1/ot-gateway.json",
         "ot-gateway check site-1/ot-gateway.json",
         "docker compose -f site-1/compose.yaml up -d",
-        "ot-gateway status",
+        "ot-gateway status site-1/ot-gateway.json",
         "ot-gateway watch site-1/ot-gateway.json --seconds 10"
       ])
       const spaced = initNext("/srv/site 1/ot-gateway.json", config, compose, { cwd: "/repo" })
