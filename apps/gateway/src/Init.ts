@@ -1,16 +1,17 @@
 /**
  * `ot-gateway init`: a few questions, then a config that `check` accepts. A person answers the broker, the site and
- * the building, and adds devices next with `discover`, which runs `discoverInteractively` below: Who-Is, the points
- * to keep and the writable setpoints, and when nobody answers, the other ways (one device by its address, a Modbus
- * TCP scan of a range, a points list, the simulated device). Scripts give init its devices as flags: a points list,
+ * the building, and adds devices next with `discover`, which runs `discoverInteractively` below: what to look for
+ * (BACnet/IP, a Modbus TCP scan, one device by its address, a points list, the simulated device), then the points
+ * to keep, read-only at the default interval. Scripts give init its devices as flags: a points list,
  * the simulated device, or `--devices discover` (drafted read-only).
  *
  * The answers become the config in `initConfig`, a pure function, and the result is decoded with the gateway's
  * own schema before anything is written, so `init` never leaves a config that `run` refuses. An existing file
  * is only replaced after a yes.
  */
-import { bacnetValueKind, GatewayConfig, parseConfig, Slug } from "@ot-gateway/core"
+import { GatewayConfig, parseConfig, Slug } from "@ot-gateway/core"
 import { parseBrokerUrl } from "@ot-gateway/mqtt"
+import { unitLabel } from "@ot-gateway/api"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Console, Effect, FileSystem, Result, Schema, type Terminal } from "effect"
 import { Prompt } from "effect/cli"
@@ -63,21 +64,9 @@ export const simulatedDevice = {
 /** A device as discovery drafts it, every point read-only. */
 export type DraftedDevice = ReturnType<typeof draftDevices>[number]
 
-/** A drafted point the operator let MQTT commands write, within `limits` unless it is binary. */
 type DraftedPoint = DraftedDevice["points"][number]
-type PickedPoint = DraftedPoint & {
-  readonly writable?: true
-  readonly limits?: { readonly min: number; readonly max: number }
-}
 
-/** A drafted device with the points the operator picked, some of them writable. */
-export type PickedDevice = Omit<DraftedDevice, "points"> & {
-  readonly points: ReadonlyArray<PickedPoint>
-  /** How often its points are read where the device does not send changes itself; the config's default without. */
-  readonly pollIntervalMs?: number
-}
-
-export type InitDevice = typeof simulatedDevice | PickedDevice | PointsListDevice
+export type InitDevice = typeof simulatedDevice | DraftedDevice | PointsListDevice
 
 export type DeviceSource = "simulated" | "discover" | "list" | "none"
 
@@ -332,53 +321,22 @@ const devicesFromFlag = (path: string) =>
 /** A drafted point's key in the pickers: its device and its id, both slugs, so `/` cannot be in either. */
 const pointKey = (device: { readonly id: string }, point: { readonly id: string }) => `${device.id}/${point.id}`
 
-/**
- * The BACnet object types whose present value is commandable (ASHRAE 135, clause 19.2): outputs and values, never
- * inputs. Only these are offered as writable.
- */
-const commandableTypes = new Set([
-  "analog-output",
-  "analog-value",
-  "binary-output",
-  "binary-value",
-  "multi-state-output",
-  "multi-state-value"
-])
-
-/** What the point pickers list for a drafted point: the device, the name, the object and the unit. */
-const pointTitle = (device: { readonly id: string }, point: DraftedPoint) =>
-  `${device.id}: ${printable(point.name)} (${point.objectType} ${point.instance}${point.unit === undefined ? "" : `, ${point.unit.replace(/^unit:/, "")}`})`
+/** A drafted point as the picker lists it: its name and unit, then where it is (the device when there are several). */
+const pointTitle = (device: { readonly id: string }, point: DraftedPoint, devices: number) => {
+  const unit = unitLabel(point.unit)
+  const where = `${devices > 1 ? `${device.id} · ` : ""}${point.objectType} ${point.instance}`
+  return `${printable(point.name)}${unit === "" ? "" : ` (${unit})`}  ·  ${where}`
+}
 
 /** Every drafted point, ticked: the operator unticks what the gateway should not read. */
 export const pointChoices = (drafts: ReadonlyArray<DraftedDevice>) =>
   drafts.flatMap((device) =>
     device.points.map((point) => ({
-      title: pointTitle(device, point),
+      title: pointTitle(device, point, drafts.length),
       value: pointKey(device, point),
       selected: true
     }))
   )
-
-/**
- * The picked points that commands could write, none ticked: a write is the operator's decision. Setpoints come
- * first, as the points most often written.
- */
-export const writableChoices = (drafts: ReadonlyArray<PickedDevice>) =>
-  drafts
-    .flatMap((device) =>
-      device.points
-        .filter((point) => commandableTypes.has(point.objectType))
-        .map((point) => ({
-          title: pointTitle(device, point),
-          value: pointKey(device, point),
-          selected: false,
-          setpoint: isSetpoint(point.name)
-        }))
-    )
-    .toSorted((a, b) => Number(b.setpoint) - Number(a.setpoint))
-    .map(({ title, value, selected }) => ({ title, value, selected }))
-
-const isSetpoint = (title: string) => /set ?point|sollwert|\bsp\b/i.test(title)
 
 /** The drafts with only the `picked` points; a device left with none is dropped. */
 export const keepPicked = (drafts: ReadonlyArray<DraftedDevice>, picked: ReadonlyArray<string>) => {
@@ -389,146 +347,62 @@ export const keepPicked = (drafts: ReadonlyArray<DraftedDevice>, picked: Readonl
   })
 }
 
-/**
- * The drafts with each point in `writable` made writable, with its limits; a binary point takes no limits (it is
- * written on or off).
- */
-export const makeWritable = (
-  drafts: ReadonlyArray<PickedDevice>,
-  writable: ReadonlyMap<string, { readonly min: number; readonly max: number } | undefined>
-): ReadonlyArray<PickedDevice> =>
-  drafts.map((device) => ({
-    ...device,
-    points: device.points.map((point) => {
-      const key = pointKey(device, point)
-      if (!writable.has(key)) return point
-      const limits = writable.get(key)
-      return { ...point, writable: true as const, ...(limits === undefined ? {} : { limits }) }
-    })
-  }))
-
-/** Limits to suggest for a writable point by its unit (a room setpoint in °C, a valve in %), when there is a usual range. */
-export const suggestedLimits = (unit: string | undefined): { readonly min: number; readonly max: number } | undefined =>
-  unit === undefined ? undefined : usualRanges[unit]
-
-const usualRanges: Readonly<Record<string, { readonly min: number; readonly max: number }>> = {
-  "unit:DEG_C": { min: 15, max: 30 },
-  "unit:DEG_F": { min: 59, max: 86 },
-  "unit:PERCENT": { min: 0, max: 100 }
-}
-
-/** Asks the limits of one writable numeric point: min, then max from min up. */
-const askLimits = Effect.fn("askLimits")(function* (title: string, unit: string | undefined) {
-  const suggested = suggestedLimits(unit)
-  yield* Console.error(`  ${title}: commands outside these limits are refused`)
-  const min = yield* Prompt.Number({
-    message: "  lowest value a command may set",
-    ...(suggested === undefined ? {} : { default: suggested.min })
-  })
-  const max = yield* Prompt.Number({
-    message: "  highest value a command may set",
-    min,
-    ...(suggested === undefined || suggested.max < min ? {} : { default: suggested.max })
-  })
-  return { min, max }
-})
-
-/** The read interval init suggests, the config's default (`pollIntervalMs` 5000). */
-const defaultIntervalSeconds = 5
-
-/** The devices read every `seconds`; the config's default is left out rather than written. */
-export const withInterval = (devices: ReadonlyArray<PickedDevice>, seconds: number): ReadonlyArray<PickedDevice> =>
-  seconds === defaultIntervalSeconds
-    ? devices
-    : devices.map((device) => ({ ...device, pollIntervalMs: Math.round(seconds * 1000) }))
-
-/** Up to this many points found, init lets the operator tick which to read. */
+/** Up to this many points found, the operator ticks which to read; past it every point is read. */
 export const maxPointsToPick = 25
 
-/** Asks which drafted points to read and which of them commands may write (with their limits). */
+/**
+ * Asks which drafted points to read. Nothing else is asked: every point is read at the config's default interval
+ * and none is writable, which the status page or the config changes later.
+ */
 const pickPoints = Effect.fn("pickPoints")(function* (drafts: ReadonlyArray<DraftedDevice>) {
   const choices = pointChoices(drafts)
   // A list to tick through stays short; past that, every point is read and trimmed where the whole list shows.
-  const kept =
-    choices.length > maxPointsToPick
-      ? yield* Console.error(
-          `  ${choices.length} points found, all of them read: leave out the ones you don't need later, on the status page or in ot-gateway.json`
-        ).pipe(Effect.as(drafts))
-      : keepPicked(
-          drafts,
-          yield* Prompt.MultiSelect({
-            message: `Points to read (${choices.length} found; space toggles, enter confirms, none for other ways)`,
-            choices,
-            maxPerPage: 15
-          })
-        )
-  if (kept.length === 0) return undefined
-  const interval = yield* Prompt.Number({
-    message: "Read every how many seconds? (where a device does not send changes itself)",
-    default: defaultIntervalSeconds,
-    min: 0.1,
-    max: 86_400
-  })
-  const timed = withInterval(kept, interval)
-  const candidates = writableChoices(timed)
-  if (candidates.length === 0) return timed
-  const chosen = yield* Prompt.MultiSelect({
-    message: "Which may MQTT commands write? (none by default; every write is checked and logged)",
-    choices: candidates,
-    maxPerPage: 15
-  })
-  const points = new Map(kept.flatMap((device) => device.points.map((point) => [pointKey(device, point), point])))
-  const writable = new Map<string, { readonly min: number; readonly max: number } | undefined>()
-  for (const key of chosen) {
-    const point = points.get(key)
-    if (point === undefined) continue
-    const binary = bacnetValueKind({ objectType: point.objectType, property: "present-value" }) === "binary"
-    writable.set(key, binary ? undefined : yield* askLimits(printable(point.name), point.unit))
+  if (choices.length > maxPointsToPick) {
+    yield* Console.error(
+      `  all ${choices.length} points are kept; leave out the ones you don't need later, on the status page or in the config`
+    )
+    return drafts
   }
-  return makeWritable(timed, writable)
+  const kept = keepPicked(
+    drafts,
+    yield* Prompt.MultiSelect({
+      message: "Points to read (space toggles, enter confirms)",
+      choices,
+      maxPerPage: 15
+    })
+  )
+  return kept.length === 0 ? undefined : kept
 })
 
-/** The other ways to devices, when no BACnet device answered Who-Is. */
-type OtherWay = "again" | "address" | "modbus" | "list" | "simulated" | "none"
+/** The ways to devices discover offers: what to look for first, and what to try when nothing was found. */
+type Way = "bacnet" | "modbus" | "address" | "list" | "simulated" | "none"
 
-const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
+const wayChoices: ReadonlyArray<Prompt.SelectChoice<Way>> = [
+  { title: "BACnet/IP", value: "bacnet", description: "ask every device on this network (Who-Is)" },
+  { title: "Modbus TCP", value: "modbus", description: "scan a range of addresses on port 502, read-only" },
   {
-    title: "Ask one device by its address",
+    title: "One BACnet device by its address",
     value: "address",
     description: "ip or ip:port, for a device on another subnet or another port"
   },
-  { title: "Search again", value: "again", description: "once the device is on and on this network" },
   {
-    title: "Scan for Modbus TCP devices",
-    value: "modbus",
-    description: "ask a range of addresses on port 502, read-only, as discover modbus does"
-  },
-  {
-    title: "From a points list",
+    title: "A points list",
     value: "list",
     description: "a CSV or JSON of devices and points (Modbus, or BACnet from an EDE file)"
   },
-  { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" },
-  {
-    title: "None for now",
-    value: "none",
-    description: "discover again once a device is reachable, or add it on the status page"
-  }
+  { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" }
 ]
 
-const otherWays = Prompt.Select<OtherWay>({ message: "No BACnet device answered. What now?", choices: otherWayChoices })
+const firstWay = Prompt.Select<Way>({ message: "What should discover look for?", choices: wayChoices })
 
-/** The other ways when a Modbus scan found nothing to read. */
-const otherWaysAfterModbus = Prompt.Select<OtherWay>({
-  message: "No Modbus device to read. What now?",
-  choices: otherWayChoices
-})
-
-/** The other ways when the operator picked none of the points found. */
-const otherWaysAfterPicking = Prompt.Select<OtherWay>({
-  message: "No point picked. What now?",
-  choices: otherWayChoices
-})
+const nextWay = (nothing: string) =>
+  Prompt.Select<Way>({
+    message: `${nothing} What now?`,
+    choices: [
+      ...wayChoices,
+      { title: "Nothing for now", value: "none", description: "discover again once a device is reachable" }
+    ]
+  })
 
 /** The /24 of the first LAN this machine is on, to scan for Modbus devices; a common one without a LAN. */
 export const suggestedModbusRange = (lans: ReadonlyArray<LanInterface>) => {
@@ -595,59 +469,47 @@ const validDeviceAddress = (value: string) =>
     : Effect.fail("ip or ip:port, e.g. 192.168.0.171 or 192.168.0.171:47810")
 
 /**
- * Discovery for a person at the terminal, the first way to devices: Who-Is right away, then they pick the points
- * found. When nobody answers, discovery cannot run (another program holds UDP 47808), or they pick no point, the
- * other ways: one device by its address, again, a points list, the simulated device, or none yet.
+ * Discovery for a person at the terminal: what to look for first (BACnet/IP by default, a Modbus TCP scan, one
+ * BACnet device by its address, a points list, the simulated device), then the points to read. When nothing was
+ * found or picked, the same ways again, or none for now. `start` skips the first question: `address` asks that
+ * device straight away, `whoIs` (init's `--devices discover`) asks the network.
  */
 export const discoverInteractively = Effect.fn("discoverInteractively")(function* (
   probe: GatewayConfig,
   modbusRange: () => string,
-  firstAddress?: string
+  start: { readonly address?: string | undefined; readonly whoIs?: boolean } = {}
 ) {
-  let address: string | undefined = firstAddress
-  let modbus = false
+  let address: string | undefined = start.address
+  let way: Way = address !== undefined ? "address" : start.whoIs === true ? "bacnet" : yield* firstWay
   while (true) {
-    if (modbus) {
-      modbus = false
+    if (way === "none") return []
+    if (way === "simulated") return [simulatedDevice]
+    if (way === "list") return yield* devicesFromList
+    let nothing = "Nothing to add."
+    if (way === "modbus") {
       const devices = yield* devicesFromModbusScan(modbusRange())
       if (devices.length > 0) return devices
-      const after = yield* otherWaysAfterModbus
-      if (after === "modbus") {
-        modbus = true
-        continue
+      nothing = "No Modbus device to read."
+    } else {
+      if (way === "address" && address === undefined) {
+        address = yield* Prompt.String({ message: "Device address (ip or ip:port)", validate: validDeviceAddress })
       }
-      if (after === "simulated") return [simulatedDevice]
-      if (after === "none") return []
-      if (after === "list") return yield* devicesFromList
-      address =
-        after === "again"
-          ? undefined
-          : yield* Prompt.String({ message: "Device address (ip or ip:port)", validate: validDeviceAddress })
-    }
-    const drafts: ReadonlyArray<DraftedDevice> = yield* discoverDrafts(
-      probe,
-      undefined,
-      address === undefined ? {} : { address }
-    ).pipe(
-      Effect.catchTag("DiscoverError", (error) =>
-        Console.error(`  ${error.message}`).pipe(Effect.as<ReadonlyArray<DraftedDevice>>([]))
+      const drafts: ReadonlyArray<DraftedDevice> = yield* discoverDrafts(
+        probe,
+        undefined,
+        address === undefined ? {} : { address }
+      ).pipe(
+        Effect.catchTag("DiscoverError", (error) =>
+          Console.error(`  ${error.message}`).pipe(Effect.as<ReadonlyArray<DraftedDevice>>([]))
+        )
       )
-    )
-    const usable = drafts.filter((draft) => draft.points.length > 0)
-    const picked = usable.length > 0 ? yield* pickPoints(usable) : undefined
-    if (picked !== undefined) return picked
-    const next = yield* usable.length > 0 ? otherWaysAfterPicking : otherWays
-    if (next === "simulated") return [simulatedDevice]
-    if (next === "none") return []
-    if (next === "list") return yield* devicesFromList
-    if (next === "modbus") {
-      modbus = true
-      continue
+      const usable = drafts.filter((draft) => draft.points.length > 0)
+      const picked = usable.length > 0 ? yield* pickPoints(usable) : undefined
+      if (picked !== undefined) return picked
+      nothing = usable.length > 0 ? "No point picked." : "No new BACnet device or point found."
     }
-    address =
-      next === "again"
-        ? undefined
-        : yield* Prompt.String({ message: "Device address (ip or ip:port)", validate: validDeviceAddress })
+    address = undefined
+    way = yield* nextWay(nothing)
   }
 })
 
@@ -662,7 +524,7 @@ const devicesFrom = Effect.fn("devicesFrom")(function* (
   if (source === "simulated") return [simulatedDevice]
   if (source === "list") return yield* flags.points === undefined ? devicesFromList : devicesFromFlag(flags.points)
   const probe = yield* Schema.decodeUnknownEffect(GatewayConfig)(initConfig(answers, []))
-  if (flags.yes !== true) return yield* discoverInteractively(probe, modbusRange)
+  if (flags.yes !== true) return yield* discoverInteractively(probe, modbusRange, { whoIs: true })
   const drafts = yield* discoverDrafts(probe)
   // A device needs a point: one without (no readable objects, or more than one address answered) is left out.
   const usable = drafts.filter((draft) => draft.points.length > 0)

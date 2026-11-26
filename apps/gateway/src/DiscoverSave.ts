@@ -81,11 +81,10 @@ export const mergeDevices = (
 }
 
 /**
- * Saves `picked` into the config at `path`, merged into `fileText`: the file as discover read it before it asked,
- * so a change made meanwhile (the status page, an editor) is refused rather than merged into. Fails without writing
- * when the result would not decode.
+ * `picked` merged into `fileText`, the config file at `path` as discover read it, and decoded with the gateway's own
+ * schema: what a save would write, and the file as it was, to show the difference before asking. Fails when the result would not decode.
  */
-export const saveDiscovered = Effect.fn("saveDiscovered")(function* (
+export const mergeDiscovered = Effect.fn("mergeDiscovered")(function* (
   path: string,
   fileText: string,
   picked: ReadonlyArray<InitDevice>,
@@ -97,7 +96,13 @@ export const saveDiscovered = Effect.fn("saveDiscovered")(function* (
     )
   )
   const merged = mergeDevices(raw, picked, broadcastAddress)
-  yield* parseConfig(merged.text).pipe(
+  // The file as it was, decoded the same way, so a diff of the two shows only what the merge changed.
+  const before = yield* parseConfig(fileText).pipe(
+    Effect.catchTag("SchemaError", (error) =>
+      Effect.fail(new DiscoverError({ message: `${path} is not a valid config; nothing was saved:\n${error.message}` }))
+    )
+  )
+  const config = yield* parseConfig(merged.text).pipe(
     Effect.catchTag("SchemaError", (error) =>
       Effect.fail(
         new DiscoverError({
@@ -106,6 +111,14 @@ export const saveDiscovered = Effect.fn("saveDiscovered")(function* (
       )
     )
   )
+  return { ...merged, before, config }
+})
+
+/**
+ * Writes `merged` over the config at `path`, unless the file is no longer `fileText`: a change made meanwhile (the
+ * status page, an editor) is refused rather than overwritten.
+ */
+export const writeMerged = Effect.fn("writeMerged")(function* (path: string, fileText: string, merged: Merged) {
   const store = yield* makeConfigStore(path)
   yield* store.save(merged.text, etagOf(fileText)).pipe(
     Effect.catchTags({
@@ -121,5 +134,4 @@ export const saveDiscovered = Effect.fn("saveDiscovered")(function* (
         Effect.fail(new DiscoverError({ message: `${error.message}; ${path} is as it was` }))
     })
   )
-  return merged
 })
