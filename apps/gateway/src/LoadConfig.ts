@@ -84,12 +84,18 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
       )
     )
   )
-  const folder = dirname(resolve(path))
-  // The gateway's folder holds ot-gateway.env too: started from elsewhere (a checkout's root), the CLI finds the
-  // broker password there as well. main.ts has read the working directory's already, and set variables win.
-  if (folder !== process.cwd()) yield* Effect.sync(() => loadEnvFile(join(folder, envFileName)))
+  yield* loadFolderEnv(path)
   return (yield* configFileSource(path)).resolve(config)
 })
+
+/**
+ * The gateway's folder holds ot-gateway.env too: started from elsewhere (a checkout's root), the CLI finds the
+ * broker password there as well. main.ts has read the working directory's already, and set variables win.
+ */
+export const loadFolderEnv = (path: string) => {
+  const folder = dirname(resolve(path))
+  return folder === process.cwd() ? Effect.void : Effect.sync(() => loadEnvFile(join(folder, envFileName)))
+}
 
 /**
  * The config file at `path` as the status page's editor needs it: its absolute path, and how a config saved there
