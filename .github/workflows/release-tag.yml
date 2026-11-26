@@ -1,0 +1,67 @@
+name: Release tag
+
+# Tags a release when dev is merged into main. The tag is the one packaging/compose.yaml pins (OT_GATEWAY_TAG), which
+# the release's pin pull request moved and ReleasePins.test.ts keeps in step with the other pins. Pushing the tag
+# starts the Image and Package workflows, which publish the release.
+#
+# The tag is pushed with ROUTINE_TOKEN: a tag pushed with GITHUB_TOKEN starts no other workflow, so nothing would be
+# published. Without the secret the job fails and says to push the tag by hand.
+#
+# A push to main whose pinned tag already exists tags nothing: on the commit it names, it is a re-run; on another, the
+# pins were not moved (an urgent fix, say), and the job says so without failing.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check the token
+        env:
+          HAS_ROUTINE_TOKEN: ${{ secrets.ROUTINE_TOKEN != '' }}
+        run: |
+          if [ "$HAS_ROUTINE_TOKEN" != true ]; then
+            echo "::error::ROUTINE_TOKEN is not set, so no tag is pushed (one pushed with GITHUB_TOKEN would publish nothing). Push the tag compose.yaml pins by hand: git tag -a vX.Y.Z -m vX.Y.Z $GITHUB_SHA && git push origin vX.Y.Z"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ secrets.ROUTINE_TOKEN }}
+
+      - name: Tag the release compose.yaml pins
+        run: |
+          set -euo pipefail
+          tag=$(sed -nE 's/.*OT_GATEWAY_TAG:-(v[^}]+)}.*/\1/p' packaging/compose.yaml | head -n 1)
+          if ! printf '%s' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::packaging/compose.yaml pins '$tag', which is not a release tag (vX.Y.Z or vX.Y.Z-rc.N)."
+            exit 1
+          fi
+
+          git fetch --quiet --tags origin
+          if existing=$(git rev-parse --quiet --verify "refs/tags/$tag^{commit}"); then
+            if [ "$existing" = "$GITHUB_SHA" ]; then
+              echo "$tag already tags $GITHUB_SHA."
+            else
+              echo "::notice::$tag already exists on ${existing:0:7}, so this push to main tags nothing. To release it, move the pins to a new tag in a pull request into dev and merge dev into main."
+            fi
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          echo "::notice::Tagged $GITHUB_SHA as $tag; Image and Package publish it."
