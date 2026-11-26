@@ -1411,7 +1411,7 @@ const simulateBacnetCommand = Command.make(
       if (!Number.isInteger(port) || port < 1 || port > 65_535) {
         return yield* new SimulateError({ message: `--port takes 1 to 65535, not ${port}` })
       }
-      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(listen)) {
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(listen) || listen.split(".").some((octet) => Number(octet) > 255)) {
         return yield* new SimulateError({
           message: `--listen takes an IPv4 address (BACnet/IP is IPv4 only), not ${listen}`
         })
@@ -1431,8 +1431,8 @@ const simulateBacnetCommand = Command.make(
   Command.withExamples([
     { command: "ot-gateway simulate bacnet", description: "Device 1001 on UDP 47808, found by discover on the LAN" },
     {
-      command: "ot-gateway simulate bacnet --port 47809 --instance 1002",
-      description: "Next to a gateway on this machine; discover it with --address <ip>:47809"
+      command: "ot-gateway simulate bacnet --port 47810 --instance 1002",
+      description: "Next to a gateway on this machine; discover it with --address <ip>:47810"
     }
   ])
 )

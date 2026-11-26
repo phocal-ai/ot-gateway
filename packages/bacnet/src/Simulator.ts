@@ -61,7 +61,7 @@ export interface CovSubscription {
   readonly subscriber: string
   readonly processId: number
   readonly object: ObjectId
-  /** When it ends, in epoch milliseconds; absent for an indefinite one. */
+  /** When it ends, in the milliseconds of `Requester.now`; absent for an indefinite one. */
   readonly expiresAt?: number
 }
 
@@ -82,7 +82,7 @@ export interface SimulatedDevice {
 /** Who sent a request, and when, for the services that remember the requester. */
 export interface Requester {
   readonly subscriber: string
-  /** Epoch milliseconds. */
+  /** Milliseconds on a clock that only moves forward (the server passes `monotonicMillis`). */
   readonly now: number
 }
 

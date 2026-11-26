@@ -53,9 +53,18 @@ describe("startBanner", () => {
   })
 
   it("says a device on another port is found by its address only", () => {
-    const lines = startBanner({ ...options, port: 47_809 }, lans).join("\n")
-    expect(lines).toContain("npx ot-gateway discover --address 192.168.1.20:47809")
+    const lines = startBanner({ ...options, port: 47_810 }, lans).join("\n")
+    expect(lines).toContain("npx ot-gateway discover --address 192.168.1.20:47810")
     expect(lines).toContain("a broadcast Who-Is goes to 47808 only")
+  })
+
+  it("does not offer a broadcast to a device that listens on one address, which gets none", () => {
+    const one = startBanner({ ...options, listen: "192.168.1.20" }, lans).join("\n")
+    expect(one).toContain("npx ot-gateway discover --address 192.168.1.20     (it listens on one address")
+    expect(one).toContain("Find it from another machine")
+    const loopback = startBanner({ ...options, listen: "127.0.0.1" }, lans).join("\n")
+    expect(loopback).toContain("Find it from this machine")
+    expect(loopback).toContain("discover --address 127.0.0.1 ")
   })
 })
 
@@ -162,7 +171,8 @@ describe("simulateBacnet", () => {
       const error = yield* Effect.flip(simulateBacnet(options, host, () => lans))
       expect(error._tag).toBe("SimulateError")
       expect(error.message).toContain("UDP port 47808 is in use")
-      expect(error.message).toContain("--port 47809")
+      // Not 47809: the demo holds it.
+      expect(error.message).toContain("--port 47810")
     }).pipe(Effect.scoped)
   )
 })

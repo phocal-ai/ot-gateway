@@ -16,7 +16,8 @@ import { makeSimulatedDevice, ObjectType, PropertyId, serveSimulatedDevice, setP
 import type { SimulatedDevice } from "@ot-gateway/bacnet"
 import { describeDatagramSocketError, monotonicMillis, type Network } from "@ot-gateway/core"
 import * as NodeDatagramSocket from "@effect/platform-node/NodeDatagramSocket"
-import { Console, Effect, Schedule, Schema } from "effect"
+import { Console, Deferred, Effect, Schedule, Schema } from "effect"
+import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import { networkInterfaces } from "node:os"
 
 /** The room's temperature and whether its heating runs. */
@@ -126,22 +127,34 @@ export const startBanner = (
 ): ReadonlyArray<string> => {
   const portSuffix = options.port === 47_808 ? "" : `:${options.port}`
   const [first] = lans
-  const here = options.listen === "0.0.0.0" ? first?.address : options.listen
+  const everyInterface = options.listen === "0.0.0.0"
+  const here = everyInterface ? first?.address : options.listen
+  const loopback = options.listen.startsWith("127.")
   return [
     `Simulated BACnet/IP device ${options.instance} "Demo room" on UDP ${options.listen}:${options.port}, 3 objects:`,
     `  analog-input 1   Room temperature       °C, moves towards the setpoint`,
     `  analog-value 1   Temperature setpoint   °C, writable, ${START_SETPOINT} to start with`,
     `  binary-input 1   Heating                on while the room is below the setpoint`,
-    ...(options.listen === "0.0.0.0" && lans.length > 0
+    ...(everyInterface && lans.length > 0
       ? [`This machine on the LAN: ${lans.map((lan) => `${lan.address} (${lan.name})`).join(", ")}`]
       : []),
-    `Find it from another machine on this network:`,
-    options.port === 47_808
+    loopback ? `Find it from this machine (a loopback address is not on the network):` : FIND_IT,
+    // A broadcast reaches a socket on every interface and port 47808 only (on Linux, one bound to an address gets none).
+    everyInterface && options.port === 47_808
       ? `  npx ot-gateway discover${here === undefined ? "" : `     (or discover --address ${here} where broadcasts do not arrive)`}`
-      : `  npx ot-gateway discover --address ${here ?? "<this machine's address>"}${portSuffix}     (a broadcast Who-Is goes to 47808 only)`,
+      : `  npx ot-gateway discover --address ${here ?? "<this machine's address>"}${portSuffix}     (${
+          options.port === 47_808
+            ? "it listens on one address, where a broadcast Who-Is does not arrive"
+            : "a broadcast Who-Is goes to 47808 only"
+        })`,
     `Writes are printed here. Stop with Ctrl+C.`
   ]
 }
+
+const FIND_IT = "Find it from another machine on this network:"
+
+/** A port to suggest when `port` is taken: not 47809, which the demo's simulated heat pump holds. */
+export const otherPort = (port: number) => (port === 47_810 ? 47_811 : 47_810)
 
 /** How often the room is updated. */
 const TICK = "1 second"
@@ -158,16 +171,18 @@ export const simulateBacnet = Effect.fn("simulateBacnet")(function* (
     lanInterfaces(networkInterfaces())
 ) {
   const device = makeRoomDevice(options.instance)
+  const stopped = yield* Deferred.make<never, DatagramSocket.DatagramSocketError>()
+  const other = otherPort(options.port)
   const socket = yield* network === undefined
     ? NodeDatagramSocket.make({ bind: { address: options.listen, port: options.port } })
     : network.udp({ address: options.listen, port: options.port })
-  yield* serveSimulatedDevice(socket, device).pipe(
+  yield* serveSimulatedDevice(socket, device, stopped).pipe(
     Effect.catchTag("DatagramSocketError", (error) =>
       Effect.fail(
         new SimulateError({
           message:
             error.reason._tag === "DatagramSocketOpenError" && error.reason.kind === "AddressInUse"
-              ? `UDP port ${options.port} is in use, probably by an ot-gateway, a demo or a BACnet tool on this machine: stop it, or run on another port with --port ${options.port + 1} (and discover it with --address <this machine>:${options.port + 1})`
+              ? `UDP port ${options.port} is in use, probably by an ot-gateway, a demo or a BACnet tool on this machine: stop it, or run on another port with --port ${other} (and discover it with --address <this machine>:${other})`
               : `could not listen on UDP ${options.listen}:${options.port}: ${describeDatagramSocketError(error)}`
         })
       )
@@ -188,5 +203,19 @@ export const simulateBacnet = Effect.fn("simulateBacnet")(function* (
     }
     state = next
     showRoom(device, state)
-  }).pipe(Effect.repeat(Schedule.spaced(TICK)))
+  }).pipe(
+    Effect.repeat(Schedule.spaced(TICK)),
+    // A device that no longer answers must not look alive: the command ends, and Docker or systemd sees it.
+    Effect.raceFirst(
+      Deferred.await(stopped).pipe(
+        Effect.catchTag("DatagramSocketError", (error) =>
+          Effect.fail(
+            new SimulateError({
+              message: `the simulated device stopped answering on UDP ${options.listen}:${options.port}: ${describeDatagramSocketError(error)}`
+            })
+          )
+        )
+      )
+    )
+  )
 })
