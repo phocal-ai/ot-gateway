@@ -77,8 +77,8 @@ flowchart LR
 Three things worth knowing:
 
 - **Click anything for its details.** A device or a point opens in a side panel; ↑ and ↓ step to the next one.
-- **Every view is a link.** The search, the filter and the open device or point stay in the URL.
-- **Save applies at once.** Settings writes `ot-gateway.json`, keeps the previous one as `.bak` and applies it without a restart.
+- **Links keep the view.** The open device, and the Points search with the open point, stay in the URL.
+- **Save applies at once.** Settings writes the config file, keeps the previous one as `.bak` and applies devices, broker and site without a restart.
 
 Every tab, card and panel in detail, and the same data as JSON for scripts: [the status page](docs/operations.md#status-page) in operations.
 

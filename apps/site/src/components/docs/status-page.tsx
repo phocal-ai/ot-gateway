@@ -18,7 +18,7 @@ const tabs: ReadonlyArray<{
     name: "Status",
     question: "Is everything working?",
     shows: [
-      "Alarms, broker, buffer and machine",
+      "Alarms, broker, devices, buffer and machine",
       "Every device with its health",
       "What broke lately, and when it came back"
     ],
@@ -36,7 +36,7 @@ const tabs: ReadonlyArray<{
     name: "Messages",
     question: "What reaches the broker?",
     shows: ["The latest message on each topic", "How many went out, per topic"],
-    click: "a kind: only values, health or command results"
+    click: "a kind to filter: values, metadata, health, commands"
   },
   {
     icon: Settings2,
