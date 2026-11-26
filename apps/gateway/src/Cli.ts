@@ -12,6 +12,7 @@
  *   ot-gateway watch [config]       print what arrives at the config's broker (--check: what is off the contract)
  *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
  *   ot-gateway publish <topic> [payload]  one message to the config's broker (empty and --retain clears)
+ *   ot-gateway write <device/point> <value> [config]  a guarded command through the broker, and its result
  *   ot-gateway status [config]      the running gateway's status, one line per device (exit 1 when failing)
  *   ot-gateway events [config]      what changed lately: devices failing and recovering, the broker lost and back
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
@@ -67,6 +68,7 @@ import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
+import { formatWritten, parseTarget, writePoint } from "./Write.ts"
 import { contractJson, contractMessageNames, describeContract, describeContractMessage } from "./ContractReport.ts"
 import {
   DEFAULT_READ_SECONDS,
@@ -1086,6 +1088,69 @@ const targetConfigFlag = Flag.String("config").pipe(
 const targetFrom = (positional: string | undefined, flag: string | undefined, url: string | undefined) =>
   chooseConfig(positional, flag).pipe(Effect.flatMap((config) => resolveTarget({ config, url })))
 
+const writeCommand = Command.make(
+  "write",
+  {
+    target: Argument.String("point").pipe(
+      Argument.withDescription("device/point, as in the config: demo-room/temperature-setpoint"),
+      Argument.filter(
+        (text) => parseTarget(text) !== undefined,
+        () => "name a device/point"
+      )
+    ),
+    value: Argument.String("value").pipe(
+      Argument.withDescription(
+        "A number in the point's unit, true or false (on/off) for a switch, null to release a BACnet priority slot"
+      )
+    ),
+    config: Argument.String("config").pipe(
+      Argument.withDescription(
+        `Path of the gateway's JSON config (default ${defaultConfigPath}): its broker, site, building and points`
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    configFlag: Flag.String("config").pipe(
+      Flag.withDescription("Path of the gateway's JSON config, the same as naming it as the argument"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    timeout: Flag.Int("timeout").pipe(
+      Flag.withDescription(
+        "Seconds to wait for the gateway's result (default 25: up to 10 for its turn, 10 for the write)"
+      ),
+      Flag.filter(
+        (seconds) => seconds >= 1 && seconds <= 300,
+        (seconds) => `--timeout takes 1 to 300, not ${seconds}`
+      ),
+      Flag.withDefault(25)
+    ),
+    json: jsonFlag
+  },
+  ({ target, value, config, configFlag, timeout, json }) =>
+    chooseConfig(config, configFlag).pipe(
+      Effect.flatMap((path) => loadConfig(path ?? defaultConfigPath)),
+      Effect.flatMap((decoded) =>
+        writePoint(decoded, parseTarget(target) ?? { device: "", point: "" }, value, {
+          timeout: Duration.seconds(timeout)
+        })
+      ),
+      Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatWritten(report)))),
+      jsonFailure(json, { point: target, value })
+    )
+).pipe(
+  Command.withDescription(
+    "Write a point through the gateway, as a consumer would: a guarded command on its $set topic, then its result (exit 1 when not written)"
+  ),
+  Command.withExamples([
+    {
+      command: "ot-gateway write demo-room/temperature-setpoint 21.5",
+      description: "Set a setpoint, wait for the result"
+    },
+    { command: "ot-gateway write plant/pump-enable on --json", description: "Switch a point on, the outcome as JSON" }
+  ])
+)
+
 const secondsFlag = (description: string) =>
   Flag.Int("seconds").pipe(
     Flag.withDescription(description),
@@ -1646,6 +1711,7 @@ export const cli = Command.make("ot-gateway").pipe(
     watchCommand,
     brokerCommand,
     publishCommand,
+    writeCommand,
     status,
     eventsCommand,
     historyCommand,
@@ -1671,6 +1737,7 @@ const subcommands = new Set([
   "watch",
   "broker",
   "publish",
+  "write",
   "status",
   "events",
   "history",

@@ -119,6 +119,48 @@ export const writeKind = (device: Device, point: AnyPoint): "binary" | "multi-st
 }
 
 /**
+ * Why `value` cannot be written to `point`, or undefined when it can: the guard's type and `limits` checks, shared
+ * with `ot-gateway write`, which runs them before it sends anything.
+ */
+export const valueRejection = (
+  device: Device,
+  point: AnyPoint,
+  value: WriteValue
+): (CommandOutcome & { readonly status: "rejected" }) | undefined => {
+  const kind = writeKind(device, point)
+  if (value === null) {
+    return device.protocol === "bacnet-ip"
+      ? undefined
+      : { status: "rejected", reason: "wrong-type", message: "only a BACnet point can be released" }
+  }
+  if ((kind === "binary") !== (typeof value === "boolean")) {
+    return {
+      status: "rejected",
+      reason: "wrong-type",
+      message: kind === "binary" ? "the point takes true or false" : "the point takes a number"
+    }
+  }
+  if (kind === "multi-state" && !(Number.isInteger(value) && Number(value) >= 1)) {
+    return {
+      status: "rejected",
+      reason: "wrong-type",
+      message: "a multi-state point takes a whole number from 1 (its state)"
+    }
+  }
+  if (typeof value === "number") {
+    const limits = point.limits
+    if (limits === undefined || value < limits.min || value > limits.max) {
+      return {
+        status: "rejected",
+        reason: "out-of-range",
+        message: `${value} is outside ${limits?.min} to ${limits?.max}`
+      }
+    }
+  }
+  return undefined
+}
+
+/**
  * A value in device units: `(value - offset) / factor`, the inverse of
  * scaling. A result within floating-point error of a whole number is that
  * number: 19.9 at factor 0.1 is register value 199, not 198.99999999999997,
@@ -174,19 +216,8 @@ export const makeCommandGuard = (options: CommandGuardOptions) => {
     const payload = decodePayload(command.payload)
     if (payload._tag === "Failure") return rejected("invalid-payload", 'the payload must be {"value": …}')
     const { value } = payload.value
-    const kind = writeKind(device, point)
-    if (value === null) {
-      if (device.protocol !== "bacnet-ip") return rejected("wrong-type", "only a BACnet point can be released")
-    } else if ((kind === "binary") !== (typeof value === "boolean")) {
-      return rejected("wrong-type", kind === "binary" ? "the point takes true or false" : "the point takes a number")
-    } else if (kind === "multi-state" && !(Number.isInteger(value) && Number(value) >= 1)) {
-      return rejected("wrong-type", "a multi-state point takes a whole number from 1 (its state)")
-    } else if (typeof value === "number") {
-      const limits = point.limits
-      if (limits === undefined || value < limits.min || value > limits.max) {
-        return rejected("out-of-range", `${value} is outside ${limits?.min} to ${limits?.max}`)
-      }
-    }
+    const wrong = valueRejection(device, point, value)
+    if (wrong !== undefined) return wrong
     // Last before the write: a command that waited too long behind others is not applied late.
     const waited = (yield* monotonicMillis) - command.receivedAt
     const maxAge = Math.min(maxAgeMillis, (command.expirySeconds ?? Number.POSITIVE_INFINITY) * 1000)
