@@ -29,7 +29,7 @@
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, CliOutput, Command, Flag } from "effect/cli"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
@@ -73,7 +73,15 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { failureFields, failureLine, localTimeZone, printJson, printResult, UsageMistake } from "./Output.ts"
+import {
+  failureFields,
+  failureLine,
+  localTimeZone,
+  printJson,
+  printResult,
+  shellArgument,
+  UsageMistake
+} from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -99,18 +107,30 @@ export const readingLabel = (device: Device) => {
   return `${which} where the device supports it, polled ${polled} otherwise`
 }
 
+/**
+ * A file the config names, as `check` shows it: under the working directory as `./name`, else as it is. In the
+ * Docker wrapper the working directory is the user's folder mounted at /work, a path they never see.
+ */
+export const shownPath = (path: string, cwd: string) => {
+  const inside = relative(cwd, path)
+  const outside = inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)
+  return inside !== "" && !outside ? `./${inside}` : path
+}
+
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
-export const describeConfig = (config: GatewayConfig) => {
+export const describeConfig = (config: GatewayConfig, cwd = process.cwd()) => {
   const passwordWarning = mqttPasswordWarning(config.mqtt)
   return [
     `config ok: ${config.site}/${config.building}, gateway ${config.id}, broker ${config.mqtt.url}`,
     ...(passwordWarning === undefined ? [] : [`  warning: ${passwordWarning}`]),
     config.buffer === undefined
       ? "  no buffer: values read while the broker is down are lost"
-      : `  buffer ${config.buffer.path}`,
+      : `  buffer ${shownPath(config.buffer.path, cwd)}`,
     ...(config.history === undefined
       ? []
-      : [`  history ${config.history.path}, per-minute values for ${config.history.retentionDays} days`]),
+      : [
+          `  history ${shownPath(config.history.path, cwd)}, per-minute values for ${config.history.retentionDays} days`
+        ]),
     config.status === undefined
       ? "  no status page"
       : config.status.bindAddress === "0.0.0.0"
@@ -429,6 +449,35 @@ export const missingInitAnswers = (
     : [])
 ]
 
+/**
+ * The `init` line to run without a terminal, with the answers it needs: the folder, site, broker and devices given
+ * kept as they were and an example for the rest, so it names the folder the user chose (`init . --site …`). Other
+ * flags (`--building`, `--status-port`, …) are left to add again.
+ */
+export const initExample = (
+  command: string,
+  directory: string | undefined,
+  given: {
+    readonly site: string | undefined
+    readonly broker: string | undefined
+    readonly points: string | undefined
+    readonly devices: string | undefined
+  }
+) => {
+  const devices =
+    given.points !== undefined
+      ? `--points ${shellArgument(given.points)}`
+      : given.devices !== undefined
+        ? `--devices ${shellArgument(given.devices)}`
+        : "--points points.csv"
+  return [
+    `${command} init ${shellArgument(directory ?? "site-1")}`,
+    `--site ${shellArgument(given.site ?? "site-1")}`,
+    `--broker ${shellArgument(given.broker ?? "mqtts://broker.example:8883")}`,
+    devices
+  ].join(" ")
+}
+
 const init = Command.make(
   "init",
   {
@@ -487,7 +536,7 @@ const init = Command.make(
             code: "missing-answers",
             message: `no terminal to ask, so init needs its answers as flags: ${missing.join(", ")}; or --yes for the defaults (site my-site, a broker on localhost, a simulated device). Nothing was written`,
             missing,
-            hint: `${yield* invocation} init site-1 --site site-1 --broker mqtts://broker.example:8883 --points points.csv`
+            hint: initExample(yield* invocation, directory, given)
           })
         }
       }

@@ -14,7 +14,9 @@ import {
   configSummary,
   describeConfig,
   messagesArguments,
+  initExample,
   missingInitAnswers,
+  shownPath,
   pointsListOutcome,
   refuseConfigAsPayload,
   runCli,
@@ -121,6 +123,14 @@ const bacnetConfig = (device: Record<string, unknown>) =>
   )
 
 describe("check", () => {
+  it("shows the files under the working directory as ./name, as the Docker wrapper's /work is no path the user knows", () => {
+    expect(shownPath("/work/ot-gateway-buffer.sqlite", "/work")).toBe("./ot-gateway-buffer.sqlite")
+    expect(shownPath("/work/data/history.sqlite", "/work")).toBe("./data/history.sqlite")
+    expect(shownPath("/var/lib/ot-gateway/buffer.sqlite", "/work")).toBe("/var/lib/ot-gateway/buffer.sqlite")
+    expect(shownPath("/work/..data/history.sqlite", "/work")).toBe("./..data/history.sqlite")
+    expect(shownPath("/elsewhere/buffer.sqlite", "/work")).toBe("/elsewhere/buffer.sqlite")
+  })
+
   it.effect("says which BACnet points are asked for by change of value, with the poll interval as the fallback", () =>
     Effect.gen(function* () {
       const config = yield* bacnetConfig({})
@@ -344,6 +354,16 @@ describe("init without a terminal", () => {
     ])
     expect(missingInitAnswers("site-1", { ...none, site: "s", broker: "mqtt://b", devices: "none" })).toEqual([])
     expect(missingInitAnswers(".", { ...none, site: "s", broker: "mqtt://b", points: "p.csv" })).toEqual([])
+  })
+
+  it("shows the whole line to run, with what was given kept and the folder the user chose", () => {
+    const none = { site: undefined, broker: undefined, points: undefined, devices: undefined }
+    expect(initExample("otg", ".", { ...none, site: "plant-2" })).toBe(
+      "otg init . --site plant-2 --broker mqtts://broker.example:8883 --points points.csv"
+    )
+    expect(initExample("otg", undefined, { ...none, devices: "none" })).toBe(
+      "otg init site-1 --site site-1 --broker mqtts://broker.example:8883 --devices none"
+    )
   })
 
   it.effect("refuses to write placeholders, naming the flags as JSON, and writes nothing", () =>
