@@ -161,8 +161,11 @@ export const reportFailure =
     if (options.json) return Effect.void
     return options.longRunning
       ? Effect.logError(describeFailure(error.success))
-      : Console.error(failureLine(describeFailure(error.success)))
+      : Console.error(withHint(failureLine(describeFailure(error.success)), failureFields(error.success)["hint"]))
   }
+
+/** A failure's line with its hint, what to check next, on the line below, as `--json` has it in `hint`. */
+export const withHint = (line: string, hint: unknown) => (typeof hint === "string" ? `${line}\n  ${hint}` : line)
 
 /** An expected failure of a one-shot command, as stderr shows it. */
 export const failureLine = (message: string) => `error: ${message}`

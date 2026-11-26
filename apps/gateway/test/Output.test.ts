@@ -19,7 +19,8 @@ import {
   ResultConsole,
   stderrConsole,
   stdoutClosed,
-  usageFailure
+  usageFailure,
+  withHint
 } from "../src/Output.ts"
 import { gatewayTeardown } from "../src/Shutdown.ts"
 import { messageRecord } from "../src/Watch.ts"
@@ -101,6 +102,13 @@ describe("--json output", () => {
 })
 
 describe("failures of one-shot commands", () => {
+  it("put the hint, what to check, below the error, as --json has it in hint", () => {
+    expect(withHint("error: could not connect", "is the broker running?")).toBe(
+      "error: could not connect\n  is the broker running?"
+    )
+    expect(withHint("error: could not connect", undefined)).toBe("error: could not connect")
+  })
+
   const main = fileURLToPath(new URL("../src/main.ts", import.meta.url))
   // The real entry point, as a person or an agent runs it: what reaches stderr, stdout and the exit code.
   // On Node 22 this also checks that Node's notice about node:sqlite stays off stderr (NodeWarnings.ts).
