@@ -443,6 +443,40 @@ describe("upgrade", () => {
     }).pipe(Effect.provide(NodeServices.layer))
   )
 
+  it.effect("takes a release for newer than its release candidate", () =>
+    Effect.gen(function* () {
+      const directory = folder({ compose: "v0.16.0-rc.1" })
+      const report = yield* upgrade(directory, { ...upgradeOptions(directory), check: true }).pipe(
+        Effect.provide(scriptedDocker().layer)
+      )
+      expect(report).toMatchObject({ current: "v0.16.0-rc.1", latest: "v0.16.0", available: true })
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("goes back without waiting for values it never had, when the gateway did not answer before", () =>
+    Effect.gen(function* () {
+      const directory = folder({ compose: "v0.15.0" })
+      const docker = scriptedDocker()
+      // The old release answers only after the rollback, and with a device that has no values.
+      let switched = false
+      const fetchSnapshot: FetchSnapshot = (url) =>
+        Effect.suspend(() => {
+          const tag = composeTag(readFileSync(join(directory, "compose.yaml"), "utf8"))
+          if (tag === "v0.16.0") switched = true
+          return tag === "v0.16.0" || !switched
+            ? scriptedStatus(["down"])(url)
+            : Effect.succeed(snapshot({ devices: [device({ status: "failing", points: [] })] }))
+        })
+      const fiber = yield* upgrade(directory, { ...upgradeOptions(directory), fetchSnapshot }).pipe(
+        Effect.provide(docker.layer),
+        Effect.flip,
+        Effect.forkChild
+      )
+      const error = yield* driveClock(fiber)
+      expect(error).toMatchObject({ code: "upgrade-rolled-back" })
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
   it.effect("does nothing when the folder runs the newest release", () =>
     Effect.gen(function* () {
       const directory = folder({ compose: "v0.16.0" })

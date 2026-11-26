@@ -308,9 +308,6 @@ type Observation =
       readonly devices: number
     }
 
-const sameRelease = (left: Release, right: Release) =>
-  left[0] === right[0] && left[1] === right[1] && left[2] === right[2]
-
 /** What one status answer says: values flow, or what is missing. */
 export const observe = (
   snapshot: GatewaySnapshot,
@@ -320,10 +317,12 @@ export const observe = (
   if (snapshot.site !== expected.site || snapshot.building !== expected.building || snapshot.id !== expected.id) {
     return { _tag: "Other", found: gatewayName(snapshot) }
   }
-  const wanted = options.version === undefined ? undefined : parseRelease(options.version)
-  if (wanted !== undefined) {
-    const running = snapshot.version === undefined ? undefined : parseRelease(snapshot.version)
-    if (running === undefined || !sameRelease(running, wanted)) return { _tag: "OldRelease", version: snapshot.version }
+  // The whole tag, so a release candidate still answering is not taken for the release.
+  if (
+    options.version !== undefined &&
+    (snapshot.version === undefined || versionName(snapshot.version) !== versionName(options.version))
+  ) {
+    return { _tag: "OldRelease", version: snapshot.version }
   }
   const all = snapshot.devices.flatMap((device) => device.points.map((point) => pointKey(device.id, point.id)))
   // A point the config no longer has is not waited for.
@@ -533,7 +532,11 @@ const valuesFor = Effect.fn("valuesFor")(function* (
   if (config.status === undefined) return null
   const seconds = Math.round(Duration.toSeconds(Duration.fromInputUnsafe(options.timeout)))
   yield* Console.log(
-    `… waiting for ${extra.required === undefined ? "every point" : `the ${extra.required.size} point(s) that had one`} to have a value (up to ${seconds} s)`
+    extra.required === undefined
+      ? `… waiting for every point to have a value (up to ${seconds} s)`
+      : extra.required.size === 0
+        ? `… waiting for ${versionName(extra.version ?? "the gateway")} to answer (up to ${seconds} s)`
+        : `… waiting for the ${extra.required.size} point(s) that had one to have a value (up to ${seconds} s)`
   )
   const values = yield* waitForValues({
     url: statusUrlOf(config.status),
@@ -703,15 +706,25 @@ const compareTags = (left: string, right: string) => {
   const a = parseRelease(left)
   const b = parseRelease(right)
   if (a === undefined || b === undefined) return left === right ? 0 : undefined
-  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || (left === right ? 0 : left < right ? -1 : 1)
+  const numbers = a[0] - b[0] || a[1] - b[1] || a[2] - b[2]
+  if (numbers !== 0 || left === right) return numbers
+  // The same numbers: a pre-release (`v0.16.0-rc.1`) comes before the release (`v0.16.0`).
+  const preLeft = /^v?\d+\.\d+\.\d+-/.test(left)
+  const preRight = /^v?\d+\.\d+\.\d+-/.test(right)
+  if (preLeft !== preRight) return preLeft ? -1 : 1
+  return left < right ? -1 : 1
 }
 
 /** Writes `text` to `path` through a new file renamed over it, so a cut-off write leaves the old file whole. */
 const replaceFile = Effect.fn("replaceFile")(function* (path: string, text: string) {
   const fs = yield* FileSystem.FileSystem
-  const temporary = `${path}.upgrade`
-  yield* fs.writeFileString(temporary, text, { mode: 0o644 })
-  yield* fs.rename(temporary, path)
+  // A symlinked compose.yaml stays a link: the file it names changes. Its mode stays as it was.
+  const target = yield* fs.realPath(path)
+  const mode = (yield* fs.stat(target)).mode & 0o777
+  const temporary = `${target}.upgrade`
+  yield* fs.writeFileString(temporary, text, { mode })
+  yield* fs.chmod(temporary, mode)
+  yield* fs.rename(temporary, target).pipe(Effect.tapError(() => fs.remove(temporary).pipe(Effect.ignore)))
 })
 
 /** The tag Compose would run instead of compose.yaml's: `OT_GATEWAY_TAG` in the environment or the folder's .env. */
@@ -739,19 +752,17 @@ export const upgrade = Effect.fn("upgrade")(function* (target: string, options: 
       hint: "Edit its image line by hand, or start from the release's compose.yaml (move yours aside, then up writes one)"
     })
   }
-  const overridden = yield* overridingTag(paths, options.envTag)
-  if (overridden !== undefined) {
-    return yield* new DeployFailed({
-      code: "tag-overridden",
-      message: `${overridden} sets the release instead of compose.yaml, so writing a tag there changes nothing`,
-      hint: "Remove OT_GATEWAY_TAG, then upgrade again",
-      next: "unset OT_GATEWAY_TAG"
-    })
-  }
-
   const release: ReleaseInfo =
     options.to === undefined
-      ? yield* options.latest ?? latestRelease
+      ? yield* (options.latest ?? latestRelease).pipe(
+          Effect.mapError(
+            (error) =>
+              new DeployFailed({
+                ...error,
+                next: `${options.cli} upgrade${resolve(options.cwd) === paths.folder ? "" : ` ${shellArgument(paths.config)}`} --to <tag>`
+              })
+          )
+        )
       : { tag: tagName(options.to), url: `https://github.com/phocal-ai/ot-gateway/releases/tag/${tagName(options.to)}` }
   const order = compareTags(release.tag, current)
   const newer = order === undefined ? release.tag !== current : order > 0
@@ -792,6 +803,16 @@ export const upgrade = Effect.fn("upgrade")(function* (target: string, options: 
     } satisfies UpgradeReport
   }
 
+  const overridden = yield* overridingTag(paths, options.envTag)
+  if (overridden !== undefined) {
+    return yield* new DeployFailed({
+      code: "tag-overridden",
+      message: `${overridden} sets the release instead of compose.yaml, so writing a tag there changes nothing`,
+      hint: "Remove OT_GATEWAY_TAG, then upgrade again",
+      next: "unset OT_GATEWAY_TAG"
+    })
+  }
+
   const config = yield* checkedConfig(paths, options)
   if (config.status === undefined) {
     return yield* new DeployFailed({
@@ -807,7 +828,10 @@ export const upgrade = Effect.fn("upgrade")(function* (target: string, options: 
   // What flows now: the new release has to bring back at least these, and only these when devices are down today.
   const before = yield* Effect.result(fetchSnapshot(statusUrlOf(config.status)))
   const required =
-    before._tag === "Success" && before.success.id === config.id && before.success.site === config.site
+    before._tag === "Success" &&
+    before.success.id === config.id &&
+    before.success.site === config.site &&
+    before.success.building === config.building
       ? pointsWithValue(before.success)
       : undefined
 
@@ -860,11 +884,23 @@ export const upgrade = Effect.fn("upgrade")(function* (target: string, options: 
       })
       const lastWords = logs.exitCode === 0 && `${logs.stdout}${logs.stderr}`.trim() !== "" ? lastLine(logs) : undefined
       yield* Console.log(`… going back to ${versionName(current)}`)
-      yield* replaceFile(paths.compose, text)
+      // compose.yaml back first: without it, the next boot starts the failed release again.
+      yield* replaceFile(paths.compose, text).pipe(
+        Effect.mapError(
+          (error) =>
+            new DeployFailed({
+              code: "rollback-failed",
+              message: `${versionName(release.tag)} failed (${why.message}), and compose.yaml could not be written back: ${error.message}`,
+              hint: `Write ${current} back into compose.yaml's image line by hand, then start it`,
+              next: `sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-${current}/' ${shellArgument(paths.compose)} && ${composeCommand(paths, options.cwd, "up -d")}`
+            })
+        )
+      )
+      // With no values to compare to (the gateway did not answer before), the old release answering is enough.
       const back = yield* Effect.result(
         Effect.andThen(
           composeUp(paths, options, false),
-          valuesFor(paths, config, options, { version: current, required })
+          valuesFor(paths, config, options, { version: current, required: required ?? new Set() })
         )
       )
       if (back._tag === "Failure") {

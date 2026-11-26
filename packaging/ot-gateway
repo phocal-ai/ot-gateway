@@ -131,6 +131,14 @@ case ${1:-} in up | down | restart | upgrade)
     echo "ot-gateway: $1 needs the Docker Compose plugin (docker compose); install it: sudo apt-get install -y docker-compose-plugin" >&2
     exit 1
   fi
+  # Only this folder is mounted: a config or folder elsewhere is not visible to the command.
+  for arg; do
+    case $arg in /* | ../* | ..)
+      echo "ot-gateway: $1 sees only the current folder; cd to the gateway's folder and run: ot-gateway $1" >&2
+      exit 1
+      ;;
+    esac
+  done
   socket=/var/run/docker.sock
   case ${DOCKER_HOST:-} in unix://*) socket=${DOCKER_HOST#unix://} ;; esac
   if [ ! -e "$socket" ]; then
@@ -171,7 +179,7 @@ fi
 # folder under /work, as the CLI does without Docker, not against the image's data volume, which --rm would discard.
 if [ -n "$deploy" ]; then
   set -- -v "$docker_bin:/usr/local/bin/docker:ro" -v "$compose_bin:/usr/local/lib/docker/cli-plugins/docker-compose:ro" \
-    -v "$socket:/var/run/docker.sock" --group-add "$(stat -c %g "$socket")" -e HOME=/tmp -e OT_GATEWAY_TAG \
+    -v "$socket:/var/run/docker.sock" --group-add "$(stat -L -c %g "$socket")" -e HOME=/tmp -e OT_GATEWAY_TAG \
     -v "$PWD:$PWD" -w "$PWD" "$@"
 else
   set -- -v "$PWD:/work" -w /work "$@"

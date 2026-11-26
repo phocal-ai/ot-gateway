@@ -115,6 +115,19 @@ describe("packaging/ot-gateway", () => {
     }
   })
 
+  it("refuses up for a folder it cannot mount", () => {
+    const result = runWrapper(
+      ["up", "/srv/site-1"],
+      { FAKE_IMAGE_PRESENT: "1", DOCKER_HOST: "fake" },
+      {
+        ".docker/cli-plugins/docker-compose": "#!/bin/sh\n",
+        uname: linux
+      }
+    )
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("cd to the gateway's folder")
+  })
+
   it("refuses up on Docker Desktop", () => {
     const desktop = runWrapper(["up"], { FAKE_IMAGE_PRESENT: "1" }, { uname: "#!/bin/sh\necho Darwin\n" })
     expect(desktop.status).toBe(1)
