@@ -97,10 +97,10 @@ npx ot-gateway watch
 ## 5. Write the setpoint
 
 ```bash
-npx ot-gateway publish 'home/main/demo-room/temperature-setpoint/$set' '{"value": 24}'
+npx ot-gateway write demo-room/temperature-setpoint 24
 ```
 
-The device prints `write: Temperature setpoint set to 24 °C (priority 8)` (and `heating on at …`, if the heating was off), `watch` shows the heating at `true` and the temperature rising, and the result of the command arrives on `home/main/demo-room/temperature-setpoint/$set/result`. A value outside `limits` is refused by the gateway and never reaches the device.
+The device prints `write: Temperature setpoint set to 24 °C (priority 8)` (and `heating on at …`, if the heating was off), `watch` shows the heating at `true` and the temperature rising, and `write` prints `✓ demo-room/temperature-setpoint = 24 °C (written in 90 ms)`. It sends what any MQTT client would, `{"value": 24}` on `home/main/demo-room/temperature-setpoint/$set`, and waits for the gateway's answer on `…/$set/result`. A value outside `limits` is refused before it is sent, and by the gateway too, and never reaches the device.
 
 ## When it does not work
 
