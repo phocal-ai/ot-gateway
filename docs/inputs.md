@@ -148,7 +148,7 @@ A fuller row, then, for an energy counter that reports in tenths of a kWh and sh
 }
 ```
 
-`ot-gateway points schema` prints every column with its default and allowed values, and `ot-gateway points template` a list to fill in.
+`ot-gateway points schema` prints every column with its default and allowed values, and `ot-gateway points template` a list to fill in. With `--protocol modbus` or `--protocol bacnet` the template has only that protocol's rows and columns; it is still the same format, so two lists can be joined into one.
 
 ## What you never have to give
 

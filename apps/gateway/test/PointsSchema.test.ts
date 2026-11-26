@@ -85,6 +85,8 @@ describe("the points list schema", () => {
       const profiles = new Map([["eastron-sdm630", yield* resolveProfile("eastron-sdm630", { relativeTo: "." })]])
       for (const [list, protocols] of [
         [pointsListTemplate(), ["modbus-tcp", "modbus-tcp", "bacnet-ip"]],
+        [pointsListTemplate("modbus"), ["modbus-tcp", "modbus-tcp"]],
+        [pointsListTemplate("bacnet"), ["bacnet-ip"]],
         [example, ["modbus-tcp", "modbus-tcp", "bacnet-ip"]]
       ] as const) {
         expect(unknownColumns(parseDelimited(list)[0] ?? [])).toEqual([])
@@ -93,6 +95,16 @@ describe("the points list schema", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer))
   )
+})
+
+const columnsOf = (scopes: ReadonlyArray<string>) =>
+  pointsListColumns.filter((column) => scopes.includes(column.scope)).map((column) => column.name)
+
+describe("a template for one protocol", () => {
+  it("has the columns of every row and its own, in the format's order, and none of the other protocol's", () => {
+    expect(parseDelimited(pointsListTemplate("modbus"))[0]).toEqual(columnsOf(["any", "modbus-tcp"]))
+    expect(parseDelimited(pointsListTemplate("bacnet"))[0]).toEqual(columnsOf(["any", "bacnet-ip"]))
+  })
 })
 
 describe("the JSON form's JSON Schema", () => {

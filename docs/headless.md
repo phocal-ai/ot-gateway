@@ -107,7 +107,7 @@ The points list is the one input: a row per value you want, with the device it c
 ot-gateway points schema --json          # every column: name, required, default, allowed values
 ot-gateway points schema --brief --json  # the same in short
 ot-gateway points schema --json-schema   # the JSON Schema of the list as JSON
-ot-gateway points template               # a CSV with every column and example rows
+ot-gateway points template               # a CSV with every column and example rows (--protocol modbus or bacnet: only its columns)
 ot-gateway profiles list --json          # Modbus models whose registers a row can take by name
 ```
 

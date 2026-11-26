@@ -267,11 +267,13 @@ export type PointsListColumn = typeof PointsListColumn.Type
 
 /**
  * The points list's format, for a page without a terminal: the template `ot-gateway points template` prints (CSV
- * to download and fill in), the rules every list follows, and its columns.
+ * to download and fill in), the same for one protocol (`--protocol`: only its rows and columns), the rules every
+ * list follows, and its columns.
  */
 export const PointsListFormat = Schema.Struct({
   version: Schema.Number,
   template: Schema.String,
+  templates: Schema.Struct({ modbus: Schema.String, bacnet: Schema.String }),
   rules: Schema.Array(Schema.String),
   columns: Schema.Array(PointsListColumn)
 })

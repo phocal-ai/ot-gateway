@@ -627,11 +627,25 @@ const schemaCommand = Command.make(
   ])
 )
 
-const templateCommand = Command.make("template", {}, () =>
-  Effect.sync(() => process.stdout.write(pointsListTemplate()))
+const templateCommand = Command.make(
+  "template",
+  {
+    protocol: Flag.ChoiceWithValue("protocol", [
+      ["modbus", "modbus"],
+      ["bacnet", "bacnet"]
+    ] as const).pipe(
+      Flag.withDescription("Only this protocol's example rows and the columns they can use"),
+      Flag.optional
+    )
+  },
+  ({ protocol }) => Effect.sync(() => process.stdout.write(pointsListTemplate(Option.getOrUndefined(protocol))))
 ).pipe(
-  Command.withDescription("A points list with every column and example rows, as CSV on stdout"),
-  Command.withExamples([{ command: "ot-gateway points template > points.csv", description: "Start a list to fill in" }])
+  Command.withDescription("A points list with example rows, as CSV on stdout: every column, or one protocol's"),
+  Command.withExamples([
+    { command: "ot-gateway points template > points.csv", description: "Start a list to fill in" },
+    { command: "ot-gateway points template --protocol modbus > points.csv", description: "Only Modbus TCP" },
+    { command: "ot-gateway points template --protocol bacnet > points.csv", description: "Only BACnet/IP" }
+  ])
 )
 
 const fromEdeCommand = Command.make(

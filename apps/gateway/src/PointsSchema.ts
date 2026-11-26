@@ -354,16 +354,32 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
   }
 ]
 
-/** A points list with every column and a few example rows, to fill in. */
-export const pointsListTemplate = () => {
-  const names = pointsListColumns.map((column) => column.name)
-  return toCsv([names, ...templateRows.map((row) => names.map((name) => row[name] ?? ""))])
+/** The protocols a template can be narrowed to, as `points template --protocol` names them. */
+export const templateProtocols = { modbus: "modbus-tcp", bacnet: "bacnet-ip" } as const
+export type TemplateProtocol = keyof typeof templateProtocols
+
+/** The protocol of a template row: only a Modbus TCP row has a host, as in the reader. */
+const rowScope = (row: Readonly<Record<string, string>>): ColumnScope =>
+  row["host"] === undefined ? "bacnet-ip" : "modbus-tcp"
+
+/**
+ * A points list with a few example rows, to fill in: every column and both protocols, or with a protocol only its
+ * rows and the columns they can use. Either way it is the one format, so lists can be joined later.
+ */
+export const pointsListTemplate = (protocol?: TemplateProtocol) => {
+  const scope = protocol === undefined ? undefined : templateProtocols[protocol]
+  const names = pointsListColumns
+    .filter((column) => scope === undefined || column.scope === "any" || column.scope === scope)
+    .map((column) => column.name)
+  const rows = templateRows.filter((row) => scope === undefined || rowScope(row) === scope)
+  return toCsv([names, ...rows.map((row) => names.map((name) => row[name] ?? ""))])
 }
 
 /** The format for the status page (`GET /api/points/format`): the template and the columns, without aliases. */
 export const pointsListFormat = (): PointsListFormat => ({
   version: pointsListVersion,
   template: pointsListTemplate(),
+  templates: { modbus: pointsListTemplate("modbus"), bacnet: pointsListTemplate("bacnet") },
   rules: pointsListRules,
   columns: pointsListColumns
 })

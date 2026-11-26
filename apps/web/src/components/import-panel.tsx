@@ -213,7 +213,7 @@ const FormatHelp = ({ format }: { readonly format: Outcome<PointsListFormat> | u
         <code className="font-mono">ot-gateway points schema</code> describes its columns.
       </p>
     )
-  const { template, rules, columns } = format.value
+  const { template, templates, rules, columns } = format.value
   const scopes = ["any", "modbus-tcp", "bacnet-ip"] as const
   return (
     <div className="grid gap-2">
@@ -230,6 +230,27 @@ const FormatHelp = ({ format }: { readonly format: Outcome<PointsListFormat> | u
           {" "}
           with every column and example rows: fill it in with a spreadsheet, one row per value.
         </span>
+      </p>
+      <p className="text-xs text-muted-foreground">
+        Only one kind of device? A shorter template with only its columns:{" "}
+        <a
+          className="underline underline-offset-4"
+          href={templateHref(templates.modbus)}
+          download="points-modbus.csv"
+          type="text/csv"
+        >
+          Modbus TCP
+        </a>
+        {" or "}
+        <a
+          className="underline underline-offset-4"
+          href={templateHref(templates.bacnet)}
+          download="points-bacnet.csv"
+          type="text/csv"
+        >
+          BACnet/IP
+        </a>
+        . It is the same format, so the lists can be joined later.
       </p>
       <details className="text-xs">
         <summary className="cursor-pointer text-sm text-muted-foreground">What the columns mean</summary>
