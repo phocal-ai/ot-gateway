@@ -6,6 +6,10 @@
  *   ot-gateway run [config]         run the gateway (config defaults to ot-gateway.json)
  *   ot-gateway check [config]       validate a config without connecting to anything
  *   ot-gateway doctor [config]      every check in order (config, broker, gateway, devices, port, disk, clock), one list
+ *   ot-gateway up [config]          start the folder's gateway with Docker Compose, wait until every point has a value
+ *   ot-gateway down [config]        stop it (docker compose down)
+ *   ot-gateway restart [config]     recreate its container, wait until every point has a value
+ *   ot-gateway upgrade [config]     to the newest release, back again when values stop (--check: is one out)
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
  *   ot-gateway discover modbus <range>  find Modbus TCP devices and unit ids on a range, read-only and rate-limited
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
@@ -43,6 +47,7 @@ import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
+import { dockerLayer, down, isDockerTag, nextLine, up, upgrade } from "./Deploy.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import {
@@ -2024,6 +2029,140 @@ const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeSe
   ])
 )
 
+const deployTarget = Argument.String("config").pipe(
+  Argument.withDescription(
+    `The gateway's JSON config, or its folder (default ./${DEFAULT_CONFIG}); compose.yaml is next to it`
+  ),
+  Argument.withDefault(DEFAULT_CONFIG)
+)
+
+const waitSeconds = Flag.Int("timeout").pipe(
+  Flag.withDescription("Seconds to wait until every point has a value (default 120)"),
+  Flag.filter(
+    (seconds) => seconds >= 1 && seconds <= 3600,
+    (seconds) => `--timeout takes 1 to 3600, not ${seconds}`
+  ),
+  Flag.withDefault(120)
+)
+
+const forceFlag = Flag.Boolean("force").pipe(
+  Flag.withDescription(
+    "Go ahead on Docker Desktop (macOS, Windows), which reaches no devices on the LAN: for simulated devices or a broker here"
+  ),
+  Flag.withDefault(false)
+)
+
+const noWaitFlag = Flag.Boolean("no-wait").pipe(
+  Flag.withDescription("Return once Compose has started it, without waiting for values"),
+  Flag.withDefault(false)
+)
+
+/** What up, down, restart and upgrade need of this machine: how the CLI was run, the platform and the folder. */
+const deployContext = Effect.map(invocation, (cli) => ({ cli, platform: process.platform, cwd: process.cwd() }))
+
+/** A report for a person: the lines printed on the way, then its warnings and the command to run next. */
+const deployDone = (
+  json: boolean,
+  report: { readonly next: string | null; readonly warnings?: ReadonlyArray<string> }
+) => {
+  if (json) return printJson(report)
+  const lines = [...(report.warnings ?? []).map((warning) => `! ${warning}`), ...nextLine(report.next)]
+  return lines.length === 0 ? Effect.void : Console.log(lines.join("\n"))
+}
+
+const upOrRestart = (recreate: boolean) =>
+  Command.make(
+    recreate ? "restart" : "up",
+    { config: deployTarget, timeout: waitSeconds, noWait: noWaitFlag, force: forceFlag, json: jsonFlag },
+    ({ config, timeout, noWait, force, json }) =>
+      Effect.gen(function* () {
+        const context = yield* deployContext
+        const report = yield* up(config, {
+          ...context,
+          recreate,
+          force,
+          wait: !noWait,
+          timeout: Duration.seconds(timeout)
+        })
+        yield* deployDone(json, report)
+      }).pipe(Effect.provide(dockerLayer), jsonFailure(json, { action: recreate ? "restart" : "up", config }))
+  )
+
+const upCommand = upOrRestart(false).pipe(
+  Command.withDescription(
+    "Start the gateway of this folder with Docker Compose and wait until every point has a value: checks the config, writes compose.yaml when there is none, docker compose up -d. Exit 1 with code, hint and next when values do not flow"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway up", description: "Start ./ot-gateway.json's gateway, wait for values" },
+    { command: "ot-gateway up site-1 --json", description: "The gateway of the folder site-1, the outcome as JSON" }
+  ])
+)
+
+const restartCommand = upOrRestart(true).pipe(
+  Command.withDescription(
+    "Recreate the gateway's container (it reads the config and ot-gateway.env again) and wait until every point has a value"
+  ),
+  Command.withExamples([{ command: "ot-gateway restart", description: "After editing ot-gateway.env" }])
+)
+
+const downCommand = Command.make("down", { config: deployTarget, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* down(config, yield* deployContext)
+    yield* deployDone(json, report)
+  }).pipe(Effect.provide(dockerLayer), jsonFailure(json, { action: "down", config }))
+).pipe(
+  Command.withDescription(
+    "Stop the gateway of this folder (docker compose down); the outbox and history stay in their volume"
+  ),
+  Command.withExamples([{ command: "ot-gateway down", description: "Stop ./ot-gateway.json's gateway" }])
+)
+
+const upgradeCommand = Command.make(
+  "upgrade",
+  {
+    config: deployTarget,
+    check: Flag.Boolean("check").pipe(
+      Flag.withDescription("Only say whether a newer release is out; change nothing"),
+      Flag.withDefault(false)
+    ),
+    to: Flag.String("to").pipe(
+      Flag.withDescription("The release to move to (v0.16.0), an older one too; the newest when left out"),
+      Flag.filter(
+        (tag) => isDockerTag(tag),
+        (tag) => `--to takes a release tag such as v0.16.0, not ${tag}`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    timeout: waitSeconds,
+    force: forceFlag,
+    json: jsonFlag
+  },
+  ({ config, check: checkOnly, to, timeout, force, json }) =>
+    Effect.gen(function* () {
+      const context = yield* deployContext
+      const envTag = yield* Config.String("OT_GATEWAY_TAG").pipe(Config.option, Config.map(Option.getOrUndefined))
+      const report = yield* upgrade(config, {
+        ...context,
+        check: checkOnly,
+        to,
+        envTag,
+        force,
+        timeout: Duration.seconds(timeout)
+      })
+      yield* deployDone(json, report)
+    }).pipe(Effect.provide(dockerLayer), jsonFailure(json, { action: checkOnly ? "upgrade-check" : "upgrade", config }))
+).pipe(
+  Command.withDescription(
+    "Move the gateway of this folder to the newest release: pull it, check the config with it, switch compose.yaml's tag, wait until values flow again, and go back to the old release when they do not. --check only says whether one is out"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway upgrade --check", description: "Is a newer release out?" },
+    { command: "ot-gateway upgrade", description: "Move to it, back again when values stop" },
+    { command: "ot-gateway upgrade --to v0.15.0", description: "Back to an older release" }
+  ])
+)
+
 const simulate = Command.make("simulate").pipe(
   Command.withDescription("Simulated devices on the network, to try the gateway against without a building"),
   Command.withSubcommands([simulateBacnetCommand])
@@ -2060,6 +2199,10 @@ export const cli = Command.make("ot-gateway").pipe(
     run,
     check,
     doctorCommand,
+    upCommand,
+    downCommand,
+    restartCommand,
+    upgradeCommand,
     discoverCommand,
     importCommand,
     diffCommand,
@@ -2090,6 +2233,10 @@ const subcommands = new Set([
   "run",
   "check",
   "doctor",
+  "up",
+  "down",
+  "restart",
+  "upgrade",
   "discover",
   "import",
   "diff",

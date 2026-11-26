@@ -7,6 +7,7 @@ import type { DeviceHealthPayload, RejectReason } from "@ot-gateway/core"
 import { Result } from "effect"
 import { readdirSync, readFileSync } from "node:fs"
 import { BrokerFailureCode } from "../src/Broker.ts"
+import { DeployCode } from "../src/Deploy.ts"
 import { codes, codesTable, explainCode, failureClasses, findCode, formatCode, formatCodeList } from "../src/Codes.ts"
 
 const sourceFolder = new URL("../src/", import.meta.url)
@@ -81,6 +82,7 @@ describe("codes", () => {
   it("has a row for every broker failure, device failure class and command result", () => {
     const wanted = [
       ...BrokerFailureCode.literals,
+      ...DeployCode.literals,
       ...Object.keys(deviceReasons),
       ...Object.keys(rejectReasons),
       "device-unavailable"

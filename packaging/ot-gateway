@@ -107,6 +107,48 @@ if [ -z "$present" ]; then
   done
 fi
 
+# up, down, restart and upgrade drive Docker Compose for the folder: the CLI in the container gets this machine's
+# docker command, its Compose plugin and its socket, and the folder at the same path as here, since Compose hands
+# the daemon absolute paths (compose.yaml mounts its own folder). The docker command links only libc, which the
+# image's Debian has; Compose is static. Docker Desktop's VM reaches no devices on the LAN, so not there.
+deploy=
+case ${1:-} in up | down | restart | upgrade)
+  if [ "$(uname -s)" != Linux ]; then
+    echo "ot-gateway: $1 runs the gateway under Docker on Linux; Docker Desktop cannot reach devices on the LAN" >&2
+    echo "  run the gateway here with: ot-gateway run" >&2
+    exit 1
+  fi
+  docker_bin=$(readlink -f "$(command -v docker)")
+  compose_bin=
+  for dir in "${DOCKER_CONFIG:-$HOME/.docker}/cli-plugins" /usr/local/lib/docker/cli-plugins \
+    /usr/local/libexec/docker/cli-plugins /usr/lib/docker/cli-plugins /usr/libexec/docker/cli-plugins; do
+    if [ -x "$dir/docker-compose" ]; then
+      compose_bin=$(readlink -f "$dir/docker-compose")
+      break
+    fi
+  done
+  if [ -z "$compose_bin" ]; then
+    echo "ot-gateway: $1 needs the Docker Compose plugin (docker compose); install it: sudo apt-get install -y docker-compose-plugin" >&2
+    exit 1
+  fi
+  # Only this folder is mounted: a config or folder elsewhere is not visible to the command.
+  for arg; do
+    case $arg in /* | ../* | ..)
+      echo "ot-gateway: $1 sees only the current folder; cd to the gateway's folder and run: ot-gateway $1" >&2
+      exit 1
+      ;;
+    esac
+  done
+  socket=/var/run/docker.sock
+  case ${DOCKER_HOST:-} in unix://*) socket=${DOCKER_HOST#unix://} ;; esac
+  if [ ! -e "$socket" ]; then
+    echo "ot-gateway: $1 needs Docker's socket, and $socket is not there: is Docker running? sudo systemctl enable --now docker" >&2
+    exit 1
+  fi
+  deploy=1
+  ;;
+esac
+
 # Long-running commands get a name to stop them by; the others may run side by side, unnamed.
 name=
 case ${1:-} in demo | run | watch | simulate) name=ot-gateway-$1 ;; esac
@@ -135,7 +177,14 @@ fi
 # SSH_CONNECTION and USER (passed only when set): over SSH, init's next steps name the tunnel to the status page.
 # OT_GATEWAY_DATA_DIR empty: relative paths in the config (the outbox, the history) resolve against the config's
 # folder under /work, as the CLI does without Docker, not against the image's data volume, which --rm would discard.
-if [ -t 0 ] && [ -t 1 ]; then
-  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ -e OT_GATEWAY_DATA_DIR= -v "$PWD:/work" -w /work "$@"
+if [ -n "$deploy" ]; then
+  set -- -v "$docker_bin:/usr/local/bin/docker:ro" -v "$compose_bin:/usr/local/lib/docker/cli-plugins/docker-compose:ro" \
+    -v "$socket:/var/run/docker.sock" --group-add "$(stat -L -c %g "$socket")" -e HOME=/tmp -e OT_GATEWAY_TAG \
+    -v "$PWD:$PWD" -w "$PWD" "$@"
+else
+  set -- -v "$PWD:/work" -w /work "$@"
 fi
-exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ -e OT_GATEWAY_DATA_DIR= -v "$PWD:/work" -w /work "$@"
+if [ -t 0 ] && [ -t 1 ]; then
+  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ -e OT_GATEWAY_DATA_DIR= "$@"
+fi
+exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ -e OT_GATEWAY_DATA_DIR= "$@"

@@ -13,7 +13,7 @@ import { Result, Schema } from "effect"
 import { closestMatch } from "./Suggest.ts"
 
 /** Where the cause lies, most often: the order `explain` and the docs list the codes in. */
-export type CodeArea = "config" | "broker" | "gateway" | "device" | "command" | "watch" | "machine" | "cli"
+export type CodeArea = "config" | "broker" | "gateway" | "deploy" | "device" | "command" | "watch" | "machine" | "cli"
 
 export interface CodeEntry {
   readonly code: string
@@ -32,6 +32,7 @@ export const areaTitles: Readonly<Record<CodeArea, string>> = {
   config: "The config",
   broker: "The broker",
   gateway: "The running gateway",
+  deploy: "Running under Docker Compose (up, down, restart, upgrade)",
   device: "Devices",
   command: "Commands (write and $set/result)",
   watch: "watch",
@@ -40,12 +41,24 @@ export const areaTitles: Readonly<Record<CodeArea, string>> = {
 }
 
 /** The areas in the order `explain` and the docs list them. */
-const areas: ReadonlyArray<CodeArea> = ["config", "broker", "gateway", "device", "command", "watch", "machine", "cli"]
+const areas: ReadonlyArray<CodeArea> = [
+  "config",
+  "broker",
+  "gateway",
+  "deploy",
+  "device",
+  "command",
+  "watch",
+  "machine",
+  "cli"
+]
 
 /** Commands that read the config file before anything else. */
 const configCommands = ["check", "run", "doctor", "read", "write", "broker", "watch", "publish", "discover", "import"]
 /** Commands that ask the running gateway at its status page. */
 const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
+/** Commands that run the gateway under Docker Compose. */
+const deployCommands = ["up", "down", "restart", "upgrade"]
 /** Commands that connect to the config's broker. */
 const brokerCommands = ["broker", "watch", "publish", "write", "doctor"]
 /** Where a device's failure class shows up. */
@@ -75,7 +88,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
   {
     code: "no-status-page",
     area: "config",
-    reportedBy: gatewayCommands,
+    reportedBy: [...gatewayCommands, "upgrade"],
     meaning: "The config has no status block, so its gateway serves no status page or API to ask.",
     fix: 'Add "status": {} to the config and restart the gateway, or pass --url for a status page elsewhere.',
     next: "ot-gateway check"
@@ -179,7 +192,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
   {
     code: "wrong-gateway",
     area: "gateway",
-    reportedBy: gatewayCommands,
+    reportedBy: [...gatewayCommands, "up", "restart", "upgrade"],
     meaning:
       "Another gateway than the config's answers on its status port (two on one machine, or an old SSH tunnel), so its report would be about the wrong building.",
     fix: "Give one of the two gateways another status.port. To ask whichever gateway answers there, pass --url and no config.",
@@ -226,6 +239,161 @@ export const codes: ReadonlyArray<CodeEntry> = [
     meaning: "At least one of doctor's checks failed; each failing line has its own code.",
     fix: "Fix the first failure first: the later checks depend on the earlier ones. ot-gateway explain with a code says more about it.",
     next: "ot-gateway doctor --json"
+  },
+
+  // Running under Docker Compose
+  {
+    code: "docker-desktop",
+    area: "deploy",
+    reportedBy: ["up", "restart"],
+    meaning:
+      "Docker Desktop (macOS, Windows) runs containers in a VM whose network cannot reach the building's devices by broadcast, so up stops before starting.",
+    fix: "Run the gateway with ot-gateway run on this machine, or --force for simulated devices or a broker on this machine.",
+    next: "ot-gateway run"
+  },
+  {
+    code: "compose-config-name",
+    area: "deploy",
+    reportedBy: ["up", "restart", "upgrade"],
+    meaning: "compose.yaml runs ./ot-gateway.json, and the config named has another name.",
+    fix: "Rename the config to ot-gateway.json, in a folder of its own."
+  },
+  {
+    code: "no-compose",
+    area: "deploy",
+    reportedBy: ["down", "restart", "upgrade"],
+    meaning: "No compose.yaml in the config's folder, so no gateway runs from there under Compose.",
+    fix: "ot-gateway up writes it, as init does, and starts the gateway.",
+    next: "ot-gateway up"
+  },
+  {
+    code: "docker-missing",
+    area: "deploy",
+    reportedBy: deployCommands,
+    meaning: "docker could not be started: Docker is not installed, or not on the PATH.",
+    fix: "Install Docker Engine with its Compose plugin (docs/raspberry-pi-install.md, step 5).",
+    next: "curl -fsSL https://get.docker.com | sh"
+  },
+  {
+    code: "docker-permission",
+    area: "deploy",
+    reportedBy: deployCommands,
+    meaning: "Docker refused access: this user may not use the Docker daemon.",
+    fix: 'Add the user to the docker group (sudo usermod -aG docker "$USER"), then log out and in again.',
+    next: "newgrp docker"
+  },
+  {
+    code: "docker-not-running",
+    area: "deploy",
+    reportedBy: deployCommands,
+    meaning: "The Docker daemon is not running.",
+    fix: "Start it, and enable it so it starts at boot.",
+    next: "sudo systemctl enable --now docker"
+  },
+  {
+    code: "compose-missing",
+    area: "deploy",
+    reportedBy: deployCommands,
+    meaning: "docker has no compose command.",
+    fix: "Install the Docker Compose plugin (docker compose, not the old docker-compose).",
+    next: "sudo apt-get install -y docker-compose-plugin"
+  },
+  {
+    code: "compose-failed",
+    area: "deploy",
+    reportedBy: deployCommands,
+    meaning: "docker compose up or down failed; the message has its last words.",
+    fix: "Its output says why: a port in use, an image that cannot be pulled, a compose.yaml that does not parse.",
+    next: "docker compose logs gateway --since 10m"
+  },
+  {
+    code: "docker-timeout",
+    area: "deploy",
+    reportedBy: deployCommands,
+    meaning: "A docker command did not finish in time: a pull over a slow uplink, or a daemon that hangs.",
+    fix: "Check that the daemon answers, then try again.",
+    next: "docker ps"
+  },
+  {
+    code: "gateway-not-answering",
+    area: "deploy",
+    reportedBy: ["up", "restart", "upgrade"],
+    meaning:
+      "The gateway's container did not answer on its status port in time: it may be restarting after a failed start.",
+    fix: "Its log says why.",
+    next: "docker compose logs gateway --since 10m"
+  },
+  {
+    code: "old-release",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "The status port still answers as the old release: the new container did not take over.",
+    fix: "Its log says why.",
+    next: "docker compose logs gateway --since 10m"
+  },
+  {
+    code: "device-failing",
+    area: "deploy",
+    reportedBy: ["up", "restart", "upgrade"],
+    meaning: "The gateway runs, but a device is failing, so not every point has a value.",
+    fix: "The message names the device and its error; the hint is the first thing to check for it.",
+    next: "ot-gateway status"
+  },
+  {
+    code: "compose-no-tag",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "compose.yaml names no image:${OT_GATEWAY_TAG:-tag}, so upgrade does not know where the release is set.",
+    fix: "Edit its image line by hand, or start from the release's compose.yaml (move yours aside, then up writes one)."
+  },
+  {
+    code: "tag-overridden",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning:
+      "OT_GATEWAY_TAG is set in the environment or ot-gateway.env, so writing a tag into compose.yaml changes nothing.",
+    fix: "Remove OT_GATEWAY_TAG, then upgrade again.",
+    next: "unset OT_GATEWAY_TAG"
+  },
+  {
+    code: "release-lookup-failed",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "upgrade could not ask GitHub for the newest release: no internet from this machine, or its rate limit.",
+    fix: "Name the release with --to.",
+    next: "ot-gateway upgrade --to v1.2.3"
+  },
+  {
+    code: "pull-failed",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "The new release's image could not be pulled.",
+    fix: "Check the internet connection and the tag; nothing changed, the old release still runs.",
+    next: "docker pull ghcr.io/phocal-ai/ot-gateway"
+  },
+  {
+    code: "config-rejected",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "The new release does not take this config, so nothing changed and the old release still runs.",
+    fix: "The message says which key; the release notes say what changed in the config.",
+    next: "ot-gateway check"
+  },
+  {
+    code: "upgrade-rolled-back",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "The new release started but values did not flow, so upgrade put the old release back.",
+    fix: "Nothing else changed. The message has the new release's last log words, and the release notes may say what changed.",
+    next: "ot-gateway status"
+  },
+  {
+    code: "rollback-failed",
+    area: "deploy",
+    reportedBy: ["upgrade"],
+    meaning: "The new release failed, and the old one could not be put back or did not come back.",
+    fix: "Write the old tag back into compose.yaml's image line by hand, then start it; the message names the tag.",
+    next: "docker compose up -d"
   },
 
   // Devices
@@ -481,7 +649,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
   {
     code: "values-missing",
     area: "watch",
-    reportedBy: ["watch"],
+    reportedBy: ["watch", "up", "restart", "upgrade"],
     meaning: "watch --until-values ended before every point of the config sent a value; missing lists them.",
     fix: "ot-gateway status says why a device fails; the gateway must be running. A point that publishes on change only sends its first value at start.",
     next: "ot-gateway status"
