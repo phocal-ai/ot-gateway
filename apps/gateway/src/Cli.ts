@@ -213,9 +213,11 @@ const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfi
   ).pipe(Effect.provide(telemetryLayer(config, version)))
 })
 
+const DEFAULT_CONFIG = "ot-gateway.json"
+
 const configPath = Argument.String("config").pipe(
   Argument.withDescription("Path of the gateway's JSON config"),
-  Argument.withDefault("ot-gateway.json")
+  Argument.withDefault(DEFAULT_CONFIG)
 )
 
 const run = Command.make("run", { config: configPath }, ({ config }) =>
@@ -289,14 +291,15 @@ export const pointsListOutcome = (json: boolean) => (written: PointsListWritten)
   json ? printJson({ ok: true, ...written }) : Effect.void
 
 /**
- * The config `discover` asks with. No config yet is the usual first step, so then it asks with the BACnet/IP
- * defaults and says so; a config that is there but wrong still fails.
+ * The config `discover` asks with. No config yet is the usual first step, so with none in this folder it asks with
+ * the BACnet/IP defaults and says so. A config named elsewhere that is not there, or one that is wrong, still fails:
+ * a typo must not scan with other settings than the config's.
  */
 const configForDiscovery = Effect.fn("configForDiscovery")(function* (path: string) {
   const loaded = yield* loadConfig(path).pipe(
     Effect.map(Option.some),
     Effect.catchTag("ConfigFileError", (error) =>
-      error.code === "no-config" ? Effect.succeedNone : Effect.fail(error)
+      error.code === "no-config" && path === DEFAULT_CONFIG ? Effect.succeedNone : Effect.fail(error)
     )
   )
   if (Option.isSome(loaded)) return { config: loaded.value, noConfig: false }

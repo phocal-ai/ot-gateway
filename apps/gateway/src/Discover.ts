@@ -277,7 +277,8 @@ const openEndpoint = (
   config: GatewayConfig,
   network: Pick<Network, "udp"> | undefined,
   unicast: boolean,
-  configPath: string | undefined
+  configPath: string | undefined,
+  noConfig = false
 ) =>
   makeBacnetNetwork(config.bacnet, network).pipe(
     Effect.catchTag("BacnetSocketError", (error) =>
@@ -289,7 +290,9 @@ const openEndpoint = (
           return yield* makeBacnetNetwork({ ...config.bacnet, port: 0 }, network)
         }
         return yield* new DiscoverError({
-          message: `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or set "bacnet.port" in ${configPath ?? "the config"} to a free port (devices that answer a broadcast on 47808 are then only found with --address ip[:port])`
+          message: noConfig
+            ? `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or ask one device from a free port with --address ip[:port]`
+            : `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or set "bacnet.port" in ${configPath ?? "the config"} to a free port (devices that answer a broadcast on 47808 are then only found with --address ip[:port])`
         })
       })
     )
@@ -305,7 +308,13 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
     if (target !== undefined && Result.isFailure(target)) {
       return yield* new DiscoverError({ message: `--address takes ip or ip:port: ${target.failure}` })
     }
-    const client = yield* openEndpoint(config, network, target !== undefined, options.configPath)
+    const client = yield* openEndpoint(
+      config,
+      network,
+      target !== undefined,
+      options.configPath,
+      options.noConfig === true
+    )
     yield* Console.error(`Who-Is to ${options.address ?? config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
     const devices = yield* client.discover({
       within: LISTEN,
@@ -313,9 +322,11 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
     })
     if (devices.length === 0) {
       yield* Console.error(
-        options.address === undefined
-          ? "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD. With a device's address from a device list: discover --address ip[:port]."
-          : `No device answered at ${options.address}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
+        options.address === undefined && options.noConfig === true
+          ? "No device answered a broadcast to 255.255.255.255. Without a config, discover asks with the defaults: write one with ot-gateway init and set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), or ask one device: discover --address ip[:port]."
+          : options.address === undefined
+            ? "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD. With a device's address from a device list: discover --address ip[:port]."
+            : `No device answered at ${options.address}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
       )
     }
     if (devices.length >= MAX_DEVICES) {

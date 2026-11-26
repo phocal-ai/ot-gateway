@@ -333,7 +333,7 @@ This is the test that the setup is done. It subscribes at your broker, prints ev
 }
 ```
 
-When a point stays silent it waits for the slowest poll interval plus 30 seconds (at least 60 seconds, or `--seconds N`), then exits with 1. After the summary line comes one more line, the failure, that names the points (spread out here to read). Every line of `watch --json` is one JSON object, to the end, so `tail -n 1` is always the outcome:
+When a point stays silent it waits for the slowest poll interval plus 30 seconds (at least 60 seconds, or `--seconds N`), then exits with 1. After the summary line comes one more line, the failure, that names the points (spread out here to read). Once the watch has started, every line it prints is one JSON object, to the end, so `tail -n 1` is the outcome:
 
 ```json
 {
