@@ -7,7 +7,8 @@
  *   ot-gateway check [config]       validate a config without connecting to anything
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
- *   ot-gateway watch [config]       print what arrives at the config's broker
+ *   ot-gateway contract [message]   the MQTT contract: its topics and payloads (--json: the JSON Schemas)
+ *   ot-gateway watch [config]       print what arrives at the config's broker (--check: what is off the contract)
  *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
  *   ot-gateway publish <topic> [payload]  one message to the config's broker (empty and --retain clears)
  *   ot-gateway status [config]      the running gateway's status, one line per device (exit 1 when failing)
@@ -51,6 +52,7 @@ import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
+import { contractJson, contractMessageNames, describeContract, describeContractMessage } from "./ContractReport.ts"
 import { defaultCount, formatProbeReport, parseEndpoint, probe, ProbeError, probeJson, probeTables } from "./Probe.ts"
 import {
   BrokerCommandError,
@@ -800,6 +802,43 @@ const points = Command.make("points").pipe(
   Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
 )
 
+const contractCommand = Command.make(
+  "contract",
+  {
+    message: Argument.Literals("message", contractMessageNames).pipe(
+      Argument.withDescription(
+        `One message's fields, or with --json its JSON Schema: ${contractMessageNames.join(", ")}`
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    json: Flag.Boolean("json").pipe(
+      Flag.withDescription(
+        "Print it as JSON: {ok, version, url, topics, schemas}, or with a message that message's JSON Schema alone"
+      ),
+      Flag.withDefault(false)
+    )
+  },
+  ({ message, json }) =>
+    message === undefined
+      ? json
+        ? printJson(contractJson())
+        : Console.log(describeContract())
+      : json
+        ? printJson(contractJson().schemas[message])
+        : Console.log(describeContractMessage(message))
+).pipe(
+  Command.withDescription(
+    "The MQTT contract: every topic the gateway publishes or listens on and its payload, as JSON Schemas; no config needed"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway contract", description: "The topics and messages, for people" },
+    { command: "ot-gateway contract health", description: "The health message's fields" },
+    { command: "ot-gateway contract --json", description: "Everything with the JSON Schemas, for agents" },
+    { command: "ot-gateway contract value --json > value.schema.json", description: "One message's JSON Schema" }
+  ])
+)
+
 const watchCommand = Command.make(
   "watch",
   {
@@ -827,15 +866,22 @@ const watchCommand = Command.make(
         "Stop once every configured point sent a value; exit 1 naming the ones that did not within --seconds (default: the slowest poll interval and 30 s, at least 60 s)"
       ),
       Flag.withDefault(false)
+    ),
+    check: Flag.Boolean("check").pipe(
+      Flag.withDescription(
+        "Check each message under the site and building against the MQTT contract, print only those off it with what is wrong; a watch that ends by itself exits 1 when one was"
+      ),
+      Flag.withDefault(false)
     )
   },
-  ({ config, topic, seconds, json, untilValues }) =>
+  ({ config, topic, seconds, json, untilValues, check: againstContract }) =>
     Effect.flatMap(loadConfig(config), (decoded) =>
       watch(decoded, {
         topic: Option.getOrUndefined(topic),
         seconds: Option.getOrUndefined(seconds),
         json,
-        untilValues
+        untilValues,
+        check: againstContract
       })
     ).pipe(jsonFailure(json, { path: config }, { lines: true }))
 ).pipe(
@@ -845,7 +891,8 @@ const watchCommand = Command.make(
     { command: "ot-gateway watch --topic 'site-1/building-a/heat-pump/#'", description: "Only one device" },
     { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" },
     { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" },
-    { command: "ot-gateway watch --until-values --json", description: "Wait until every point sent a value" }
+    { command: "ot-gateway watch --until-values --json", description: "Wait until every point sent a value" },
+    { command: "ot-gateway watch --check --seconds 60", description: "A minute of messages against the MQTT contract" }
   ])
 )
 
@@ -1368,6 +1415,7 @@ export const cli = Command.make("ot-gateway").pipe(
     importCommand,
     points,
     profiles,
+    contractCommand,
     watchCommand,
     brokerCommand,
     publishCommand,
@@ -1389,6 +1437,7 @@ const subcommands = new Set([
   "import",
   "points",
   "profiles",
+  "contract",
   "watch",
   "broker",
   "publish",

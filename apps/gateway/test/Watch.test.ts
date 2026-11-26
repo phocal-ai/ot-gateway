@@ -8,6 +8,9 @@ import { TestConsole } from "effect/testing"
 import { publishOnce } from "../src/Broker.ts"
 import {
   clearHint,
+  contractViolation,
+  describeViolation,
+  formatContractSummary,
   formatMessage,
   formatSummary,
   messageRecord,
@@ -282,6 +285,83 @@ describe("watch --seconds", () => {
         expect.stringMatching(/^\d\d:\d\d:\d\d -- lost the broker: .*; reconnecting$/),
         expect.stringMatching(/^\d\d:\d\d:\d\d -- broker back after \d+ s$/)
       ])
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+  )
+})
+
+describe("watch --check", () => {
+  const site = { site: "s", building: "b" }
+  const verdict = (payload: string, topic = "s/b/meter/power") => contractViolation(site, { topic, payload })
+
+  it("passes what the contract allows, and says which message and what is wrong otherwise", () => {
+    expect(verdict('{"value":21.5,"unit":"unit:DEG_C","ts":1764075600000}')).toBe("ok")
+    expect(verdict('{"value":21.5,"ts":1.5}')).toMatchObject({ message: "value", issues: [{ path: "ts" }] })
+    // Strict, as the gateway's own tests: a field the contract does not have is off it too.
+    expect(verdict('{"value":1,"ts":1,"extra":2}')).toMatchObject({ message: "value" })
+    expect(verdict("not json")).toMatchObject({ message: "value", issues: [expect.objectContaining({})] })
+    expect(contractViolation(site, { topic: "s/b/meter/power/$set", payload: '{"value":1,"x":1}' })).toMatchObject({
+      message: "command"
+    })
+  })
+
+  it("lets an empty message clear a retained topic, and leaves topics outside the contract alone", () => {
+    expect(verdict("", "s/b/meter/power/$meta")).toBe("ok")
+    expect(verdict("", "s/b/$gateway/main/health")).toBe("ok")
+    expect(verdict("", "s/b/meter/power")).toMatchObject({ message: "value" })
+    expect(verdict("x", "s/b/$gateway/main/check/1")).toBeUndefined()
+    expect(verdict("x", "other/b/meter/power")).toBeUndefined()
+    expect(verdict("x", "s/b/meter")).toBeUndefined()
+  })
+
+  it("names the message and every mistake on one line, and in the JSON line", () => {
+    const violation = { message: "value" as const, issues: [{ path: "ts", message: "Expected an integer" }] }
+    expect(describeViolation(violation)).toBe("off contract (value): ts: Expected an integer")
+    const at = new Date(2026, 10, 5, 9, 4, 7)
+    const record = messageRecord({ topic: "s/b/m/p", payload: '{"ts":1.5}', retain: false }, at, undefined, violation)
+    expect(JSON.parse(record)).toMatchObject({ topic: "s/b/m/p", contract: violation, payload: { ts: 1.5 } })
+    expect(formatContractSummary({ event: "contract", version: "1.0", checked: 3, off: 0 })).toBe(
+      "-- 3 message(s) checked against the MQTT contract 1.0: all on it"
+    )
+  })
+
+  it.live("prints only the messages off the contract, sums up, and fails when there was one", () =>
+    Effect.gen(function* () {
+      const port = yield* startBroker(0)
+      const config = yield* configFor(port)
+      const watching = yield* watch(config, { seconds: 1, json: true, check: true }).pipe(Effect.flip, Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      yield* publishOnce(config, "s/b/meter/power", '{"value":1,"ts":1764075600000}', { retain: false, qos: 1 })
+      yield* publishOnce(config, "s/b/meter/power", '{"value":"1","ts":1764075600000}', { retain: false, qos: 1 })
+      yield* publishOnce(config, "s/b/$gateway/main/check/1", "anything", { retain: false, qos: 1 })
+      const error = yield* Fiber.join(watching)
+      expect(error).toMatchObject({ _tag: "WatchError", code: "off-contract" })
+      expect(error.message).toBe("1 of 2 message(s) under s/b were off the MQTT contract 1.0")
+      const records = (yield* TestConsole.logLines)
+        .map(String)
+        .filter((line) => line.startsWith("{"))
+        .map((line): unknown => JSON.parse(line))
+      expect(records).toEqual([
+        expect.objectContaining({ topic: "s/b/meter/power", contract: expect.objectContaining({ message: "value" }) }),
+        { event: "contract", version: "1.0", checked: 2, off: 1 }
+      ])
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+  )
+
+  it.live("ends well when every message was on the contract", () =>
+    Effect.gen(function* () {
+      const port = yield* startBroker(0)
+      const config = yield* configFor(port)
+      const watching = yield* watch(config, { seconds: 1, check: true }).pipe(Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      yield* publishOnce(config, "s/b/$gateway/main/health", '{"status":"offline","reason":"shutdown"}', {
+        retain: false,
+        qos: 1
+      })
+      yield* Fiber.join(watching)
+      const lines = (yield* TestConsole.logLines)
+        .map(String)
+        .filter((line) => line.includes("s/b/") || line.startsWith("--"))
+      expect(lines).toEqual(["-- 1 message(s) checked against the MQTT contract 1.0: all on it"])
     }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
   )
 })
