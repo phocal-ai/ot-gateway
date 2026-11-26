@@ -42,6 +42,11 @@ const modbusList = [
 ].join("\n")
 
 describe("appendToPointsList", () => {
+  it("refuses a JSON list, naming what to do instead", () => {
+    const appended = appendToPointsList('[{"device": "m", "point": "p"}]', ["device", "point"], [["n", "q"]])
+    expect(Result.isFailure(appended) && appended.failure).toContain("JSON points list")
+  })
+
   it("adds the columns the list lacks after its own, keeps its rows, and import reads both devices", () =>
     Effect.gen(function* () {
       const result = append(modbusList, heatPump())

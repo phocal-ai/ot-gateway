@@ -154,6 +154,7 @@ export const pointsListColumns: ReadonlyArray<PointsListColumn> = [
 /** What every list follows, beyond its columns. */
 export const pointsListRules: ReadonlyArray<string> = [
   "CSV with a header row and one row per point; commas, semicolons or tabs, as the header line uses",
+  'Or JSON: an array with one object per point, the columns as keys ([{"device": "Meter", "point": "Active power", "register": 100, …}]); numbers may be JSON numbers; points schema --json-schema prints its JSON Schema',
   "Column names in any order and case; spaces and - count as _; unknown columns are named and ignored",
   "A row with host is Modbus TCP, a row with device_instance is BACnet/IP; one list can hold both",
   "A decimal comma is read as a point; a value that contains the delimiter (1,5 in a comma-separated list) goes in double quotes",
@@ -161,6 +162,54 @@ export const pointsListRules: ReadonlyArray<string> = [
   "A BACnet EDE file (the semicolon CSV engineering tools export) is read as a list too; points from-ede shows it as one",
   "Nothing is made writable: writes are set in the config, on purpose"
 ]
+
+/** The columns whose values are numbers: in the JSON form, a JSON number or text that reads as one. */
+const numberColumns: ReadonlySet<string> = new Set([
+  "interval_s",
+  "publish_s",
+  "deadband",
+  "scale",
+  "offset",
+  "port",
+  "unit_id",
+  "register",
+  "device_instance",
+  "object_instance"
+])
+
+/**
+ * The JSON form as a JSON Schema (draft 2020-12), as `points schema --json-schema` prints it, for an agent or an
+ * editor to check a list against before `import`: an array of rows, `device` and `point` required, the allowed
+ * values of each column, and unknown keys allowed (import names and ignores them). What depends on other columns
+ * (a host or a device_instance, a type for holding registers) stays with `import --dry-run`, which says it by line.
+ */
+export const pointsListJsonSchema = () => ({
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  title: `OT Gateway points list, version ${pointsListVersion}`,
+  description:
+    "One object per point. A row with host is Modbus TCP, one with device_instance BACnet/IP. Values are listed as written here; import also reads them in any case.",
+  type: "array",
+  items: {
+    type: "object",
+    required: pointsListColumns.filter((column) => column.scope === "any" && column.required).map(({ name }) => name),
+    properties: Object.fromEntries(
+      pointsListColumns.map((column) => [
+        column.name,
+        {
+          description: `${column.scope === "any" ? "" : `${column.scope === "modbus-tcp" ? "Modbus TCP" : "BACnet/IP"}: `}${column.description}`,
+          // null and "" are an empty cell, as import reads them.
+          ...(column.values !== undefined
+            ? { enum: [...column.values, "", null] }
+            : numberColumns.has(column.name) || column.name === "object_type"
+              ? { type: ["number", "string", "null"] }
+              : { type: ["string", "null"] }),
+          ...(column.default === undefined ? {} : { default: column.default })
+        }
+      ])
+    ),
+    additionalProperties: true
+  }
+})
 
 /** The schema as `points schema --json` prints it. */
 export const pointsListSchema = () => ({

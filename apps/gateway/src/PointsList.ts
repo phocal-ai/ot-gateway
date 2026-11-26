@@ -12,7 +12,7 @@
  * checks everything this module does not.
  */
 import { Device } from "@ot-gateway/core"
-import { Effect, Result, Schema } from "effect"
+import { Effect, Predicate, Result, Schema } from "effect"
 import { configIssues } from "./ConfigStore.ts"
 import { slugify } from "./Slug.ts"
 import type { Profile, ProfilePoint } from "./Profile.ts"
@@ -145,6 +145,137 @@ export const readDelimited = (
 export const parseDelimited = (text: string, separator?: string): ReadonlyArray<ReadonlyArray<string>> => {
   const read = readDelimited(text, separator)
   return (Result.isSuccess(read) ? read.success : read.failure.records).map((record) => record.fields)
+}
+
+/**
+ * Whether a points list is the JSON form: an array of rows, each an object with the columns as keys
+ * (`[{"device": "Meter", "point": "Active power", "register": 100, …}]`). The CSV form's header row and quoting
+ * have no part in it, which is what makes it the easier one for a program to write.
+ */
+export const isJsonList = (text: string) => /^[[{]/.test(text.replace(/^\uFEFF/, "").trimStart())
+
+/** The 1-based line each element of a JSON array's top level starts on, in order. */
+const elementLines = (text: string): ReadonlyArray<number> => {
+  const lines: Array<number> = []
+  let line = 1
+  let depth = 0
+  let inString = false
+  let escaped = false
+  let expecting = false
+  let previous = ""
+  for (const char of text) {
+    // \n, \r\n and a bare \r each end a line, as readDelimited counts them.
+    if (char === "\n" ? previous !== "\r" : char === "\r") line++
+    previous = char
+    if (inString) {
+      if (escaped) escaped = false
+      else if (char === "\\") escaped = true
+      else if (char === '"') inString = false
+      continue
+    }
+    if (/\s/.test(char)) continue
+    if (depth === 1 && expecting && char !== "]") {
+      lines.push(line)
+      expecting = false
+    }
+    if (char === '"') inString = true
+    else if (char === "[" || char === "{") {
+      depth++
+      if (depth === 1) expecting = true
+    } else if (char === "]" || char === "}") depth--
+    else if (char === "," && depth === 1) expecting = true
+  }
+  return lines
+}
+
+/**
+ * The line a JSON parser's message points at: its own `(line 3 column 5)` where it gives one, else the line of
+ * its `position 41`, else (the text ended early) the last line.
+ */
+const jsonErrorLine = (text: string, message: string): number | undefined => {
+  const given = /\(line (\d+) column \d+\)/.exec(message)?.[1]
+  if (given !== undefined) return Number(given)
+  const position = /position (\d+)/.exec(message)?.[1]
+  const upTo =
+    position === undefined
+      ? /end of JSON input/.test(message)
+        ? text.trimEnd()
+        : undefined
+      : text.slice(0, Number(position))
+  return upTo === undefined ? undefined : upTo.split(/\r\n|\r|\n/).length
+}
+
+/** A JSON value as a points list field: text as it is, a number as written in JSON, nothing for null. */
+const jsonField = (value: unknown): string | undefined => {
+  if (value === null || value === undefined) return ""
+  if (typeof value === "string") return value
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  return undefined
+}
+
+/**
+ * The JSON form's rows as the records of a delimited text: a header of every key in the order first used, then one
+ * record per row with the line it starts on in the file, so a mistake names the line to fix there too.
+ */
+export const readJsonList = (text: string): Result.Result<ReadonlyArray<DelimitedRecord>, PointsListError> => {
+  const body = text.replace(/^\uFEFF/, "")
+  const decoded = Result.try({ try: (): unknown => JSON.parse(body), catch: (error) => String(error) })
+  if (Result.isFailure(decoded)) {
+    const line = jsonErrorLine(body, decoded.failure)
+    const message = `not valid JSON: ${decoded.failure.replace(/^SyntaxError: /, "")}; check its commas, quotes and brackets (a JSON list is [{"device": "…", "point": "…", …}, …])`
+    return Result.fail(
+      line === undefined ? new PointsListError({ message: `the points list is ${message}` }) : lineError(line, message)
+    )
+  }
+  const rows = decoded.success
+  if (Array.isArray(rows) && rows.length === 0) return Result.succeed([])
+  if (!Array.isArray(rows)) {
+    return Result.fail(new PointsListError({ message: 'a JSON points list is an array of rows: [{"device": …}]' }))
+  }
+  const lines = elementLines(text)
+  const header: Array<string> = []
+  const errors: Array<PointsListError> = []
+  const objects = rows.flatMap((row: unknown, index): Array<{ line: number; row: Record<string, unknown> }> => {
+    const line = lines[index] ?? 1
+    if (!Predicate.isObject(row) || Array.isArray(row)) {
+      errors.push(lineError(line, 'each row of a JSON points list is an object, such as {"device": "Meter", …}'))
+      return []
+    }
+    // Keys as columns, so `Unit` on one row and `unit` on another are one column, as in a CSV header.
+    for (const [key, value] of Object.entries(row)) {
+      if (!header.includes(columnName(key))) header.push(columnName(key))
+      if (jsonField(value) === undefined) {
+        errors.push(
+          lineError(line, `${key} is an object or a list; write text or a number`, { column: columnName(key) })
+        )
+      }
+    }
+    return [{ line, row }]
+  })
+  if (errors.length > 0) return Result.fail(combinedError(errors))
+  return Result.succeed([
+    { line: 1, fields: header },
+    ...objects.map(({ line, row }) => {
+      const byColumn = new Map(Object.entries(row).map(([key, value]) => [columnName(key), value]))
+      return { line, fields: header.map((column) => jsonField(byColumn.get(column)) ?? "") }
+    })
+  ])
+}
+
+/** A points list's records, either form: its header first. A list that cannot be read at all fails. */
+const readList = (text: string): Result.Result<ReadonlyArray<DelimitedRecord>, PointsListError> => {
+  if (isJsonList(text)) return readJsonList(text)
+  const read = readDelimited(text)
+  return Result.isSuccess(read)
+    ? Result.succeed(read.success)
+    : Result.fail(lineError(read.failure.line, "a quote opened here is never closed"))
+}
+
+/** A points list's fields, either form, header first; nothing for a list that cannot be read. */
+export const listFields = (text: string): ReadonlyArray<ReadonlyArray<string>> => {
+  if (!isJsonList(text)) return parseDelimited(text)
+  const read = readJsonList(text)
+  return Result.isSuccess(read) ? read.success.map((record) => record.fields) : []
 }
 
 /** Common ways of writing a unit, as QUDT names. Anything else is kept as written. */
@@ -541,7 +672,7 @@ const typoOf = (written: string, known: string) => {
 
 /** Each distinct unit the list's `unit` column writes, in the order first written, and what it becomes. */
 export const unitsWritten = (text: string): ReadonlyArray<UnitMapping> => {
-  const [header, ...records] = parseDelimited(text)
+  const [header, ...records] = listFields(text)
   const column = headerColumns(header ?? []).indexOf("unit")
   if (column === -1) return []
   const counted = new Map<string, number>()
@@ -559,7 +690,7 @@ export const unitsWritten = (text: string): ReadonlyArray<UnitMapping> => {
 
 /** The profiles a points list names, as written, for the caller to load before devicesFromPointsList. */
 export const profileNames = (text: string): ReadonlyArray<string> => {
-  const [header, ...records] = parseDelimited(text)
+  const [header, ...records] = listFields(text)
   const column = (header ?? []).map(columnName).indexOf("profile")
   if (column === -1) return []
   return [...new Set(records.flatMap((fields) => fields[column]?.trim() || []))]
@@ -807,8 +938,8 @@ interface DeviceRows {
  * field counts, a row without a device), which fail: nothing in such a list can be trusted.
  */
 const groupRows = Effect.fnUntraced(function* (text: string, profiles: ReadonlyMap<string, Profile>) {
-  const read = readDelimited(text)
-  if (Result.isFailure(read)) return yield* lineError(read.failure.line, "a quote opened here is never closed")
+  const read = readList(text)
+  if (Result.isFailure(read)) return yield* read.failure
   const [headerRecord, ...records] = read.success
   if (headerRecord === undefined) return yield* fail("the points list is empty")
   const header = headerRecord.fields

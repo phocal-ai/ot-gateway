@@ -9,7 +9,7 @@ import { configIssues, etagOf, makeConfigStore } from "./ConfigStore.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import {
   devicesFromPointsList,
-  parseDelimited,
+  listFields,
   type PointsListDevice,
   PointsListError,
   profileNames,
@@ -60,7 +60,7 @@ export const pointsListFromText = Effect.fn("pointsListFromText")(function* (tex
     } satisfies PointsListText
   }
   // A misspelt column would otherwise vanish without a word; extra columns (a description, a comment) are normal.
-  const ignored = unknownColumns(parseDelimited(text)[0] ?? [])
+  const ignored = unknownColumns(listFields(text)[0] ?? [])
   return {
     list: text,
     format: "points-list",

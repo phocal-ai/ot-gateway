@@ -40,6 +40,7 @@ import { invocation } from "./Invocation.ts"
 import {
   briefPointsListSchemaJson,
   describePointsListSchema,
+  pointsListJsonSchema,
   pointsListSchema,
   pointsListTemplate
 } from "./PointsSchema.ts"
@@ -379,7 +380,7 @@ const init = Command.make(
       Flag.optional,
       Flag.map(Option.getOrUndefined)
     ),
-    points: optionalFlag("points", "A points list (CSV) to take the devices from"),
+    points: optionalFlag("points", "A points list (CSV or JSON) to take the devices from"),
     broadcast: optionalFlag("broadcast", "The broadcast address for BACnet discovery, when there are several networks"),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
@@ -487,7 +488,9 @@ const importCommand = Command.make(
   "import",
   {
     list: Argument.String("points-list").pipe(
-      Argument.withDescription("A CSV with a device and a point column, one row per point")
+      Argument.withDescription(
+        "A CSV with a device and a point column, one row per point, or the same as a JSON array of rows"
+      )
     ),
     // Optional rather than defaulted: a dry run that names no config may check the list on its own.
     config: Argument.String("config").pipe(
@@ -541,12 +544,13 @@ const importCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config ?? defaultConfigPath }))
 ).pipe(
   Command.withDescription(
-    "Add the devices of a points list (CSV: device, point, host, register, type, unit, …) to the config"
+    "Add the devices of a points list (CSV or JSON: device, point, host, register, type, unit, …) to the config"
   ),
   Command.withExamples([
     { command: "ot-gateway import points.csv", description: "Add them to ot-gateway.json" },
     { command: "ot-gateway import points.csv site-1/ot-gateway.json", description: "Add them to another config" },
-    { command: "ot-gateway import points.csv --dry-run", description: "Only check and print them" }
+    { command: "ot-gateway import points.csv --dry-run", description: "Only check and print them" },
+    { command: "ot-gateway import points.json --dry-run --json", description: "The same for a JSON list, for agents" }
   ])
 )
 
@@ -557,20 +561,27 @@ const schemaCommand = Command.make(
     brief: Flag.Boolean("brief").pipe(
       Flag.withDescription("Each column's name, scope, required, first sentence and values, one line each; no aliases"),
       Flag.withDefault(false)
+    ),
+    jsonSchema: Flag.Boolean("json-schema").pipe(
+      Flag.withDescription("The JSON form of the list as a JSON Schema (draft 2020-12), to check a list against"),
+      Flag.withDefault(false)
     )
   },
-  ({ json, brief }) =>
-    json
-      ? brief
-        ? printResult(briefPointsListSchemaJson())
-        : printJson(pointsListSchema())
-      : Console.log(describePointsListSchema({ brief }))
+  ({ json, brief, jsonSchema }) =>
+    jsonSchema
+      ? printJson(pointsListJsonSchema())
+      : json
+        ? brief
+          ? printResult(briefPointsListSchemaJson())
+          : printJson(pointsListSchema())
+        : Console.log(describePointsListSchema({ brief }))
 ).pipe(
   Command.withDescription("The points list's columns, rules and allowed values"),
   Command.withExamples([
     { command: "ot-gateway points schema", description: "Every column, for people" },
     { command: "ot-gateway points schema --brief --json", description: "The columns in short, for agents" },
-    { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" }
+    { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" },
+    { command: "ot-gateway points schema --json-schema", description: "The JSON form's JSON Schema" }
   ])
 )
 
@@ -653,7 +664,7 @@ const profiles = Command.make("profiles").pipe(
 )
 
 const points = Command.make("points").pipe(
-  Command.withDescription("The points list, the CSV that import and init read: its schema and a template"),
+  Command.withDescription("The points list, the CSV (or JSON) that import and init read: its schema and a template"),
   Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
 )
 
@@ -1180,7 +1191,7 @@ export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
-  "    points schema --json             the points list's columns: translate any list or EDE file into it",
+  "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
