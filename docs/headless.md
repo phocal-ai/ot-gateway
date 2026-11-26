@@ -9,6 +9,7 @@ Set up a gateway without answering a single question: from a script, a CI job, o
 Eight commands, in this order. Each one either passes or tells you exactly what to fix, so the whole setup is a loop of run, read, fix, run again.
 
 ```mermaid
+%% site: headless-path
 flowchart LR
   subgraph list["The list"]
     direction TB
@@ -74,6 +75,7 @@ You need three things on the machine that sits on the building network:
 Where everything runs, when you work from a laptop over SSH:
 
 ```mermaid
+%% site: headless-map
 flowchart TB
   subgraph laptop["Your laptop"]
     you["you, a script<br/>or an AI agent"]
@@ -377,6 +379,7 @@ ot-gateway logs --level warn --json   # in detail: the warnings and errors
 Start from the symptom:
 
 ```mermaid
+%% site: headless-failures
 flowchart TD
   start(["watch --until-values exits with 1"]) --> s{"status --json"}
   s -- "code: gateway-unreachable" --> notrun["the gateway is not running:<br/>docker compose up -d,<br/>then docker compose logs gateway"]

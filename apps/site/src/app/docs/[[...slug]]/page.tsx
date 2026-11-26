@@ -2,7 +2,7 @@ import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/layo
 import defaultMdxComponents from "fumadocs-ui/mdx"
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
-import { Mermaid } from "@/components/mermaid.tsx"
+import { Diagram } from "@/components/docs/diagrams.tsx"
 import { pageMarkdownUrl, source } from "@/lib/source.ts"
 
 interface Props {
@@ -27,7 +27,7 @@ const Page = async ({ params }: Props) => {
         </a>
       </div>
       <DocsBody>
-        <Body components={{ ...defaultMdxComponents, Mermaid }} />
+        <Body components={{ ...defaultMdxComponents, Diagram }} />
       </DocsBody>
     </DocsPage>
   )
