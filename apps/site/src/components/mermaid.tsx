@@ -16,9 +16,9 @@ const palette = {
 
 const isDark = (): boolean => document.documentElement.classList.contains("dark")
 
-/** Whether the site is in dark mode, following the theme switch. */
-const useDark = (): boolean => {
-  const [dark, setDark] = useState(false)
+/** Whether the site is in dark mode, following the theme switch; undefined until the browser has said. */
+const useDark = (): boolean | undefined => {
+  const [dark, setDark] = useState<boolean>()
   useEffect(() => {
     setDark(isDark())
     const observer = new MutationObserver(() => setDark(isDark()))
@@ -34,6 +34,8 @@ export const Mermaid = ({ chart }: { readonly chart: string }) => {
   const [svg, setSvg] = useState<string>()
 
   useEffect(() => {
+    // Not before the theme is known: a dark page would draw every diagram in light first.
+    if (dark === undefined) return
     let current = true
     const draw = async () => {
       const { default: mermaid } = await import("mermaid")
@@ -41,6 +43,8 @@ export const Mermaid = ({ chart }: { readonly chart: string }) => {
       mermaid.initialize({
         startOnLoad: false,
         securityLevel: "strict",
+        // Without it Mermaid leaves its own "syntax error" drawing in the page when a diagram does not parse.
+        suppressErrorRendering: true,
         fontFamily: "inherit",
         theme: "base",
         // Labels are measured before the page's font applies, so they get room and break only at <br/>.

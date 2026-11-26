@@ -146,13 +146,13 @@ Or the same columns as JSON, which a program writes without CSV's quoting traps:
 
 You do not always have to write it by hand:
 
-| What you have                        | How it becomes a points list                                                                  |
-| ------------------------------------ | --------------------------------------------------------------------------------------------- |
-| BACnet devices on the network        | `ot-gateway discover --points-list points.csv` writes a draft: delete the rows you don't need |
-| A BACnet EDE file                    | `import` and `init --points` read it as it is                                                 |
-| A Modbus device with a known profile | one row with `profile` and `point` `*` takes all its registers                                |
-| A Modbus register you are unsure of  | `ot-gateway probe <host> <register> --json` reads it once and returns a row to copy           |
-| A PDF, a spreadsheet, anything else  | an AI agent translates it into these columns; step 3 checks its work                          |
+| What you have                        | How it becomes a points list                                                                                                                                                                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| BACnet devices on the network        | `init … --devices discover` in step 4 finds them and needs no list. To trim the draft first: `init … --devices none`, then `ot-gateway discover --points-list points.csv` in the folder, delete rows, `ot-gateway import points.csv` |
+| A BACnet EDE file                    | `import` and `init --points` read it as it is                                                                                                                                                                                        |
+| A Modbus device with a known profile | one row with `profile` and `point` `*` takes all its registers                                                                                                                                                                       |
+| A Modbus register you are unsure of  | `ot-gateway probe <host> <register> --json` reads it once and returns a row to copy                                                                                                                                                  |
+| A PDF, a spreadsheet, anything else  | an AI agent translates it into these columns; step 3 checks its work                                                                                                                                                                 |
 
 No list makes a point writable. Writes are set in the config, on purpose.
 
@@ -213,10 +213,11 @@ ot-gateway init site-1 --json \
 | `--yes`                        | take the default for whatever no flag gives: site `my-site`, a broker on localhost, a simulated device |
 | `--force`                      | replace a config that exists; without it `init` refuses and keeps yours                                |
 
-The password is the one thing `init` does not take. With a `--username`, the result's `notes` say where it goes:
+The password is the one thing `init` does not take. With a `--username` it writes an empty `MQTT_PASSWORD=` line into `ot-gateway.env`, and the result's `notes` say so. Fill that line in with an editor, or from wherever your script keeps its secrets, so that the password is never typed on a command line:
 
 ```bash
-echo 'MQTT_PASSWORD=your-broker-password' >> site-1/ot-gateway.env
+# BROKER_PASSWORD comes from your secret store, not from the keyboard
+sed -i "s|^MQTT_PASSWORD=.*|MQTT_PASSWORD=${BROKER_PASSWORD}|" site-1/ot-gateway.env
 ```
 
 `ot-gateway.env` is readable by you alone and stays out of git. Docker Compose and every `ot-gateway` command read it from the folder.
@@ -279,13 +280,13 @@ It logs in as the gateway will, sends one message and waits for it to come back,
 }
 ```
 
-| `code`                 | What happened                                         | What to do                                                                                      |
-| ---------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `broker-unreachable`   | nothing accepts a connection there                    | check `mqtt.url`, and that the broker runs                                                      |
-| `broker-timeout`       | something is in the way, or answers other than MQTT   | a firewall, the wrong port, or TLS on one side only (`mqtts://`, 8883)                          |
-| `broker-login-refused` | the broker refused the username or password           | check `mqtt.username` and the password in `ot-gateway.env`                                      |
-| `broker-refused`       | the broker refused for another reason, which it names | read `hint`: it carries the broker's own words                                                  |
-| `no-round-trip`        | connected, but the message did not come back          | the broker's access rules must allow this user to publish and subscribe under `site/building/#` |
+| `code`                 | What happened                                                      | What to do                                                                                      |
+| ---------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `broker-unreachable`   | nothing accepts a connection there                                 | check `mqtt.url`, and that the broker runs                                                      |
+| `broker-timeout`       | something is in the way, or answers other than MQTT                | a firewall, the wrong port, or TLS on one side only (`mqtts://`, 8883)                          |
+| `broker-login-refused` | the broker refused the username or password                        | check `mqtt.username` and the password in `ot-gateway.env`                                      |
+| `broker-refused`       | the broker refused for another reason, which it names              | read `hint`: it carries the broker's own words                                                  |
+| no `code`, `ok: false` | connected, but the message did not come back; `warnings[]` says so | the broker's access rules must allow this user to publish and subscribe under `site/building/#` |
 
 ## 7. Run it
 
@@ -334,7 +335,7 @@ When a point stays silent it waits for the slowest poll interval plus 30 seconds
 }
 ```
 
-A point that publishes only on change and has not changed since the watch began is listed under `onChange`, not under `missing`: it is not a failure.
+A point that publishes only on change and has not changed since the watch began is listed under `onChange`, not under `missing`: it is not a failure, as long as at least one point sent a value. When nothing arrived at all, the watch fails and names those points too, since nothing shows that the gateway works.
 
 What the messages look like (topics, the value payload, the retained `$meta` and health messages) is the [MQTT contract](mqtt-contract.md), with a JSON Schema for each message.
 
@@ -387,18 +388,18 @@ flowchart TD
   s -- "everything ok" --> oc["the silent points publish<br/>on change and have not changed:<br/>not a failure"]
 ```
 
-| What you see                         | Where                      | What it means                                          | Next                                                                  |
-| ------------------------------------ | -------------------------- | ------------------------------------------------------ | --------------------------------------------------------------------- |
-| `code: missing-answers`, exit code 2 | `init`                     | no terminal and not enough flags                       | run the command in `hint`                                             |
-| `code: usage`, exit code 2           | any command                | an unknown flag or a missing argument                  | `hint` names the `--help` to read                                     |
-| `code: no-config`                    | any command with a config  | no `ot-gateway.json` here                              | `cd` into the folder, or name the config                              |
-| `issues[]` with `line`               | `import`, `init --points`  | mistakes in the points list                            | fix those rows, run it again                                          |
-| `code: invalid-config`               | `check`                    | mistakes in `ot-gateway.json`                          | fix each `path`, run it again                                         |
-| `MQTT_PASSWORD is not set`           | `broker`, `watch`, `run`   | the config names a password variable that has no value | put it in `ot-gateway.env`                                            |
-| `code: broker-…`, `no-round-trip`    | `broker`, `watch`          | the broker cannot be reached or refuses                | step 6's table                                                        |
-| `code: values-missing`               | `watch --until-values`     | some points sent nothing in time                       | `ot-gateway status --json`                                            |
-| `code: gateway-unreachable`          | `status`, `events`, `logs` | no gateway answers on the status port                  | start it; `docker compose logs gateway` when it does not stay up      |
-| a device `failing`                   | `status`                   | the device does not answer as configured               | follow its `hints.checks`, then [Troubleshooting](troubleshooting.md) |
+| What you see                                     | Where                      | What it means                                                         | Next                                                                  |
+| ------------------------------------------------ | -------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `code: missing-answers`, exit code 2             | `init`                     | no terminal and not enough flags                                      | run the command in `hint`                                             |
+| `code: usage`, exit code 2                       | any command                | an unknown flag or a missing argument                                 | `hint` names the `--help` to read                                     |
+| `code: no-config`                                | any command with a config  | no `ot-gateway.json` here                                             | `cd` into the folder, or name the config                              |
+| `issues[]` with `line`                           | `import`, `init --points`  | mistakes in the points list                                           | fix those rows, run it again                                          |
+| `code: invalid-config`                           | `check`                    | mistakes in `ot-gateway.json`                                         | fix each `path`, run it again                                         |
+| `MQTT_PASSWORD is not set`                       | `broker`, `watch`, `run`   | the config names a password variable that has no value                | put it in `ot-gateway.env`                                            |
+| `code: broker-…`, or `ok: false` with `warnings` | `broker`, `watch`          | the broker cannot be reached, refuses, or does not return the message | step 6's table                                                        |
+| `code: values-missing`                           | `watch --until-values`     | some points sent nothing in time                                      | `ot-gateway status --json`                                            |
+| `code: gateway-unreachable`                      | `status`, `events`, `logs` | no gateway answers on the status port                                 | start it; `docker compose logs gateway` when it does not stay up      |
+| a device `failing`                               | `status`                   | the device does not answer as configured                              | follow its `hints.checks`, then [Troubleshooting](troubleshooting.md) |
 
 Two cases are worth knowing before they cost you time:
 
@@ -426,7 +427,7 @@ cd "$site"
 
 # 5 and 6. the config, then the broker
 ot-gateway check --json > check.json   || { jq '.issues' check.json; exit 1; }
-ot-gateway broker --json > broker.json || { jq '{code, error, hint}' broker.json; exit 1; }
+ot-gateway broker --json > broker.json || { jq '{code, error, hint, warnings}' broker.json; exit 1; }
 
 # 7. run it
 docker compose up -d
@@ -463,19 +464,19 @@ For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start wi
 
 ## Reference: what `--json` returns
 
-Every result has `ok`. Every time is given twice: as Unix milliseconds and, under the same key with `Local` added, in the machine's local time with its UTC offset.
+Every result that can fail has `ok`. `status`, `events`, `logs`, `history` and `messages` give each time twice: as Unix milliseconds and, under the same key with `Local` added, in the machine's local time with its UTC offset. A `watch` line's `at` is an ISO time in UTC.
 
-| Command                         | On success                                                                             | On failure                                       |
-| ------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `points schema --json`          | `format`, `version`, `rules`, `columns[]`                                              |                                                  |
-| `import --dry-run --json`       | `points`, `units[]`, `devices[]`, `summary[]`                                          | `issues[]`: `line`, `column`, `value`, `message` |
-| `init --json`                   | `files.written`, `config`, `notes[]`, `next[]`, `url`                                  | `code`, `missing[]`, `hint`                      |
-| `check --json`                  | `site`, `building`, `broker`, `devices[]`, `warnings[]`, `next[]`                      | `code`, `issues[]`: `path`, `message`            |
-| `broker --json`                 | `protocolVersion`, `maximumQoS`, `retainAvailable`, `roundTripMs`                      | `code`, `hint`                                   |
-| `watch --json`                  | one line per message: `at`, `topic`, `retained`, `payload`; then `{"event":"summary"}` | `code`, `missing[]`, `hint`                      |
-| `status --json`                 | `broker`, `buffer`, `host`, `devices[]` with `points[]`                                | the same, with `problem` and per device `hints`  |
-| `events --json`                 | `events[]`: `at`, `type`, and what happened                                            | `code`, `hint`                                   |
-| `logs --json`                   | `lines[]`: the recent log lines, secrets redacted                                      | `code`, `hint`                                   |
-| `history <device/point> --json` | `series[]` with `buckets[]`: `min`, `max`, `avg`, and the gaps                         | `code`, `hint`                                   |
+| Command                         | On success                                                                                               | On failure                                                      |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `points schema --json`          | `format`, `version`, `rules`, `columns[]`                                                                |                                                                 |
+| `import --dry-run --json`       | `points`, `units[]`, `devices[]`, `summary[]`                                                            | `issues[]`: `line`, `column`, `value`, `message`                |
+| `init --json`                   | `files.written`, `notes[]`, `next[]`, `url`; with `--dry-run`, `files.wouldWrite` and the whole `config` | `code`, `missing[]`, `hint`                                     |
+| `check --json`                  | `site`, `building`, `broker`, `devices[]`, `warnings[]`, `next[]`                                        | `code`, `issues[]`: `path`, `message`                           |
+| `broker --json`                 | `protocolVersion`, `maximumQoS`, `retainAvailable`, `roundTripMs`                                        | `code`, `hint`; or the report with `ok: false` and `warnings[]` |
+| `watch --json`                  | one line per message: `at`, `topic`, `retained`, `payload`; then `{"event":"summary"}`                   | `code`, `missing[]`, `hint`                                     |
+| `status --json`                 | `broker`, `buffer`, `host`, `devices[]` with `points[]`                                                  | the same, with `problem` and per device `hints`                 |
+| `events --json`                 | `events[]`: `at`, `type`, and what happened                                                              | `code`, `hint`                                                  |
+| `logs --json`                   | `lines[]`: the recent log lines, secrets redacted                                                        | `code`, `hint`                                                  |
+| `history <device/point> --json` | `series[]` with `buckets[]`: `min`, `max`, `avg`, and the gaps                                           | `code`, `hint`                                                  |
 
 `ot-gateway --help` lists every command, and `ot-gateway <command> --help` its flags with examples.
