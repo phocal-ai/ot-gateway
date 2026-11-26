@@ -509,7 +509,11 @@ const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
     description: "a CSV or JSON of devices and points (Modbus, or BACnet from an EDE file)"
   },
   { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" },
-  { title: "None yet", value: "none", description: "add devices later, on the status page" }
+  {
+    title: "None for now",
+    value: "none",
+    description: "discover again once a device is reachable, or add it on the status page"
+  }
 ]
 
 const otherWays = Prompt.Select<OtherWay>({ message: "No BACnet device answered. What now?", choices: otherWayChoices })
@@ -1040,7 +1044,7 @@ export const initSummary = (
         ? [
             `next: ${discover}`,
             "      finds the BACnet devices on this network, lets you pick their points and saves them here",
-            `      (Modbus TCP: it offers a scan of a range; a points list: ${cli} import points.csv)`
+            `      (Modbus TCP: it offers a scan of a range; a points list: ${cli} import points.csv${run.slice(`${cli} run`.length)})`
           ]
         : [
             `start it:     ${run}${compose === undefined ? "" : `   (or in Docker: ${compose})`}`,

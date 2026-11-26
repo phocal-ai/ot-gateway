@@ -68,6 +68,21 @@ describe("mergeDevices", () => {
     })
   )
 
+  it("adds a device that only shares an id under an id of its own, never into the other", () => {
+    const elsewhere: PickedDevice = { ...newPoint, deviceInstance: 1002, address: "192.168.0.172" }
+    const merged = mergeDevices(base, [elsewhere])
+    expect(merged.added).toEqual(["demo-room-2"])
+    expect(merged.extended).toEqual([])
+    expect(JSON.parse(merged.text).devices[0].points).toHaveLength(1)
+  })
+
+  it("replaces the limited broadcast with the network the devices were found on", () => {
+    const limited = { ...base, bacnet: { broadcastAddress: "255.255.255.255" } }
+    expect(JSON.parse(mergeDevices(limited, [newDevice], "192.168.0.255").text).bacnet).toEqual({
+      broadcastAddress: "192.168.0.255"
+    })
+  })
+
   it("keeps the network the file sets, and sets none when not asked to", () => {
     const set = { ...base, bacnet: { broadcastAddress: "10.0.0.255", port: 47809 } }
     expect(JSON.parse(mergeDevices(set, [newDevice], "192.168.0.255").text).bacnet).toEqual(set.bacnet)
@@ -82,7 +97,7 @@ describe("saveDiscovered", () => {
       const folder = yield* fs.makeTempDirectoryScoped()
       const path = `${folder}/ot-gateway.json`
       yield* fs.writeFileString(path, `${JSON.stringify(base, null, 2)}\n`)
-      yield* saveDiscovered(path, [newDevice])
+      yield* saveDiscovered(path, yield* fs.readFileString(path), [newDevice])
       const saved = yield* parseConfig(yield* fs.readFileString(path))
       expect(saved.devices.map((device) => device.id)).toEqual(["demo-room", "ahu-1"])
 
@@ -92,9 +107,16 @@ describe("saveDiscovered", () => {
         ...newPoint,
         points: [{ id: "room-temperature", name: "Room temperature", objectType: "analog-value", instance: 9 }]
       }
-      const refused = yield* saveDiscovered(path, [duplicate]).pipe(Effect.flip)
+      const refused = yield* saveDiscovered(path, before, [duplicate]).pipe(Effect.flip)
       expect(refused.message).toContain("nothing was saved")
       expect(yield* fs.readFileString(path)).toBe(before)
+
+      // Changed while discover asked (the status page saved it): refused, not merged into.
+      const asRead = yield* fs.readFileString(path)
+      yield* fs.writeFileString(path, asRead.replace('"main"', '"north"'))
+      const another: PickedDevice = { ...newDevice, id: "ahu-2", deviceInstance: 2002 }
+      const conflict = yield* saveDiscovered(path, asRead, [another]).pipe(Effect.flip)
+      expect(conflict.message).toContain("changed while discover ran")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

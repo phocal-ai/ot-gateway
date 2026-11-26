@@ -508,11 +508,8 @@ const discoverModbusCommand = Command.make(
 const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, address: string | undefined) {
   const fs = yield* FileSystem.FileSystem
   const cli = yield* invocation
-  if (!(yield* fs.exists(path))) {
-    return yield* new DiscoverError({
-      message: `no ${path} here yet: ${cli} init sets up the broker and the site first, then discover adds the devices to it`
-    })
-  }
+  // The file as it is before any question: the save merges into it and refuses when it changed meanwhile.
+  const fileText = yield* fs.readFileString(path)
   const config = yield* loadConfig(path)
   const lans = lanInterfaces(networkInterfaces())
   // The default broadcast reaches no device behind most routers' settings: ask on this machine's network instead.
@@ -529,14 +526,14 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
   })
   if (!save) return yield* Console.log(`nothing saved; ${path} is as it was`)
   const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
-  const merged = yield* saveDiscovered(path, picked, located ? undefined : broadcast)
+  const merged = yield* saveDiscovered(path, fileText, picked, located ? undefined : broadcast)
   const saved = yield* loadConfig(path)
   const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
   yield* Console.log(
     [
       "",
       ...merged.added.map((id) => `✓ added ${id}`),
-      ...merged.extended.map((id) => `✓ added points to ${id}`),
+      ...merged.extended.map((id) => `✓ added points to ${id} (it keeps its read interval)`),
       ""
     ].join("\n")
   )
@@ -584,8 +581,13 @@ const discoverCommand = Command.make(
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
       // A person at a terminal picks what to keep and saves it into the config; scripts and agents get the draft.
+      // Without a config there is nothing to save into: the draft, as before, and init named as the way to one.
+      const fs = yield* FileSystem.FileSystem
       if (!json && Option.isNone(pointsList) && process.stdin.isTTY && process.stdout.isTTY) {
-        return yield* discoverAndSave(config, Option.getOrUndefined(address))
+        if (yield* fs.exists(config)) return yield* discoverAndSave(config, Option.getOrUndefined(address))
+        yield* Console.error(
+          `no ${config} here, so the devices found are printed, not saved: ${yield* invocation} init sets up the broker and the site, then discover saves the devices you pick`
+        )
       }
       const found = yield* configForDiscovery(config)
       const decoded = found.config
@@ -605,10 +607,14 @@ const discoverCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "Find BACnet devices through the config's bacnet settings (the defaults when there is no config yet) and print a draft of their devices entries, read-only"
+    "Find BACnet devices through the config's bacnet settings. In a terminal: pick their points and writable setpoints and save them into the config. Otherwise (--json, a pipe, no config yet): print a draft of their devices entries; nothing is written"
   ),
   Command.withExamples([
-    { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
+    {
+      command: "ot-gateway discover",
+      description: "In a terminal: pick what to keep and save it into ot-gateway.json"
+    },
+    { command: "ot-gateway discover --json", description: "Print the draft as JSON, in the config's shape" },
     { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
     {
       command: "ot-gateway discover --points-list points.csv --append",

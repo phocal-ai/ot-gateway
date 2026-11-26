@@ -6,7 +6,7 @@
  * changed in between (the status page saved it, or an editor).
  */
 import { parseConfig } from "@ot-gateway/core"
-import { Effect, FileSystem, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { etagOf, makeConfigStore } from "./ConfigStore.ts"
 import { DiscoverError } from "./Discover.ts"
 import type { InitDevice } from "./Init.ts"
@@ -25,9 +25,33 @@ export interface Merged {
 }
 
 /**
+ * Whether `existing` in the file is the device `picked` drafts more points of: the same id and the same device, by
+ * protocol and its instance (BACnet) or host and unit id (Modbus). Two devices that only share an id are not.
+ */
+const sameDevice = (existing: Readonly<Record<string, unknown>>, picked: InitDevice) => {
+  if (existing["id"] !== picked.id || existing["protocol"] !== picked.protocol) return false
+  if (picked.protocol === "bacnet-ip") return existing["deviceInstance"] === picked.deviceInstance
+  if (picked.protocol === "modbus-tcp") {
+    return existing["host"] === picked.host && (existing["unitId"] ?? 1) === (picked.unitId ?? 1)
+  }
+  return false
+}
+
+/** `wanted`, or `wanted-2`, `wanted-3`…: the first id no device in `taken` has. */
+const freeId = (taken: ReadonlySet<unknown>, wanted: string) => {
+  let id = wanted
+  for (let n = 2; taken.has(id); n++) id = `${wanted.slice(0, 60)}-${n}`
+  return id
+}
+
+/** A broadcast the file sets that reaches the devices: one it names, other than the limited broadcast. */
+const setsNetwork = (bacnet: Readonly<Record<string, unknown>> | undefined) =>
+  typeof bacnet?.["broadcastAddress"] === "string" && bacnet["broadcastAddress"] !== "255.255.255.255"
+
+/**
  * The config's `raw` object with `picked` merged in, as text formatted as `init` writes it. `broadcastAddress`,
- * when given, becomes `bacnet.broadcastAddress` unless the file sets one: a device found by broadcast needs the
- * network it was found on.
+ * when given, becomes `bacnet.broadcastAddress` unless the file names a subnet's: a device found by broadcast needs
+ * the network it was found on, and 255.255.255.255 does not cross most networks' settings.
  */
 export const mergeDevices = (
   raw: Readonly<Record<string, unknown>>,
@@ -38,33 +62,35 @@ export const mergeDevices = (
   const added: Array<string> = []
   const extended: Array<string> = []
   for (const device of picked) {
-    const at = devices.findIndex((existing) => isRecord(existing) && existing["id"] === device.id)
+    const at = devices.findIndex((existing) => isRecord(existing) && sameDevice(existing, device))
     const existing = at === -1 ? undefined : devices[at]
     if (isRecord(existing) && Array.isArray(existing["points"])) {
       devices[at] = { ...existing, points: [...existing["points"], ...device.points] }
       extended.push(device.id)
-    } else {
-      devices.push(device)
-      added.push(device.id)
+      continue
     }
+    const taken = new Set(devices.map((other) => (isRecord(other) ? other["id"] : undefined)))
+    const id = freeId(taken, device.id)
+    devices.push({ ...device, id })
+    added.push(id)
   }
   const bacnet = isRecord(raw["bacnet"]) ? raw["bacnet"] : undefined
   const withNetwork =
-    broadcastAddress === undefined || bacnet?.["broadcastAddress"] !== undefined
-      ? raw
-      : { ...raw, bacnet: { ...bacnet, broadcastAddress } }
+    broadcastAddress === undefined || setsNetwork(bacnet) ? raw : { ...raw, bacnet: { ...bacnet, broadcastAddress } }
   return { text: `${JSON.stringify({ ...withNetwork, devices }, null, 2)}\n`, added, extended }
 }
 
-/** Saves `picked` into the config at `path`; fails without writing when the result would not decode. */
+/**
+ * Saves `picked` into the config at `path`, merged into `fileText`: the file as discover read it before it asked,
+ * so a change made meanwhile (the status page, an editor) is refused rather than merged into. Fails without writing
+ * when the result would not decode.
+ */
 export const saveDiscovered = Effect.fn("saveDiscovered")(function* (
   path: string,
+  fileText: string,
   picked: ReadonlyArray<InitDevice>,
   broadcastAddress?: string
 ) {
-  const fs = yield* FileSystem.FileSystem
-  // One read: the text the devices merge into and the ETag the save checks.
-  const fileText = yield* fs.readFileString(path)
   const raw = yield* Schema.decodeUnknownEffect(ConfigObject)(fileText).pipe(
     Effect.catchTag("SchemaError", () =>
       Effect.fail(new DiscoverError({ message: `${path} is not a JSON object; nothing was saved` }))
