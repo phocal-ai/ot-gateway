@@ -15,7 +15,7 @@
 import { objectTypeNumber } from "@ot-gateway/bacnet"
 import { Result } from "effect"
 import { csvLine, toCsv } from "./Csv.ts"
-import { detectDelimiter, headerColumns, readDelimited } from "./PointsList.ts"
+import { detectDelimiter, headerColumns, isJsonList, readDelimited } from "./PointsList.ts"
 import { slugify } from "./Slug.ts"
 
 /** U+FEFF, which spreadsheet exports put before the header; spelled out because the character is invisible. */
@@ -101,6 +101,11 @@ export const appendToPointsList = (
   columns: ReadonlyArray<string>,
   rows: ReadonlyArray<ReadonlyArray<string>>
 ): Result.Result<AppendedPointsList, string> => {
+  if (isJsonList(text)) {
+    return Result.fail(
+      "it is a JSON points list, and --append adds rows to a CSV one; write the found devices to a list of their own (--points-list found.csv) and import each"
+    )
+  }
   const read = readDelimited(text)
   if (Result.isFailure(read)) return Result.fail(`line ${read.failure.line}: a quote opened here is never closed`)
   const [headerRecord, ...records] = read.success

@@ -392,7 +392,7 @@ export const ImportPanel = ({
         }}
       >
         <p>
-          A points list (CSV, one row per value) or a BACnet EDE file. Drop it here, or{" "}
+          A points list (CSV or JSON, one row per value) or a BACnet EDE file. Drop it here, or{" "}
           <Button size="sm" variant="outline" onClick={() => input.current?.click()} disabled={adding}>
             choose a file
           </Button>
@@ -400,7 +400,7 @@ export const ImportPanel = ({
         <input
           ref={input}
           type="file"
-          accept=".csv,.txt,text/csv,text/plain"
+          accept=".csv,.txt,.json,text/csv,text/plain,application/json"
           className="sr-only"
           aria-label="Points list or EDE file"
           tabIndex={-1}

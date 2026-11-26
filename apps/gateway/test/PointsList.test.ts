@@ -457,3 +457,81 @@ describe("importPointsList", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })
+
+describe("a points list as JSON", () => {
+  const csv = [
+    "device,point,unit,host,register,type,byte_order",
+    "Meter,Active power,kW,10.0.0.1,100,float32,CDAB",
+    "Heat pump,Flow,°C,,,,"
+  ].join("\n")
+
+  it.effect("reads the same devices as the CSV with the same columns, numbers as JSON numbers", () =>
+    Effect.gen(function* () {
+      const json = JSON.stringify([
+        {
+          device: "Meter",
+          point: "Active power",
+          unit: "kW",
+          host: "10.0.0.1",
+          register: 100,
+          type: "float32",
+          byte_order: "CDAB"
+        }
+      ])
+      const fromJson = yield* devicesFromPointsList(json)
+      const fromCsv = yield* devicesFromPointsList(csv.split("\n").slice(0, 2).join("\n"))
+      expect(fromJson).toEqual(fromCsv)
+      expect(unitsWritten(json)).toEqual([{ written: "kW", unit: "unit:KiloW", qudt: true, points: 1 }])
+    })
+  )
+
+  it.effect("names the line in the file each row starts on, with every mistake at once", () =>
+    Effect.gen(function* () {
+      const json = [
+        "[",
+        '  { "device": "Meter", "point": "Active power", "host": "10.0.0.1", "register": 100, "type": "float32" },',
+        "  {",
+        '    "device": "Meter",',
+        '    "point": "Energy",',
+        '    "host": "10.0.0.1",',
+        '    "register": 102,',
+        '    "type": "uint33"',
+        "  },",
+        '  { "device": "Pump", "point": "Speed", "interval_s": 0.01, "host": "10.0.0.2", "register": 1, "type": "int16" }',
+        "]"
+      ].join("\n")
+      const error = yield* Effect.flip(devicesFromPointsList(json))
+      expect(error.issues?.map((issue) => [issue.line, issue.column])).toEqual([
+        [3, "type"],
+        [10, "interval_s"]
+      ])
+    })
+  )
+
+  it.effect("refuses what is not an array of flat rows, naming the line", () =>
+    Effect.gen(function* () {
+      const notArray = yield* Effect.flip(devicesFromPointsList('{"device": "m"}'))
+      expect(notArray.message).toContain("an array of rows")
+      const broken = yield* Effect.flip(
+        devicesFromPointsList('[\n  {"device": "m", "point": "p"},\n  {"device": "m",}\n]')
+      )
+      expect(broken.issues?.[0]?.line).toBe(3)
+      expect(broken.message).toMatch(/^line 3: not valid JSON: /)
+      const empty = yield* Effect.flip(devicesFromPointsList("[]"))
+      expect(empty.message).toBe("the points list is empty")
+      const spelled = yield* devicesFromPointsList(
+        '[{"device": "m", "point": "p", "unit": "kW", "host": "h", "register": 1, "type": "int16"},\r{"device": "m", "point": "q", "Unit": "kWh", "host": "h", "register": 2, "type": "int16"}]'
+      )
+      expect(spelled[0]?.points.map((point) => point.unit)).toEqual(["unit:KiloW", "unit:KiloW-HR"])
+      const nested = yield* Effect.flip(
+        devicesFromPointsList(
+          '[\n  {"device": "m", "point": "p"},\n  {"device": "m", "point": "q", "scale": {"x": 1}},\n  "row"\n]'
+        )
+      )
+      expect(nested.issues).toEqual([
+        { line: 3, column: "scale", message: "scale is an object or a list; write text or a number" },
+        { line: 4, message: 'each row of a JSON points list is an object, such as {"device": "Meter", …}' }
+      ])
+    })
+  )
+})

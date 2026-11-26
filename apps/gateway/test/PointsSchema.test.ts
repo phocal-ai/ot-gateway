@@ -16,6 +16,7 @@ import {
   describePointsListSchema,
   firstSentence,
   pointsListColumns,
+  pointsListJsonSchema,
   pointsListRules,
   pointsListSchema,
   pointsListTemplate,
@@ -92,6 +93,21 @@ describe("the points list schema", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer))
   )
+})
+
+describe("the JSON form's JSON Schema", () => {
+  it("describes every column, requires device and point, and lists the allowed values", () => {
+    const schema = pointsListJsonSchema()
+    expect(schema.type).toBe("array")
+    expect(schema.items.required).toEqual(["device", "point"])
+    expect(Object.keys(schema.items.properties)).toEqual(pointsListColumns.map((column) => column.name))
+    expect(schema.items.properties["register"]).toMatchObject({ type: ["number", "string", "null"] })
+    expect(schema.items.properties["type"]).toMatchObject({
+      enum: [...(pointsListColumns.find((c) => c.name === "type")?.values ?? []), "", null]
+    })
+    expect(schema.items.properties["host"]?.description).toMatch(/^Modbus TCP: /)
+    expect(schema.items.additionalProperties).toBe(true)
+  })
 })
 
 describe("import --dry-run without a config", () => {
