@@ -18,6 +18,7 @@ import {
   makeWritable,
   pointChoices,
   siteSuggestion,
+  withInterval,
   startNowQuestion,
   suggestedLimits,
   writableChoices,
@@ -561,6 +562,27 @@ describe("picking discovered points", () => {
     })
   )
 
+  it("puts setpoints first by the point's name, not by the device's", () => {
+    const ahu: DraftedDevice = {
+      ...room,
+      id: "ahu-sp-1",
+      points: [{ id: "valve", name: "Valve", objectType: "analog-output", instance: 3 }]
+    }
+    expect(writableChoices([ahu, room]).map((choice) => choice.value)).toEqual([
+      "demo-room/temperature-setpoint",
+      "ahu-sp-1/valve",
+      "demo-room/fan"
+    ])
+  })
+
+  it.effect("reads every device at the interval asked, and leaves the default out of the file", () =>
+    Effect.gen(function* () {
+      expect(withInterval([room], 5)).toEqual([room])
+      const config = yield* decode(initConfig(answers, withInterval([room], 2.5)))
+      expect(config.devices[0]?.pollIntervalMs).toBe(2500)
+    })
+  )
+
   it("suggests limits only for units with a usual range", () => {
     expect(suggestedLimits("unit:DEG_C")).toEqual({ min: 15, max: 30 })
     expect(suggestedLimits("unit:PERCENT")).toEqual({ min: 0, max: 100 })
@@ -584,6 +606,8 @@ describe("init for a person at the terminal", () => {
       expect(yield* initTarget(undefined, false, { empty: true })).toBe("ot-gateway.json")
       expect(yield* initTarget("site-1", false, { empty: true })).toBe("site-1/ot-gateway.json")
       expect(yield* initTarget(undefined, true, { empty: false })).toBe(`${defaultFolder}/ot-gateway.json`)
+      // Scripts get the folder they always got, empty or not.
+      expect(yield* initTarget(undefined, true, { empty: true })).toBe(`${defaultFolder}/ot-gateway.json`)
     }).pipe(Effect.provide(NodeServices.layer))
   )
 

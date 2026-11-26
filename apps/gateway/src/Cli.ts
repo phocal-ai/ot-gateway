@@ -77,7 +77,7 @@ import {
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
-import { ConfigFileError, configFileSource, loadConfig } from "./LoadConfig.ts"
+import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
 import {
   describeProfile,
@@ -598,7 +598,9 @@ const init = Command.make(
         return yield* Console.log(nextSteps(config, written, files, context))
       }
       // A person gets a few lines to scan, then the one next step: start it now, as create-cloudflare offers to deploy.
-      const summary = initSummary(config, written, files, context)
+      // The folder's ot-gateway.env may hold the broker password already (a folder init kept it in).
+      yield* loadFolderEnv(config)
+      const summary = initSummary(config, written, files, context, process.env)
       yield* Console.log(["", ...summary.lines, ""].join("\n"))
       const question = startNowQuestion(written, process.env)
       if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {

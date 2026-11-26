@@ -10,11 +10,12 @@
 import { bacnetValueKind, GatewayConfig, parseConfig, Slug } from "@ot-gateway/core"
 import { parseBrokerUrl } from "@ot-gateway/mqtt"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { Console, Effect, FileSystem, Schema, type Terminal } from "effect"
+import { Console, Effect, FileSystem, Result, Schema, type Terminal } from "effect"
 import { Prompt } from "effect/cli"
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { discoverDrafts, type draftDevices, printable } from "./Discover.ts"
+import { parseDeviceAddress } from "@ot-gateway/bacnet"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { devicesFromFile } from "./Import.ts"
 import { shellArgument } from "./Output.ts"
@@ -59,7 +60,11 @@ type PickedPoint = DraftedPoint & {
 }
 
 /** A drafted device with the points the operator picked, some of them writable. */
-export type PickedDevice = Omit<DraftedDevice, "points"> & { readonly points: ReadonlyArray<PickedPoint> }
+export type PickedDevice = Omit<DraftedDevice, "points"> & {
+  readonly points: ReadonlyArray<PickedPoint>
+  /** How often its points are read where the device does not send changes itself; the config's default without. */
+  readonly pollIntervalMs?: number
+}
 
 export type InitDevice = typeof simulatedDevice | PickedDevice | PointsListDevice
 
@@ -352,9 +357,15 @@ export const writableChoices = (drafts: ReadonlyArray<PickedDevice>) =>
     .flatMap((device) =>
       device.points
         .filter((point) => commandableTypes.has(point.objectType))
-        .map((point) => ({ title: pointTitle(device, point), value: pointKey(device, point), selected: false }))
+        .map((point) => ({
+          title: pointTitle(device, point),
+          value: pointKey(device, point),
+          selected: false,
+          setpoint: isSetpoint(point.name)
+        }))
     )
-    .toSorted((a, b) => Number(isSetpoint(b.title)) - Number(isSetpoint(a.title)))
+    .toSorted((a, b) => Number(b.setpoint) - Number(a.setpoint))
+    .map(({ title, value, selected }) => ({ title, value, selected }))
 
 const isSetpoint = (title: string) => /set ?point|sollwert|\bsp\b/i.test(title)
 
@@ -411,6 +422,15 @@ const askLimits = Effect.fn("askLimits")(function* (title: string, unit: string 
   return { min, max }
 })
 
+/** The read interval init suggests, the config's default (`pollIntervalMs` 5000). */
+const defaultIntervalSeconds = 5
+
+/** The devices read every `seconds`; the config's default is left out rather than written. */
+export const withInterval = (devices: ReadonlyArray<PickedDevice>, seconds: number): ReadonlyArray<PickedDevice> =>
+  seconds === defaultIntervalSeconds
+    ? devices
+    : devices.map((device) => ({ ...device, pollIntervalMs: Math.round(seconds * 1000) }))
+
 /** Up to this many points found, init lets the operator tick which to read. */
 export const maxPointsToPick = 25
 
@@ -426,14 +446,21 @@ const pickPoints = Effect.fn("pickPoints")(function* (drafts: ReadonlyArray<Draf
       : keepPicked(
           drafts,
           yield* Prompt.MultiSelect({
-            message: `Points to read (${choices.length} found; space toggles, enter confirms)`,
+            message: `Points to read (${choices.length} found; space toggles, enter confirms, none for other ways)`,
             choices,
-            min: 1,
             maxPerPage: 15
           })
         )
-  const candidates = writableChoices(kept)
-  if (candidates.length === 0) return kept
+  if (kept.length === 0) return undefined
+  const interval = yield* Prompt.Number({
+    message: "Read every how many seconds? (where a device does not send changes itself)",
+    default: defaultIntervalSeconds,
+    min: 0.1,
+    max: 86_400
+  })
+  const timed = withInterval(kept, interval)
+  const candidates = writableChoices(timed)
+  if (candidates.length === 0) return timed
   const chosen = yield* Prompt.MultiSelect({
     message: "Which may MQTT commands write? (none by default; every write is checked and logged)",
     choices: candidates,
@@ -447,46 +474,62 @@ const pickPoints = Effect.fn("pickPoints")(function* (drafts: ReadonlyArray<Draf
     const binary = bacnetValueKind({ objectType: point.objectType, property: "present-value" }) === "binary"
     writable.set(key, binary ? undefined : yield* askLimits(printable(point.name), point.unit))
   }
-  return makeWritable(kept, writable)
+  return makeWritable(timed, writable)
 })
 
 /** The other ways to devices, when no BACnet device answered Who-Is. */
 type OtherWay = "again" | "address" | "list" | "simulated" | "none"
 
-const otherWays = Prompt.Select<OtherWay>({
-  message: "No BACnet device answered. What now?",
-  choices: [
-    {
-      title: "Ask one device by its address",
-      value: "address",
-      description: "ip or ip:port, for a device on another subnet or another port"
-    },
-    { title: "Search again", value: "again", description: "once the device is on and on this network" },
-    {
-      title: "From a points list",
-      value: "list",
-      description: "a CSV or JSON of devices and points (Modbus, or BACnet from an EDE file)"
-    },
-    { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" },
-    { title: "None yet", value: "none", description: "add devices later, on the status page" }
-  ]
+const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
+  {
+    title: "Ask one device by its address",
+    value: "address",
+    description: "ip or ip:port, for a device on another subnet or another port"
+  },
+  { title: "Search again", value: "again", description: "once the device is on and on this network" },
+  {
+    title: "From a points list",
+    value: "list",
+    description: "a CSV or JSON of devices and points (Modbus, or BACnet from an EDE file)"
+  },
+  { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" },
+  { title: "None yet", value: "none", description: "add devices later, on the status page" }
+]
+
+const otherWays = Prompt.Select<OtherWay>({ message: "No BACnet device answered. What now?", choices: otherWayChoices })
+
+/** The other ways when the operator picked none of the points found. */
+const otherWaysAfterPicking = Prompt.Select<OtherWay>({
+  message: "No point picked. What now?",
+  choices: otherWayChoices
 })
 
 const validDeviceAddress = (value: string) =>
-  /^[\w.:-]+$/.test(value) ? Effect.succeed(value) : Effect.fail("ip or ip:port, e.g. 192.168.0.171")
+  Result.isSuccess(parseDeviceAddress(value))
+    ? Effect.succeed(value)
+    : Effect.fail("ip or ip:port, e.g. 192.168.0.171 or 192.168.0.171:47810")
 
 /**
  * Discovery for a person at the terminal, the first way to devices: Who-Is right away, then they pick the points
- * found. When nobody answers, the other ways: one device by its address, again, a points list, the simulated device,
- * or none yet.
+ * found. When nobody answers, discovery cannot run (another program holds UDP 47808), or they pick no point, the
+ * other ways: one device by its address, again, a points list, the simulated device, or none yet.
  */
 const discoverInteractively = Effect.fn("discoverInteractively")(function* (probe: GatewayConfig) {
   let address: string | undefined = undefined
   while (true) {
-    const drafts = yield* discoverDrafts(probe, undefined, address === undefined ? {} : { address })
+    const drafts: ReadonlyArray<DraftedDevice> = yield* discoverDrafts(
+      probe,
+      undefined,
+      address === undefined ? {} : { address }
+    ).pipe(
+      Effect.catchTag("DiscoverError", (error) =>
+        Console.error(`  ${error.message}`).pipe(Effect.as<ReadonlyArray<DraftedDevice>>([]))
+      )
+    )
     const usable = drafts.filter((draft) => draft.points.length > 0)
-    if (usable.length > 0) return yield* pickPoints(usable)
-    const next = yield* otherWays
+    const picked = usable.length > 0 ? yield* pickPoints(usable) : undefined
+    if (picked !== undefined) return picked
+    const next = yield* usable.length > 0 ? otherWaysAfterPicking : otherWays
     if (next === "simulated") return [simulatedDevice]
     if (next === "none") return []
     if (next === "list") return yield* devicesFromList
@@ -595,8 +638,8 @@ export const isInteractive = (yes: boolean, stdinIsTTY: boolean | undefined) => 
 /**
  * Where init writes, from its argument: a folder (`.` for this one), created when missing; or, as before folders, a
  * path ending in `.json`, which is the config itself. Without one, as create-next-app and create-cloudflare do with
- * an empty folder: this folder when it is empty (`here` says whether it is), otherwise the folder asked for, or
- * `ot-gateway` with `--yes`.
+ * an empty folder: this folder when it is empty (`here` says whether it is) and a person answers, otherwise the
+ * folder asked for, or `ot-gateway` with `--yes` (scripts rely on where that is).
  */
 export const initTarget = Effect.fn("initTarget")(function* (
   argument: string | undefined,
@@ -604,7 +647,7 @@ export const initTarget = Effect.fn("initTarget")(function* (
   here: { readonly empty: boolean } = { empty: false }
 ) {
   if (argument?.endsWith(".json") === true) return argument
-  if (argument === undefined && here.empty) {
+  if (argument === undefined && here.empty && !yes) {
     yield* Console.error("  this folder is empty, so the gateway's files go here")
     return folderConfigName
   }
@@ -857,7 +900,8 @@ export const initSummary = (
   path: string,
   config: GatewayConfig,
   folder: FolderFiles = { written: [], kept: [] },
-  context: InitContext = {}
+  context: InitContext = {},
+  env: Readonly<Record<string, string | undefined>> = {}
 ) => {
   const { run, url, compose } = initNext(path, config, folder, context)
   const cli = context.command ?? "ot-gateway"
@@ -872,7 +916,7 @@ export const initSummary = (
     lines: [
       `✓ wrote ${files.join(", ")}${folder.written.length > 0 && dirname(path) !== "." ? ` in ${dirname(path)}` : ""}`,
       ...devices,
-      ...(passwordEnv === undefined
+      ...(passwordEnv === undefined || (env[passwordEnv] ?? "") !== ""
         ? []
         : [`· put the broker password after ${passwordEnv}= in ${envFile ?? "the environment"} before you start`])
     ],
