@@ -4,7 +4,7 @@ From the list of values you want to values arriving on your broker, in five step
 
 ## 1. Write down your points
 
-Most projects start with a points list: a spreadsheet of what to read, from which device, how often. That list is all the gateway needs. For each device, note:
+Most projects start with a points list: a spreadsheet of what to read, from which device, how often. That list is all the gateway needs. [What the gateway needs from you](inputs.md) shows it in its smallest form, field by field. For each device, note:
 
 | You need             | Example                 | Where to find it                                    |
 | -------------------- | ----------------------- | --------------------------------------------------- |

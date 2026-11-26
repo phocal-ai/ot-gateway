@@ -3,9 +3,12 @@
  * component of that name here (src/content/diagrams.ts); GitHub draws the block itself.
  */
 import type * as React from "react"
+import { InputsOverview, InputsRow } from "./inputs.tsx"
 import { HeadlessFailures, HeadlessMap, HeadlessPath } from "./headless.tsx"
 
 export const diagrams: Readonly<Record<string, React.ComponentType>> = {
+  "inputs-overview": InputsOverview,
+  "inputs-row": InputsRow,
   "headless-path": HeadlessPath,
   "headless-map": HeadlessMap,
   "headless-failures": HeadlessFailures

@@ -111,7 +111,7 @@ ot-gateway points template               # a CSV with every column and example r
 ot-gateway profiles list --json          # Modbus models whose registers a row can take by name
 ```
 
-A row with a `host` is Modbus TCP, a row with a `device_instance` is BACnet/IP, and one list can hold both. Rows with the same `device` are one device.
+A row with a `host` is Modbus TCP, a row with a `device_instance` is BACnet/IP, and one list can hold both. Rows with the same `device` are one device. [What the gateway needs from you](inputs.md) explains every field.
 
 ## 2. Write the list
 
