@@ -21,7 +21,7 @@ Three answers, given once:
 | a building | `building-a`                  | the second part: a building or hall on that site             |
 | a broker   | `mqtts://broker.example:8883` | where the values are sent; a username if the broker has one  |
 
-Site and building are short names in lowercase letters, digits and dashes, because they become part of every topic. The broker's password is never part of any of this: it lives in `ot-gateway.env`, next to the config.
+Site and building are short names in lowercase letters, digits, `-` and `_`, because they become part of every topic. The broker's password is never part of any of this: it lives in `ot-gateway.env`, next to the config.
 
 ## 2. What to read: the points list
 
@@ -110,7 +110,7 @@ A row is one value, and one value is one topic with one kind of message. The nam
 flowchart LR
   row["the row<br/>device: Main meter<br/>point: Active power<br/>unit: kW<br/>host, register, type"] --> topic["the topic<br/>site-1/building-a/main-meter/active-power"]
   topic --> value["every read<br/>{ value: 12.4, ts: …, unit: unit:KiloW }"]
-  topic --> meta["once, kept by the broker: …/$meta<br/>{ name: Active power, unit: unit:KiloW, writable: false }"]
+  topic --> meta["once, kept by the broker: …/$meta<br/>{ name: Active power, unit: unit:KiloW, writable: false, … }"]
 ```
 
 - **The topic** is `site/building/device/point`. `Main meter` becomes `main-meter`: lowercase, with dashes.
@@ -161,11 +161,11 @@ A fuller row, then, for an energy counter that reports in tenths of a kWh and sh
 
 The same three things go in whichever way suits you, and end up in the same place: `ot-gateway.json`, the gateway's config.
 
-| Way                 | Where the values go                         | What to read                                                                                                                             |
-| ------------------- | ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| **The status page** | the Settings tab: Gateway and Broker        | Add a device and its points in a form, find BACnet devices, or upload the points list. Each point can be tested before anything is saved |
-| **The CLI**         | `ot-gateway init`, as questions or as flags | `init --points points.json`, or `ot-gateway import points.json`                                                                          |
-| **An AI agent**     | it asks you, then runs the CLI              | it turns your spreadsheet or data sheet into the points list                                                                             |
+| Way                 | Where the values go                         | What to read                                                                                                                                                                    |
+| ------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **The status page** | the Settings tab: Gateway and Broker        | Add a device and its points in a form, find BACnet devices, or upload the points list. The form and the BACnet search test a device before saving; an upload is applied at once |
+| **The CLI**         | `ot-gateway init`, as questions or as flags | `init --points points.json`, or `ot-gateway import points.json`                                                                                                                 |
+| **An AI agent**     | it asks you, then runs the CLI              | it turns your spreadsheet or data sheet into the points list                                                                                                                    |
 
 A list uploaded in the status page is applied at once. After `ot-gateway import` on the command line, restart the gateway (`docker compose restart`) so it reads the new config.
 
@@ -175,18 +175,18 @@ A list uploaded in the status page is applied at once. After `ot-gateway import`
 
 The points list, the status page and the config file describe the same settings, each in the words that fit its form. When you move between them, this is the map:
 
-| Points list column                 | Status page field            | Config key (`ot-gateway.json`)                     |
-| ---------------------------------- | ---------------------------- | -------------------------------------------------- |
-| `device`                           | Id                           | `id` of the device                                 |
-| `point`, `name`                    | Id, Name                     | `id`, `name` of the point                          |
-| `host`, `port`, `unit_id`          | Host, Port, Unit id          | `host`, `port`, `unitId`                           |
-| `register`                         | Address                      | `address` of the point                             |
-| `table`, `type`, `byte_order`      | Table, Data type, word order | `table`, `dataType`, `byteOrder`                   |
-| `device_instance`                  | Device instance              | `deviceInstance`                                   |
-| `address` (the device's IP)        | Address                      | `address` of the device                            |
-| `object_type`, `object_instance`   | Object type, Instance        | `objectType`, `instance`                           |
-| `interval_s` (seconds)             | Read every (seconds)         | `pollIntervalMs` (milliseconds)                    |
-| `publish`, `publish_s`, `deadband` | Sending                      | `publish`: `mode`, `intervalMs`; `deadband`        |
-| `unit`, `scale`, `offset`, `alarm` | Unit, Scaling, Alarm         | `unit`, `scaling`: `factor`, `offset`; `alarmWhen` |
+| Points list column                 | Status page field                      | Config key (`ot-gateway.json`)                     |
+| ---------------------------------- | -------------------------------------- | -------------------------------------------------- |
+| `device`                           | Id                                     | `id` of the device                                 |
+| `point`, `name`                    | Id, Name                               | `id`, `name` of the point                          |
+| `host`, `port`, `unit_id`          | Host, Port, Unit id                    | `host`, `port`, `unitId`                           |
+| `register`                         | Address                                | `address` of the point                             |
+| `table`, `type`, `byte_order`      | Table, Data type, Word order           | `table`, `dataType`, `byteOrder`                   |
+| `device_instance`                  | Device instance                        | `deviceInstance`                                   |
+| `address` (the device's IP)        | Address                                | `address` of the device                            |
+| `object_type`, `object_instance`   | Object type, Instance                  | `objectType`, `instance`                           |
+| `interval_s` (seconds)             | Read every (seconds)                   | `pollIntervalMs` (milliseconds)                    |
+| `publish`, `publish_s`, `deadband` | Send, Every (seconds), Smallest change | `publish`: `mode`, `intervalMs`; `deadband`        |
+| `unit`, `scale`, `offset`, `alarm` | Unit, Multiply by, Then add, Alarm     | `unit`, `scaling`: `factor`, `offset`; `alarmWhen` |
 
 Mind the word "address": for a Modbus point it is the register, for a BACnet device it is the IP address. The [configuration reference](configuration.md) has every config key.

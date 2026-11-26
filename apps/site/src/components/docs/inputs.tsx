@@ -51,7 +51,7 @@ const inputs: ReadonlyArray<{
     icon: Send,
     title: "How to send it",
     example: <span className="font-mono">every 5 s, every read</span>,
-    note: "optional: change it per value"
+    note: "optional: how often to read, what to send per value"
   }
 ]
 
@@ -109,7 +109,7 @@ export const InputsRow = () => (
     <div className="grid items-stretch lg:grid-cols-[1fr_auto_1.3fr]">
       <div className="bg-fd-card rounded-xl border p-4">
         <Eyebrow>One row of the points list</Eyebrow>
-        <dl className="mt-3 grid grid-cols-[auto_auto_1fr] gap-x-3 gap-y-1.5 text-xs">
+        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 sm:grid-cols-[auto_auto_1fr] gap-y-1.5 text-xs">
           {rowLines.map(([key, value, note]) => (
             <div className="contents" key={key}>
               <dt className="text-fd-muted-foreground font-mono">{key}</dt>
@@ -140,7 +140,7 @@ export const InputsRow = () => (
             On <span className="font-mono normal-case">…/$meta</span>, once, kept by the broker
           </Eyebrow>
           <p className="mt-2 font-mono text-xs [overflow-wrap:anywhere]">
-            {'{ "name": "Active power", "unit": "unit:KiloW", "writable": false }'}
+            {'{ "name": "Active power", "unit": "unit:KiloW", "writable": false, … }'}
           </p>
         </div>
       </div>
