@@ -15,13 +15,9 @@ import {
   initSummary,
   isEmptyFolder,
   keepPicked,
-  makeWritable,
   pointChoices,
   siteSuggestion,
-  withInterval,
   startNowQuestion,
-  suggestedLimits,
-  writableChoices,
   dockerDesktopNote,
   historyDiskBytes,
   type InitFlags,
@@ -527,67 +523,23 @@ const room: DraftedDevice = {
 }
 
 describe("picking discovered points", () => {
-  it("ticks every point to read, and offers only commandable objects to write, setpoints first, none ticked", () => {
+  it("ticks every point to read, titled by its name and unit, with the device only when there are several", () => {
     expect(pointChoices([room]).map((choice) => [choice.value, choice.selected])).toEqual([
       ["demo-room/room-temperature", true],
       ["demo-room/heating", true],
       ["demo-room/fan", true],
       ["demo-room/temperature-setpoint", true]
     ])
-    expect(pointChoices([room])[0]?.title).toBe("demo-room: Room temperature (analog-input 1, DEG_C)")
-    expect(writableChoices([room]).map((choice) => [choice.value, choice.selected])).toEqual([
-      ["demo-room/temperature-setpoint", false],
-      ["demo-room/fan", false]
-    ])
+    expect(pointChoices([room])[0]?.title).toBe("Room temperature (°C)  ·  analog-input 1")
+    expect(pointChoices([room])[1]?.title).toBe("Heating  ·  binary-input 1")
+    const other: DraftedDevice = { ...room, id: "ahu-1", deviceInstance: 2001 }
+    expect(pointChoices([room, other])[4]?.title).toBe("Room temperature (°C)  ·  ahu-1 · analog-input 1")
   })
 
   it("keeps the picked points, drops a device left with none, and leaves the drafts as they were", () => {
     expect(keepPicked([room], ["demo-room/heating"])).toEqual([{ ...room, points: [room.points[1]] }])
     expect(keepPicked([room], [])).toEqual([])
     expect(room.points).toHaveLength(4)
-  })
-
-  it.effect("makes the chosen points writable, a numeric one within its limits, into a config the gateway takes", () =>
-    Effect.gen(function* () {
-      const writable = new Map([
-        ["demo-room/temperature-setpoint", { min: 15, max: 30 }],
-        ["demo-room/fan", undefined]
-      ])
-      const config = yield* decode(initConfig(answers, makeWritable([room], writable)))
-      const points = config.devices[0]?.points ?? []
-      expect(points.filter((point) => point.writable).map((point) => [point.id, point.limits])).toEqual([
-        ["fan", undefined],
-        ["temperature-setpoint", { min: 15, max: 30 }]
-      ])
-    })
-  )
-
-  it("puts setpoints first by the point's name, not by the device's", () => {
-    const ahu: DraftedDevice = {
-      ...room,
-      id: "ahu-sp-1",
-      points: [{ id: "valve", name: "Valve", objectType: "analog-output", instance: 3 }]
-    }
-    expect(writableChoices([ahu, room]).map((choice) => choice.value)).toEqual([
-      "demo-room/temperature-setpoint",
-      "ahu-sp-1/valve",
-      "demo-room/fan"
-    ])
-  })
-
-  it.effect("reads every device at the interval asked, and leaves the default out of the file", () =>
-    Effect.gen(function* () {
-      expect(withInterval([room], 5)).toEqual([room])
-      const config = yield* decode(initConfig(answers, withInterval([room], 2.5)))
-      expect(config.devices[0]?.pollIntervalMs).toBe(2500)
-    })
-  )
-
-  it("suggests limits only for units with a usual range", () => {
-    expect(suggestedLimits("unit:DEG_C")).toEqual({ min: 15, max: 30 })
-    expect(suggestedLimits("unit:PERCENT")).toEqual({ min: 0, max: 100 })
-    expect(suggestedLimits("unit:KiloW")).toBeUndefined()
-    expect(suggestedLimits(undefined)).toBeUndefined()
   })
 })
 
@@ -630,8 +582,11 @@ describe("init for a person at the terminal", () => {
 
   it.effect("sums it up in a few lines, with how to start it later", () =>
     Effect.gen(function* () {
-      const writable = new Map([["demo-room/temperature-setpoint", { min: 15, max: 30 }]])
-      const config = yield* decode(initConfig(answers, makeWritable([room], writable)))
+      const setpoint = { writable: true, limits: { min: 15, max: 30 } }
+      const points = room.points.map((point) =>
+        point.id === "temperature-setpoint" ? { ...point, ...setpoint } : point
+      )
+      const config = yield* decode({ ...initConfig(answers, []), devices: [{ ...room, points }] })
       const files = { written: ["ot-gateway.json", "compose.yaml", "ot-gateway.env"], kept: [] }
       const summary = initSummary("ot-gateway.json", config, files, { platform: "linux", cwd: "." })
       expect(summary.lines).toEqual([
@@ -640,6 +595,7 @@ describe("init for a person at the terminal", () => {
       ])
       expect(summary.later).toEqual([
         "start it:     ot-gateway run   (or in Docker: docker compose up -d)",
+        "read once:    ot-gateway read",
         "status page:  http://127.0.0.1:8080",
         "all commands: ot-gateway --help"
       ])
@@ -654,6 +610,17 @@ describe("init for a person at the terminal", () => {
       )
       expect(mac.lines[0]).toBe("✓ wrote ot-gateway.json in site-1")
       expect(mac.later[0]).toBe("start it:     ot-gateway run site-1/ot-gateway.json")
+    })
+  )
+
+  it.effect("points at discover as the next step when there are no devices yet, naming the config from elsewhere", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig(answers, []))
+      const here = initSummary("ot-gateway.json", config, { written: ["ot-gateway.json"], kept: [] }, { cwd: "." })
+      expect(here.lines).toEqual(["✓ wrote ot-gateway.json"])
+      expect(here.later[0]).toBe("next: ot-gateway discover")
+      const elsewhere = initSummary("site-1/ot-gateway.json", config, { written: [], kept: [] }, { cwd: "." })
+      expect(elsewhere.later[0]).toBe("next: ot-gateway discover site-1/ot-gateway.json")
     })
   )
 

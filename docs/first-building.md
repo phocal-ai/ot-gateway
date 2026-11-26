@@ -32,14 +32,28 @@ pnpm ot-gateway init
 
 With no `ot-gateway.json` in the folder, a bare `ot-gateway` in a terminal starts `init` too. It writes into this folder when the folder is empty and asks for a folder name otherwise; `init .` and `init my-building` say where.
 
-It goes as the work goes, and Enter takes the default every time:
+It sets up the project and nothing else, and Enter takes the default every time:
 
 1. **The broker.** `mqtt://localhost:1883` is suggested, and init says whether something answers there. Then a username, if the broker needs one.
-2. **The devices.** init asks the network who is there right away (BACnet Who-Is) and lists every point it found, all ticked: untick what the gateway should not read. With more than 25 points it reads them all and says so; leave out the ones you don't need later, on the status page or in `ot-gateway.json`. Untick them all to get to the other ways below. Then how often to read (5 seconds; Enter keeps it), for points the device does not send on change itself. Then it lists the points that commands could write (outputs and values, setpoints first), none ticked. For each one you tick it asks the lowest and highest value a command may set (15 to 30 is suggested for °C). Nothing is written to a device during setup.
-3. **When nobody answers** (or discovery cannot run, say another BACnet program holds UDP 47808), init offers the other ways: ask one device by its address (`ip` or `ip:port`, for a device on another subnet or port), search again, a scan for Modbus TCP devices on a range (the LAN's /24 by default, as `discover modbus` does), a points list (Modbus, or BACnet from an EDE file; step 3 shows the columns), a simulated device to see values flow first, or none yet, to add devices on the status page.
-4. **Site and building**, the first two parts of every topic. The folder's name is suggested for the site.
+2. **Site and building**, the first two parts of every topic. The folder's name is suggested for the site.
 
-Then it writes the folder, shows what it found in a few lines, and asks whether to start the gateway now in this terminal (Ctrl-C stops it). Scripts and agents get the whole account instead, every file and the next commands, and with `--json` as data ([Headless setup](headless.md)).
+It writes the folder and names the next step. Scripts and agents get the whole account instead, every file and the next commands, and with `--json` as data ([Headless setup](headless.md)).
+
+## 2b. Let `discover` add the devices
+
+In the gateway's folder:
+
+```bash
+pnpm ot-gateway discover
+```
+
+1. **What to look for.** BACnet/IP (the default: a Who-Is on this machine's network when the config sets none), a Modbus TCP scan of a range (the LAN's /24 by default, read-only, as `discover modbus` does), one BACnet device by its address (`ip` or `ip:port`, for a device on another subnet or port), a points list (Modbus, or BACnet from an EDE file; step 3 shows the columns), or a simulated device to see values flow first.
+2. **Which points.** It lists every point it found by name and unit, all ticked: untick what the gateway should not read. With more than 25 points it keeps them all and says so; leave out the ones you don't need later, on the status page or in `ot-gateway.json`. Nothing else is asked: points are read every 5 seconds (or sent by the device on change), and none is writable until you make a setpoint writable on the status page or in the config. Nothing is written to a device during discovery.
+3. **When nothing is found** (or discovery cannot run, say another BACnet program holds UDP 47808), or you untick every point, it offers the same ways again, or none for now.
+4. **What changes, then save.** When the config has devices already, it shows what the save changes on the broker, as `ot-gateway diff` does (new topics, and anything that moves). It saves after a yes: new devices after the ones there, new points of a device the config has after its own. Run it again whenever a device is added to the building.
+5. **What next.** Read every point once (as often as you like), start the gateway in this terminal (Ctrl-C stops it), or stop here with the commands for later.
+
+Without a terminal, `discover` prints the draft as JSON and saves nothing, as before.
 
 `ot-gateway discover --points-list points.csv` writes what discovery finds as a points list instead: delete the rows you don't need and import it, as in step 3. Its rows say `publish` `sample`, every read; change that column to `change` for a point that should send only changes, or to `aggregate` with `publish_s` (`900` for 15 minutes). With `--append` it adds to a list that exists already, say one with your Modbus rows: the list keeps its rows, columns and separator, gets the columns it lacks, and rows it has already are skipped, so one list holds every device. An EDE file from the BACnet engineering tool (the semicolon CSV most of them export) imports as it is, and `ot-gateway points from-ede building.csv > points.csv` turns it into a list to trim first; objects that are not points (schedules, trend logs) are left out. [`examples/building.ede.csv`](../examples/building.ede.csv) is one. A points list is CSV (Excel's "CSV" export works, with commas or semicolons) or the same columns as JSON, one object per point: `[{"device": "Main meter", "point": "Active power", "host": "192.168.1.50", "register": 100, "type": "float32"}]` (`ot-gateway points schema --json-schema` prints its JSON Schema).
 
