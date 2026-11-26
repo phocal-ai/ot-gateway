@@ -400,18 +400,18 @@ flowchart TD
   s -- "ok: true, some points arrived" --> pt["the missing points are read, but nothing<br/>was published in time: check their rows,<br/>then history and messages"]
 ```
 
-| What you see                                     | Where                      | What it means                                                         | Next                                                                  |
-| ------------------------------------------------ | -------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| `code: missing-answers`, exit code 2             | `init`                     | no terminal and not enough flags                                      | run the command in `hint`                                             |
-| `code: usage`, exit code 2                       | any command                | an unknown flag or a missing argument                                 | `hint` names the `--help` to read                                     |
-| `code: no-config`                                | any command with a config  | no `ot-gateway.json` here                                             | `cd` into the folder, or name the config                              |
-| `issues[]` with `line`                           | `import`, `init --points`  | mistakes in the points list                                           | fix those rows, run it again                                          |
-| `code: invalid-config`                           | `check`                    | mistakes in `ot-gateway.json`                                         | fix each `path`, run it again                                         |
-| `code: password-unset`                           | `broker`, `watch`, `run`   | the config names a password variable that has no value                | put it in `ot-gateway.env`                                            |
-| `code: broker-…`, or `ok: false` with `warnings` | `broker`, `watch`          | the broker cannot be reached, refuses, or does not return the message | step 6's table                                                        |
-| `code: values-missing`                           | `watch --until-values`     | some points sent nothing in time                                      | `ot-gateway status --json`                                            |
-| `code: gateway-unreachable`                      | `status`, `events`, `logs` | no gateway answers on the status port                                 | start it; `docker compose logs gateway` when it does not stay up      |
-| a device `failing`                               | `status`                   | the device does not answer as configured                              | follow its `hints.checks`, then [Troubleshooting](troubleshooting.md) |
+| What you see                                                   | Where                      | What it means                                                         | Next                                                                  |
+| -------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `code: missing-answers`, exit code 2                           | `init`                     | no terminal and not enough flags                                      | run the command in `hint`                                             |
+| `code: usage`, exit code 2                                     | any command                | an unknown flag or a missing argument                                 | `hint` names the `--help` to read                                     |
+| `code: no-config`                                              | any command with a config  | no `ot-gateway.json` here                                             | `cd` into the folder, or name the config                              |
+| `issues[]` with `line`                                         | `import`, `init --points`  | mistakes in the points list                                           | fix those rows, run it again                                          |
+| `code: invalid-config`                                         | `check`                    | mistakes in `ot-gateway.json`                                         | fix each `path`, run it again                                         |
+| `code: password-unset` (`run` logs `MQTT_PASSWORD is not set`) | `broker`, `watch`, `run`   | the config names a password variable that has no value                | put it in `ot-gateway.env`                                            |
+| `code: broker-…`, or `ok: false` with `warnings`               | `broker`, `watch`          | the broker cannot be reached, refuses, or does not return the message | step 6's table                                                        |
+| `code: values-missing`                                         | `watch --until-values`     | some points sent nothing in time                                      | `ot-gateway status --json`                                            |
+| `code: gateway-unreachable`                                    | `status`, `events`, `logs` | no gateway answers on the status port                                 | start it; `docker compose logs gateway` when it does not stay up      |
+| a device `failing`                                             | `status`                   | the device does not answer as configured                              | follow its `hints.checks`, then [Troubleshooting](troubleshooting.md) |
 
 Two cases are worth knowing before they cost you time:
 
