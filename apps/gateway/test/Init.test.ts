@@ -7,9 +7,20 @@ import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem } from "effect"
 import type { NetworkInterfaceInfo } from "node:os"
-import { configSummary } from "../src/Cli.ts"
+import { configSummary, withFirstRun } from "../src/Cli.ts"
 import {
+  brokerQuestion,
   defaultFolder,
+  type DraftedDevice,
+  initSummary,
+  isEmptyFolder,
+  keepPicked,
+  makeWritable,
+  pointChoices,
+  siteSuggestion,
+  startNowQuestion,
+  suggestedLimits,
+  writableChoices,
   dockerDesktopNote,
   historyDiskBytes,
   type InitFlags,
@@ -492,5 +503,140 @@ describe("isInteractive", () => {
     expect(isInteractive(true, true)).toBe(false)
     expect(isInteractive(false, false)).toBe(false)
     expect(isInteractive(false, undefined)).toBe(false)
+  })
+})
+
+const room: DraftedDevice = {
+  protocol: "bacnet-ip",
+  id: "demo-room",
+  deviceInstance: 1001,
+  address: "192.168.0.171",
+  points: [
+    { id: "room-temperature", name: "Room temperature", unit: "unit:DEG_C", objectType: "analog-input", instance: 1 },
+    { id: "heating", name: "Heating", objectType: "binary-input", instance: 1 },
+    { id: "fan", name: "Fan", objectType: "binary-value", instance: 2 },
+    {
+      id: "temperature-setpoint",
+      name: "Temperature setpoint",
+      unit: "unit:DEG_C",
+      objectType: "analog-value",
+      instance: 1
+    }
+  ]
+}
+
+describe("picking discovered points", () => {
+  it("ticks every point to read, and offers only commandable objects to write, setpoints first, none ticked", () => {
+    expect(pointChoices([room]).map((choice) => [choice.value, choice.selected])).toEqual([
+      ["demo-room/room-temperature", true],
+      ["demo-room/heating", true],
+      ["demo-room/fan", true],
+      ["demo-room/temperature-setpoint", true]
+    ])
+    expect(pointChoices([room])[0]?.title).toBe("demo-room: Room temperature (analog-input 1, DEG_C)")
+    expect(writableChoices([room]).map((choice) => [choice.value, choice.selected])).toEqual([
+      ["demo-room/temperature-setpoint", false],
+      ["demo-room/fan", false]
+    ])
+  })
+
+  it("keeps the picked points, drops a device left with none, and leaves the drafts as they were", () => {
+    expect(keepPicked([room], ["demo-room/heating"])).toEqual([{ ...room, points: [room.points[1]] }])
+    expect(keepPicked([room], [])).toEqual([])
+    expect(room.points).toHaveLength(4)
+  })
+
+  it.effect("makes the chosen points writable, a numeric one within its limits, into a config the gateway takes", () =>
+    Effect.gen(function* () {
+      const writable = new Map([
+        ["demo-room/temperature-setpoint", { min: 15, max: 30 }],
+        ["demo-room/fan", undefined]
+      ])
+      const config = yield* decode(initConfig(answers, makeWritable([room], writable)))
+      const points = config.devices[0]?.points ?? []
+      expect(points.filter((point) => point.writable).map((point) => [point.id, point.limits])).toEqual([
+        ["fan", undefined],
+        ["temperature-setpoint", { min: 15, max: 30 }]
+      ])
+    })
+  )
+
+  it("suggests limits only for units with a usual range", () => {
+    expect(suggestedLimits("unit:DEG_C")).toEqual({ min: 15, max: 30 })
+    expect(suggestedLimits("unit:PERCENT")).toEqual({ min: 0, max: 100 })
+    expect(suggestedLimits("unit:KiloW")).toBeUndefined()
+    expect(suggestedLimits(undefined)).toBeUndefined()
+  })
+})
+
+describe("init for a person at the terminal", () => {
+  it("writes into an empty folder (hidden files aside), and suggests the folder's name as the site", () => {
+    expect(isEmptyFolder([])).toBe(true)
+    expect(isEmptyFolder([".git", ".DS_Store"])).toBe(true)
+    expect(isEmptyFolder([".git", "points.csv"])).toBe(false)
+    expect(siteSuggestion("/srv/plant-3/ot-gateway.json")).toBe("plant-3")
+    expect(siteSuggestion(`/srv/${defaultFolder}/ot-gateway.json`)).toBe("my-site")
+    expect(siteSuggestion("/srv/My Plant/ot-gateway.json")).toBe("my-site")
+  })
+
+  it.effect("takes this folder when it is empty and no folder is named", () =>
+    Effect.gen(function* () {
+      expect(yield* initTarget(undefined, false, { empty: true })).toBe("ot-gateway.json")
+      expect(yield* initTarget("site-1", false, { empty: true })).toBe("site-1/ot-gateway.json")
+      expect(yield* initTarget(undefined, true, { empty: false })).toBe(`${defaultFolder}/ot-gateway.json`)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it("says whether a broker answers on localhost", () => {
+    expect(brokerQuestion(true)).toContain("one answers on localhost:1883")
+    expect(brokerQuestion(false)).toContain("nothing answers on localhost:1883 yet")
+  })
+
+  it.effect("offers to start only with devices, and not before the broker password is set", () =>
+    Effect.gen(function* () {
+      expect(startNowQuestion(yield* decode(initConfig(answers, [simulatedDevice])), {})).toContain("Start the gateway")
+      expect(startNowQuestion(yield* decode(initConfig(answers, [])), {})).toBeUndefined()
+      const login = { username: "u", passwordEnv: "MQTT_PASSWORD" }
+      const withLogin = yield* decode(initConfig({ ...answers, login }, [simulatedDevice]))
+      expect(startNowQuestion(withLogin, {})).toBeUndefined()
+      expect(startNowQuestion(withLogin, { MQTT_PASSWORD: "" })).toBeUndefined()
+      expect(startNowQuestion(withLogin, { MQTT_PASSWORD: "secret" })).toContain("Start the gateway")
+    })
+  )
+
+  it.effect("sums it up in a few lines, with how to start it later", () =>
+    Effect.gen(function* () {
+      const writable = new Map([["demo-room/temperature-setpoint", { min: 15, max: 30 }]])
+      const config = yield* decode(initConfig(answers, makeWritable([room], writable)))
+      const files = { written: ["ot-gateway.json", "compose.yaml", "ot-gateway.env"], kept: [] }
+      const summary = initSummary("ot-gateway.json", config, files, { platform: "linux", cwd: "." })
+      expect(summary.lines).toEqual([
+        "✓ wrote ot-gateway.json, compose.yaml, ot-gateway.env",
+        "✓ demo-room at 192.168.0.171: 4 points, 1 writable"
+      ])
+      expect(summary.later).toEqual([
+        "start it:     ot-gateway run   (or in Docker: docker compose up -d)",
+        "status page:  http://127.0.0.1:8080",
+        "all commands: ot-gateway --help"
+      ])
+      const mac = initSummary(
+        "site-1/ot-gateway.json",
+        config,
+        { ...files, written: ["site-1/ot-gateway.json"] },
+        {
+          platform: "darwin",
+          cwd: "."
+        }
+      )
+      expect(mac.lines[0]).toBe("✓ wrote ot-gateway.json in site-1")
+      expect(mac.later[0]).toBe("start it:     ot-gateway run site-1/ot-gateway.json")
+    })
+  )
+
+  it("starts init from a bare ot-gateway only in a terminal with no config here", () => {
+    expect(withFirstRun([], { terminal: true, configHere: false })).toEqual(["init"])
+    expect(withFirstRun([], { terminal: false, configHere: false })).toEqual([])
+    expect(withFirstRun([], { terminal: true, configHere: true })).toEqual([])
+    expect(withFirstRun(["status"], { terminal: true, configHere: false })).toEqual(["status"])
   })
 })

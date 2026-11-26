@@ -17,8 +17,9 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { Console, Effect, Logger } from "effect"
 import { identity } from "effect/Function"
+import { existsSync } from "node:fs"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
-import { isLongRunning, runCli } from "./Cli.ts"
+import { isLongRunning, runCli, withFirstRun } from "./Cli.ts"
 import { loadEnvFile } from "./EnvFile.ts"
 import { hideSqliteExperimentalWarning } from "./NodeWarnings.ts"
 import { isJsonMode, reportFailure, ResultConsole, stderrConsole, stdoutClosed } from "./Output.ts"
@@ -41,7 +42,11 @@ loadEnvFile()
 const extraEnvFile = process.env["OT_GATEWAY_ENV_FILE"]
 if (extraEnvFile !== undefined && extraEnvFile !== "") loadEnvFile(extraEnvFile)
 
-const argv = process.argv.slice(2)
+// A bare `ot-gateway` in a terminal, with no config here yet, is a first run: it starts init.
+const argv = withFirstRun(process.argv.slice(2), {
+  terminal: process.stdin.isTTY && process.stdout.isTTY,
+  configHere: existsSync("ot-gateway.json")
+})
 const json = isJsonMode(argv)
 
 runCli(argv).pipe(
