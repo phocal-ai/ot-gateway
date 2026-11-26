@@ -443,6 +443,24 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ message }) => ["contract", message]
   }),
   defineTool({
+    name: "explain",
+    title: "Explain a code",
+    description:
+      "What a code means, what to do and the command to run next: any code a tool returned (its code, a doctor finding, a device's reason, a write result). Without code, every code",
+    input: { code: optionalText("A code as a tool returned it: broker-unreachable, timeout, out-of-range") },
+    annotations: local,
+    argv: ({ code }) => ["explain", code]
+  }),
+  defineTool({
+    name: "support",
+    title: "Support bundle",
+    description:
+      "One redacted Markdown report for an issue: versions and host, the config, which settings variables are set, and the running gateway's status, last 24 hours of events and log lines. Returns it as text with what each section holds; writes no file",
+    input: { config: configArgument, url: urlArgument },
+    annotations: asks,
+    argv: ({ config, url }) => ["support", flag("config", config), flag("url", url), "--output=-"]
+  }),
+  defineTool({
     name: "profiles_list",
     title: "Device profiles",
     description: "The device profiles a points list can name in its profile column",

@@ -139,6 +139,8 @@ import {
   UsageMistake
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
+import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
 import { serveMcp } from "./Mcp.ts"
 import { mcpTools } from "./McpTools.ts"
@@ -1913,6 +1915,94 @@ const doctorCommand = Command.make("doctor", { config: configPath, json: jsonFla
   ])
 )
 
+const explainCommand = Command.make(
+  "explain",
+  {
+    code: Argument.String("code").pipe(
+      Argument.withDescription(
+        "A code as a command printed it (broker-unreachable), or a command result (rejected out-of-range); none lists every code"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    markdown: Flag.Boolean("markdown").pipe(
+      Flag.withDescription(
+        "Print every code as the Markdown table in docs/troubleshooting.md, to paste there after adding a code"
+      ),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ code, markdown, json }) =>
+    Effect.gen(function* () {
+      const cli = yield* invocation
+      if (markdown) return yield* printResult(codesTable())
+      if (code === undefined) {
+        return yield* json
+          ? printJson({ ok: true, codes: codes.map((entry) => codeJson(entry, cli)) })
+          : printResult(formatCodeList())
+      }
+      const entry = yield* Effect.fromResult(explainCode(code))
+      yield* json ? printJson({ ok: true, ...codeJson(entry, cli) }) : printResult(formatCode(entry, cli))
+    }).pipe(jsonFailure(json, { asked: code ?? null }))
+).pipe(
+  Command.withDescription(
+    "What a code means, what to do about it and the command to run next: any code a command prints, in its --json code, a doctor finding or a command result. With no code, every code by area"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway explain broker-login-refused", description: "One code" },
+    { command: "ot-gateway explain timeout --json", description: "As JSON, with what to check per protocol" },
+    { command: "ot-gateway explain", description: "Every code, one line each" }
+  ])
+)
+
+const supportCommand = Command.make(
+  "support",
+  {
+    config: targetConfig,
+    configFlag: targetConfigFlag,
+    url: urlFlag,
+    output: Flag.String("output").pipe(
+      Flag.withAlias("o"),
+      Flag.withDescription(
+        "Where to write the bundle (default ot-gateway-support-<date>-<time>.md in this folder); - prints it instead (with --json: {ok, text, sections})"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    json: jsonFlag
+  },
+  ({ config, configFlag, url, output, json }) =>
+    Effect.gen(function* () {
+      const now = Date.now()
+      const bundle = yield* supportBundle({ config: yield* chooseConfig(config, configFlag), url, now })
+      const sections = bundle.sections.map(({ name, ok, note }) => ({ name, ok, note }))
+      if (output === "-") {
+        return yield* json ? printJson({ ok: true, text: bundle.text, sections }) : printResult(bundle.text.trimEnd())
+      }
+      const path = output ?? supportFileName(now)
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.writeFileString(path, bundle.text)
+      yield* json
+        ? printJson({
+            ok: true,
+            path,
+            bytes: Buffer.byteLength(bundle.text),
+            sections
+          })
+        : printResult(formatSupportSummary(path, bundle))
+    }).pipe(jsonFailure(json, { path: config ?? configFlag ?? null }))
+).pipe(
+  Command.withDescription(
+    "Write one file for an issue report: versions and host, the config (redacted), which settings variables are set, and the running gateway's status, last 24 hours of events and the log lines it keeps. Secrets are redacted; device addresses and names are not. Sections it cannot fill say why, so it works while the gateway is down too"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway support", description: "The gateway of ot-gateway.json in this folder" },
+    { command: "ot-gateway support site-1/ot-gateway.json -o report.md", description: "Another config, to report.md" },
+    { command: "ot-gateway support --output -", description: "Print it instead of writing a file" }
+  ])
+)
+
 /**
  * `mcp`: the commands as MCP tools on stdin and stdout. Its type is written out because a tool call runs `runCli`,
  * whose type is the CLI's, this command included.
@@ -2130,6 +2220,8 @@ export const cli = Command.make("ot-gateway").pipe(
     logsCommand,
     readCommand,
     probeCommand,
+    explainCommand,
+    supportCommand,
     simulate,
     mcpCommand
   ])
@@ -2162,6 +2254,8 @@ const subcommands = new Set([
   "logs",
   "read",
   "probe",
+  "explain",
+  "support",
   "simulate",
   "mcp"
 ])

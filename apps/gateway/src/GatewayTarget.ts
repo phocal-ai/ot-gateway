@@ -29,7 +29,8 @@ export interface GatewayTarget {
 /** The config names no status page, so there is nothing to ask. */
 export class NoStatusPage extends Schema.TaggedError<NoStatusPage>()("NoStatusPage", {
   path: Schema.String,
-  message: Schema.String
+  message: Schema.String,
+  code: Schema.Literal("no-status-page")
 }) {}
 
 /** The config was named twice, as an argument and as `--config`, and the two differ. */
@@ -52,7 +53,8 @@ export const chooseConfig = (
 /** Another gateway than the config's answered: its report would describe the wrong building. */
 export class GatewayMismatch extends Schema.TaggedError<GatewayMismatch>()("GatewayMismatch", {
   url: Schema.String,
-  message: Schema.String
+  message: Schema.String,
+  code: Schema.Literal("wrong-gateway")
 }) {}
 
 /**
@@ -70,6 +72,7 @@ export const targetOf = (path: string, config: GatewayConfig, url: string | unde
     if (config.status === undefined) {
       return yield* new NoStatusPage({
         path,
+        code: "no-status-page",
         message: `${path} has no status block, so its gateway serves no status page or API to ask. Add "status": {} to it and restart the gateway, or pass --url`
       })
     }
@@ -118,6 +121,7 @@ export const checkIdentity = (
   return Effect.fail(
     new GatewayMismatch({
       url: target.url,
+      code: "wrong-gateway",
       message: `WRONG GATEWAY: ${target.url} is ${gatewayName(found)}, but ${expected.path} describes ${gatewayName(expected)}. Another gateway answers on that address: is this config's gateway running, and does its status port differ from the other's? To report on whichever gateway answers there, pass --url and no config.`
     })
   )
