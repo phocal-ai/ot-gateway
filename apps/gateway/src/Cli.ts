@@ -1715,23 +1715,27 @@ const explainCommand = Command.make(
 const supportCommand = Command.make(
   "support",
   {
-    config: configPath,
+    config: targetConfig,
+    configFlag: targetConfigFlag,
     url: urlFlag,
     output: Flag.String("output").pipe(
       Flag.withAlias("o"),
       Flag.withDescription(
-        "Where to write the bundle (default ot-gateway-support-<date>-<time>.md in this folder); - prints it instead"
+        "Where to write the bundle (default ot-gateway-support-<date>-<time>.md in this folder); - prints it instead (with --json: {ok, text, sections})"
       ),
       Flag.optional,
       Flag.map(Option.getOrUndefined)
     ),
     json: jsonFlag
   },
-  ({ config, url, output, json }) =>
+  ({ config, configFlag, url, output, json }) =>
     Effect.gen(function* () {
       const now = Date.now()
-      const bundle = yield* supportBundle({ config, url, now })
-      if (output === "-") return yield* printResult(bundle.text.trimEnd())
+      const bundle = yield* supportBundle({ config: yield* chooseConfig(config, configFlag), url, now })
+      const sections = bundle.sections.map(({ name, ok, note }) => ({ name, ok, note }))
+      if (output === "-") {
+        return yield* json ? printJson({ ok: true, text: bundle.text, sections }) : printResult(bundle.text.trimEnd())
+      }
       const path = output ?? supportFileName(now)
       const fs = yield* FileSystem.FileSystem
       yield* fs.writeFileString(path, bundle.text)
@@ -1740,10 +1744,10 @@ const supportCommand = Command.make(
             ok: true,
             path,
             bytes: Buffer.byteLength(bundle.text),
-            sections: bundle.sections.map(({ name, ok, note }) => ({ name, ok, note }))
+            sections
           })
         : printResult(formatSupportSummary(path, bundle))
-    }).pipe(jsonFailure(json, { path: config }))
+    }).pipe(jsonFailure(json, { path: config ?? configFlag ?? null }))
 ).pipe(
   Command.withDescription(
     "Write one file for an issue report: versions and host, the config (redacted), which settings variables are set, and the running gateway's status, last 24 hours of events and the log lines it keeps. Secrets are redacted; device addresses and names are not. Sections it cannot fill say why, so it works while the gateway is down too"

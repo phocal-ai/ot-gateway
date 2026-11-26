@@ -528,7 +528,7 @@ A command whose output is cut short by its reader (`ot-gateway watch | head`, `e
 
 `ot-gateway support` in the gateway's folder writes one Markdown file, `ot-gateway-support-<date>-<time>.md`, with what a report needs first: the CLI's version and the host (OS, CPUs, memory, whether it runs in a container, the time zone), the config file and whether it is valid, which `OT_GATEWAY_*` and `OTEL_*` variables are set (names only), and from the running gateway its status, the events of the last 24 hours and every log line it keeps. A section it cannot fill says why (no config, the gateway not running), so it works while something is broken. `--output report.md` names the file, `--output -` prints it, `--url` asks a gateway elsewhere, `--json` says where it went and what each section holds.
 
-The broker password, `OT_GATEWAY_EDIT_TOKEN`, every value in `ot-gateway.env`, the OTLP headers, credentials in a URL and config keys that hold a secret are replaced by `<redacted>`. Device addresses, ids and names stay, as they are what the report is about: read the file before you attach it.
+The broker password, `OT_GATEWAY_EDIT_TOKEN`, the values in `ot-gateway.env` whose names say they are secret (`*PASSWORD*`, `*TOKEN*`, `*SECRET*`, `*KEY*`), the OTLP headers, credentials in a URL and config keys that hold a secret are replaced by `<redacted>`. Device addresses, ids and names stay, as they are what the report is about: read the file before you attach it.
 
 ## Health on MQTT
 

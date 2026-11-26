@@ -3,6 +3,7 @@ import { describe, expect, it } from "@effect/vitest"
 import { Effect, FileSystem } from "effect"
 import { join } from "node:path"
 import {
+  configText,
   formatSupportSummary,
   REDACTED,
   redactJson,
@@ -20,6 +21,22 @@ describe("redaction", () => {
     ).toEqual({ mqtt: { url: "mqtt://broker", passwordEnv: "MQTT_PASSWORD", password: REDACTED }, token: REDACTED })
   })
 
+  it("redacts the whole value under a secret key, and secrets in a config that is not JSON", () => {
+    expect(redactJson({ tokens: ["abc123"], credentials: { user: "x" } })).toEqual({
+      tokens: REDACTED,
+      credentials: REDACTED
+    })
+    expect(configText('{"mqtt": {"password": "hunter22", "passwordEnv": "P", "token": 1234,},}')).toBe(
+      `{"mqtt": {"password": "${REDACTED}", "passwordEnv": "P", "token": "${REDACTED}",},}`
+    )
+  })
+
+  it("redacts a URL's credentials whole, with an @ or a / in the password", () => {
+    expect(redactText('"mqtts://gw:a/b9x@broker:8883" mqtt://u:p@ss@host', [])).toBe(
+      `"mqtts://${REDACTED}@broker:8883" mqtt://${REDACTED}@host`
+    )
+  })
+
   it("redacts credentials in a URL and each secret, the longest first", () => {
     expect(redactText("mqtts://user:pass@broker:8883 and hunter22 and hunter2245", ["hunter22", "hunter2245"])).toBe(
       `mqtts://${REDACTED}@broker:8883 and ${REDACTED} and ${REDACTED}`
@@ -34,10 +51,12 @@ describe("redaction", () => {
       OT_GATEWAY_EDIT_TOKEN: "edit-secret",
       OTEL_EXPORTER_OTLP_HEADERS: "Authorization=Basic abcd1234"
     }
-    expect(secretsOf(env, "OTHER=from-file\nEMPTY=\n", "SITE_PASSWORD").toSorted()).toEqual(
+    // TZ is no secret: redacting Europe/Vienna would blank out every time zone in the bundle.
+    expect(secretsOf(env, "TZ=Europe/Vienna\nAPI_KEY=from-file\nEMPTY=\n", "SITE_PASSWORD").toSorted()).toEqual(
       ["from-file", "broker-secret", "edit-secret", "Authorization=Basic abcd1234", "Basic abcd1234"].toSorted()
     )
-    expect(settingNames({ ...env, PATH: "/bin", OT_GATEWAY_DATA_DIR: "/data" })).toEqual([
+    // The Docker wrapper passes OT_GATEWAY_DATA_DIR empty: not set.
+    expect(settingNames({ ...env, PATH: "/bin", OT_GATEWAY_DATA_DIR: "/data", OT_GATEWAY_EMPTY: "" })).toEqual([
       "OTEL_EXPORTER_OTLP_HEADERS",
       "OT_GATEWAY_DATA_DIR",
       "OT_GATEWAY_EDIT_TOKEN"

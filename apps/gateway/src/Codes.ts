@@ -45,7 +45,7 @@ const areas: ReadonlyArray<CodeArea> = ["config", "broker", "gateway", "device",
 /** Commands that read the config file before anything else. */
 const configCommands = ["check", "run", "doctor", "read", "write", "broker", "watch", "publish", "discover", "import"]
 /** Commands that ask the running gateway at its status page. */
-const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor", "support"]
+const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
 /** Commands that connect to the config's broker. */
 const brokerCommands = ["broker", "watch", "publish", "write", "doctor"]
 /** Where a device's failure class shows up. */

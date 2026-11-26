@@ -11,8 +11,8 @@
  * A section that cannot be filled (no config, no gateway running) says why, and the rest are still written: a bundle
  * is most needed when something is broken. The file is Markdown, readable in an issue and by an agent.
  *
- * Redacted: the broker password (the variable `mqtt.passwordEnv` names), `OT_GATEWAY_EDIT_TOKEN`, every value of
- * the `ot-gateway.env` next to the config, the OTLP headers, credentials in a URL, and config keys that hold a
+ * Redacted: the broker password (the variable `mqtt.passwordEnv` names), `OT_GATEWAY_EDIT_TOKEN`, the values in
+ * the `ot-gateway.env` next to the config whose names say they are secret (`*PASSWORD*`, `*TOKEN*`, `*KEY*`, …), the OTLP headers, credentials in a URL, and config keys that hold a
  * secret. Device addresses, ids and names stay: they are what a report is about, so the person attaching it reads it
  * first.
  */
@@ -22,6 +22,7 @@ import { arch, cpus, freemem, platform, release, totalmem, type as osType, uptim
 import { dirname, join, resolve } from "node:path"
 import { parseEnv } from "node:util"
 import { envFileName } from "./EnvFile.ts"
+import { defaultConfigPath } from "./Import.ts"
 import { checkIdentity, type GatewayTarget, targetOf } from "./GatewayTarget.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import { fetchGatewayLogs, formatLogs } from "./LogsReport.ts"
@@ -58,16 +59,15 @@ export const redactJson = (value: unknown): unknown => {
   return Object.fromEntries(
     Object.entries(value).map(([key, inner]) => [
       key,
-      secretKey.test(key) && !namesSecret.test(key) && inner !== null && typeof inner !== "object"
-        ? REDACTED
-        : redactJson(inner)
+      secretKey.test(key) && !namesSecret.test(key) && inner !== null ? REDACTED : redactJson(inner)
     ])
   )
 }
 
 /** `text` without the credentials of any URL in it (`mqtt://user:pass@host`) and without each of `secrets`. */
 export const redactText = (text: string, secrets: Iterable<string>) => {
-  let clean = text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, `$1${REDACTED}@`)
+  // Up to the last @ of the address, so a password with an @ or a / in it goes whole.
+  let clean = text.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s"'<>]*@/gi, `$1${REDACTED}@`)
   // Longest first, so a secret that contains another is replaced whole.
   const sorted = [...new Set(secrets)].filter((secret) => secret.length >= MIN_SECRET_LENGTH)
   for (const secret of sorted.toSorted((left, right) => right.length - left.length)) {
@@ -76,13 +76,22 @@ export const redactText = (text: string, secrets: Iterable<string>) => {
   return clean
 }
 
+/** A variable whose value is a secret, by its name. */
+const secretVariable = /(PASSWORD|PASSWD|SECRET|TOKEN|KEY|CREDENTIAL|HEADERS)/i
+
 /** The values to redact: the env file's next to the config, and the variables that hold a secret. */
 export const secretsOf = (
   env: Readonly<Record<string, string | undefined>>,
   envFileText: string | undefined,
   passwordEnv: string | undefined
 ) => {
-  const fromFile = envFileText === undefined ? [] : Object.values(parseEnv(envFileText))
+  // Only the env file's variables that hold a secret by their name: TZ or OTEL_SERVICE_NAME would blank out text.
+  const fromFile =
+    envFileText === undefined
+      ? []
+      : Object.entries(parseEnv(envFileText))
+          .filter(([name]) => secretVariable.test(name) || name === passwordEnv)
+          .map(([, value]) => value)
   const named = [passwordEnv, "MQTT_PASSWORD", "OT_GATEWAY_EDIT_TOKEN"].flatMap((name) => {
     const value = name === undefined ? undefined : env[name]
     return value === undefined || value === "" ? [] : [value]
@@ -99,7 +108,7 @@ export const secretsOf = (
 /** The names of the variables that set up the gateway and its telemetry, never their values. */
 export const settingNames = (env: Readonly<Record<string, string | undefined>>) =>
   Object.keys(env)
-    .filter((name) => /^(OT_GATEWAY_|OTEL_)/.test(name) && env[name] !== undefined)
+    .filter((name) => /^(OT_GATEWAY_|OTEL_)/.test(name) && env[name] !== undefined && env[name] !== "")
     .toSorted()
 
 export interface SupportSection {
@@ -145,9 +154,13 @@ const hostSection = Effect.gen(function* () {
 })
 
 /** The config file's text, as JSON with its secrets redacted when it is JSON, else as it is. */
-const configText = (text: string) => {
+export const configText = (text: string) => {
   const parsed = Result.try((): unknown => JSON.parse(text))
-  return Result.isSuccess(parsed) ? JSON.stringify(redactJson(parsed.success), null, 2) : text
+  if (Result.isSuccess(parsed)) return JSON.stringify(redactJson(parsed.success), null, 2)
+  // Not JSON: the value after each key that holds a secret, as far as a string or a word goes.
+  return text.replace(/("([^"]*)"\s*:\s*)("(?:[^"\\]|\\.)*"|[^\s,{}[\]"]+)/g, (whole, head: string, key: string) =>
+    secretKey.test(key) && !namesSecret.test(key) ? `${head}"${REDACTED}"` : whole
+  )
 }
 
 const notFilled = (name: SupportSection["name"], note: string): SupportSection => ({
@@ -158,8 +171,8 @@ const notFilled = (name: SupportSection["name"], note: string): SupportSection =
 })
 
 export interface SupportOptions {
-  /** The config's path. */
-  readonly config: string
+  /** The config's path; ot-gateway.json in this folder when none is named. */
+  readonly config?: string | undefined
   /** Ask the status page here instead of the config's. */
   readonly url?: string | undefined
   readonly env?: Readonly<Record<string, string | undefined>>
@@ -170,7 +183,7 @@ export interface SupportOptions {
 /** The bundle for the gateway of `options.config`: each section, and the whole Markdown, redacted. */
 export const supportBundle = Effect.fn("supportBundle")(function* (options: SupportOptions) {
   const fs = yield* FileSystem.FileSystem
-  const path = options.config
+  const path = options.config ?? defaultConfigPath
   const host = yield* hostSection
 
   // The config: the file as it is, then whether it is valid. loadConfig reads the env file next to it too.
@@ -212,8 +225,9 @@ export const supportBundle = Effect.fn("supportBundle")(function* (options: Supp
 
   // The running gateway: the config's, or the one at --url.
   const target = yield* Effect.gen(function* () {
+    // --url and no config named: whichever gateway answers there, as status asks it.
+    if (options.url !== undefined && options.config === undefined) return { url: options.url } satisfies GatewayTarget
     if (config !== undefined) return yield* targetOf(path, config, options.url)
-    if (options.url !== undefined) return { url: options.url } satisfies GatewayTarget
     return undefined
   }).pipe(Effect.catchTag("NoStatusPage", (error) => Effect.succeed(error.message)))
   const gateway = yield* gatewaySections(target)
