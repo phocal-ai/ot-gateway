@@ -17,6 +17,7 @@
  *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started (--since: the last minutes)
  *   ot-gateway logs [config]        the running gateway's recent log lines: warnings and errors, and info
  *   ot-gateway probe <host[:port]> <register>  read Modbus registers once and show every type and byte order they read as
+ *   ot-gateway simulate bacnet      a simulated BACnet/IP device with three objects on the LAN, to try against
  *
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
@@ -33,6 +34,7 @@ import { Argument, CliOutput, Command, Flag } from "effect/cli"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
+import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
@@ -1383,6 +1385,61 @@ const probeCommand = Command.make(
   ])
 )
 
+const simulateBacnetCommand = Command.make(
+  "bacnet",
+  {
+    instance: Flag.Int("instance").pipe(
+      Flag.withDescription("The device instance, 0 to 4194302 (two devices on one network need different ones)"),
+      Flag.withDefault(1001)
+    ),
+    port: Flag.Int("port").pipe(
+      Flag.withDescription(
+        "The UDP port; 47808 to be found by a broadcast Who-Is, another one when a gateway on this machine holds it"
+      ),
+      Flag.withDefault(47_808)
+    ),
+    listen: Flag.String("listen").pipe(
+      Flag.withDescription("The IPv4 address to listen on: 0.0.0.0, every interface, receives broadcasts"),
+      Flag.withDefault("0.0.0.0")
+    )
+  },
+  ({ instance, port, listen }) =>
+    Effect.gen(function* () {
+      if (!Number.isInteger(instance) || instance < 0 || instance > 4_194_302) {
+        return yield* new SimulateError({ message: `--instance takes 0 to 4194302, not ${instance}` })
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        return yield* new SimulateError({ message: `--port takes 1 to 65535, not ${port}` })
+      }
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(listen)) {
+        return yield* new SimulateError({ message: `--listen takes an IPv4 address (BACnet/IP is IPv4 only), not ${listen}` })
+      }
+      return yield* simulateBacnet({ instance, port, listen })
+    }).pipe(
+      Effect.scoped,
+      // Nothing has run yet: one plain line, like a one-shot command's answer, not a log line.
+      Effect.catchTag("SimulateError", (error) =>
+        Console.error(failureLine(error.message)).pipe(Effect.andThen(Effect.sync(() => (process.exitCode = 1))))
+      )
+    )
+).pipe(
+  Command.withDescription(
+    "A simulated BACnet/IP device on this machine's network: a room with a temperature, a writable setpoint and its heating, to discover, read and write from another machine"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway simulate bacnet", description: "Device 1001 on UDP 47808, found by discover on the LAN" },
+    {
+      command: "ot-gateway simulate bacnet --port 47809 --instance 1002",
+      description: "Next to a gateway on this machine; discover it with --address <ip>:47809"
+    }
+  ])
+)
+
+const simulate = Command.make("simulate").pipe(
+  Command.withDescription("Simulated devices on the network, to try the gateway against without a building"),
+  Command.withSubcommands([simulateBacnetCommand])
+)
+
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
@@ -1424,7 +1481,8 @@ export const cli = Command.make("ot-gateway").pipe(
     historyCommand,
     messagesCommand,
     logsCommand,
-    probeCommand
+    probeCommand,
+    simulate
   ])
 )
 
@@ -1446,7 +1504,8 @@ const subcommands = new Set([
   "history",
   "messages",
   "logs",
-  "probe"
+  "probe",
+  "simulate"
 ])
 
 /**
@@ -1506,7 +1565,7 @@ export const runCli = (argv: ReadonlyArray<string>) => {
 }
 
 /** The commands that run until stopped and log what they do, as the gateway does. */
-const longRunning = new Set(["run", "demo"])
+const longRunning = new Set(["run", "demo", "simulate"])
 
 /** Whether `argv` (without node and the script) runs until stopped, the forms from before the subcommands too. */
 export const isLongRunning = (argv: ReadonlyArray<string>) => longRunning.has(toCliArgs(argv)[0] ?? "")
