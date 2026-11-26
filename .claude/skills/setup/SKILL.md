@@ -106,7 +106,9 @@ otg import points.csv             # adds the devices to ot-gateway.json
 
 Run `otg check --json` and fix every error it reports (each has its path) until it says `"ok": true`. Show the user the summary: devices, points, warnings. Past a few hundred points read every few seconds, suggest a longer `interval_s` or aggregates.
 
-Then run `otg doctor --json` once before the first run: it checks the broker, asks each device once (read-only), and checks the BACnet/IP port, the disk and the clock. Fix every finding with `"status": "fail"` (its `hint` says what to check, `next` the command to look closer); the gateway finding is `skip` with `code: "gateway-unreachable"` until it runs, which is expected here. A device that fails here fails the same way in the gateway. When something stops working later, `otg doctor --json` is the first command to run.
+Then, when the devices are reachable from here, `otg read --json` reads every point once through the gateway's own drivers (read-only, no broker, nothing runs on): per point its `value` and `unit`, or an `error` with its `code`; a device that did not answer has an `error` with `hint` and `checks`, what to check, most likely first. Fix what it reports before step 7 (exit code 1 while a point fails), or note the points the user accepts as failing. `otg read <device>/<point>` reads only those.
+
+Before the first run, also run `otg doctor --json` once: it checks the broker, asks each device once (read-only), and checks the BACnet/IP port, the disk and the clock. Fix every finding with `"status": "fail"` (its `hint` says what to check, `next` the command to look closer); the gateway finding is `skip` with `code: "gateway-unreachable"` until it runs, which is expected here. A device that fails here fails the same way in the gateway. When something stops working later, `otg doctor --json` is the first command to run.
 
 ## 7. First run: values must flow
 
