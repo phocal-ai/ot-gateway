@@ -11,7 +11,7 @@ A Raspberry Pi 4 on an SD card is the low end of where OT Gateway runs. What run
 - **The 64-bit Raspberry Pi OS Lite** (Bookworm or later). The image is arm64 only; it does not start on the 32-bit OS.
 - **Something to talk to.** In order of how much it proves:
   1. Nothing extra: the soak runs the broker and simulated devices on the Pi itself.
-  2. A broker on a second machine (Mosquitto, or the one you will use), so MQTT crosses a real network. The bench cannot stand in for it there: it serves only `localhost`.
+  2. A broker on a second machine (Mosquitto, or the one you will use), so MQTT crosses a real network. The bench cannot stand in for it there: it serves only `localhost`. For BACnet across the LAN, `ot-gateway simulate bacnet` on another machine is a device that answers broadcasts ([Try BACnet with two machines](try-bacnet.md)).
   3. Real devices: a Modbus TCP meter; a Modbus RTU meter behind an RS-485-to-TCP gateway, which is what most buildings have and where `requestGapMs` and `maxRegistersPerRead` matter; a BACnet/IP controller, or the BACnet Stack server on another Pi (`scripts/interop.sh bacnet` shows how to run it).
 - **Optionally a smart plug** to cut power on a schedule for the power-loss test.
 
@@ -69,7 +69,7 @@ On the Pi, in the gateway's folder (`~/ot-gateway`):
 3. Back to a release: the command from `main` (the install line in [raspberry-pi-install.md](raspberry-pi-install.md)), the release's tag in `compose.yaml`, then pull and restart. Remove the preview image to free the space.
 
    ```bash
-   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.15.0/' compose.yaml && docker compose pull && docker compose up -d && docker image rm ghcr.io/phocal-ai/ot-gateway:dev
+   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.16.0/' compose.yaml && docker compose pull && docker compose up -d && docker image rm ghcr.io/phocal-ai/ot-gateway:dev
    ```
 
 ## The tests, in order
@@ -81,7 +81,7 @@ Stop at the first one that fails, fix it, and start that test again.
 Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (the tag in `compose.yaml`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.15.0      # or ot-gateway:test
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.16.0      # or ot-gateway:test
 docker run -d --name ot-gateway-bench --network host --log-driver local --restart unless-stopped \
   --entrypoint node $IMAGE apps/gateway/src/bench.ts examples/gateway.json
 ```

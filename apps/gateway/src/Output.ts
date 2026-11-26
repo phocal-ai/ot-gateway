@@ -111,7 +111,8 @@ export const exitsAsUsage = (error: unknown) =>
 /**
  * What `--json` prints for an expected failure besides `ok` and `error`: the fields an agent acts on when the
  * failure has them, `code` (what kind of failure), `issues` (each mistake on its own, with where it is),
- * `missing` (the flags to add), `hint` (what to run) and `url` (the address it asked).
+ * `missing` (the flags to add), `hint` (what to run), `next` (one command to run next), `url` (the address it asked) and `written` (whether a
+ * command may have reached the device).
  */
 export const failureFields = (error: unknown): Readonly<Record<string, unknown>> => {
   if (!Predicate.isObject(error)) return {}
@@ -122,6 +123,12 @@ export const failureFields = (error: unknown): Readonly<Record<string, unknown>>
   }
   if (Predicate.hasProperty(error, "missing") && Array.isArray(error.missing)) fields["missing"] = error.missing
   if (Predicate.hasProperty(error, "hint") && typeof error.hint === "string") fields["hint"] = error.hint
+  // One command to run next (`up`, `upgrade`), as doctor's findings have it.
+  if (Predicate.hasProperty(error, "next") && typeof error.next === "string") fields["next"] = error.next
+  // Whether a command may have reached the device (`write`): false, true or "unknown".
+  if (Predicate.hasProperty(error, "written") && (typeof error.written === "boolean" || error.written === "unknown")) {
+    fields["written"] = error.written
+  }
   // The address a command asked (the status page's), when the error knows it.
   if (Predicate.hasProperty(error, "url") && typeof error.url === "string") fields["url"] = error.url
   return fields
@@ -163,11 +170,19 @@ export const reportFailure =
     if (options.json) return Effect.void
     return options.longRunning
       ? Effect.logError(describeFailure(error.success))
-      : Console.error(withHint(failureLine(describeFailure(error.success)), failureFields(error.success)["hint"]))
+      : Console.error(
+          withNext(
+            withHint(failureLine(describeFailure(error.success)), failureFields(error.success)["hint"]),
+            failureFields(error.success)["next"]
+          )
+        )
   }
 
 /** A failure's line with its hint, what to check next, on the line below, as `--json` has it in `hint`. */
 export const withHint = (line: string, hint: unknown) => (typeof hint === "string" ? `${line}\n  ${hint}` : line)
+
+/** A failure's lines with the command to run next below them, as `--json` has it in `next`. */
+export const withNext = (text: string, next: unknown) => (typeof next === "string" ? `${text}\n  next: ${next}` : text)
 
 /** An expected failure of a one-shot command, as stderr shows it. */
 export const failureLine = (message: string) => `error: ${message}`

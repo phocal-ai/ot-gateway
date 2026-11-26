@@ -26,7 +26,7 @@ The first line installs the command, without `sudo` ([`packaging/ot-gateway`](..
 Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.15.0/packaging/compose.yaml
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.16.0/packaging/compose.yaml
 ```
 
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
@@ -50,7 +50,7 @@ Without Compose, the same as one command, from the same folder:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v "$PWD:/etc/ot-gateway" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.15.0 /etc/ot-gateway/ot-gateway.json
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.16.0 /etc/ot-gateway/ot-gateway.json
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -127,7 +127,13 @@ docker compose run --rm gateway --check /etc/ot-gateway/ot-gateway.json
 docker compose up -d --force-recreate
 ```
 
+`ot-gateway restart` in the folder does both, and waits until every point has a value again.
+
 Under systemd, you can also run `install.sh` again with the new file: it checks it before replacing the old one. To find BACnet devices for the config, stop the gateway first (both need UDP 47808), then run `node apps/gateway/src/main.ts --discover /etc/ot-gateway/gateway.json`.
+
+Before the restart, `ot-gateway diff` shows what the edited file changes on the broker against the gateway running now (its status page): topics that are new, go silent or move (a point or device renamed, found by its register or object; the site or building changed), points that take commands now or no longer do, whose retained `$meta` changes, which topics keep their name but read another register or scaling, and which settings change, by name. A point that leaves keeps its retained `$meta` on the broker when its device leaves too, or when the site, building or gateway id changes, as the gateway clears only its own devices' ghosts: `diff` lists each one with the `ot-gateway publish <topic> --retain` that clears it after the change. When the broker's address changes, everything the gateway retained stays on the old broker: `diff` lists it all, and the clear commands need the config from before. `--against ot-gateway.json.bak` compares with the file before the last save or import instead, without a running gateway (and names it in those commands); `--url` asks a running gateway the edited file no longer points at. `--json` gives `added`, `removed`, `moved`, `writable`, `meta`, `values`, `settings`, `brokerChanged` and `stale`.
+
+To keep a points list in step with a config changed here or on the status page, `ot-gateway points export > points.csv` writes the config's devices back as one (`--format json` for the JSON form). `import` reads it back into the same devices. What a list has no column for stays in the config only, and `export` names it on stderr: writable points and their limits, semantics, device settings such as `requestGapMs`. A point it would describe wrongly (a bit of a register, a BACnet property other than the present value) and simulated devices are left out.
 
 A change by hand is read when the gateway starts: the gateway does not watch the file. The status page's editor is the way to change settings without a restart.
 
@@ -176,7 +182,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/config/file -H 'Origin: http://127.0.0.
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.15.0
+git fetch --tags && git checkout v0.16.0
 ```
 
 ```bash
@@ -189,10 +195,16 @@ sudo packaging/install.sh
 
 Read the release notes for config changes first. If the new version refuses the config, the installer says so and changes nothing: the old version keeps running with its files and config. Fix the config and run it again.
 
-With Docker Compose, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
+With Docker Compose, `ot-gateway upgrade` in the folder does it all: it finds the newest release (`--to v0.15.0` names one, an older one too), pulls it, checks the config with the new release's own `check` (a config it refuses changes nothing), writes its tag into `compose.yaml`, recreates the container and waits until the points that had a value before have one again from the new release. When they do not come (`--timeout`, 120 s by default), it writes the old tag back, recreates the old release and says why, with the new release's last log line; the exit code is 1 and `--json` has `code: "upgrade-rolled-back"`. `ot-gateway upgrade --check` only says whether a newer release is out. A site without internet can `docker load` the image first: when the pull fails, the copy on the machine is used.
 
 ```bash
-sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.15.0/' compose.yaml && docker compose up -d
+ot-gateway upgrade
+```
+
+By hand, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
+
+```bash
+sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.16.0/' compose.yaml && docker compose up -d
 ```
 
 ### From a `compose.yaml` that mounts the config file (v0.12.0 and earlier)
@@ -233,11 +245,11 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.15.0/packaging/compose.yaml && docker compose create
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.16.0/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
-docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.15.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.16.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
 ```
 
 ```bash
@@ -282,14 +294,14 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.15.0 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.16.0 --check /etc/ot-gateway/gateway.json
 ```
 
 Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.15.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.16.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -304,7 +316,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.15.0
+git fetch --tags && git checkout v0.16.0
 ```
 
 ```bash
@@ -523,6 +535,12 @@ The gateway keeps the lines in memory since it started, next to the log it write
 A command whose output is cut short by its reader (`ot-gateway watch | head`, `events --follow | head -5`) ends there with exit code 0, as a finished command, and closes its connections.
 
 `ot-gateway watch` says when it loses the broker and when it is back; with `--seconds` it exits with 1 when the broker was lost and did not come back. A watch that ends by itself (`--seconds` or `--until-values`) ends with a summary: how many of the config's points sent a value, which did not, and which send only on change and have not changed yet (`{"event": "summary", …}` with `--json`). `--until-values` stops as soon as every point that sends on a timer has sent one, and exits with 1 naming the rest when they have not within `--seconds` (by default the slowest point's interval and 30 s, at least 60 s). When `watch`, `broker` or `publish` cannot connect, the `--json` error has a `code` (`broker-unreachable`, `broker-timeout`, `broker-login-refused`, `broker-refused`; `password-unset` when the config's password variable is empty, `no-round-trip` from `broker`, `broker-lost` from `watch`) and a `hint`, what to check. A retained message the broker keeps from another gateway, or for a device or point the config does not have (an older config's), is marked, `retained (from gateway old-pi)` or `retained (point not in this config)` (`"stale"` in `--json`), and the first one prints, once, how to clear it: `ot-gateway publish <topic> --retain`. The gateway clears the `$meta` of its own points that are gone by itself; the rest it leaves, as nothing says whose they are now.
+
+### A bundle for an issue report
+
+`ot-gateway support` in the gateway's folder writes one Markdown file, `ot-gateway-support-<date>-<time>.md`, with what a report needs first: the CLI's version and the host (OS, CPUs, memory, whether it runs in a container, the time zone), the config file and whether it is valid, which `OT_GATEWAY_*` and `OTEL_*` variables are set (names only), and from the running gateway its status, the events of the last 24 hours and every log line it keeps. A section it cannot fill says why (no config, the gateway not running), so it works while something is broken. `--output report.md` names the file, `--output -` prints it, `--url` asks a gateway elsewhere, `--json` says where it went and what each section holds.
+
+The broker password, `OT_GATEWAY_EDIT_TOKEN`, the values in `ot-gateway.env` whose names say they are secret (`*PASSWORD*`, `*TOKEN*`, `*SECRET*`, `*KEY*`), the OTLP headers, credentials in a URL and config keys that hold a secret are replaced by `<redacted>`. Device addresses, ids and names stay, as they are what the report is about: read the file before you attach it.
 
 ## Health on MQTT
 

@@ -12,6 +12,7 @@
         "../../packaging/ot-gateway",
         "../../packaging/install.sh",
         "../../docs/operations.md",
+        "../../docs/troubleshooting.md",
         "../../docs/raspberry-pi-testing.md",
         "../../docs/raspberry-pi-install.md",
         "../../README.md",

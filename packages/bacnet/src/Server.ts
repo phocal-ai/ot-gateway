@@ -13,10 +13,12 @@
  *
  * COV subscribers get a notification right after subscribing and then
  * whenever a subscribed object changes (clause 13.1), at the address and
- * through the routing they subscribed from.
+ * through the routing they subscribed from. Subscription lifetimes run on the
+ * monotonic clock, so a stepped wall clock (a Pi without a real-time clock)
+ * neither ends nor prolongs them.
  */
-import { describeDatagramSocketError } from "@ot-gateway/core"
-import { Clock, Effect, Queue, Result } from "effect"
+import { describeDatagramSocketError, monotonicMillis } from "@ot-gateway/core"
+import { Deferred, Effect, Queue, Result } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import type * as DatagramSocket from "effect/socket/DatagramSocket"
 import { type Apdu, ConfirmedService } from "./Apdu.ts"
@@ -33,11 +35,14 @@ interface Peer {
 
 /**
  * Serve `device` on `socket` until the surrounding scope closes. Returns the
- * bound address, so a test can bind port 0 and learn the port.
+ * bound address, so a test can bind port 0 and learn the port. When the socket
+ * fails later the device stops answering and logs it; `stopped`, if given,
+ * fails with that error, so a caller whose only job is the device can end.
  */
 export const serveSimulatedDevice = Effect.fn("serveSimulatedDevice")(function* (
   socket: DatagramSocket.DatagramSocket,
-  device: SimulatedDevice
+  device: SimulatedDevice,
+  stopped?: Deferred.Deferred<never, DatagramSocket.DatagramSocketError>
 ) {
   const reader = yield* socket.reader
   const writer = yield* socket.writer
@@ -55,7 +60,7 @@ export const serveSimulatedDevice = Effect.fn("serveSimulatedDevice")(function* 
       )
 
   const notify = (object: ObjectId, subscriber?: string) =>
-    Effect.flatMap(Clock.currentTimeMillis, (now) =>
+    Effect.flatMap(monotonicMillis, (now) =>
       Effect.forEach(
         covNotifications(device, object, now, subscriber),
         (notification) => {
@@ -82,7 +87,7 @@ export const serveSimulatedDevice = Effect.fn("serveSimulatedDevice")(function* 
       source === undefined
         ? NetAddress.formatInet(datagram.address)
         : `${NetAddress.formatInet(datagram.address)}/${source.network}:${source.address.join(".")}`
-    const now = yield* Clock.currentTimeMillis
+    const now = yield* monotonicMillis
     const response = answer(device, apdu, { subscriber, now })
     if (response === undefined) return
     yield* send(response, peer)
@@ -114,7 +119,8 @@ export const serveSimulatedDevice = Effect.fn("serveSimulatedDevice")(function* 
   ).pipe(
     Effect.catch((error) =>
       Effect.logWarning("simulated BACnet device stopped").pipe(
-        Effect.annotateLogs({ device: device.instance, error: describeDatagramSocketError(error) })
+        Effect.annotateLogs({ device: device.instance, error: describeDatagramSocketError(error) }),
+        Effect.andThen(stopped === undefined ? Effect.void : Deferred.fail(stopped, error))
       )
     ),
     Effect.forkScoped

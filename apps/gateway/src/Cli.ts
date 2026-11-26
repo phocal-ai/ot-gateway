@@ -5,17 +5,30 @@
  *   ot-gateway init [config]        answer a few questions, get a config (config defaults to ot-gateway.json)
  *   ot-gateway run [config]         run the gateway (config defaults to ot-gateway.json)
  *   ot-gateway check [config]       validate a config without connecting to anything
+ *   ot-gateway doctor [config]      every check in order (config, broker, gateway, devices, port, disk, clock), one list
+ *   ot-gateway up [config]          start the folder's gateway with Docker Compose, wait until every point has a value
+ *   ot-gateway down [config]        stop it (docker compose down)
+ *   ot-gateway restart [config]     recreate its container, wait until every point has a value
+ *   ot-gateway upgrade [config]     to the newest release, back again when values stop (--check: is one out)
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
+ *   ot-gateway discover modbus <range>  find Modbus TCP devices and unit ids on a range, read-only and rate-limited
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
- *   ot-gateway watch [config]       print what arrives at the config's broker
+ *   ot-gateway points export [config]  the config's devices as a points list again, for import (CSV or JSON)
+ *   ot-gateway diff [config]        what the config changes on the broker against the running gateway (or --against a file)
+ *   ot-gateway contract [message]   the MQTT contract: its topics and payloads (--json: the JSON Schemas)
+ *   ot-gateway watch [config]       print what arrives at the config's broker (--check: what is off the contract)
  *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
  *   ot-gateway publish <topic> [payload]  one message to the config's broker (empty and --retain clears)
+ *   ot-gateway write <device/point> <value> [config]  a guarded command through the broker, and its result
  *   ot-gateway status [config]      the running gateway's status, one line per device (exit 1 when failing)
  *   ot-gateway events [config]      what changed lately: devices failing and recovering, the broker lost and back
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
  *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started (--since: the last minutes)
  *   ot-gateway logs [config]        the running gateway's recent log lines: warnings and errors, and info
+ *   ot-gateway read [device[/point]] [config]  read every configured point (or the ones named) once, without a running gateway
  *   ot-gateway probe <host[:port]> <register>  read Modbus registers once and show every type and byte order they read as
+ *   ot-gateway simulate bacnet      a simulated BACnet/IP device with three objects on the LAN, to try against
+ *   ot-gateway mcp                  these commands as MCP tools over stdio, for agents without a shell (McpTools.ts)
  *
  * A config is a positional argument after the others, as `ot-gateway.json` in this folder when left out. `publish`
  * is the exception, since its positionals are the topic and the payload: it takes `--config`, and refuses a payload
@@ -27,16 +40,46 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Effect, FileSystem, Option, References } from "effect"
-import { Argument, CliOutput, Command, Flag } from "effect/cli"
+import { Config, Console, Duration, Effect, FileSystem, Option, References, Result } from "effect"
+import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
+import { simulateBacnet, SimulateError } from "./Simulate.ts"
+import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
+import { dockerLayer, down, isDockerTag, nextLine, up, upgrade } from "./Deploy.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
+import {
+  DEFAULT_RATE,
+  foundUnits,
+  formatScan,
+  MAX_RATE,
+  MODBUS_PORT,
+  ModbusDiscoverError,
+  modbusRangeHint,
+  nothingFound,
+  parseRange,
+  parseUnitIds,
+  scanJson,
+  scanModbus,
+  scanToPointsList
+} from "./ModbusDiscover.ts"
+import { clearCommands, diffReport, diffTitle, formatDiff } from "./Diff.ts"
+import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
-import { initNext, initTarget, isInteractive, nextSteps, runInit, sshSession } from "./Init.ts"
+import {
+  initNext,
+  initSummary,
+  initTarget,
+  isEmptyFolder,
+  isInteractive,
+  nextSteps,
+  runInit,
+  sshSession,
+  startNowQuestion
+} from "./Init.ts"
 import { invocation } from "./Invocation.ts"
 import {
   briefPointsListSchemaJson,
@@ -51,6 +94,18 @@ import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
+import { formatWritten, parseTarget, writePoint } from "./Write.ts"
+import { contractJson, contractMessageNames, describeContract, describeContractMessage } from "./ContractReport.ts"
+import {
+  DEFAULT_READ_SECONDS,
+  formatReadReport,
+  incompleteMessage,
+  parseReadSelection,
+  readOnce,
+  ReadIncomplete,
+  selectDevices
+} from "./ReadOnce.ts"
+import { printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { defaultCount, formatProbeReport, parseEndpoint, probe, ProbeError, probeJson, probeTables } from "./Probe.ts"
 import {
   BrokerCommandError,
@@ -63,7 +118,7 @@ import {
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
-import { ConfigFileError, configFileSource, loadConfig } from "./LoadConfig.ts"
+import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
 import {
   describeProfile,
@@ -80,9 +135,15 @@ import {
   printJson,
   printResult,
   shellArgument,
+  stderrConsole,
   UsageMistake
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
+import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
+import type { NodeServices } from "@effect/platform-node/NodeServices"
+import { serveMcp } from "./Mcp.ts"
+import { mcpTools } from "./McpTools.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
 
@@ -327,6 +388,112 @@ const configForDiscovery = Effect.fn("configForDiscovery")(function* (path: stri
   return { config: yield* discoveryDefaults, noConfig: true }
 })
 
+/** The scan's progress on stderr, at most every tenth of the addresses, so a /24 says where it is. */
+const scanProgress = (done: number, total: number) =>
+  total >= 20 && (done === total || done % Math.ceil(total / 10) === 0)
+    ? Console.error(`  ${done}/${total} addresses asked`)
+    : Effect.void
+
+const modbusUsage = (message: string, hint: string) => new ModbusDiscoverError({ message, code: "usage", hint })
+
+const discoverModbusCommand = Command.make(
+  "modbus",
+  {
+    range: Argument.String("range").pipe(
+      Argument.withDescription(
+        "The addresses to ask: 192.168.1.20, 192.168.1.20:5020, 192.168.1.0/24, 192.168.1.10-40, or several with commas"
+      )
+    ),
+    port: Flag.Int("port").pipe(
+      Flag.withDescription(`The TCP port to ask on, where the range does not give one (${MODBUS_PORT}, Modbus TCP's)`),
+      Flag.withDefault(MODBUS_PORT)
+    ),
+    unitIds: Flag.String("unit-ids").pipe(
+      Flag.withDescription(
+        "The unit ids to ask on each address, as 1, 1,2,5 or 1-247 (behind a Modbus gateway); by default 1, and 255 and 0 when 1 is silent"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    rate: Flag.Int("rate").pipe(
+      Flag.withDescription(`At most this many requests a second across the scan (1 to ${MAX_RATE})`),
+      Flag.withDefault(DEFAULT_RATE)
+    ),
+    pointsList: Flag.String("points-list").pipe(
+      Flag.withDescription("Write the units found as a points list (CSV) to this file, to fill in and import"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    append: Flag.Boolean("append").pipe(
+      Flag.withDescription("Add to the --points-list file when it exists (rows it has are skipped)"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ range, port, unitIds, rate, pointsList, append, json }) =>
+    Effect.gen(function* () {
+      if (append && pointsList === undefined) {
+        return yield* modbusUsage("--append adds to the file --points-list names", "give both")
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        return yield* modbusUsage(`--port takes 1 to 65535, not ${port}`, `Modbus TCP is ${MODBUS_PORT}`)
+      }
+      if (!Number.isInteger(rate) || rate < 1 || rate > MAX_RATE) {
+        return yield* modbusUsage(
+          `--rate takes 1 to ${MAX_RATE}, not ${rate}`,
+          `${DEFAULT_RATE} unless the network is slow`
+        )
+      }
+      const targets = parseRange(range, port)
+      if (Result.isFailure(targets)) return yield* modbusUsage(targets.failure, modbusRangeHint)
+      const ids = unitIds === undefined ? undefined : parseUnitIds(unitIds)
+      if (ids !== undefined && Result.isFailure(ids))
+        return yield* modbusUsage(`--unit-ids ${ids.failure}`, "--unit-ids 1-247")
+      const asked = ids === undefined ? undefined : ids.success
+      const perAddress = asked === undefined ? "unit id 1 (255 and 0 where 1 is silent)" : `${asked.length} unit id(s)`
+      yield* Console.error(
+        `asking ${targets.success.length} address(es), ${perAddress} each, at most ${rate} requests a second; read-only`
+      )
+      const report = yield* scanModbus(
+        { range, targets: targets.success, unitIds: asked, rate, askedPort: port },
+        { onDone: scanProgress }
+      )
+      const command = yield* invocation
+      if (pointsList !== undefined) {
+        // A config in this folder takes the list with import; without one, init starts from it.
+        const fs = yield* FileSystem.FileSystem
+        const hasConfig = yield* fs.exists(DEFAULT_CONFIG)
+        const { written, message } = yield* scanToPointsList(report, pointsList, {
+          append,
+          command,
+          noConfig: !hasConfig,
+          configPath: hasConfig ? DEFAULT_CONFIG : undefined
+        })
+        yield* Console.error(message)
+        return yield* json
+          ? printJson({ ...scanJson(report, { command }), points: written, next: written.next ?? null })
+          : Effect.void
+      }
+      if (foundUnits(report).length === 0) return yield* nothingFound(report, { command })
+      yield* json ? printJson(scanJson(report, { command })) : printResult(formatScan(report, { command }))
+    }).pipe(jsonFailure(json, { range }))
+).pipe(
+  Command.withDescription(
+    "Find Modbus TCP devices and their unit ids on a range of addresses, read-only (one register read per unit) and rate-limited, and draft their points list rows"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway discover modbus 192.168.1.0/24", description: "Every address of a /24 on port 502" },
+    {
+      command: "ot-gateway discover modbus 192.168.1.0/24 --points-list modbus.csv",
+      description: "Write the units found as a points list to fill in"
+    },
+    {
+      command: "ot-gateway discover modbus 192.168.1.60 --unit-ids 1-247",
+      description: "The meters behind one Modbus gateway"
+    }
+  ])
+)
+
 const discoverCommand = Command.make(
   "discover",
   {
@@ -386,7 +553,8 @@ const discoverCommand = Command.make(
       command: "ot-gateway discover --address 10.20.3.40:47809",
       description: "Ask one device whose address a device list gives"
     }
-  ])
+  ]),
+  Command.withSubcommands([discoverModbusCommand])
 )
 
 const demo = Command.make(
@@ -541,7 +709,11 @@ const init = Command.make(
         }
       }
       const flags = { ...given, yes: !interactive }
-      const config = yield* initTarget(directory, flags.yes)
+      const fs = yield* FileSystem.FileSystem
+      const empty = directory === undefined && isEmptyFolder(yield* fs.readDirectory("."))
+      if (interactive)
+        yield* Console.error("ot-gateway init: a few questions, then the gateway's folder. Enter takes the default.\n")
+      const config = yield* initTarget(directory, flags.yes, { empty })
       const written = yield* runInit(config, flags)
       if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun, timeZone: localTimeZone() })
@@ -574,8 +746,23 @@ const init = Command.make(
           [`dry run, nothing written. It would write:`, ...files.written.map((file) => `  ${file}`)].join("\n")
         )
       }
-      yield* Console.log(describeConfig(written))
-      yield* Console.log(nextSteps(config, written, files, context))
+      if (!interactive) {
+        // Scripts and agents get the whole account: the config, every file, the notes and the next commands.
+        yield* Console.log(describeConfig(written))
+        return yield* Console.log(nextSteps(config, written, files, context))
+      }
+      // A person gets a few lines to scan, then the one next step: start it now, as create-cloudflare offers to deploy.
+      // The folder's ot-gateway.env may hold the broker password already (a folder init kept it in).
+      yield* loadFolderEnv(config)
+      const summary = initSummary(config, written, files, context, process.env)
+      yield* Console.log(["", ...summary.lines, ""].join("\n"))
+      const question = startNowQuestion(written, process.env)
+      if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {
+        return yield* Console.log(["", ...summary.later].join("\n"))
+      }
+      const loaded = yield* loadConfig(config)
+      yield* Console.log(`\nstatus page: ${initNext(config, written, files, context).url}   Ctrl-C stops the gateway\n`)
+      return yield* runConfigured(loaded, config).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
@@ -741,6 +928,62 @@ const fromEdeCommand = Command.make(
   ])
 )
 
+const exportCommand = Command.make(
+  "export",
+  {
+    config: configPath,
+    format: Flag.Literals("format", ["csv", "json"] as const).pipe(
+      Flag.withDescription("csv (default), or json: the points list's JSON form, an array of rows"),
+      Flag.withDefault("csv" as const)
+    ),
+    json: jsonFlag
+  },
+  ({ config, format, json }) =>
+    Effect.gen(function* () {
+      const decoded = yield* loadConfig(config)
+      const list = exportPointsList(decoded)
+      const text = format === "json" ? exportJson(list) : exportCsv(list)
+      const file = format === "json" ? "points.json" : "points.csv"
+      const next = [
+        {
+          command: `${yield* invocation} import ${file} --dry-run`,
+          description: "Check the list; import adds its devices to a config that does not have them yet"
+        }
+      ]
+      if (json) {
+        return yield* printJson({
+          ok: true,
+          path: config,
+          format,
+          devices: list.devices,
+          points: list.rows.length,
+          columns: list.columns,
+          rows: list.rows,
+          ...(format === "csv" ? { csv: text } : {}),
+          notCarried: list.notCarried,
+          next
+        })
+      }
+      yield* Effect.sync(() => process.stdout.write(text))
+      yield* Console.error(
+        [
+          `✓ ${list.rows.length} point(s) of ${list.devices} device(s) from ${config}`,
+          ...describeNotCarried(list.notCarried),
+          ...next.map((step) => `next: ${step.command}`)
+        ].join("\n")
+      )
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "The config's devices as a points list on stdout (CSV, or --format json), the columns import reads, so the list follows edits made in the config or on the status page. What a list cannot say (writable points, semantics, a register's bit, …) is named on stderr; --json: rows, columns and notCarried [{kind, device, point, detail, skipped}]"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway points export > points.csv", description: "The list of ot-gateway.json" },
+    { command: "ot-gateway points export site-1/ot-gateway.json --format json > points.json", description: "As JSON" },
+    { command: "ot-gateway points export --json", description: "The rows and what the list leaves out, for agents" }
+  ])
+)
+
 const profilesList = Command.make("list", { json: jsonFlag }, ({ json }) =>
   Effect.gen(function* () {
     const profiles = yield* libraryProfiles()
@@ -797,7 +1040,44 @@ const profiles = Command.make("profiles").pipe(
 
 const points = Command.make("points").pipe(
   Command.withDescription("The points list, the CSV (or JSON) that import and init read: its schema and a template"),
-  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
+  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand, exportCommand])
+)
+
+const contractCommand = Command.make(
+  "contract",
+  {
+    message: Argument.Literals("message", contractMessageNames).pipe(
+      Argument.withDescription(
+        `One message's fields, or with --json its JSON Schema: ${contractMessageNames.join(", ")}`
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    json: Flag.Boolean("json").pipe(
+      Flag.withDescription(
+        "Print it as JSON: {ok, version, url, topics, schemas}, or with a message that message's JSON Schema alone"
+      ),
+      Flag.withDefault(false)
+    )
+  },
+  ({ message, json }) =>
+    message === undefined
+      ? json
+        ? printJson(contractJson())
+        : Console.log(describeContract())
+      : json
+        ? printJson(contractJson().schemas[message])
+        : Console.log(describeContractMessage(message))
+).pipe(
+  Command.withDescription(
+    "The MQTT contract: every topic the gateway publishes or listens on and its payload, as JSON Schemas; no config needed"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway contract", description: "The topics and messages, for people" },
+    { command: "ot-gateway contract health", description: "The health message's fields" },
+    { command: "ot-gateway contract --json", description: "Everything with the JSON Schemas, for agents" },
+    { command: "ot-gateway contract value --json > value.schema.json", description: "One message's JSON Schema" }
+  ])
 )
 
 const watchCommand = Command.make(
@@ -827,15 +1107,22 @@ const watchCommand = Command.make(
         "Stop once every configured point sent a value; exit 1 naming the ones that did not within --seconds (default: the slowest poll interval and 30 s, at least 60 s)"
       ),
       Flag.withDefault(false)
+    ),
+    check: Flag.Boolean("check").pipe(
+      Flag.withDescription(
+        "Check each message under the site and building against the MQTT contract, print only those off it with what is wrong; a watch that ends by itself exits 1 when one was"
+      ),
+      Flag.withDefault(false)
     )
   },
-  ({ config, topic, seconds, json, untilValues }) =>
+  ({ config, topic, seconds, json, untilValues, check: againstContract }) =>
     Effect.flatMap(loadConfig(config), (decoded) =>
       watch(decoded, {
         topic: Option.getOrUndefined(topic),
         seconds: Option.getOrUndefined(seconds),
         json,
-        untilValues
+        untilValues,
+        check: againstContract
       })
     ).pipe(jsonFailure(json, { path: config }, { lines: true }))
 ).pipe(
@@ -845,7 +1132,8 @@ const watchCommand = Command.make(
     { command: "ot-gateway watch --topic 'site-1/building-a/heat-pump/#'", description: "Only one device" },
     { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" },
     { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" },
-    { command: "ot-gateway watch --until-values --json", description: "Wait until every point sent a value" }
+    { command: "ot-gateway watch --until-values --json", description: "Wait until every point sent a value" },
+    { command: "ot-gateway watch --check --seconds 60", description: "A minute of messages against the MQTT contract" }
   ])
 )
 
@@ -994,6 +1282,120 @@ const targetConfigFlag = Flag.String("config").pipe(
 /** The gateway status, events and history ask: the config named either way, or `--url`, or the defaults. */
 const targetFrom = (positional: string | undefined, flag: string | undefined, url: string | undefined) =>
   chooseConfig(positional, flag).pipe(Effect.flatMap((config) => resolveTarget({ config, url })))
+
+const diffCommand = Command.make(
+  "diff",
+  {
+    config: configPath,
+    against: Flag.String("against").pipe(
+      Flag.withDescription(
+        "Compare with this config file (the one before; ot-gateway.json.bak after a save on the status page) instead of the running gateway"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    url: urlFlag,
+    json: jsonFlag
+  },
+  ({ config, against, url, json }) =>
+    Effect.gen(function* () {
+      if (against !== undefined && url !== undefined) {
+        return yield* new UsageMistake({
+          message: "--against compares with a file and --url with a running gateway: give one of them",
+          code: "usage",
+          missing: [],
+          hint: "ot-gateway diff --help"
+        })
+      }
+      const report = yield* diffReport(config, { against, url })
+      const context = {
+        command: yield* invocation,
+        config: config === DEFAULT_CONFIG ? undefined : config,
+        against
+      }
+      const next = clearCommands(report.diff, context).map((command) => ({
+        command,
+        description: "After the change: clear a retained message nobody publishes any more"
+      }))
+      if (json) return yield* printJson({ ok: true, path: config, against: report.against, ...report.diff, next })
+      yield* Console.log(formatDiff(report.diff, diffTitle(report), context))
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "What a config change does on the broker before it is applied, against the running gateway (or --against an older file): topics new (+), silent (-) and moved (→: a point, device, site or building renamed), points that take commands now (!), $meta that changes (~), settings that change, and the retained messages left behind with the command to clear each. --json: changed, added, removed, moved, writable, meta, settings, stale, next"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway diff", description: "ot-gateway.json against the gateway running now" },
+    {
+      command: "ot-gateway diff ot-gateway.json --against ot-gateway.json.bak",
+      description: "Against the config before the last save"
+    },
+    { command: "ot-gateway diff --json", description: "The same as JSON, for agents" }
+  ])
+)
+
+const writeCommand = Command.make(
+  "write",
+  {
+    target: Argument.String("point").pipe(
+      Argument.withDescription("device/point, as in the config: demo-room/temperature-setpoint"),
+      Argument.filter(
+        (text) => parseTarget(text) !== undefined,
+        () => "name a device/point"
+      )
+    ),
+    value: Argument.String("value").pipe(
+      Argument.withDescription(
+        "A number in the point's unit, true or false (on/off) for a switch, null to release a BACnet priority slot"
+      )
+    ),
+    config: Argument.String("config").pipe(
+      Argument.withDescription(
+        `Path of the gateway's JSON config (default ${defaultConfigPath}): its broker, site, building and points`
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    configFlag: Flag.String("config").pipe(
+      Flag.withDescription("Path of the gateway's JSON config, the same as naming it as the argument"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    timeout: Flag.Int("timeout").pipe(
+      Flag.withDescription(
+        "Seconds to wait for the gateway's result (default 25: up to 10 for its turn, 10 for the write)"
+      ),
+      Flag.filter(
+        (seconds) => seconds >= 1 && seconds <= 300,
+        (seconds) => `--timeout takes 1 to 300, not ${seconds}`
+      ),
+      Flag.withDefault(25)
+    ),
+    json: jsonFlag
+  },
+  ({ target, value, config, configFlag, timeout, json }) =>
+    chooseConfig(config, configFlag).pipe(
+      Effect.flatMap((path) => loadConfig(path ?? defaultConfigPath)),
+      Effect.flatMap((decoded) =>
+        writePoint(decoded, parseTarget(target) ?? { device: "", point: "" }, value, {
+          timeout: Duration.seconds(timeout)
+        })
+      ),
+      Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatWritten(report)))),
+      jsonFailure(json, { point: target, value })
+    )
+).pipe(
+  Command.withDescription(
+    "Write a point through the gateway, as a consumer would: a guarded command on its $set topic, then its result (exit 1 when not written)"
+  ),
+  Command.withExamples([
+    {
+      command: "ot-gateway write demo-room/temperature-setpoint 21.5",
+      description: "Set a setpoint, wait for the result"
+    },
+    { command: "ot-gateway write plant/pump-enable on --json", description: "Switch a point on, the outcome as JSON" }
+  ])
+)
 
 const secondsFlag = (description: string) =>
   Flag.Int("seconds").pipe(
@@ -1256,6 +1658,113 @@ const logsCommand = Command.make(
   ])
 )
 
+/**
+ * `read`'s arguments: the points and the config, either order. A word ending in `.json` is the config (`read
+ * site-1/ot-gateway.json`, `read room site-1/ot-gateway.json`, `read site-1/ot-gateway.json room`); `--config` names
+ * it too.
+ */
+const isJsonPath = (word: string | undefined) => word !== undefined && word.toLowerCase().endsWith(".json")
+
+export const readArguments = (
+  first: string | undefined,
+  second: string | undefined,
+  flag: string | undefined
+): { readonly points?: string; readonly config: string } | { readonly error: string } => {
+  if (isJsonPath(first) && isJsonPath(second)) return { error: `two configs: ${first} and ${second}; name one` }
+  const [config, selection] = isJsonPath(first) ? [first, second] : [second, first]
+  if (config !== undefined && flag !== undefined && config !== flag) {
+    return { error: `two configs: ${config} and --config ${flag}; name one` }
+  }
+  return { ...(selection === undefined ? {} : { points: selection }), config: config ?? flag ?? DEFAULT_CONFIG }
+}
+
+const readCommand = Command.make(
+  "read",
+  {
+    points: Argument.String("points").pipe(
+      Argument.withDescription(
+        "device/point, a device for all its points, or several of either comma-separated; every point when left out"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    positionalConfig: Argument.String("config").pipe(
+      Argument.withDescription(`Path of the gateway's JSON config (default ${DEFAULT_CONFIG})`),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription("Path of the gateway's JSON config, the same as naming it as an argument"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    timeout: Flag.Int("timeout").pipe(
+      Flag.withDescription(
+        `Seconds each device may take, connecting and finding it included (default ${DEFAULT_READ_SECONDS})`
+      ),
+      Flag.filter(
+        (seconds) => seconds >= 1 && seconds <= 600,
+        (seconds) => `--timeout takes 1 to 600 seconds, not ${seconds}`
+      ),
+      Flag.withDefault(DEFAULT_READ_SECONDS)
+    ),
+    json: jsonFlag
+  },
+  ({ points: first, positionalConfig, config: configFlag, timeout, json }) => {
+    const chosen = readArguments(first, positionalConfig, configFlag)
+    return Effect.gen(function* () {
+      if ("error" in chosen) {
+        return yield* new UsageMistake({
+          code: "usage",
+          message: chosen.error,
+          missing: [],
+          hint: "ot-gateway read --help"
+        })
+      }
+      const decoded = yield* loadConfig(chosen.config)
+      const selection = chosen.points === undefined ? [] : parseReadSelection(chosen.points)
+      if (selection === undefined) {
+        return yield* new UsageMistake({
+          code: "usage",
+          message: `no device or point named in "${chosen.points ?? ""}"; leave it out to read every point`,
+          missing: [],
+          hint: "ot-gateway read --help"
+        })
+      }
+      const devices = yield* selectDevices(decoded, selection)
+      if (!json && process.stderr.isTTY) {
+        const count = devices.reduce((sum, device) => sum + device.points.length, 0)
+        yield* Console.error(`reading ${count} point(s) of ${devices.length} device(s) once …`)
+      }
+      // The report says what failed and why; the drivers' warnings about it would only repeat it, unformatted.
+      return yield* readOnce(decoded, devices, { timeout: Duration.seconds(timeout) }).pipe(
+        Effect.provideService(References.MinimumLogLevel, "Error")
+      )
+    }).pipe(
+      jsonFailure(json, { path: "error" in chosen ? null : chosen.config }),
+      Effect.flatMap((report) =>
+        Effect.gen(function* () {
+          yield* json ? printJsonWithLocalTimes(report) : printResult(formatReadReport(report))
+          if (!report.ok) return yield* new ReadIncomplete({ message: incompleteMessage(report) })
+        })
+      )
+    )
+  }
+).pipe(
+  Command.withDescription(
+    "Read every configured point (or the ones named) once through the gateway's drivers and exit, without a running gateway or a broker; exits with 1 when a point was not read. Read-only: it never writes"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway read", description: "Every point of ot-gateway.json in this folder" },
+    { command: "ot-gateway read demo-room", description: "Every point of one device" },
+    {
+      command: "ot-gateway read demo-room/setpoint,meter",
+      description: "One point, and every point of another device"
+    },
+    { command: "ot-gateway read site-1/ot-gateway.json --json", description: "Another config, as JSON" }
+  ])
+)
+
 const probeCommand = Command.make(
   "probe",
   {
@@ -1336,11 +1845,336 @@ const probeCommand = Command.make(
   ])
 )
 
+const simulateBacnetCommand = Command.make(
+  "bacnet",
+  {
+    instance: Flag.Int("instance").pipe(
+      Flag.withDescription("The device instance, 0 to 4194302 (two devices on one network need different ones)"),
+      Flag.withDefault(1001)
+    ),
+    port: Flag.Int("port").pipe(
+      Flag.withDescription(
+        "The UDP port; 47808 to be found by a broadcast Who-Is, another one when a gateway on this machine holds it"
+      ),
+      Flag.withDefault(47_808)
+    ),
+    listen: Flag.String("listen").pipe(
+      Flag.withDescription("The IPv4 address to listen on: 0.0.0.0, every interface, receives broadcasts"),
+      Flag.withDefault("0.0.0.0")
+    )
+  },
+  ({ instance, port, listen }) =>
+    Effect.gen(function* () {
+      if (!Number.isInteger(instance) || instance < 0 || instance > 4_194_302) {
+        return yield* new SimulateError({ message: `--instance takes 0 to 4194302, not ${instance}` })
+      }
+      if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+        return yield* new SimulateError({ message: `--port takes 1 to 65535, not ${port}` })
+      }
+      if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(listen) || listen.split(".").some((octet) => Number(octet) > 255)) {
+        return yield* new SimulateError({
+          message: `--listen takes an IPv4 address (BACnet/IP is IPv4 only), not ${listen}`
+        })
+      }
+      return yield* simulateBacnet({ instance, port, listen })
+    }).pipe(
+      Effect.scoped,
+      // Nothing has run yet: one plain line, like a one-shot command's answer, not a log line.
+      Effect.catchTag("SimulateError", (error) =>
+        Console.error(failureLine(error.message)).pipe(Effect.andThen(Effect.sync(() => (process.exitCode = 1))))
+      )
+    )
+).pipe(
+  Command.withDescription(
+    "A simulated BACnet/IP device on this machine's network: a room with a temperature, a writable setpoint and its heating, to discover, read and write from another machine"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway simulate bacnet", description: "Device 1001 on UDP 47808, found by discover on the LAN" },
+    {
+      command: "ot-gateway simulate bacnet --port 47810 --instance 1002",
+      description: "Next to a gateway on this machine; discover it with --address <ip>:47810"
+    }
+  ])
+)
+
+const doctorCommand = Command.make("doctor", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* runDoctor(config, { cli: yield* invocation })
+    // A terminal gets one line per check and the one command to run; a pipe or a log the hint for each problem too.
+    yield* json ? printJson(report) : Console.log(formatDoctor(report, { brief: process.stdout.isTTY }))
+    const problems = doctorProblems(report)
+    if (problems !== undefined) return yield* problems
+  })
+).pipe(
+  Command.withDescription(
+    "Run every check in order: the config, the broker (a round trip), the running gateway, each device (read-only: its first point, or a Who-Is for its instance, when the gateway does not run), the BACnet/IP port, the disk and the clock. One line per finding and the command to run next; --json: findings [{check, status, subject, message, code, hint, next}]. Exits with 1 when one fails"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway doctor", description: "Check ot-gateway.json in this folder and everything it names" },
+    { command: "ot-gateway doctor site-1/ot-gateway.json --json", description: "Another config, as JSON" }
+  ])
+)
+
+const explainCommand = Command.make(
+  "explain",
+  {
+    code: Argument.String("code").pipe(
+      Argument.withDescription(
+        "A code as a command printed it (broker-unreachable), or a command result (rejected out-of-range); none lists every code"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    markdown: Flag.Boolean("markdown").pipe(
+      Flag.withDescription(
+        "Print every code as the Markdown table in docs/troubleshooting.md, to paste there after adding a code"
+      ),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ code, markdown, json }) =>
+    Effect.gen(function* () {
+      const cli = yield* invocation
+      if (markdown) return yield* printResult(codesTable())
+      if (code === undefined) {
+        return yield* json
+          ? printJson({ ok: true, codes: codes.map((entry) => codeJson(entry, cli)) })
+          : printResult(formatCodeList())
+      }
+      const entry = yield* Effect.fromResult(explainCode(code))
+      yield* json ? printJson({ ok: true, ...codeJson(entry, cli) }) : printResult(formatCode(entry, cli))
+    }).pipe(jsonFailure(json, { asked: code ?? null }))
+).pipe(
+  Command.withDescription(
+    "What a code means, what to do about it and the command to run next: any code a command prints, in its --json code, a doctor finding or a command result. With no code, every code by area"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway explain broker-login-refused", description: "One code" },
+    { command: "ot-gateway explain timeout --json", description: "As JSON, with what to check per protocol" },
+    { command: "ot-gateway explain", description: "Every code, one line each" }
+  ])
+)
+
+const supportCommand = Command.make(
+  "support",
+  {
+    config: targetConfig,
+    configFlag: targetConfigFlag,
+    url: urlFlag,
+    output: Flag.String("output").pipe(
+      Flag.withAlias("o"),
+      Flag.withDescription(
+        "Where to write the bundle (default ot-gateway-support-<date>-<time>.md in this folder); - prints it instead (with --json: {ok, text, sections})"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    json: jsonFlag
+  },
+  ({ config, configFlag, url, output, json }) =>
+    Effect.gen(function* () {
+      const now = Date.now()
+      const bundle = yield* supportBundle({ config: yield* chooseConfig(config, configFlag), url, now })
+      const sections = bundle.sections.map(({ name, ok, note }) => ({ name, ok, note }))
+      if (output === "-") {
+        return yield* json ? printJson({ ok: true, text: bundle.text, sections }) : printResult(bundle.text.trimEnd())
+      }
+      const path = output ?? supportFileName(now)
+      const fs = yield* FileSystem.FileSystem
+      yield* fs.writeFileString(path, bundle.text)
+      yield* json
+        ? printJson({
+            ok: true,
+            path,
+            bytes: Buffer.byteLength(bundle.text),
+            sections
+          })
+        : printResult(formatSupportSummary(path, bundle))
+    }).pipe(jsonFailure(json, { path: config ?? configFlag ?? null }))
+).pipe(
+  Command.withDescription(
+    "Write one file for an issue report: versions and host, the config (redacted), which settings variables are set, and the running gateway's status, last 24 hours of events and the log lines it keeps. Secrets are redacted; device addresses and names are not. Sections it cannot fill say why, so it works while the gateway is down too"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway support", description: "The gateway of ot-gateway.json in this folder" },
+    { command: "ot-gateway support site-1/ot-gateway.json -o report.md", description: "Another config, to report.md" },
+    { command: "ot-gateway support --output -", description: "Print it instead of writing a file" }
+  ])
+)
+
+/**
+ * `mcp`: the commands as MCP tools on stdin and stdout. Its type is written out because a tool call runs `runCli`,
+ * whose type is the CLI's, this command included.
+ */
+const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeServices> =>
+  Effect.gen(function* () {
+    const version = yield* readVersion
+    // stdout is the protocol's: what is printed besides goes to stderr.
+    const log = yield* Console.Console
+    yield* serveMcp({
+      tools: mcpTools,
+      version,
+      run: (argv): Effect.Effect<unknown, unknown, NodeServices> => runCli(argv),
+      log
+    })
+  }).pipe(Effect.updateService(Console.Console, stderrConsole))
+).pipe(
+  Command.withDescription(
+    "Serve these commands as MCP tools over stdio (check, doctor, status, read, write, watch, …), for agents that do not run a shell; each tool's result is the command's --json"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway mcp", description: "Started by an MCP client, in the gateway's folder" },
+    { command: "claude mcp add ot-gateway -- npx ot-gateway mcp", description: "Add it to Claude Code" }
+  ])
+)
+
+const deployTarget = Argument.String("config").pipe(
+  Argument.withDescription(
+    `The gateway's JSON config, or its folder (default ./${DEFAULT_CONFIG}); compose.yaml is next to it`
+  ),
+  Argument.withDefault(DEFAULT_CONFIG)
+)
+
+const waitSeconds = Flag.Int("timeout").pipe(
+  Flag.withDescription("Seconds to wait until every point has a value (default 120)"),
+  Flag.filter(
+    (seconds) => seconds >= 1 && seconds <= 3600,
+    (seconds) => `--timeout takes 1 to 3600, not ${seconds}`
+  ),
+  Flag.withDefault(120)
+)
+
+const forceFlag = Flag.Boolean("force").pipe(
+  Flag.withDescription(
+    "Go ahead on Docker Desktop (macOS, Windows), which reaches no devices on the LAN: for simulated devices or a broker here"
+  ),
+  Flag.withDefault(false)
+)
+
+const noWaitFlag = Flag.Boolean("no-wait").pipe(
+  Flag.withDescription("Return once Compose has started it, without waiting for values"),
+  Flag.withDefault(false)
+)
+
+/** What up, down, restart and upgrade need of this machine: how the CLI was run, the platform and the folder. */
+const deployContext = Effect.map(invocation, (cli) => ({ cli, platform: process.platform, cwd: process.cwd() }))
+
+/** A report for a person: the lines printed on the way, then its warnings and the command to run next. */
+const deployDone = (
+  json: boolean,
+  report: { readonly next: string | null; readonly warnings?: ReadonlyArray<string> }
+) => {
+  if (json) return printJson(report)
+  const lines = [...(report.warnings ?? []).map((warning) => `! ${warning}`), ...nextLine(report.next)]
+  return lines.length === 0 ? Effect.void : Console.log(lines.join("\n"))
+}
+
+const upOrRestart = (recreate: boolean) =>
+  Command.make(
+    recreate ? "restart" : "up",
+    { config: deployTarget, timeout: waitSeconds, noWait: noWaitFlag, force: forceFlag, json: jsonFlag },
+    ({ config, timeout, noWait, force, json }) =>
+      Effect.gen(function* () {
+        const context = yield* deployContext
+        const report = yield* up(config, {
+          ...context,
+          recreate,
+          force,
+          wait: !noWait,
+          timeout: Duration.seconds(timeout)
+        })
+        yield* deployDone(json, report)
+      }).pipe(Effect.provide(dockerLayer), jsonFailure(json, { action: recreate ? "restart" : "up", config }))
+  )
+
+const upCommand = upOrRestart(false).pipe(
+  Command.withDescription(
+    "Start the gateway of this folder with Docker Compose and wait until every point has a value: checks the config, writes compose.yaml when there is none, docker compose up -d. Exit 1 with code, hint and next when values do not flow"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway up", description: "Start ./ot-gateway.json's gateway, wait for values" },
+    { command: "ot-gateway up site-1 --json", description: "The gateway of the folder site-1, the outcome as JSON" }
+  ])
+)
+
+const restartCommand = upOrRestart(true).pipe(
+  Command.withDescription(
+    "Recreate the gateway's container (it reads the config and ot-gateway.env again) and wait until every point has a value"
+  ),
+  Command.withExamples([{ command: "ot-gateway restart", description: "After editing ot-gateway.env" }])
+)
+
+const downCommand = Command.make("down", { config: deployTarget, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* down(config, yield* deployContext)
+    yield* deployDone(json, report)
+  }).pipe(Effect.provide(dockerLayer), jsonFailure(json, { action: "down", config }))
+).pipe(
+  Command.withDescription(
+    "Stop the gateway of this folder (docker compose down); the outbox and history stay in their volume"
+  ),
+  Command.withExamples([{ command: "ot-gateway down", description: "Stop ./ot-gateway.json's gateway" }])
+)
+
+const upgradeCommand = Command.make(
+  "upgrade",
+  {
+    config: deployTarget,
+    check: Flag.Boolean("check").pipe(
+      Flag.withDescription("Only say whether a newer release is out; change nothing"),
+      Flag.withDefault(false)
+    ),
+    to: Flag.String("to").pipe(
+      Flag.withDescription("The release to move to (v0.16.0), an older one too; the newest when left out"),
+      Flag.filter(
+        (tag) => isDockerTag(tag),
+        (tag) => `--to takes a release tag such as v0.16.0, not ${tag}`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    timeout: waitSeconds,
+    force: forceFlag,
+    json: jsonFlag
+  },
+  ({ config, check: checkOnly, to, timeout, force, json }) =>
+    Effect.gen(function* () {
+      const context = yield* deployContext
+      const envTag = yield* Config.String("OT_GATEWAY_TAG").pipe(Config.option, Config.map(Option.getOrUndefined))
+      const report = yield* upgrade(config, {
+        ...context,
+        check: checkOnly,
+        to,
+        envTag,
+        force,
+        timeout: Duration.seconds(timeout)
+      })
+      yield* deployDone(json, report)
+    }).pipe(Effect.provide(dockerLayer), jsonFailure(json, { action: checkOnly ? "upgrade-check" : "upgrade", config }))
+).pipe(
+  Command.withDescription(
+    "Move the gateway of this folder to the newest release: pull it, check the config with it, switch compose.yaml's tag, wait until values flow again, and go back to the old release when they do not. --check only says whether one is out"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway upgrade --check", description: "Is a newer release out?" },
+    { command: "ot-gateway upgrade", description: "Move to it, back again when values stop" },
+    { command: "ot-gateway upgrade --to v0.15.0", description: "Back to an older release" }
+  ])
+)
+
+const simulate = Command.make("simulate").pipe(
+  Command.withDescription("Simulated devices on the network, to try the gateway against without a building"),
+  Command.withSubcommands([simulateBacnetCommand])
+)
+
 /** The top of `--help`: what it is, then the short way through for agents, which read help first. */
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
+  "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
+  "    points export --json             the config's devices as a points list again, and what a list cannot carry",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
@@ -1364,19 +2198,32 @@ export const cli = Command.make("ot-gateway").pipe(
     init,
     run,
     check,
+    doctorCommand,
+    upCommand,
+    downCommand,
+    restartCommand,
+    upgradeCommand,
     discoverCommand,
     importCommand,
+    diffCommand,
     points,
     profiles,
+    contractCommand,
     watchCommand,
     brokerCommand,
     publishCommand,
+    writeCommand,
     status,
     eventsCommand,
     historyCommand,
     messagesCommand,
     logsCommand,
-    probeCommand
+    readCommand,
+    probeCommand,
+    explainCommand,
+    supportCommand,
+    simulate,
+    mcpCommand
   ])
 )
 
@@ -1385,19 +2232,32 @@ const subcommands = new Set([
   "init",
   "run",
   "check",
+  "doctor",
+  "up",
+  "down",
+  "restart",
+  "upgrade",
   "discover",
   "import",
+  "diff",
   "points",
   "profiles",
+  "contract",
   "watch",
   "broker",
   "publish",
+  "write",
   "status",
   "events",
   "history",
   "messages",
   "logs",
-  "probe"
+  "read",
+  "probe",
+  "explain",
+  "support",
+  "simulate",
+  "mcp"
 ])
 
 /**
@@ -1456,8 +2316,18 @@ export const runCli = (argv: ReadonlyArray<string>) => {
   return longRunning.has(args[0] ?? "") ? program : Effect.provideService(program, References.MinimumLogLevel, "Warn")
 }
 
+/**
+ * The arguments to run for `argv` as typed: a bare `ot-gateway` in a terminal with no `ot-gateway.json` here starts
+ * `init`, as a bare `vercel` sets up a project it does not know yet. Without a terminal, or with a config, it stays
+ * `run`, which the image and the systemd unit rely on.
+ */
+export const withFirstRun = (
+  argv: ReadonlyArray<string>,
+  where: { readonly terminal: boolean; readonly configHere: boolean }
+): ReadonlyArray<string> => (argv.length === 0 && where.terminal && !where.configHere ? ["init"] : argv)
+
 /** The commands that run until stopped and log what they do, as the gateway does. */
-const longRunning = new Set(["run", "demo"])
+const longRunning = new Set(["run", "demo", "simulate"])
 
 /** Whether `argv` (without node and the script) runs until stopped, the forms from before the subcommands too. */
 export const isLongRunning = (argv: ReadonlyArray<string>) => longRunning.has(toCliArgs(argv)[0] ?? "")

@@ -20,19 +20,32 @@ pnpm gateway          # build the status page (cached), then run apps/gateway wi
 pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, compose.yaml and ot-gateway.env out (the CLI: apps/gateway/src/Cli.ts)
 pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
+pnpm ot-gateway doctor ot-gateway.json     # every check in order (config, broker, gateway, devices, BACnet port, disk, clock), one line each and the next command (--json: findings with code, hint, next; exit 1 when one fails)
+pnpm ot-gateway up                         # the folder's gateway under Docker Compose (compose.yaml written when missing), until every point has a value (down, restart; exit 1 with code, hint, next)
+pnpm ot-gateway upgrade --check            # is a newer release out (upgrade: pull, check the config with it, switch compose.yaml's tag, wait for values, roll back when they do not come)
 pnpm ot-gateway discover ot-gateway.json   # find BACnet devices, print a draft of their config (--points-list points.csv writes a list to trim, --append adds to one; works before init, without a config)
+pnpm ot-gateway discover modbus 192.168.1.0/24   # find Modbus TCP devices and unit ids on a range, read-only and rate-limited (--unit-ids 1-247 behind a gateway, --points-list writes draft rows)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in (--protocol modbus|bacnet: only that protocol's columns)
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
-pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker
+pnpm ot-gateway points export > points.csv   # the config's devices as a points list again, for import (--format json; what a list cannot carry is named on stderr)
+pnpm ot-gateway diff                       # what ./ot-gateway.json changes on the broker against the running gateway: topics new, silent, moved, writable, stale $meta (--against <old.json>, --json)
+pnpm ot-gateway contract                   # the MQTT contract: topics and each message's fields (--json: the JSON Schemas; contract value --json: one)
+pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker (--check: only what is off the contract)
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
+pnpm ot-gateway read                       # every point of ./ot-gateway.json read once, without a running gateway or broker (read <device>[/<point>], --json; exit 1 when one fails)
 pnpm ot-gateway probe 127.0.0.1:5020 100   # read Modbus registers once (read-only): every type and byte order they read as, a points list row
+pnpm ot-gateway simulate bacnet            # a simulated BACnet/IP device on the LAN (a room: temperature, writable setpoint, heating) to try from another machine (docs/try-bacnet.md)
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
+pnpm ot-gateway write <device/point> <value>   # a guarded command on the point's $set topic and its result (exit 1 with code and hint when not written)
 pnpm ot-gateway status                     # the running gateway of ./ot-gateway.json (or a config named): its devices, one line each, what to check (exit 1 when one fails)
 pnpm ot-gateway events --since 1h          # what broke, since when and why, and when it came back (/api/events; --follow for what comes)
 pnpm ot-gateway history meter/power        # a point's last 10 minutes from the gateway's history: min, max, average per minute, gaps (on/off and switch times for a bool)
 pnpm ot-gateway messages                   # messages per topic since the gateway started, and how many reached the broker
 pnpm ot-gateway logs --level warn          # the running gateway's recent log lines from memory, without docker logs (/api/logs; --follow, --json)
+pnpm ot-gateway explain broker-unreachable # what a code means, what to do, the next command (no code: all of them; --json; the table is apps/gateway/src/Codes.ts, docs/troubleshooting.md's "Codes" is checked against it)
+pnpm ot-gateway support                    # one redacted file for an issue report: versions, host, config, status, a day of events, the logs (--output -, --json)
+pnpm ot-gateway mcp                        # the commands as MCP tools over stdio, each result the command's --json (the tools: apps/gateway/src/McpTools.ts)
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)

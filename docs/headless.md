@@ -150,13 +150,14 @@ Or the same columns as JSON, which a program writes without CSV's quoting traps:
 
 You do not always have to write it by hand:
 
-| What you have                        | How it becomes a points list                                                                                                                                                                            |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| BACnet devices on the network        | `init … --devices discover` in step 4 finds them and needs no list. To trim the draft first: `ot-gateway discover --points-list points.csv` (no config needed), delete rows, then step 3 with that list |
-| A BACnet EDE file                    | `import` and `init --points` read it as it is                                                                                                                                                           |
-| A Modbus device with a known profile | one row with `profile` and `point` `*` takes all its registers                                                                                                                                          |
-| A Modbus register you are unsure of  | `ot-gateway probe <host> <register> --json` reads it once and returns a row to copy                                                                                                                     |
-| A PDF, a spreadsheet, anything else  | an AI agent translates it into these columns; step 3 checks its work                                                                                                                                    |
+| What you have                                  | How it becomes a points list                                                                                                                                                                                                                                   |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| BACnet devices on the network                  | `init … --devices discover` in step 4 finds them and needs no list. To trim the draft first: `ot-gateway discover --points-list points.csv` (no config needed), delete rows, then step 3 with that list                                                        |
+| Modbus TCP devices at addresses you don't know | `ot-gateway discover modbus 192.168.1.0/24 --points-list modbus.csv --json` (read-only, rate-limited; `--unit-ids 1-247` behind a Modbus gateway) writes one placeholder row per unit: replace each with the datasheet's registers, then step 3 with that list |
+| A BACnet EDE file                              | `import` and `init --points` read it as it is                                                                                                                                                                                                                  |
+| A Modbus device with a known profile           | one row with `profile` and `point` `*` takes all its registers                                                                                                                                                                                                 |
+| A Modbus register you are unsure of            | `ot-gateway probe <host> <register> --json` reads it once and returns a row to copy                                                                                                                                                                            |
+| A PDF, a spreadsheet, anything else            | an AI agent translates it into these columns; step 3 checks its work                                                                                                                                                                                           |
 
 No list makes a point writable. Writes are set in the config, on purpose.
 
@@ -347,9 +348,25 @@ When a point stays silent it waits for the slowest poll interval plus 30 seconds
 
 A point that publishes only on change and has not changed since the watch began is listed under `onChange`, not under `missing`: it is not a failure, as long as at least one point sent a value. When nothing arrived at all, the watch fails and names those points too, since nothing shows that the gateway works.
 
-What the messages look like (topics, the value payload, the retained `$meta` and health messages) is the [MQTT contract](mqtt-contract.md), with a JSON Schema for each message.
+What the messages look like (topics, the value payload, the retained `$meta` and health messages) is the [MQTT contract](mqtt-contract.md), with a JSON Schema for each message. The CLI prints it, with no config and no broker:
+
+```bash
+ot-gateway contract --json          # {ok, version, url, topics[], schemas}: every topic and each message's JSON Schema
+ot-gateway contract value --json    # one message's JSON Schema alone, to hand to a validator
+ot-gateway watch --check --seconds 60 --json
+```
+
+`watch --check` checks every message under the site and building against the contract, with the same strict check as the gateway's own tests, and prints only the ones off it, each with `contract: {message, issues[]}` next to the message. After the usual `{"event":"summary"}` line (when the config has points) comes `{"event":"contract","version":"1.0","checked":120,"off":0}`, and then, when one was off, a failure with `code: off-contract`. A check that saw no message under the site and building fails with `code: nothing-checked`, since that proves nothing. With `--until-values` as well, missing values keep the code `values-missing` and the `error` adds the messages off the contract. Use it when a consumer chokes on something: it tells whether the gateway or another publisher sent it.
 
 ## When something fails
+
+Not sure where it breaks? `doctor` runs every check of the path at once and puts the failures first in `next`:
+
+```bash
+ot-gateway doctor --json   # config, broker, gateway, each device, BACnet/IP port, disk, clock
+```
+
+Each of its `findings` has a `check`, a `status` (`ok`, `warn`, `fail` or `skip`) and, when it is not `ok`, the same `code` and `hint` the command behind that check reports, and `next`, the command to look closer. It exits with 1 when one fails. With the gateway running, the devices are its own view of them; without it, each device is asked once, read-only.
 
 `watch` says that values are missing. These three say why, each from the running gateway:
 
@@ -410,6 +427,8 @@ flowchart TD
 | `code: password-unset` (`run` logs `MQTT_PASSWORD is not set`) | `broker`, `watch`, `run`   | the config names a password variable that has no value                | put it in `ot-gateway.env`                                            |
 | `code: broker-…`, or `ok: false` with `warnings`               | `broker`, `watch`          | the broker cannot be reached, refuses, or does not return the message | step 6's table                                                        |
 | `code: values-missing`                                         | `watch --until-values`     | some points sent nothing in time                                      | `ot-gateway status --json`                                            |
+| `code: off-contract`                                           | `watch --check`            | a message under the site and building is not what the contract says   | its `contract.issues[]`; `ot-gateway contract <message>`              |
+| `code: nothing-checked`                                        | `watch --check`            | no message under the site and building arrived to check               | `ot-gateway status --json`                                            |
 | `code: gateway-unreachable`                                    | `status`, `events`, `logs` | no gateway answers on the status port                                 | start it; `docker compose logs gateway` when it does not stay up      |
 | a device `failing`                                             | `status`                   | the device does not answer as configured                              | follow its `hints.checks`, then [Troubleshooting](troubleshooting.md) |
 
@@ -477,6 +496,16 @@ In Claude Code, the `/setup` skill does the same with more care for the edges ([
 For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start with `npx ot-gateway --help`.
 ```
 
+### As MCP tools
+
+An agent that does not run a shell (a desktop chat app, an IDE assistant) reaches the same commands through `ot-gateway mcp`, a Model Context Protocol server on stdio. Start it in the gateway's folder, so `ot-gateway.json` is found as it is for the CLI:
+
+```bash
+claude mcp add ot-gateway -- npx ot-gateway mcp   # Claude Code; other clients take the same command
+```
+
+Each tool is a command with `--json`, and its result is that command's JSON (as `structuredContent` too when it is one object), `isError` when the command exits with 1 or 2: `check`, `doctor`, `broker`, `status`, `events`, `logs`, `history`, `messages`, `read`, `write`, `watch` (for `seconds`, 1 to 300), `discover`, `discover_modbus` (its rows come back in the JSON; no file is written), `probe`, `import` (`dryRun` unless told otherwise), `points_schema`, `contract`, `profiles_list`, `profiles_show`, `explain`, `support` (the report as text, no file written), `up`, `restart`, `down` and `upgrade` (`check` only compares). Their arguments are the command's flags in camelCase (`failOnAlarm`, `untilValues`, `unitId`); `tools/list` gives each one's JSON Schema. An argument the tool does not know, or one that starts with `-`, is refused with `code: "usage"`, so no argument becomes a flag. `up`, `restart`, `down` and `upgrade` run Docker Compose on the gateway's machine (Linux), as the commands do. `write` is the one tool that changes a device, and it goes through the running gateway's command guard as `ot-gateway write` does: writable points only, within their limits, always logged. Commands that ask questions or run until stopped (`init`, `run`, `demo`, `simulate`) are not tools; `publish` is not one either. A call runs at most 15 minutes, its wait for a turn included, four at a time (`import`, `write`, `up`, `restart`, `down` and `upgrade` one at a time), and a call the client cancels is stopped.
+
 ## Reference: what `--json` returns
 
 Every result that can fail has `ok`. `status`, `events`, `logs`, `history` and `messages` give each time twice: as Unix milliseconds and, under the same key with `Local` added, in the machine's local time with its UTC offset. A `watch` line's `at` is an ISO time in UTC.
@@ -489,6 +518,8 @@ Every result that can fail has `ok`. `status`, `events`, `logs`, `history` and `
 | `check --json`                  | `site`, `building`, `broker`, `devices[]`, `warnings[]`, `next[]`                                        | `code`, `issues[]`: `path`, `message`                           |
 | `broker --json`                 | `protocolVersion`, `maximumQoS`, `retainAvailable`, `roundTripMs`                                        | `code`, `hint`; or the report with `ok: false` and `warnings[]` |
 | `watch --json`                  | one line per message: `at`, `topic`, `retained`, `payload`; then `{"event":"summary"}`                   | `code`, `missing[]`, `hint`                                     |
+| `watch --check --json`          | one line per message off the contract, with `contract`; then the summary and `{"event":"contract"}`      | `code: off-contract` or `nothing-checked`, `hint`               |
+| `contract --json`               | `version`, `url`, `topics[]`, `schemas` (one JSON Schema per message)                                    |                                                                 |
 | `status --json`                 | `broker`, `buffer`, `host`, `devices[]` with `points[]`                                                  | the same, with `problem` and per device `hints`                 |
 | `events --json`                 | `events[]`: `at`, `type`, and what happened                                                              | `code`, `hint`                                                  |
 | `logs --json`                   | `lines[]`: the recent log lines, secrets redacted                                                        | `code`, `hint`                                                  |

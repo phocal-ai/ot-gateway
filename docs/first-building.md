@@ -27,17 +27,21 @@ Also note the broker your values should go to: its URL (`mqtt://` or `mqtts://` 
 In a checkout (`pnpm ot-gateway …`) or anywhere the gateway is installed (`ot-gateway …`):
 
 ```bash
-pnpm ot-gateway init .
+pnpm ot-gateway init
 ```
 
-`.` writes into this folder; `init my-building` makes a folder for it, and `init` alone asks where.
+With no `ot-gateway.json` in the folder, a bare `ot-gateway` in a terminal starts `init` too. It writes into this folder when the folder is empty and asks for a folder name otherwise; `init .` and `init my-building` say where.
 
-It asks for the site and building (the first two parts of every topic, such as `site-1` and `building-a`), the broker, and where your devices come from:
+It goes as the work goes, and Enter takes the default every time:
 
-- **Find BACnet devices now:** the gateway asks the network who is there and drafts every device with its points, names and units. Nothing is written to a device, and no point is made writable. `ot-gateway discover --points-list points.csv` writes the same as a points list instead: delete the rows you don't need and import it, as in step 3. Its rows say `publish` `sample`, every read; change that column to `change` for a point that should send only changes, or to `aggregate` with `publish_s` (`900` for 15 minutes). With `--append` it adds to a list that exists already, say one with your Modbus rows: the list keeps its rows, columns and separator, gets the columns it lacks, and rows it has already are skipped, so one list holds every device. An EDE file from the BACnet engineering tool (the semicolon CSV most of them export) imports as it is, and `ot-gateway points from-ede building.csv > points.csv` turns it into a list to trim first; objects that are not points (schedules, trend logs) are left out. [`examples/building.ede.csv`](../examples/building.ede.csv) is one.
-- **A simulated device:** to see your broker receive values before any real device is connected.
-- **From a points list:** a CSV of your devices and points (step 3 shows the columns). Excel's "CSV" export works, with commas or semicolons. A script or an agent can write the same columns as JSON instead, one object per point: `[{"device": "Main meter", "point": "Active power", "host": "192.168.1.50", "register": 100, "type": "float32"}]` (`ot-gateway points schema --json-schema` prints its JSON Schema).
-- **None yet:** to add devices in the next step.
+1. **The broker.** `mqtt://localhost:1883` is suggested, and init says whether something answers there. Then a username, if the broker needs one.
+2. **The devices.** init asks the network who is there right away (BACnet Who-Is) and lists every point it found, all ticked: untick what the gateway should not read. With more than 25 points it reads them all and says so; leave out the ones you don't need later, on the status page or in `ot-gateway.json`. Untick them all to get to the other ways below. Then how often to read (5 seconds; Enter keeps it), for points the device does not send on change itself. Then it lists the points that commands could write (outputs and values, setpoints first), none ticked. For each one you tick it asks the lowest and highest value a command may set (15 to 30 is suggested for °C). Nothing is written to a device during setup.
+3. **When nobody answers** (or discovery cannot run, say another BACnet program holds UDP 47808), init offers the other ways: ask one device by its address (`ip` or `ip:port`, for a device on another subnet or port), search again, a scan for Modbus TCP devices on a range (the LAN's /24 by default, as `discover modbus` does), a points list (Modbus, or BACnet from an EDE file; step 3 shows the columns), a simulated device to see values flow first, or none yet, to add devices on the status page.
+4. **Site and building**, the first two parts of every topic. The folder's name is suggested for the site.
+
+Then it writes the folder, shows what it found in a few lines, and asks whether to start the gateway now in this terminal (Ctrl-C stops it). Scripts and agents get the whole account instead, every file and the next commands, and with `--json` as data ([Headless setup](headless.md)).
+
+`ot-gateway discover --points-list points.csv` writes what discovery finds as a points list instead: delete the rows you don't need and import it, as in step 3. Its rows say `publish` `sample`, every read; change that column to `change` for a point that should send only changes, or to `aggregate` with `publish_s` (`900` for 15 minutes). With `--append` it adds to a list that exists already, say one with your Modbus rows: the list keeps its rows, columns and separator, gets the columns it lacks, and rows it has already are skipped, so one list holds every device. An EDE file from the BACnet engineering tool (the semicolon CSV most of them export) imports as it is, and `ot-gateway points from-ede building.csv > points.csv` turns it into a list to trim first; objects that are not points (schedules, trend logs) are left out. [`examples/building.ede.csv`](../examples/building.ede.csv) is one. A points list is CSV (Excel's "CSV" export works, with commas or semicolons) or the same columns as JSON, one object per point: `[{"device": "Main meter", "point": "Active power", "host": "192.168.1.50", "register": 100, "type": "float32"}]` (`ot-gateway points schema --json-schema` prints its JSON Schema).
 
 It writes `ot-gateway.json` and checks it. The password is never in that file: put it in `ot-gateway.env` as `MQTT_PASSWORD=…` (or the name you chose).
 
@@ -67,6 +71,8 @@ Read it once and see every way it can be read:
 pnpm ot-gateway probe 192.168.1.50 100                # holding registers 100 and 101 of unit 1
 pnpm ot-gateway probe 192.168.1.50 0 --table input --count 4 --unit-id 2   # 64-bit types too, another unit
 ```
+
+Don't know the devices' addresses yet? `ot-gateway discover modbus 192.168.1.0/24` asks every address of the range on port 502 for one register (read-only, at most 20 requests a second, `--rate` to change it) and lists the Modbus TCP devices and unit ids that answer. A Modbus gateway in front of RS-485 meters is named as one: ask its meters with `--unit-ids 1-247`. `--points-list modbus.csv` writes one row per unit, with a placeholder point (register 0 as `uint16`) to replace with the data sheet's registers; `--append` adds to a list you have. `--json` gives each unit with its `row`, the addresses that answered without a unit, and `next`.
 
 It prints the registers in hex and decimal, then each type (`int16` to `float64`) in each byte order with its value, as a point with those settings would publish it before `scale`. NaN, infinite and implausible values (a float of `1.4e-41` or `2.6e+20`, the mark of a wrong word order) are marked, and the likeliest reading is pointed out, with a points list row to copy. Pick the line whose value matches the data sheet or the device's display, and write its `type` and `byte_order`. `probe` only reads, one request, and never writes; the address is 0-based as the list's `register`, and a refusal names the Modbus exception (`illegal data address` for a register the device does not have). `--json` gives the same for scripts and agents. Some devices take one Modbus TCP connection at a time: while a gateway polls one, `probe` may be refused or time out, so probe before adding the device, or stop the gateway for a moment.
 
@@ -109,10 +115,11 @@ With a coding agent, `/setup` in Claude Code (or the prompt in [Set it up with A
 
 ```bash
 pnpm ot-gateway check     # every mistake, with where it is; nothing connects yet
+pnpm ot-gateway read      # every point read once, to see the devices answer; nothing is published
 pnpm ot-gateway run       # start the gateway
 ```
 
-`check` lists every mistake with its place in the file (`["devices"][0]["points"][1]["dataType"]`) and what it expected there. `run` starts polling and sending; stop it with Ctrl-C.
+`check` lists every mistake with its place in the file (`["devices"][0]["points"][1]["dataType"]`) and what it expected there. `read` asks each device once through the gateway's own drivers and prints a line per point, its value and unit or why it failed, then exits (with 1 when a point failed): `read <device>` or `read <device>/<point>` for fewer, `--json` for scripts. It needs no broker, and it only reads. `run` starts polling and sending; stop it with Ctrl-C.
 
 ## 5. See your values arrive
 

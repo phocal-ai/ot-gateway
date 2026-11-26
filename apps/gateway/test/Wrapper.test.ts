@@ -5,9 +5,9 @@
  */
 import { describe, expect, it } from "@effect/vitest"
 import { spawnSync } from "node:child_process"
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { afterEach } from "vitest"
 
@@ -45,6 +45,7 @@ const fakeDocker = [
   "esac",
   ""
 ].join("\n")
+const linux = "#!/bin/sh\necho Linux\n"
 const fakeSleep = ["#!/bin/sh", 'echo "sleep $*" >> "$FAKE_DIR/log"', ""].join("\n")
 
 const directories: Array<string> = []
@@ -52,16 +53,24 @@ afterEach(() => {
   for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true })
 })
 
-const runWrapper = (args: ReadonlyArray<string>, env: Record<string, string>) => {
+const runWrapper = (
+  args: ReadonlyArray<string>,
+  env: Record<string, string>,
+  executables: Readonly<Record<string, string>> = {}
+) => {
   const directory = mkdtempSync(join(tmpdir(), "ot-gateway-wrapper-"))
   directories.push(directory)
-  for (const [name, body] of [
+  const files: ReadonlyArray<readonly [string, string]> = [
     ["docker", fakeDocker],
-    ["sleep", fakeSleep]
-  ] as const) {
+    ["sleep", fakeSleep],
+    ...Object.entries(executables)
+  ]
+  for (const [name, body] of files) {
+    mkdirSync(dirname(join(directory, name)), { recursive: true })
     writeFileSync(join(directory, name), body)
     chmodSync(join(directory, name), 0o755)
   }
+  if (env["DOCKER_HOST"] === "fake") writeFileSync(join(directory, "docker.sock"), "")
   const result = spawnSync("sh", [wrapper, ...args], {
     cwd: directory,
     encoding: "utf8",
@@ -71,7 +80,9 @@ const runWrapper = (args: ReadonlyArray<string>, env: Record<string, string>) =>
       HOME: directory,
       OT_GATEWAY_TAG: "v9.9.9",
       FAKE_DIR: directory,
-      ...env
+      ...env,
+      // A file stands in for Docker's socket.
+      ...(env["DOCKER_HOST"] === "fake" ? { DOCKER_HOST: `unix://${join(directory, "docker.sock")}` } : {})
     }
   })
   const log = readFileSync(join(directory, "log"), "utf8").trim().split("\n")
@@ -83,6 +94,46 @@ const runWrapper = (args: ReadonlyArray<string>, env: Record<string, string>) =>
 const runCall = (log: ReadonlyArray<string>) => log.find((line) => line.startsWith("docker run "))
 
 describe("packaging/ot-gateway", () => {
+  it("gives up, down, restart and upgrade this machine's docker, Compose and socket, and the folder at its own path", () => {
+    const compose = ".docker/cli-plugins/docker-compose"
+    for (const command of ["up", "down", "restart", "upgrade"]) {
+      const result = runWrapper(
+        [command],
+        { FAKE_IMAGE_PRESENT: "1", DOCKER_HOST: "fake" },
+        { [compose]: "#!/bin/sh\n", uname: linux }
+      )
+      expect(result.status).toBe(0)
+      const call = runCall(result.log) ?? ""
+      const folder = /-v (\S+):\1 -w \1 /.exec(call)?.[1]
+      expect(folder).toBeDefined()
+      expect(call).toContain(`/docker:/usr/local/bin/docker:ro -v `)
+      expect(call).toContain(`/${compose}:/usr/local/lib/docker/cli-plugins/docker-compose:ro -v `)
+      expect(call).toContain(`/docker.sock:/var/run/docker.sock --group-add `)
+      expect(call).toContain(" -e OT_GATEWAY_TAG ")
+      expect(call).not.toContain("/work")
+      expect(call).toMatch(new RegExp(`${image} ${command}$`))
+    }
+  })
+
+  it("refuses up for a folder it cannot mount", () => {
+    const result = runWrapper(
+      ["up", "/srv/site-1"],
+      { FAKE_IMAGE_PRESENT: "1", DOCKER_HOST: "fake" },
+      {
+        ".docker/cli-plugins/docker-compose": "#!/bin/sh\n",
+        uname: linux
+      }
+    )
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain("cd to the gateway's folder")
+  })
+
+  it("refuses up on Docker Desktop", () => {
+    const desktop = runWrapper(["up"], { FAKE_IMAGE_PRESENT: "1" }, { uname: "#!/bin/sh\necho Darwin\n" })
+    expect(desktop.status).toBe(1)
+    expect(desktop.stderr).toContain("Docker Desktop cannot reach devices on the LAN")
+  })
+
   it("runs a present image without pulling and without a name", () => {
     const result = runWrapper(["--version"], { FAKE_IMAGE_PRESENT: "1" })
     expect(result.status).toBe(0)
@@ -250,7 +301,7 @@ describe("packaging/ot-gateway", () => {
     expect(runCall(result.log)).toMatch(new RegExp(`-w /work ${pinned} --version$`))
   })
 
-  it.each(["demo", "run", "watch"])("names the %s container after the command", (command) => {
+  it.each(["demo", "run", "watch", "simulate"])("names the %s container after the command", (command) => {
     const result = runWrapper([command, "--seconds", "5"], { FAKE_IMAGE_PRESENT: "1" })
     expect(result.status).toBe(0)
     expect(runCall(result.log)).toMatch(new RegExp(`--name ot-gateway-${command} ${image} ${command} --seconds 5$`))
