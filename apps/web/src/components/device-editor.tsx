@@ -6,7 +6,7 @@
  * over a connection of its own), and Save writes the file and applies it without a restart, as the Gateway and
  * Broker cards do. Remove takes the device out of the file, after a confirmation.
  */
-import type { ConfigIssue, EditStatus, PointTest, ReadTest } from "@ot-gateway/api"
+import type { ConfigIssue, EditStatus, PointsListColumnName, PointTest, ReadTest } from "@ot-gateway/api"
 import { Effect } from "effect"
 import { Fragment, useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
@@ -115,14 +115,45 @@ interface FieldProps {
   readonly numeric?: boolean
   readonly list?: string
   readonly disabled: boolean
+  /** The points list column that holds this field, shown next to its label. */
+  readonly column?: PointsListColumnName | undefined
 }
+
+/** The points list column behind a field, so the form and a points list read as one thing. */
+const Column = ({ name }: { readonly name: PointsListColumnName | undefined }) =>
+  name === undefined ? null : (
+    <code
+      className="font-mono text-xs font-normal text-muted-foreground"
+      title={`In a points list: the ${name} column`}
+    >
+      {name}
+    </code>
+  )
+
+/** A field's label, with its points list column on the right. */
+const FieldLabel = ({
+  id,
+  label,
+  optional,
+  column
+}: {
+  readonly id: string
+  readonly label: string
+  readonly optional?: boolean | undefined
+  readonly column?: PointsListColumnName | undefined
+}) => (
+  <div className="flex items-baseline justify-between gap-2">
+    <label className={labelClass} htmlFor={id}>
+      {label}
+      {optional === true ? <span className="font-normal text-muted-foreground"> (optional)</span> : null}
+    </label>
+    <Column name={column} />
+  </div>
+)
 
 const TextField = (props: FieldProps) => (
   <div className={fieldClass}>
-    <label className={labelClass} htmlFor={props.id}>
-      {props.label}
-      {props.optional === true ? <span className="font-normal text-muted-foreground"> (optional)</span> : null}
-    </label>
+    <FieldLabel id={props.id} label={props.label} optional={props.optional} column={props.column} />
     <Input
       id={props.id}
       value={props.value}
@@ -147,7 +178,8 @@ const SelectField = ({
   onChange,
   choices,
   issues,
-  disabled
+  disabled,
+  column
 }: {
   readonly id: string
   readonly label: string
@@ -156,11 +188,10 @@ const SelectField = ({
   readonly choices: ReadonlyArray<{ readonly value: string; readonly label: string }>
   readonly issues?: ReadonlyArray<string> | undefined
   readonly disabled: boolean
+  readonly column?: PointsListColumnName | undefined
 }) => (
   <div className={fieldClass}>
-    <label className={labelClass} htmlFor={id}>
-      {label}
-    </label>
+    <FieldLabel id={id} label={label} column={column} />
     <NativeSelect
       id={id}
       value={value}
@@ -282,6 +313,7 @@ const PointFields = ({
     <div className="grid gap-3 sm:grid-cols-2">
       <TextField
         id={id("name")}
+        column="name"
         label="Name"
         value={point.name}
         placeholder={position === 0 ? "Active power" : undefined}
@@ -291,6 +323,7 @@ const PointFields = ({
       />
       <TextField
         id={id("id")}
+        column="point"
         label="Id"
         value={point.id}
         hint="The last part of its topic."
@@ -302,6 +335,7 @@ const PointFields = ({
         <>
           <SelectField
             id={id("table")}
+            column="table"
             label="Table"
             value={point.table}
             choices={tables}
@@ -311,6 +345,7 @@ const PointFields = ({
           />
           <TextField
             id={id("register")}
+            column="register"
             label="Address"
             value={point.register}
             numeric
@@ -322,6 +357,7 @@ const PointFields = ({
           {bits ? null : (
             <SelectField
               id={id("dataType")}
+              column="type"
               label="Data type"
               value={point.dataType}
               choices={dataTypes.filter((type) => type !== "bool").map((type) => ({ value: type, label: type }))}
@@ -335,6 +371,7 @@ const PointFields = ({
         <>
           <SelectField
             id={id("objectType")}
+            column="object_type"
             label="Object type"
             value={point.objectType}
             choices={objectTypes.map((type) => ({ value: type, label: type }))}
@@ -344,6 +381,7 @@ const PointFields = ({
           />
           <TextField
             id={id("instance")}
+            column="object_instance"
             label="Instance"
             value={point.instance}
             numeric
@@ -357,6 +395,7 @@ const PointFields = ({
       {!takesUnit(protocol, point) && issues["unit"] === undefined ? null : (
         <TextField
           id={id("unit")}
+          column="unit"
           label="Unit"
           value={point.unit}
           optional
@@ -371,6 +410,7 @@ const PointFields = ({
       {isBoolean(protocol, point) ? (
         <SelectField
           id={id("alarmWhen")}
+          column="alarm"
           label="Alarm"
           value={point.alarmWhen}
           choices={alarmChoices}
@@ -388,6 +428,7 @@ const PointFields = ({
             <>
               <TextField
                 id={id("scale")}
+                column="scale"
                 label="Multiply by"
                 value={point.scale}
                 optional
@@ -400,6 +441,7 @@ const PointFields = ({
               />
               <TextField
                 id={id("offset")}
+                column="offset"
                 label="Then add"
                 value={point.offset}
                 optional
@@ -411,6 +453,7 @@ const PointFields = ({
               {wide ? (
                 <SelectField
                   id={id("byteOrder")}
+                  column="byte_order"
                   label="Word order"
                   value={point.byteOrder}
                   choices={byteOrders}
@@ -423,6 +466,7 @@ const PointFields = ({
           ) : null}
           <SelectField
             id={id("publish")}
+            column="publish"
             label="Send"
             value={point.publish}
             choices={publishModes}
@@ -433,6 +477,7 @@ const PointFields = ({
           {point.publish === "change" ? (
             <TextField
               id={id("deadband")}
+              column="deadband"
               label="Smallest change"
               value={point.deadband}
               optional
@@ -445,6 +490,7 @@ const PointFields = ({
           ) : point.publish === "sample" || point.publish === "aggregate" ? (
             <TextField
               id={id("publishSeconds")}
+              column="publish_s"
               label="Every (seconds)"
               value={point.publishSeconds}
               optional={point.publish === "sample"}
@@ -809,13 +855,15 @@ export const DeviceEditor = ({
             ? `New ${protocolName[draft.protocol] ?? draft.protocol} device`
             : `Editing ${deviceId ?? draft.id}`}
         </h3>
+        <p className="text-xs text-muted-foreground">Grey on the right of a field: its column in a points list.</p>
         <div className="grid gap-3 sm:grid-cols-2">
           <TextField
             id={deviceField("id")}
+            column="device"
             label="Id"
             value={draft.id}
             placeholder={draft.protocol === "modbus-tcp" ? "meter-1" : "ahu-1"}
-            hint="Lower-case letters, digits and dashes; part of every topic."
+            hint="Lower-case letters, digits, - and _; part of every topic."
             issues={byField.device["id"]}
             onChange={set("id")}
             disabled={busy}
@@ -824,6 +872,7 @@ export const DeviceEditor = ({
             <>
               <TextField
                 id={deviceField("host")}
+                column="host"
                 label="Host"
                 value={draft.host}
                 placeholder="192.168.1.30"
@@ -833,6 +882,7 @@ export const DeviceEditor = ({
               />
               <TextField
                 id={deviceField("port")}
+                column="port"
                 label="Port"
                 value={draft.port}
                 optional
@@ -844,6 +894,7 @@ export const DeviceEditor = ({
               />
               <TextField
                 id={deviceField("unitId")}
+                column="unit_id"
                 label="Unit id"
                 value={draft.unitId}
                 optional
@@ -859,6 +910,7 @@ export const DeviceEditor = ({
             <>
               <TextField
                 id={deviceField("deviceInstance")}
+                column="device_instance"
                 label="Device instance"
                 value={draft.deviceInstance}
                 numeric
@@ -869,6 +921,7 @@ export const DeviceEditor = ({
               />
               <TextField
                 id={deviceField("address")}
+                column="address"
                 label="Address"
                 value={draft.address}
                 optional
@@ -882,6 +935,7 @@ export const DeviceEditor = ({
           )}
           <TextField
             id={deviceField("interval")}
+            column="interval_s"
             label="Read every (seconds)"
             value={draft.intervalSeconds}
             optional

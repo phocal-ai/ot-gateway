@@ -5,6 +5,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, FileSystem } from "effect"
+import { pointsListColumnNames } from "@ot-gateway/api"
 import { fileURLToPath } from "node:url"
 import { exampleConfigPath } from "../src/Demo.ts"
 import { importPointsList } from "../src/Import.ts"
@@ -101,6 +102,12 @@ const columnsOf = (scopes: ReadonlyArray<string>) =>
   pointsListColumns.filter((column) => scopes.includes(column.scope)).map((column) => column.name)
 
 const exampleRows = (protocol?: "modbus" | "bacnet") => parseDelimited(pointsListTemplate(protocol)).length - 1
+
+describe("the column names the status page shows", () => {
+  it("are the format's columns, in its order", () => {
+    expect(pointsListColumns.map((column) => column.name)).toEqual([...pointsListColumnNames])
+  })
+})
 
 describe("a template for one protocol", () => {
   it("has the columns of every row and its own, in the format's order, and none of the other protocol's", () => {

@@ -253,6 +253,37 @@ const ImportUpload = Schema.Struct({
   renames: Schema.optionalKey(Schema.Array(ImportRename).pipe(Schema.check(Schema.isMaxLength(MAX_IMPORT_RENAMES))))
 })
 
+/**
+ * The points list's column names, in the order a template lists them. The gateway's format (`points schema`) has
+ * exactly these (a test checks it), so the status page can name the column behind each of its fields.
+ */
+export const pointsListColumnNames = [
+  "device",
+  "point",
+  "name",
+  "unit",
+  "interval_s",
+  "publish",
+  "publish_s",
+  "deadband",
+  "alarm",
+  "scale",
+  "offset",
+  "host",
+  "port",
+  "unit_id",
+  "profile",
+  "register",
+  "table",
+  "type",
+  "byte_order",
+  "device_instance",
+  "address",
+  "object_type",
+  "object_instance"
+] as const
+export type PointsListColumnName = (typeof pointsListColumnNames)[number]
+
 /** One column of the points list, as `ot-gateway points schema` describes it. */
 export const PointsListColumn = Schema.Struct({
   name: Schema.String,
