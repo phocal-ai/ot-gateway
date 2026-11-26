@@ -121,7 +121,12 @@ describe("failures of one-shot commands", () => {
   it("leave --json as it was: the failure as JSON on stdout, nothing on stderr", () => {
     const result = runMain(["check", missing, "--json"])
     expect(result.status).toBe(1)
-    expect(JSON.parse(result.stdout)).toEqual({ ok: false, path: missing, error: expect.stringContaining(message) })
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      path: missing,
+      error: expect.stringContaining(message),
+      code: "no-config"
+    })
     expect(result.stderr).toBe("")
   })
 

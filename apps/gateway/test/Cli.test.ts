@@ -5,7 +5,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig, publicTestBrokers } from "@ot-gateway/core"
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Schema } from "effect"
 import { TestConsole } from "effect/testing"
 import type { NetworkInterfaceInfo } from "node:os"
 import type { BrokerReport } from "../src/Broker.ts"
@@ -149,6 +149,41 @@ describe("check", () => {
       expect(describeConfig(polled)).toContain("3 point(s), every 5000 ms")
       expect(configSummary(polled).devices[0]?.covPoints).toEqual([])
     })
+  )
+})
+
+const CheckNext = Schema.fromJsonString(
+  Schema.Struct({ next: Schema.Array(Schema.Struct({ command: Schema.String })) })
+)
+const nextCommands = (line: unknown) =>
+  Schema.decodeUnknownSync(CheckNext)(String(line)).next.map((step) => step.command)
+const ConfigObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+
+describe("check --json", () => {
+  it.effect("says what to run next, from the files next to the config, and where the status page is", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/ot-gateway.json`
+      const example = yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(exampleConfigPath))
+      yield* fs.writeFileString(path, JSON.stringify({ ...example, devices: [] }))
+      yield* runCli(["check", path, "--json"])
+      const [bare] = yield* TestConsole.logLines
+      expect(JSON.parse(String(bare))).toMatchObject({ url: "http://127.0.0.1:8080" })
+      const alone = nextCommands(bare)
+      expect(alone.some((command) => command.includes(" check "))).toBe(false)
+      expect(alone.some((command) => command.includes("points template"))).toBe(true)
+      expect(alone.some((command) => command.startsWith("docker compose"))).toBe(false)
+
+      // A points.csv there is the user's list, never overwritten by the template; compose.yaml means Compose.
+      yield* fs.writeFileString(`${directory}/compose.yaml`, "services: {}\n")
+      yield* fs.writeFileString(`${directory}/points.csv`, "")
+      yield* runCli(["check", path, "--json"])
+      const [, withFiles] = yield* TestConsole.logLines
+      const steps = nextCommands(withFiles)
+      expect(steps.some((command) => command.startsWith(`docker compose -f ${directory}/compose.yaml`))).toBe(true)
+      expect(steps.some((command) => command.includes("points template"))).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })
 

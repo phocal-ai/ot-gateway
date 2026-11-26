@@ -11,12 +11,24 @@
 import { type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Config, Effect, FileSystem, Option, Schema } from "effect"
 import { dirname, isAbsolute, join, resolve } from "node:path"
+import { configIssues } from "./ConfigStore.ts"
 import { envFileName, loadEnvFile } from "./EnvFile.ts"
 
-/** The config file is missing or does not describe a valid gateway. `message` says what to change. */
+/**
+ * One mistake in a config: where (`mqtt.url`, `devices.0.points.2.dataType`; none for the file as a whole) and what
+ * is wrong there. A points list's mistakes have a line and a column instead (PointsList.ts).
+ */
+export const ConfigFileIssue = Schema.Struct({ path: Schema.optionalKey(Schema.String), message: Schema.String })
+
+/**
+ * The config file is missing (`code` `no-config`) or does not describe a valid gateway (`invalid-config`, with
+ * every mistake in `issues`). `message` says what to change.
+ */
 export class ConfigFileError extends Schema.TaggedError<ConfigFileError>()("ConfigFileError", {
   path: Schema.String,
-  message: Schema.String
+  message: Schema.String,
+  code: Schema.optionalKey(Schema.Literals(["no-config", "invalid-config"])),
+  issues: Schema.optionalKey(Schema.Array(ConfigFileIssue))
 }) {}
 
 /**
@@ -49,6 +61,7 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
       Effect.fail(
         new ConfigFileError({
           path,
+          code: "no-config",
           message: `no config at ${path}. To see the gateway work first, run ot-gateway demo. To write your own, run ot-gateway init. ot-gateway --help lists every command.`
         })
       )
@@ -56,7 +69,19 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
   )
   const config = yield* parseConfig(text).pipe(
     Effect.catchTag("SchemaError", (error) =>
-      Effect.fail(new ConfigFileError({ path, message: `${path} is not a valid config:\n${error.message}` }))
+      Effect.fail(
+        new ConfigFileError({
+          path,
+          code: "invalid-config",
+          message: `${path} is not a valid config:\n${error.message}`,
+          // A mistake in the file as a whole (not JSON at all) has no path.
+          issues: configIssues(error.issue).map((issue) =>
+            issue.path.length === 0
+              ? { message: issue.message }
+              : { path: issue.path.join("."), message: issue.message }
+          )
+        })
+      )
     )
   )
   const folder = dirname(resolve(path))

@@ -29,6 +29,7 @@
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, CliOutput, Command, Flag } from "effect/cli"
+import { dirname, join } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
@@ -231,12 +232,50 @@ const run = Command.make("run", { config: configPath }, ({ config }) =>
   Command.withExamples([{ command: "ot-gateway run /etc/ot-gateway/gateway.json", description: "Run a config" }])
 )
 
-const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ config, json }) =>
-  loadConfig(config).pipe(
-    Effect.flatMap((decoded) => (json ? printJson(configSummary(decoded)) : Console.log(describeConfig(decoded)))),
-    jsonFailure(json, { path: config })
+/**
+ * What to run after a valid `check --json`: init's next steps for the config's folder (the broker, the points,
+ * starting it, the status page), without the check itself. Only in the JSON: the text stays what it was, as
+ * install.sh and the image validate a staged config with it.
+ */
+const checkNext = Effect.fn("checkNext")(function* (path: string, config: GatewayConfig) {
+  const fs = yield* FileSystem.FileSystem
+  const folder = dirname(path)
+  const present = yield* Effect.forEach(["compose.yaml", "ot-gateway.env", "points.csv"], (file) =>
+    fs.exists(join(folder, file)).pipe(
+      Effect.map((exists) => (exists ? [join(folder, file)] : [])),
+      // Not knowing leaves the file out of the advice (run rather than Compose), which still works.
+      Effect.catchTag("PlatformError", (error) =>
+        Effect.as(Effect.logDebug(`check: could not look for ${file}`, error.message), [])
+      )
+    )
   )
-).pipe(Command.withDescription("Validate a config without connecting to anything; lists every mistake with its path"))
+  const kept = present.flat().filter((file) => !file.endsWith("points.csv"))
+  const hasList = present.flat().some((file) => file.endsWith("points.csv"))
+  const command = yield* invocation
+  const context = { ssh: sshSession(yield* sshEnvironment), platform: process.platform, cwd: process.cwd(), command }
+  const { next, url, page } = initNext(path, config, { written: [], kept }, context)
+  // A points.csv there is the user's list: never suggest writing the template over it.
+  return {
+    next: next.filter(
+      (step) => !step.command.startsWith(`${command} check`) && !(hasList && step.command.includes("points template"))
+    ),
+    url,
+    page
+  }
+})
+
+const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const decoded = yield* loadConfig(config)
+    if (!json) return yield* Console.log(describeConfig(decoded))
+    const { next, url, page } = yield* checkNext(config, decoded)
+    yield* printJson({ ...configSummary(decoded), next, url, page })
+  }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "Validate a config without connecting to anything; lists every mistake with its path (--json: issues [{path, message}], and next, what to run after it)"
+  )
+)
 
 /** What `discover --points-list` prints on stdout: with --json its outcome; without, stderr has said it already. */
 export const pointsListOutcome = (json: boolean) => (written: PointsListWritten) =>
