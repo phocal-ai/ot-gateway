@@ -5,6 +5,7 @@
  *   ot-gateway init [config]        answer a few questions, get a config (config defaults to ot-gateway.json)
  *   ot-gateway run [config]         run the gateway (config defaults to ot-gateway.json)
  *   ot-gateway check [config]       validate a config without connecting to anything
+ *   ot-gateway doctor [config]      every check in order (config, broker, gateway, devices, port, disk, clock), one list
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
  *   ot-gateway contract [message]   the MQTT contract: its topics and payloads (--json: the JSON Schemas)
@@ -35,6 +36,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
+import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
@@ -1437,6 +1439,24 @@ const simulateBacnetCommand = Command.make(
   ])
 )
 
+const doctorCommand = Command.make("doctor", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* runDoctor(config, { cli: yield* invocation })
+    // A terminal gets one line per check and the one command to run; a pipe or a log the hint for each problem too.
+    yield* json ? printJson(report) : Console.log(formatDoctor(report, { brief: process.stdout.isTTY }))
+    const problems = doctorProblems(report)
+    if (problems !== undefined) return yield* problems
+  })
+).pipe(
+  Command.withDescription(
+    "Run every check in order: the config, the broker (a round trip), the running gateway, each device (read-only: its first point, or a Who-Is for its instance, when the gateway does not run), the BACnet/IP port, the disk and the clock. One line per finding and the command to run next; --json: findings [{check, status, subject, message, code, hint, next}]. Exits with 1 when one fails"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway doctor", description: "Check ot-gateway.json in this folder and everything it names" },
+    { command: "ot-gateway doctor site-1/ot-gateway.json --json", description: "Another config, as JSON" }
+  ])
+)
+
 const simulate = Command.make("simulate").pipe(
   Command.withDescription("Simulated devices on the network, to try the gateway against without a building"),
   Command.withSubcommands([simulateBacnetCommand])
@@ -1470,6 +1490,7 @@ export const cli = Command.make("ot-gateway").pipe(
     init,
     run,
     check,
+    doctorCommand,
     discoverCommand,
     importCommand,
     points,
@@ -1493,6 +1514,7 @@ const subcommands = new Set([
   "init",
   "run",
   "check",
+  "doctor",
   "discover",
   "import",
   "points",

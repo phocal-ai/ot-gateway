@@ -359,6 +359,14 @@ ot-gateway watch --check --seconds 60 --json
 
 ## When something fails
 
+Not sure where it breaks? `doctor` runs every check of the path at once and puts the failures first in `next`:
+
+```bash
+ot-gateway doctor --json   # config, broker, gateway, each device, BACnet/IP port, disk, clock
+```
+
+Each of its `findings` has a `check`, a `status` (`ok`, `warn`, `fail` or `skip`) and, when it is not `ok`, the same `code` and `hint` the command behind that check reports, and `next`, the command to look closer. It exits with 1 when one fails. With the gateway running, the devices are its own view of them; without it, each device is asked once, read-only.
+
 `watch` says that values are missing. These three say why, each from the running gateway:
 
 ```bash
