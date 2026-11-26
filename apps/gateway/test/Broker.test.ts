@@ -153,8 +153,12 @@ describe("ot-gateway broker", () => {
     Effect.gen(function* () {
       const settings = { version: "auto", url: "mqtt://127.0.0.1:1", passwordEnv: "MQTT_PASSWORD" } as const
       const error = yield* Effect.flip(brokerClient(settings, "check"))
-      expect(error._tag).toBe("MqttSettingsError")
-      expect(error.message).toContain("MQTT_PASSWORD is not set")
+      expect(error).toMatchObject({
+        _tag: "BrokerCommandError",
+        code: "password-unset",
+        message: expect.stringContaining("MQTT_PASSWORD is not set"),
+        hint: expect.stringContaining("ot-gateway.env next to the config (MQTT_PASSWORD=...)")
+      })
       expect(error.message).toContain("ot-gateway.env (MQTT_PASSWORD=...)")
     }).pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))))
   )

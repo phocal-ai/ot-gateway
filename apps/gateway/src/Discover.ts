@@ -35,6 +35,7 @@ import {
   objectTypeNumber,
   parseDeviceAddress
 } from "@ot-gateway/bacnet"
+import { parseConfig } from "@ot-gateway/core"
 import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Result, Schema } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
@@ -254,7 +255,17 @@ export interface DiscoverOptions {
   readonly address?: string | undefined
   /** The config discover read: for an error that names the key to change there, and the import command it names. */
   readonly configPath?: string | undefined
+  /** There was no config: the BACnet defaults were used, and the next step is `init --points`, not `import`. */
+  readonly noConfig?: boolean | undefined
 }
+
+/**
+ * What `discover` asks with when there is no config yet: the BACnet/IP defaults (UDP 47808, broadcast to
+ * 255.255.255.255), no devices. Site, building and broker are placeholders it never uses.
+ */
+export const discoveryDefaults = parseConfig(
+  JSON.stringify({ site: "site", building: "building", mqtt: { url: "mqtt://localhost:1883" }, devices: [] })
+)
 
 /**
  * The BACnet/IP endpoint discovery asks from. When another program (a running gateway, the demo, a BACnet tool)
@@ -428,6 +439,12 @@ export interface PointsListWritten {
 export const importCommand = (listPath: string, configPath: string | undefined, cli = "ot-gateway") =>
   `${cli} import ${shellArgument(listPath)}${configPath === undefined ? "" : ` ${shellArgument(configPath)}`}`
 
+/** What to run after a list is written: import it into the config, or with no config yet, start one from it. */
+export const pointsListNext = (path: string, options: PointsListOptions) =>
+  options.noConfig === true
+    ? `${options.command ?? "ot-gateway"} init . --points ${shellArgument(path)}`
+    : importCommand(path, options.configPath, options.command)
+
 /**
  * `text` at `path` in one step: written next to it under a temporary name, then renamed over it, so an
  * interrupted run leaves the old file or the new one, never half of one. The temporary file goes on failure.
@@ -496,7 +513,7 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
       message: `no points to list; ${path} was ${existing === undefined ? "not written" : "left as it was"}.`
     })
   }
-  const next = importCommand(path, options.configPath, options.command)
+  const next = pointsListNext(path, options)
   if (existing === undefined) {
     yield* writeAtomically(path, draftPointsList(fresh))
     yield* Console.error(
