@@ -13,13 +13,15 @@ import { DatagramSocketError, DatagramSocketOpenError } from "effect/socket/Data
 import { TestConsole } from "effect/testing"
 import { isLongRunning, runCli, toCliArgs } from "../src/Cli.ts"
 import {
+  failureFields,
   isUsageError,
   printJson,
   reportFailure,
   ResultConsole,
   stderrConsole,
   stdoutClosed,
-  usageFailure
+  usageFailure,
+  withHint
 } from "../src/Output.ts"
 import { gatewayTeardown } from "../src/Shutdown.ts"
 import { messageRecord } from "../src/Watch.ts"
@@ -101,8 +103,22 @@ describe("--json output", () => {
 })
 
 describe("failures of one-shot commands", () => {
+  it("pass on what an error knows for --json: its code, hint and the address it asked", () => {
+    expect(
+      failureFields({ message: "m", code: "gateway-unreachable", hint: "is it running?", url: "http://127.0.0.1:8080" })
+    ).toEqual({ code: "gateway-unreachable", hint: "is it running?", url: "http://127.0.0.1:8080" })
+  })
+
+  it("put the hint, what to check, below the error, as --json has it in hint", () => {
+    expect(withHint("error: could not connect", "is the broker running?")).toBe(
+      "error: could not connect\n  is the broker running?"
+    )
+    expect(withHint("error: could not connect", undefined)).toBe("error: could not connect")
+  })
+
   const main = fileURLToPath(new URL("../src/main.ts", import.meta.url))
   // The real entry point, as a person or an agent runs it: what reaches stderr, stdout and the exit code.
+  // On Node 22 this also checks that Node's notice about node:sqlite stays off stderr (NodeWarnings.ts).
   const runMain = (args: ReadonlyArray<string>) =>
     spawnSync(process.execPath, [main, ...args], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } })
   const missing = "no-such-config.json"
@@ -120,7 +136,12 @@ describe("failures of one-shot commands", () => {
   it("leave --json as it was: the failure as JSON on stdout, nothing on stderr", () => {
     const result = runMain(["check", missing, "--json"])
     expect(result.status).toBe(1)
-    expect(JSON.parse(result.stdout)).toEqual({ ok: false, path: missing, error: expect.stringContaining(message) })
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: false,
+      path: missing,
+      error: expect.stringContaining(message),
+      code: "no-config"
+    })
     expect(result.stderr).toBe("")
   })
 

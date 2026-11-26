@@ -82,7 +82,7 @@ const systemErrorText = (error: Error): string | undefined => {
  * addresses (`localhost` is `::1` and `127.0.0.1`) fails with an
  * `AggregateError` whose message is empty; its parts carry the detail.
  */
-const causeText = (cause: unknown): string | undefined => {
+export const causeText = (cause: unknown): string | undefined => {
   if (!(cause instanceof Error)) return undefined
   const plain = systemErrorText(cause)
   if (plain !== undefined) return plain

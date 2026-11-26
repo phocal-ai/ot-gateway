@@ -6,7 +6,17 @@ import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
 import { Effect, Exit, Fiber, Scope } from "effect"
 import { TestConsole } from "effect/testing"
 import { publishOnce } from "../src/Broker.ts"
-import { clearHint, formatMessage, messageRecord, staleReason, watch, watchFilter } from "../src/Watch.ts"
+import {
+  clearHint,
+  formatMessage,
+  formatSummary,
+  messageRecord,
+  pointArrivals,
+  staleReason,
+  untilValuesSeconds,
+  watch,
+  watchFilter
+} from "../src/Watch.ts"
 
 const configFor = (port: number) =>
   parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url: `mqtt://127.0.0.1:${port}` }, devices: [] }))
@@ -77,6 +87,138 @@ describe("watch", () => {
   })
 })
 
+/** A meter read every 5 s, one point on change only and one with a heartbeat; a BACnet device asked by COV. */
+const buildingFor = (port: number) =>
+  parseConfig(
+    JSON.stringify({
+      site: "s",
+      building: "b",
+      mqtt: { url: `mqtt://127.0.0.1:${port}` },
+      devices: [
+        {
+          id: "meter",
+          protocol: "simulator",
+          pollIntervalMs: 5000,
+          points: [
+            { id: "power", name: "Power", waveform: "sine", min: 0, max: 10, periodSeconds: 60 },
+            { id: "tripped", name: "Tripped", waveform: "constant", min: 0, max: 0, publish: { mode: "change" } },
+            {
+              id: "energy",
+              name: "Energy",
+              waveform: "ramp",
+              min: 0,
+              max: 10,
+              periodSeconds: 60,
+              publish: { mode: "change", maxSilenceMs: 120_000 }
+            }
+          ]
+        },
+        {
+          id: "heat-pump",
+          protocol: "bacnet-ip",
+          address: "127.0.0.1",
+          deviceInstance: 2001,
+          points: [{ id: "flow", name: "Flow", objectType: "analog-input", instance: 1 }]
+        }
+      ]
+    })
+  )
+
+/** A value message on `topic`, live unless `retain`. */
+const value = (topic: string, retain = false) => ({ topic, payload: '{"value":1}', retain })
+
+describe("watch: which points sent a value", () => {
+  it.effect("counts live values of configured points, and tells points that send only on change apart", () =>
+    Effect.gen(function* () {
+      const config = yield* buildingFor(1883)
+      const arrivals = pointArrivals(config, watchFilter(config))
+      // The heartbeat goes out with the first read after maxSilenceMs: up to a poll later.
+      expect(arrivals.slowestDueMs).toBe(125_000)
+      expect(untilValuesSeconds(arrivals.slowestDueMs)).toBe(155)
+      expect(untilValuesSeconds(undefined)).toBe(60)
+      // Retained (an older run's), $meta, unknown points and empty payloads are not values.
+      expect(arrivals.record(value("s/b/meter/power", true))).toBe(false)
+      expect(arrivals.record(value("s/b/meter/power/$meta"))).toBe(false)
+      expect(arrivals.record(value("s/b/meter/voltage"))).toBe(false)
+      expect(arrivals.record({ topic: "s/b/meter/power", payload: "", retain: false })).toBe(false)
+      expect(arrivals.record(value("s/b/meter/power"))).toBe(false)
+      expect(arrivals.devices()).toEqual([
+        { id: "meter", arrived: ["power"], missing: ["energy"], onChange: ["tripped"] },
+        { id: "heat-pump", arrived: [], missing: [], onChange: ["flow"] }
+      ])
+      // The last point on a timer: done, though the ones on change only stay quiet.
+      expect(arrivals.record(value("s/b/meter/energy"))).toBe(true)
+    })
+  )
+
+  it.effect("with only points that send on change, waits for the first value of any", () =>
+    Effect.gen(function* () {
+      const config = yield* buildingFor(1883)
+      const arrivals = pointArrivals(config, "s/b/heat-pump/#")
+      expect(arrivals.slowestDueMs).toBeUndefined()
+      expect(arrivals.record({ topic: "s/b/heat-pump/flow", payload: "21", retain: false })).toBe(true)
+      expect(pointArrivals(config, "other/#").expects).toBe(false)
+    })
+  )
+
+  it("sums it up in one line", () => {
+    expect(
+      formatSummary({
+        event: "summary",
+        seconds: 10,
+        messages: 20,
+        points: 4,
+        arrived: 1,
+        missing: 1,
+        devices: [
+          { id: "meter", arrived: ["power"], missing: ["energy"], onChange: ["tripped"] },
+          { id: "heat-pump", arrived: [], missing: [], onChange: ["flow"] }
+        ]
+      })
+    ).toBe(
+      "-- 1 of 4 point(s) sent a value in 10 s (20 message(s)); none from meter: energy; on change only, unchanged so far: meter: tripped; heat-pump: flow"
+    )
+  })
+})
+
+describe("watch --until-values", () => {
+  it.live("stops once every point on a timer sent a value, and ends with the summary", () =>
+    Effect.gen(function* () {
+      const port = yield* startBroker(0)
+      const config = yield* buildingFor(port)
+      const watching = yield* watch(config, { untilValues: true, json: true }).pipe(Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      yield* publishOnce(config, "s/b/meter/power", "1", { retain: false, qos: 1 })
+      yield* publishOnce(config, "s/b/meter/energy", "2", { retain: false, qos: 1 })
+      yield* Fiber.join(watching)
+      const last = (yield* TestConsole.logLines).map(String).findLast((line) => line.startsWith("{"))
+      expect(JSON.parse(String(last))).toMatchObject({ event: "summary", points: 4, arrived: 2, missing: 0 })
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+  )
+
+  it.live("fails naming the points that sent nothing in time", () =>
+    Effect.gen(function* () {
+      const port = yield* startBroker(0)
+      const config = yield* buildingFor(port)
+      const watching = yield* watch(config, { untilValues: true, seconds: 1 }).pipe(Effect.flip, Effect.forkChild)
+      yield* Effect.sleep("300 millis")
+      yield* publishOnce(config, "s/b/meter/power", "1", { retain: false, qos: 1 })
+      expect(yield* Fiber.join(watching)).toMatchObject({
+        _tag: "WatchError",
+        code: "values-missing",
+        message: "1 of 4 point(s) sent no value within 1 s",
+        missing: ["meter/energy"]
+      })
+      // Only points that send on change, and none did: nothing shows the gateway works.
+      const quiet = yield* Effect.flip(watch(config, { untilValues: true, topic: "s/b/heat-pump/#", seconds: 1 }))
+      expect(quiet).toMatchObject({ code: "values-missing", message: "no point sent a value within 1 s" })
+      expect(quiet).toMatchObject({ missing: ["heat-pump/flow"] })
+      const failed = yield* Effect.flip(watch(config, { untilValues: true, topic: "other/#", seconds: 1 }))
+      expect(failed).toMatchObject({ code: "nothing-to-wait-for" })
+    }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
+  )
+})
+
 describe("watch --seconds", () => {
   it.live("fails when it cannot reach the broker, instead of watching nothing", () =>
     Effect.gen(function* () {
@@ -84,6 +226,7 @@ describe("watch --seconds", () => {
       const error = yield* Effect.flip(watch(config, { seconds: 1 }))
       expect(error._tag).toBe("BrokerCommandError")
       expect(error.message).toMatch(/^could not connect to mqtt:\/\/127\.0\.0\.1:\d+/)
+      expect(error).toMatchObject({ code: "broker-unreachable" })
     }).pipe(Effect.provide(TestConsole.layer))
   )
 

@@ -5,7 +5,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig, publicTestBrokers } from "@ot-gateway/core"
-import { Effect, FileSystem } from "effect"
+import { Effect, FileSystem, Schema } from "effect"
 import { TestConsole } from "effect/testing"
 import type { NetworkInterfaceInfo } from "node:os"
 import type { BrokerReport } from "../src/Broker.ts"
@@ -14,6 +14,9 @@ import {
   configSummary,
   describeConfig,
   messagesArguments,
+  initExample,
+  missingInitAnswers,
+  shownPath,
   pointsListOutcome,
   refuseConfigAsPayload,
   runCli,
@@ -120,6 +123,14 @@ const bacnetConfig = (device: Record<string, unknown>) =>
   )
 
 describe("check", () => {
+  it("shows the files under the working directory as ./name, as the Docker wrapper's /work is no path the user knows", () => {
+    expect(shownPath("/work/ot-gateway-buffer.sqlite", "/work")).toBe("./ot-gateway-buffer.sqlite")
+    expect(shownPath("/work/data/history.sqlite", "/work")).toBe("./data/history.sqlite")
+    expect(shownPath("/var/lib/ot-gateway/buffer.sqlite", "/work")).toBe("/var/lib/ot-gateway/buffer.sqlite")
+    expect(shownPath("/work/..data/history.sqlite", "/work")).toBe("./..data/history.sqlite")
+    expect(shownPath("/elsewhere/buffer.sqlite", "/work")).toBe("/elsewhere/buffer.sqlite")
+  })
+
   it.effect("says which BACnet points are asked for by change of value, with the poll interval as the fallback", () =>
     Effect.gen(function* () {
       const config = yield* bacnetConfig({})
@@ -148,6 +159,41 @@ describe("check", () => {
       expect(describeConfig(polled)).toContain("3 point(s), every 5000 ms")
       expect(configSummary(polled).devices[0]?.covPoints).toEqual([])
     })
+  )
+})
+
+const CheckNext = Schema.fromJsonString(
+  Schema.Struct({ next: Schema.Array(Schema.Struct({ command: Schema.String })) })
+)
+const nextCommands = (line: unknown) =>
+  Schema.decodeUnknownSync(CheckNext)(String(line)).next.map((step) => step.command)
+const ConfigObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
+
+describe("check --json", () => {
+  it.effect("says what to run next, from the files next to the config, and where the status page is", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const path = `${directory}/ot-gateway.json`
+      const example = yield* Schema.decodeUnknownEffect(ConfigObject)(yield* fs.readFileString(exampleConfigPath))
+      yield* fs.writeFileString(path, JSON.stringify({ ...example, devices: [] }))
+      yield* runCli(["check", path, "--json"])
+      const [bare] = yield* TestConsole.logLines
+      expect(JSON.parse(String(bare))).toMatchObject({ url: "http://127.0.0.1:8080" })
+      const alone = nextCommands(bare)
+      expect(alone.some((command) => command.includes(" check "))).toBe(false)
+      expect(alone.some((command) => command.includes("points template"))).toBe(true)
+      expect(alone.some((command) => command.startsWith("docker compose"))).toBe(false)
+
+      // A points.csv there is the user's list, never overwritten by the template; compose.yaml means Compose.
+      yield* fs.writeFileString(`${directory}/compose.yaml`, "services: {}\n")
+      yield* fs.writeFileString(`${directory}/points.csv`, "")
+      yield* runCli(["check", path, "--json"])
+      const [, withFiles] = yield* TestConsole.logLines
+      const steps = nextCommands(withFiles)
+      expect(steps.some((command) => command.startsWith(`docker compose -f ${directory}/compose.yaml`))).toBe(true)
+      expect(steps.some((command) => command.includes("points template"))).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 })
 
@@ -297,6 +343,58 @@ describe("discover --points-list", () => {
   )
 })
 
+describe("init without a terminal", () => {
+  it("names what no flag answers: the folder, the site, the broker and where the devices come from", () => {
+    const none = { site: undefined, broker: undefined, points: undefined, devices: undefined }
+    expect(missingInitAnswers(undefined, none)).toEqual([
+      "<folder> (. for this one)",
+      "--site",
+      "--broker",
+      "--points <list> or --devices simulated|discover|none"
+    ])
+    expect(missingInitAnswers("site-1", { ...none, site: "s", broker: "mqtt://b", devices: "none" })).toEqual([])
+    expect(missingInitAnswers(".", { ...none, site: "s", broker: "mqtt://b", points: "p.csv" })).toEqual([])
+  })
+
+  it("shows the whole line to run, with what was given kept and the folder the user chose", () => {
+    const none = { site: undefined, broker: undefined, points: undefined, devices: undefined }
+    expect(initExample("otg", ".", { ...none, site: "plant-2" })).toBe(
+      "otg init . --site plant-2 --broker mqtts://broker.example:8883 --points points.csv"
+    )
+    expect(initExample("otg", undefined, { ...none, devices: "none" })).toBe(
+      "otg init site-1 --site site-1 --broker mqtts://broker.example:8883 --devices none"
+    )
+  })
+
+  it.effect("refuses to write placeholders, naming the flags as JSON, and writes nothing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const folder = `${directory}/site-1`
+      const error = yield* Effect.flip(runCli(["init", folder, "--site", "site-1", "--json"]))
+      expect(error._tag).toBe("UsageMistake")
+      const [line] = yield* TestConsole.logLines
+      expect(JSON.parse(String(line))).toMatchObject({
+        ok: false,
+        code: "missing-answers",
+        missing: ["--broker", "--points <list> or --devices simulated|discover|none"]
+      })
+      expect(yield* fs.exists(folder)).toBe(false)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+
+  it.effect("writes the folder with --yes, and shows the defaults in a dry run", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      yield* runCli(["init", `${directory}/dry`, "--dry-run", "--json"])
+      expect(yield* fs.exists(`${directory}/dry/ot-gateway.json`)).toBe(false)
+      yield* runCli(["init", `${directory}/yes`, "--yes", "--json"])
+      expect(yield* fs.exists(`${directory}/yes/ot-gateway.json`)).toBe(true)
+    }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
+  )
+})
+
 describe("broker", () => {
   const noRoundTrip: BrokerReport = {
     ok: false,
@@ -326,7 +424,12 @@ describe("broker", () => {
       yield* Effect.flip(brokerOutcome(true)(noRoundTrip))
       const lines = yield* TestConsole.logLines
       expect(lines).toHaveLength(1)
-      expect(JSON.parse(String(lines[0]))).toMatchObject({ ok: false, roundTripTopic: noRoundTrip.roundTripTopic })
+      expect(JSON.parse(String(lines[0]))).toMatchObject({
+        ok: false,
+        roundTripTopic: noRoundTrip.roundTripTopic,
+        code: "no-round-trip",
+        hint: expect.stringContaining("s/b/#")
+      })
     }).pipe(Effect.provide(TestConsole.layer))
   )
 

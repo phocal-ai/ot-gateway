@@ -40,9 +40,21 @@ export const pages: ReadonlyArray<PageSource> = [
       "What the gateway does, with one example building: from an energy meter, a PV inverter and a heat pump to your software."
   },
   {
+    source: "docs/inputs.md",
+    slug: "inputs",
+    description:
+      "The three things you give the gateway, each in its smallest form, and what one row of the points list becomes on your broker."
+  },
+  {
     source: "docs/first-building.md",
     slug: "first-building",
     description: "From your list of points to values arriving on your broker, in five steps."
+  },
+  {
+    source: "docs/headless.md",
+    slug: "headless",
+    description:
+      "For scripts, CI and AI agents: eight commands, the JSON each one prints, and what to do when one fails."
   },
   {
     source: "docs/operations.md",

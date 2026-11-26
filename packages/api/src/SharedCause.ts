@@ -3,6 +3,7 @@
  * gateway's own network), not at each device. `ot-gateway status`, `ot-gateway events` and the status page's events
  * say so in the same words, from these pure functions.
  */
+import { gatewaySideFailure } from "./Hints.ts"
 
 /** Failing devices that all started failing within this much of each other point at one cause, not at each device. */
 export const SHARED_CAUSE_WINDOW_MS = 10_000
@@ -108,6 +109,8 @@ export interface DeviceFailure {
   readonly id: number
   readonly device: string
   readonly at: number
+  /** The driver's words: a failure on the gateway's own side (`gatewaySideFailure`) shares no cause with others. */
+  readonly error?: string | undefined
 }
 
 /** Failures of two or more devices that began within `SHARED_CAUSE_WINDOW_MS` of the first of them. */
@@ -139,17 +142,19 @@ export const sharedCauses = (
   broker?: BrokerOutages
 ): ReadonlyArray<SharedCause> => {
   const found: Array<SharedCause> = []
+  // A port the gateway itself cannot open is its own problem, not one the devices' host or network share.
+  const devicesSide = failures.filter((failure) => !gatewaySideFailure(failure.error))
   let index = 0
-  while (index < failures.length) {
-    const first = failures[index]
+  while (index < devicesSide.length) {
+    const first = devicesSide[index]
     if (first === undefined) break
     let end = index + 1
     while (
-      end < failures.length &&
-      (failures[end]?.at ?? Number.POSITIVE_INFINITY) - first.at <= SHARED_CAUSE_WINDOW_MS
+      end < devicesSide.length &&
+      (devicesSide[end]?.at ?? Number.POSITIVE_INFINITY) - first.at <= SHARED_CAUSE_WINDOW_MS
     )
       end++
-    const group = failures.slice(index, end)
+    const group = devicesSide.slice(index, end)
     const devices = [...new Set(group.map((failure) => failure.device))]
     if (devices.length >= 2) {
       const host = commonHost(devices, hostOf)

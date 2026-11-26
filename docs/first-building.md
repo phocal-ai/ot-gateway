@@ -1,10 +1,10 @@
 # Your first building
 
-From the list of values you want to values arriving on your broker, in five steps. You need the demo running once first ([quick start](../README.md#quick-start)), so you know what success looks like.
+From the list of values you want to values arriving on your broker, in five steps. For a script or an AI agent, with no questions asked, the same path is [Headless setup](headless.md). You need the demo running once first ([quick start](../README.md#quick-start)), so you know what success looks like.
 
 ## 1. Write down your points
 
-Most projects start with a points list: a spreadsheet of what to read, from which device, how often. That list is all the gateway needs. For each device, note:
+Most projects start with a points list: a spreadsheet of what to read, from which device, how often. That list is all the gateway needs. [What the gateway needs from you](inputs.md) shows it in its smallest form, field by field. For each device, note:
 
 | You need             | Example                 | Where to find it                                    |
 | -------------------- | ----------------------- | --------------------------------------------------- |
@@ -36,7 +36,7 @@ It asks for the site and building (the first two parts of every topic, such as `
 
 - **Find BACnet devices now:** the gateway asks the network who is there and drafts every device with its points, names and units. Nothing is written to a device, and no point is made writable. `ot-gateway discover --points-list points.csv` writes the same as a points list instead: delete the rows you don't need and import it, as in step 3. Its rows say `publish` `sample`, every read; change that column to `change` for a point that should send only changes, or to `aggregate` with `publish_s` (`900` for 15 minutes). With `--append` it adds to a list that exists already, say one with your Modbus rows: the list keeps its rows, columns and separator, gets the columns it lacks, and rows it has already are skipped, so one list holds every device. An EDE file from the BACnet engineering tool (the semicolon CSV most of them export) imports as it is, and `ot-gateway points from-ede building.csv > points.csv` turns it into a list to trim first; objects that are not points (schedules, trend logs) are left out. [`examples/building.ede.csv`](../examples/building.ede.csv) is one.
 - **A simulated device:** to see your broker receive values before any real device is connected.
-- **From a points list:** a CSV of your devices and points (step 3 shows the columns). Excel's "CSV" export works, with commas or semicolons.
+- **From a points list:** a CSV of your devices and points (step 3 shows the columns). Excel's "CSV" export works, with commas or semicolons. A script or an agent can write the same columns as JSON instead, one object per point: `[{"device": "Main meter", "point": "Active power", "host": "192.168.1.50", "register": 100, "type": "float32"}]` (`ot-gateway points schema --json-schema` prints its JSON Schema).
 - **None yet:** to add devices in the next step.
 
 It writes `ot-gateway.json` and checks it. The password is never in that file: put it in `ot-gateway.env` as `MQTT_PASSWORD=…` (or the name you chose).
@@ -52,7 +52,7 @@ Modbus devices can't describe themselves, so their points come from your list. T
 | Energy meter | Breaker tripped |      | 5          | 192.168.1.50 | 0        | coil  |         |            |       | on    |
 
 ```bash
-pnpm ot-gateway points template > points.csv  # every column and example rows, to fill in
+pnpm ot-gateway points template > points.csv  # every column and example rows, to fill in (--protocol modbus or bacnet: only its columns)
 pnpm ot-gateway import points.csv --dry-run    # checks the list and prints its devices (alone, without an ot-gateway.json here)
 pnpm ot-gateway import points.csv              # adds the devices to ot-gateway.json (replaced in one step, the old one kept as ot-gateway.json.bak)
 ```

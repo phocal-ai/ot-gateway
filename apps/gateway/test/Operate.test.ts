@@ -221,11 +221,17 @@ const log = (events: EventLog["events"]): EventLog => ({ now, capacity: 500, dro
 describe("events --follow", () => {
   it.effect("prints each new event as it comes, says when the gateway is away and when it restarted", () =>
     Effect.gen(function* () {
+      const away = new GatewayUnreachable({
+        url: "u",
+        message: "no gateway status at u",
+        code: "gateway-unreachable",
+        hint: "is it running?"
+      })
       const answers: Array<Effect.Effect<EventLog, GatewayUnreachable>> = [
         Effect.succeed(log([])),
         Effect.succeed(log([{ id: 5, at: at(12, 19, 32), type: "device-recovered", device: "meter", downMs: 40_000 }])),
-        Effect.fail(new GatewayUnreachable({ url: "u", message: "no gateway status at u" })),
-        Effect.fail(new GatewayUnreachable({ url: "u", message: "no gateway status at u" })),
+        Effect.fail(away),
+        Effect.fail(away),
         Effect.succeed(log([{ id: 1, at: at(12, 19, 40), type: "gateway-started", version: "v2", devices: 1 }]))
       ]
       const asked: Array<number> = []

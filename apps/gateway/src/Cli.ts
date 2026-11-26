@@ -29,9 +29,10 @@
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Effect, FileSystem, Option, References } from "effect"
 import { Argument, CliOutput, Command, Flag } from "effect/cli"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
-import { discover, DiscoverError, discoverToPointsList, type PointsListWritten } from "./Discover.ts"
+import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -40,6 +41,7 @@ import { invocation } from "./Invocation.ts"
 import {
   briefPointsListSchemaJson,
   describePointsListSchema,
+  pointsListJsonSchema,
   pointsListSchema,
   pointsListTemplate
 } from "./PointsSchema.ts"
@@ -71,7 +73,15 @@ import {
   resolveProfile
 } from "./Profile.ts"
 import { telemetryLayer } from "./Telemetry.ts"
-import { failureLine, localTimeZone, printJson, printResult } from "./Output.ts"
+import {
+  failureFields,
+  failureLine,
+  localTimeZone,
+  printJson,
+  printResult,
+  shellArgument,
+  UsageMistake
+} from "./Output.ts"
 import { readVersion } from "./Version.ts"
 
 const optionalEnv = (name: string) => Config.String(name).pipe(Config.option, Config.map(Option.getOrUndefined))
@@ -97,18 +107,30 @@ export const readingLabel = (device: Device) => {
   return `${which} where the device supports it, polled ${polled} otherwise`
 }
 
+/**
+ * A file the config names, as `check` shows it: under the working directory as `./name`, else as it is. In the
+ * Docker wrapper the working directory is the user's folder mounted at /work, a path they never see.
+ */
+export const shownPath = (path: string, cwd: string) => {
+  const inside = relative(cwd, path)
+  const outside = inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)
+  return inside !== "" && !outside ? `./${inside}` : path
+}
+
 /** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
-export const describeConfig = (config: GatewayConfig) => {
+export const describeConfig = (config: GatewayConfig, cwd = process.cwd()) => {
   const passwordWarning = mqttPasswordWarning(config.mqtt)
   return [
     `config ok: ${config.site}/${config.building}, gateway ${config.id}, broker ${config.mqtt.url}`,
     ...(passwordWarning === undefined ? [] : [`  warning: ${passwordWarning}`]),
     config.buffer === undefined
       ? "  no buffer: values read while the broker is down are lost"
-      : `  buffer ${config.buffer.path}`,
+      : `  buffer ${shownPath(config.buffer.path, cwd)}`,
     ...(config.history === undefined
       ? []
-      : [`  history ${config.history.path}, per-minute values for ${config.history.retentionDays} days`]),
+      : [
+          `  history ${shownPath(config.history.path, cwd)}, per-minute values for ${config.history.retentionDays} days`
+        ]),
     config.status === undefined
       ? "  no status page"
       : config.status.bindAddress === "0.0.0.0"
@@ -175,12 +197,23 @@ const jsonFlag = Flag.Boolean("json").pipe(
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-/** With --json, a failure is JSON on stdout as well; it still fails, so the exit code stays 1. */
+/**
+ * With --json, a failure is JSON on stdout as well; it still fails, so the exit code stays 1. A command that prints
+ * JSON lines (`watch`) passes `lines`, so its failure is one line too and the output stays NDJSON to the end.
+ */
 const jsonFailure =
-  (json: boolean, fields: Readonly<Record<string, unknown>> = {}) =>
+  (json: boolean, fields: Readonly<Record<string, unknown>> = {}, options: { readonly lines?: boolean } = {}) =>
   <A, E, R>(effect: Effect.Effect<A, E, R>) =>
     json
-      ? effect.pipe(Effect.tapError((error) => printJson({ ok: false, ...fields, error: errorText(error) })))
+      ? effect.pipe(
+          Effect.tapError((error) => {
+            // The address a flag named stays as given; the error's (the config's status page) fills in a null.
+            const { url, ...known } = failureFields(error)
+            const asked = typeof fields["url"] === "string" ? {} : url === undefined ? {} : { url }
+            const failure = { ok: false, ...fields, ...asked, error: errorText(error), ...known }
+            return options.lines === true ? printResult(JSON.stringify(failure)) : printJson(failure)
+          })
+        )
       : effect
 
 const dryRunFlag = (description: string) =>
@@ -200,9 +233,11 @@ const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfi
   ).pipe(Effect.provide(telemetryLayer(config, version)))
 })
 
+const DEFAULT_CONFIG = "ot-gateway.json"
+
 const configPath = Argument.String("config").pipe(
   Argument.withDescription("Path of the gateway's JSON config"),
-  Argument.withDefault("ot-gateway.json")
+  Argument.withDefault(DEFAULT_CONFIG)
 )
 
 const run = Command.make("run", { config: configPath }, ({ config }) =>
@@ -226,16 +261,71 @@ const run = Command.make("run", { config: configPath }, ({ config }) =>
   Command.withExamples([{ command: "ot-gateway run /etc/ot-gateway/gateway.json", description: "Run a config" }])
 )
 
-const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ config, json }) =>
-  loadConfig(config).pipe(
-    Effect.flatMap((decoded) => (json ? printJson(configSummary(decoded)) : Console.log(describeConfig(decoded)))),
-    jsonFailure(json, { path: config })
+/**
+ * What to run after a valid `check --json`: init's next steps for the config's folder (the broker, the points,
+ * starting it, the status page), without the check itself. Only in the JSON: the text stays what it was, as
+ * install.sh and the image validate a staged config with it.
+ */
+const checkNext = Effect.fn("checkNext")(function* (path: string, config: GatewayConfig) {
+  const fs = yield* FileSystem.FileSystem
+  const folder = dirname(path)
+  const present = yield* Effect.forEach(["compose.yaml", "ot-gateway.env", "points.csv"], (file) =>
+    fs.exists(join(folder, file)).pipe(
+      Effect.map((exists) => (exists ? [join(folder, file)] : [])),
+      // Not knowing leaves the file out of the advice (run rather than Compose), which still works.
+      Effect.catchTag("PlatformError", (error) =>
+        Effect.as(Effect.logDebug(`check: could not look for ${file}`, error.message), [])
+      )
+    )
   )
-).pipe(Command.withDescription("Validate a config without connecting to anything; lists every mistake with its path"))
+  const kept = present.flat().filter((file) => !file.endsWith("points.csv"))
+  const hasList = present.flat().some((file) => file.endsWith("points.csv"))
+  const command = yield* invocation
+  const context = { ssh: sshSession(yield* sshEnvironment), platform: process.platform, cwd: process.cwd(), command }
+  const { next, url, page } = initNext(path, config, { written: [], kept }, context)
+  // A points.csv there is the user's list: never suggest writing the template over it.
+  return {
+    next: next.filter(
+      (step) => !step.command.startsWith(`${command} check`) && !(hasList && step.command.includes("points template"))
+    ),
+    url,
+    page
+  }
+})
+
+const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const decoded = yield* loadConfig(config)
+    if (!json) return yield* Console.log(describeConfig(decoded))
+    const { next, url, page } = yield* checkNext(config, decoded)
+    yield* printJson({ ...configSummary(decoded), next, url, page })
+  }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "Validate a config without connecting to anything; lists every mistake with its path (--json: issues [{path, message}], and next, what to run after it)"
+  )
+)
 
 /** What `discover --points-list` prints on stdout: with --json its outcome; without, stderr has said it already. */
 export const pointsListOutcome = (json: boolean) => (written: PointsListWritten) =>
   json ? printJson({ ok: true, ...written }) : Effect.void
+
+/**
+ * The config `discover` asks with. No config yet is the usual first step, so with none in this folder it asks with
+ * the BACnet/IP defaults and says so. A config named elsewhere that is not there, or one that is wrong, still fails:
+ * a typo must not scan with other settings than the config's.
+ */
+const configForDiscovery = Effect.fn("configForDiscovery")(function* (path: string) {
+  const loaded = yield* loadConfig(path).pipe(
+    Effect.map(Option.some),
+    Effect.catchTag("ConfigFileError", (error) =>
+      error.code === "no-config" && path === DEFAULT_CONFIG ? Effect.succeedNone : Effect.fail(error)
+    )
+  )
+  if (Option.isSome(loaded)) return { config: loaded.value, noConfig: false }
+  yield* Console.error(`no ${path} here: asking with the BACnet/IP defaults (UDP 47808, broadcast 255.255.255.255)`)
+  return { config: yield* discoveryDefaults, noConfig: true }
+})
 
 const discoverCommand = Command.make(
   "discover",
@@ -265,11 +355,13 @@ const discoverCommand = Command.make(
       if (append && Option.isNone(pointsList)) {
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
-      const decoded = yield* loadConfig(config)
+      const found = yield* configForDiscovery(config)
+      const decoded = found.config
       const options = {
         address: Option.getOrUndefined(address),
         append,
-        configPath: config,
+        configPath: found.noConfig ? undefined : config,
+        noConfig: found.noConfig,
         command: yield* invocation
       }
       return Option.isSome(pointsList)
@@ -281,7 +373,7 @@ const discoverCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "Find BACnet devices through the config's bacnet settings and print a draft of their devices entries, read-only"
+    "Find BACnet devices through the config's bacnet settings (the defaults when there is no config yet) and print a draft of their devices entries, read-only"
   ),
   Command.withExamples([
     { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
@@ -336,6 +428,56 @@ const demo = Command.make(
 const optionalFlag = (name: string, description: string) =>
   Flag.String(name).pipe(Flag.withDescription(description), Flag.optional, Flag.map(Option.getOrUndefined))
 
+/**
+ * What `init` would have asked that no flag answers, as the flags to add: the folder, the site, the broker and where
+ * the devices come from. The building and the rest have defaults that need no cleaning up.
+ */
+export const missingInitAnswers = (
+  directory: string | undefined,
+  given: {
+    readonly site: string | undefined
+    readonly broker: string | undefined
+    readonly points: string | undefined
+    readonly devices: string | undefined
+  }
+): ReadonlyArray<string> => [
+  ...(directory === undefined ? ["<folder> (. for this one)"] : []),
+  ...(given.site === undefined ? ["--site"] : []),
+  ...(given.broker === undefined ? ["--broker"] : []),
+  ...(given.points === undefined && given.devices === undefined
+    ? ["--points <list> or --devices simulated|discover|none"]
+    : [])
+]
+
+/**
+ * The `init` line to run without a terminal, with the answers it needs: the folder, site, broker and devices given
+ * kept as they were and an example for the rest, so it names the folder the user chose (`init . --site …`). Other
+ * flags (`--building`, `--status-port`, …) are left to add again.
+ */
+export const initExample = (
+  command: string,
+  directory: string | undefined,
+  given: {
+    readonly site: string | undefined
+    readonly broker: string | undefined
+    readonly points: string | undefined
+    readonly devices: string | undefined
+  }
+) => {
+  const devices =
+    given.points !== undefined
+      ? `--points ${shellArgument(given.points)}`
+      : given.devices !== undefined
+        ? `--devices ${shellArgument(given.devices)}`
+        : "--points points.csv"
+  return [
+    `${command} init ${shellArgument(directory ?? "site-1")}`,
+    `--site ${shellArgument(given.site ?? "site-1")}`,
+    `--broker ${shellArgument(given.broker ?? "mqtts://broker.example:8883")}`,
+    devices
+  ].join(" ")
+}
+
 const init = Command.make(
   "init",
   {
@@ -354,11 +496,13 @@ const init = Command.make(
       Flag.optional,
       Flag.map(Option.getOrUndefined)
     ),
-    points: optionalFlag("points", "A points list (CSV) to take the devices from"),
+    points: optionalFlag("points", "A points list (CSV or JSON) to take the devices from"),
     broadcast: optionalFlag("broadcast", "The broadcast address for BACnet discovery, when there are several networks"),
     yes: Flag.Boolean("yes").pipe(
       Flag.withAlias("y"),
-      Flag.withDescription("Ask nothing: the defaults for whatever no flag gives (the same without a terminal)"),
+      Flag.withDescription(
+        "Ask nothing: the defaults for whatever no flag gives (without a terminal, init needs this or the flags)"
+      ),
       Flag.withDefault(false)
     ),
     force: Flag.Boolean("force").pipe(Flag.withDescription("Replace an existing config"), Flag.withDefault(false)),
@@ -383,10 +527,18 @@ const init = Command.make(
     Effect.gen(function* () {
       // Without a terminal (an AI agent, a script, CI) there is nobody to answer: ask nothing, as with --yes.
       const interactive = !json && isInteractive(given.yes, process.stdin.isTTY)
-      if (!given.yes && !json && !interactive) {
-        yield* Console.error(
-          "no terminal, so init asks nothing: the flags answer and the defaults fill the rest (--help lists the flags)"
-        )
+      // Nobody to ask and no --yes: writing the defaults would leave a folder of placeholders (my-site, a broker on
+      // localhost, a simulated device) to clean up. A dry run writes nothing, so it may fill them in to show them.
+      if (!interactive && !given.yes && !given.dryRun) {
+        const missing = missingInitAnswers(directory, given)
+        if (missing.length > 0) {
+          return yield* new UsageMistake({
+            code: "missing-answers",
+            message: `no terminal to ask, so init needs its answers as flags: ${missing.join(", ")}; or --yes for the defaults (site my-site, a broker on localhost, a simulated device). Nothing was written`,
+            missing,
+            hint: initExample(yield* invocation, directory, given)
+          })
+        }
       }
       const flags = { ...given, yes: !interactive }
       const config = yield* initTarget(directory, flags.yes)
@@ -452,7 +604,9 @@ const importCommand = Command.make(
   "import",
   {
     list: Argument.String("points-list").pipe(
-      Argument.withDescription("A CSV with a device and a point column, one row per point")
+      Argument.withDescription(
+        "A CSV with a device and a point column, one row per point, or the same as a JSON array of rows"
+      )
     ),
     // Optional rather than defaulted: a dry run that names no config may check the list on its own.
     config: Argument.String("config").pipe(
@@ -506,12 +660,13 @@ const importCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config ?? defaultConfigPath }))
 ).pipe(
   Command.withDescription(
-    "Add the devices of a points list (CSV: device, point, host, register, type, unit, …) to the config"
+    "Add the devices of a points list (CSV or JSON: device, point, host, register, type, unit, …) to the config"
   ),
   Command.withExamples([
     { command: "ot-gateway import points.csv", description: "Add them to ot-gateway.json" },
     { command: "ot-gateway import points.csv site-1/ot-gateway.json", description: "Add them to another config" },
-    { command: "ot-gateway import points.csv --dry-run", description: "Only check and print them" }
+    { command: "ot-gateway import points.csv --dry-run", description: "Only check and print them" },
+    { command: "ot-gateway import points.json --dry-run --json", description: "The same for a JSON list, for agents" }
   ])
 )
 
@@ -522,28 +677,51 @@ const schemaCommand = Command.make(
     brief: Flag.Boolean("brief").pipe(
       Flag.withDescription("Each column's name, scope, required, first sentence and values, one line each; no aliases"),
       Flag.withDefault(false)
+    ),
+    jsonSchema: Flag.Boolean("json-schema").pipe(
+      Flag.withDescription("The JSON form of the list as a JSON Schema (draft 2020-12), to check a list against"),
+      Flag.withDefault(false)
     )
   },
-  ({ json, brief }) =>
-    json
-      ? brief
-        ? printResult(briefPointsListSchemaJson())
-        : printJson(pointsListSchema())
-      : Console.log(describePointsListSchema({ brief }))
+  ({ json, brief, jsonSchema }) =>
+    jsonSchema
+      ? printJson(pointsListJsonSchema())
+      : json
+        ? brief
+          ? printResult(briefPointsListSchemaJson())
+          : printJson(pointsListSchema())
+        : Console.log(describePointsListSchema({ brief }))
 ).pipe(
   Command.withDescription("The points list's columns, rules and allowed values"),
   Command.withExamples([
     { command: "ot-gateway points schema", description: "Every column, for people" },
     { command: "ot-gateway points schema --brief --json", description: "The columns in short, for agents" },
-    { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" }
+    { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" },
+    { command: "ot-gateway points schema --json-schema", description: "The JSON form's JSON Schema" }
   ])
 )
 
-const templateCommand = Command.make("template", {}, () =>
-  Effect.sync(() => process.stdout.write(pointsListTemplate()))
+const templateCommand = Command.make(
+  "template",
+  {
+    protocol: Flag.ChoiceWithValue("protocol", [
+      ["modbus", "modbus"],
+      ["bacnet", "bacnet"],
+      ["modbus-tcp", "modbus"],
+      ["bacnet-ip", "bacnet"]
+    ] as const).pipe(
+      Flag.withDescription("Only this protocol's example rows and the columns they can use"),
+      Flag.optional
+    )
+  },
+  ({ protocol }) => Effect.sync(() => process.stdout.write(pointsListTemplate(Option.getOrUndefined(protocol))))
 ).pipe(
-  Command.withDescription("A points list with every column and example rows, as CSV on stdout"),
-  Command.withExamples([{ command: "ot-gateway points template > points.csv", description: "Start a list to fill in" }])
+  Command.withDescription("A points list with example rows, as CSV on stdout: every column, or one protocol's"),
+  Command.withExamples([
+    { command: "ot-gateway points template > points.csv", description: "Start a list to fill in" },
+    { command: "ot-gateway points template --protocol modbus > points.csv", description: "Only Modbus TCP" },
+    { command: "ot-gateway points template --protocol bacnet > points.csv", description: "Only BACnet/IP" }
+  ])
 )
 
 const fromEdeCommand = Command.make(
@@ -618,7 +796,7 @@ const profiles = Command.make("profiles").pipe(
 )
 
 const points = Command.make("points").pipe(
-  Command.withDescription("The points list, the CSV that import and init read: its schema and a template"),
+  Command.withDescription("The points list, the CSV (or JSON) that import and init read: its schema and a template"),
   Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
 )
 
@@ -639,32 +817,50 @@ const watchCommand = Command.make(
       Flag.optional
     ),
     json: Flag.Boolean("json").pipe(
-      Flag.withDescription("One JSON object per message and line (NDJSON): at, topic, retained, payload"),
+      Flag.withDescription(
+        "One JSON object per message and line (NDJSON): at, topic, retained, payload; a watch that ends by itself ends with {event: summary}"
+      ),
+      Flag.withDefault(false)
+    ),
+    untilValues: Flag.Boolean("until-values").pipe(
+      Flag.withDescription(
+        "Stop once every configured point sent a value; exit 1 naming the ones that did not within --seconds (default: the slowest poll interval and 30 s, at least 60 s)"
+      ),
       Flag.withDefault(false)
     )
   },
-  ({ config, topic, seconds, json }) =>
+  ({ config, topic, seconds, json, untilValues }) =>
     Effect.flatMap(loadConfig(config), (decoded) =>
-      watch(decoded, { topic: Option.getOrUndefined(topic), seconds: Option.getOrUndefined(seconds), json })
-    ).pipe(jsonFailure(json, { path: config }))
+      watch(decoded, {
+        topic: Option.getOrUndefined(topic),
+        seconds: Option.getOrUndefined(seconds),
+        json,
+        untilValues
+      })
+    ).pipe(jsonFailure(json, { path: config }, { lines: true }))
 ).pipe(
   Command.withDescription("Print what arrives at the config's broker under its site and building, as it arrives"),
   Command.withExamples([
     { command: "ot-gateway watch", description: "Watch the broker in ot-gateway.json" },
     { command: "ot-gateway watch --topic 'site-1/building-a/heat-pump/#'", description: "Only one device" },
     { command: "ot-gateway watch --seconds 10", description: "Ten seconds of it, then stop" },
-    { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" }
+    { command: "ot-gateway watch --seconds 10 --json", description: "The same as JSON lines, for scripts and agents" },
+    { command: "ot-gateway watch --until-values --json", description: "Wait until every point sent a value" }
   ])
 )
 
 /**
  * `broker`'s report, as JSON or text, then a failure when its message did not come back, so the exit code is 1.
- * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON.
+ * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON; a
+ * failed report carries the failure's `code` and `hint` as any other failure's JSON does.
  */
 export const brokerOutcome = (json: boolean) =>
   Effect.fnUntraced(function* (report: BrokerReport) {
-    yield* json ? printJson(report) : Console.log(formatBrokerReport(report))
-    if (!report.ok) return yield* roundTripFailure(report)
+    const failure = report.ok ? undefined : roundTripFailure(report)
+    yield* json
+      ? printJson(failure === undefined ? report : { ...report, code: failure.code, hint: failure.hint })
+      : Console.log(formatBrokerReport(report))
+    if (failure !== undefined) return yield* failure
   })
 
 const brokerCommand = Command.make("broker", { config: configPath, json: jsonFlag }, ({ config, json }) =>
@@ -1145,7 +1341,7 @@ export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
-  "    points schema --json             the points list's columns: translate any list or EDE file into it",
+  "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",

@@ -21,6 +21,7 @@ import {
   drainedParts,
   type EventLog,
   flappingAlarmHint,
+  gatewaySideFailure,
   type GatewayEvent,
   type GatewayStatus,
   type ValuesQueryInvalid,
@@ -38,6 +39,7 @@ import {
   type ValueEvent,
   whatToCheck
 } from "@ot-gateway/api"
+import { causeText } from "@ot-gateway/core"
 import { Console, type Duration, Effect, type FileSystem, Schema } from "effect"
 import { FetchHttpClient, HttpClient, type HttpClientError } from "effect/http"
 import { HttpApiClient } from "effect/http-api"
@@ -58,12 +60,16 @@ import { readVersion } from "./Version.ts"
 /** Something answered at the gateway's address, in a form this CLI cannot read: most likely another release. */
 export class GatewayAnswerUnreadable extends Schema.TaggedError<GatewayAnswerUnreadable>()("GatewayAnswerUnreadable", {
   url: Schema.String,
-  message: Schema.String
+  message: Schema.String,
+  code: Schema.Literal("gateway-unreadable")
 }) {}
 
+/** Nothing answered at the status page's address: the gateway is not running there, or its page is elsewhere. */
 export class GatewayUnreachable extends Schema.TaggedError<GatewayUnreachable>()("GatewayUnreachable", {
   url: Schema.String,
-  message: Schema.String
+  message: Schema.String,
+  code: Schema.Literal("gateway-unreachable"),
+  hint: Schema.String
 }) {}
 
 /** The gateway answered, and something is failing: printed already, this makes the exit code 1. */
@@ -96,6 +102,13 @@ export const hintsFor = (device: DeviceStatus, shared = false, sharedHost?: stri
     ...(sharedHost === undefined ? {} : { sharedHost })
   })
 
+/**
+ * The devices a shared cause is judged on: not those failing on the gateway's own BACnet/IP port, which is the
+ * gateway's problem and no host, switch or power they share. `events` leaves them out the same way (`sharedCauses`).
+ */
+export const deviceSide = (devices: ReadonlyArray<DeviceStatus>) =>
+  devices.filter((device) => !gatewaySideFailure(device.lastError))
+
 /** The one host all of `devices` sit on (`DeviceStatus.host`); undefined when one has none or they differ. */
 export const sharedHostOf = (devices: ReadonlyArray<DeviceStatus>) => {
   const hosts = new Map(devices.map((device) => [device.id, device.host]))
@@ -111,7 +124,8 @@ export const sharedHostOf = (devices: ReadonlyArray<DeviceStatus>) => {
  * then the likelier cause than a switch on the way. With `broker`, a broker on that host (loopback in any spelling is
  * this machine) that is away since then is named too: `all 2 devices and the broker stopped answering …`.
  */
-export const sharedCause = (devices: ReadonlyArray<DeviceStatus>, broker?: GatewayStatus["broker"]) => {
+export const sharedCause = (all: ReadonlyArray<DeviceStatus>, broker?: GatewayStatus["broker"]) => {
+  const devices = deviceSide(all)
   if (devices.length < 2) return undefined
   const starts: Array<number> = []
   for (const device of devices) {
@@ -121,18 +135,17 @@ export const sharedCause = (devices: ReadonlyArray<DeviceStatus>, broker?: Gatew
   const spread = Math.max(...starts) - Math.min(...starts)
   if (spread > SHARED_CAUSE_WINDOW_MS) return undefined
   const host = sharedHostOf(devices)
+  const who =
+    devices.length === all.length
+      ? `all ${devices.length} devices`
+      : `${devices.length} devices (${devices.map((device) => device.id).join(", ")})`
   const away =
     broker === undefined || broker.connected || broker.disconnectedSince === undefined
       ? undefined
       : brokerWith(Math.min(...starts), host, brokerHostOf(broker.url), [{ at: broker.disconnectedSince }])
-  if (away === undefined) return sharedCauseLine(`all ${devices.length} devices`, spread, host, devices.length)
+  if (away === undefined) return sharedCauseLine(who, spread, host, devices.length)
   const times = [...starts, away.at]
-  return sharedCauseLine(
-    `all ${devices.length} devices and the broker`,
-    Math.max(...times) - Math.min(...times),
-    host,
-    devices.length + 1
-  )
+  return sharedCauseLine(`${who} and the broker`, Math.max(...times) - Math.min(...times), host, devices.length + 1)
 }
 
 /** What `events` adds to an event: what to check for a device that failed, and whether others failed with it. */
@@ -516,7 +529,7 @@ export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) =>
   const failing = status.devices.filter((device) => device.status === "failing").length
   const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
   const shared = sharedCause(status.devices, status.broker)
-  const sharedHost = shared === undefined ? undefined : sharedHostOf(status.devices)
+  const sharedHost = shared === undefined ? undefined : sharedHostOf(deviceSide(status.devices))
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)} (since ${localTime(status.since, status.now)})`,
     `  broker ${status.broker.url}: ${brokerState(status.broker, status.now, status.since, recent)}`,
@@ -548,6 +561,16 @@ const noEventsLine = (status: Pick<GatewayStatus, "host">) =>
 const unreachableAdvice =
   "Is the gateway running (ot-gateway run, or ot-gateway demo), with a status block in its config? Name its config, or pass --url for a page elsewhere."
 
+/**
+ * Why a request to the status page found nothing, in the socket's words: fetch fails with `fetch failed` and the
+ * system error (`connection refused by 127.0.0.1:8080`) as its cause.
+ */
+export const transportReason = (error: HttpClientError.HttpClientError) => {
+  const cause = error.reason.cause
+  const inner = cause instanceof Error ? cause.cause : undefined
+  return causeText(inner) ?? causeText(cause) ?? error.reason.description ?? error.message
+}
+
 const gatewayClient = (url: string) => HttpApiClient.make(OtGatewayApi, { baseUrl: url })
 
 /** A call to the gateway at `url` through the page's typed client, within three seconds. */
@@ -569,7 +592,9 @@ export const askGateway = <A>(
           ? Effect.fail(
               new GatewayUnreachable({
                 url,
-                message: `no gateway status at ${url} (${error.message}). ${unreachableAdvice}`
+                message: `no gateway status at ${url}: ${transportReason(error)}`,
+                code: "gateway-unreachable",
+                hint: unreachableAdvice
               })
             )
           : unreadableAnswer(url, error.message),
@@ -582,7 +607,12 @@ export const askGateway = <A>(
       duration: "3 seconds",
       orElse: () =>
         Effect.fail(
-          new GatewayUnreachable({ url, message: `no gateway status at ${url} within 3 s. ${unreachableAdvice}` })
+          new GatewayUnreachable({
+            url,
+            message: `no gateway status at ${url}: no answer within 3 s`,
+            code: "gateway-unreachable",
+            hint: unreachableAdvice
+          })
         )
     })
   )
@@ -612,6 +642,7 @@ const unreadableAnswer = Effect.fnUntraced(function* (
   )
   return yield* new GatewayAnswerUnreadable({
     url,
+    code: "gateway-unreadable",
     message:
       gatewayVersion === undefined
         ? `the gateway at ${url} answers in a form this CLI (${cliVersion}) cannot read (${reason}). It may run another release: upgrade the gateway, or run the CLI at the gateway's version`
@@ -702,9 +733,12 @@ export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: b
  */
 export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => {
   const shared = sharedCause(status.devices, status.broker) !== undefined
-  const sharedHost = shared ? sharedHostOf(status.devices) : undefined
+  const sharedHost = shared ? sharedHostOf(deviceSide(status.devices)) : undefined
+  const problem = unhealthySummary(status)
   return {
     ok: isHealthy(status),
+    // What is wrong in one line, as the text's last line: `2 of 3 device(s) failing, broker not connected`.
+    ...(problem === undefined ? {} : { problem }),
     alarmsActive: activeAlarms(status),
     ...status,
     devices: status.devices.map((device) =>

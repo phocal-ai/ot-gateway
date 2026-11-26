@@ -11,10 +11,10 @@ import { makeBacnetNetwork } from "@ot-gateway/bacnet"
 import { BacnetSettings, makeMemoryNetwork, parseConfig } from "@ot-gateway/core"
 import { type BrokerControl, makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
 import { Clock, Effect, Exit, Fiber, FileSystem, Schema, Scope } from "effect"
-import { TestClock } from "effect/testing"
 import { createServer } from "node:net"
 import { runGateway } from "../src/Gateway.ts"
 import { configFileSource } from "../src/LoadConfig.ts"
+import { settle, whileTimePasses } from "./support/VirtualTime.ts"
 
 const BROKER = "10.0.0.2"
 
@@ -83,23 +83,6 @@ const configText = (
     null,
     2
   )}\n`
-
-/** Let real I/O (sockets, SQLite, HTTP) and virtual time move on together, `steps` half-seconds of the latter. */
-const settle = (steps: number) =>
-  Effect.gen(function* () {
-    for (let step = 0; step < steps; step++) {
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
-      yield* TestClock.adjust("500 millis")
-    }
-  })
-
-/** Run `request` (an HTTP call into the gateway) while virtual time moves on, as the gateway may wait on it. */
-const whileTimePasses = <A>(request: () => Promise<A>) =>
-  Effect.gen(function* () {
-    const fiber = yield* Effect.promise(request).pipe(Effect.forkScoped)
-    for (let step = 0; step < 200 && fiber.pollUnsafe() === undefined; step++) yield* settle(1)
-    return yield* Fiber.join(fiber)
-  })
 
 interface Reply {
   readonly status: number

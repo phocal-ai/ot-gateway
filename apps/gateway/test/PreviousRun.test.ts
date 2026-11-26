@@ -3,8 +3,15 @@
  */
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
-import { Effect, Exit, FileSystem, Option, Path, Scope } from "effect"
-import { RUN_FILE, runFilePath, trackRun } from "../src/PreviousRun.ts"
+import { Effect, Exit, Fiber, FileSystem, Option, Path, Scope } from "effect"
+import { TestClock } from "effect/testing"
+import { RUN_FILE, RUN_FILE_DEADLINE, runFilePath, trackRun } from "../src/PreviousRun.ts"
+
+/** A card that takes half of a write and then hangs. */
+const halfWrite = (real: FileSystem.FileSystem): FileSystem.FileSystem => ({
+  ...real,
+  writeFileString: (target, data) => Effect.andThen(real.writeFileString(target, data.slice(0, 5)), Effect.never)
+})
 
 describe("trackRun", () => {
   it.effect("tells a clean stop from one that never ran its shutdown, and a first run from both", () =>
@@ -42,5 +49,59 @@ describe("trackRun", () => {
       expect(runFilePath({ history: { path: "/h/history.sqlite" } }, path)).toBe("/h/ot-gateway-run.json")
       expect(runFilePath({}, path)).toBeUndefined()
     }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("leaves the run file as it was when a write is cut short", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const file = path.join(yield* fs.makeTempDirectoryScoped(), RUN_FILE)
+      yield* fs.writeFileString(file, `${JSON.stringify({ started: 1000, stopped: 2000 })}\n`)
+      const started = yield* trackRun(file, 3000).pipe(
+        Effect.scoped,
+        Effect.updateService(FileSystem.FileSystem, halfWrite),
+        Effect.forkChild
+      )
+      // Real file I/O between steps of the test clock, until the write's deadline has passed.
+      for (let step = 0; step < 20 && started.pollUnsafe() === undefined; step++) {
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 5)))
+        yield* TestClock.adjust("1 second")
+      }
+      expect(yield* Fiber.join(started)).toEqual(Option.some({ started: 1000, stopped: 2000 }))
+      expect(JSON.parse(yield* fs.readFileString(file))).toEqual({ started: 1000, stopped: 2000 })
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("gives up on a card that hangs, at start and at stop, instead of holding the gateway", () =>
+    Effect.gen(function* () {
+      const writes: Array<string> = []
+      const hanging = FileSystem.makeNoop({
+        readFileString: () => Effect.never,
+        writeFileString: (_path, data) =>
+          Effect.andThen(
+            Effect.sync(() => writes.push(data)),
+            Effect.never
+          )
+      })
+      const scope = yield* Scope.make()
+      const started = yield* trackRun("/card/ot-gateway-run.json", 1000).pipe(
+        Scope.provide(scope),
+        Effect.provideService(FileSystem.FileSystem, hanging),
+        Effect.forkChild
+      )
+      // The read and the first write each wait out their deadline, and no longer.
+      yield* TestClock.adjust(RUN_FILE_DEADLINE)
+      expect(started.pollUnsafe()).toBeUndefined()
+      yield* TestClock.adjust(RUN_FILE_DEADLINE)
+      expect(yield* Fiber.join(started)).toEqual(Option.none())
+      // The stop's write is bounded too: closing the scope finishes once its deadline has passed.
+      const stopping = yield* Scope.close(scope, Exit.interrupt(1)).pipe(Effect.forkChild)
+      yield* TestClock.adjust(RUN_FILE_DEADLINE)
+      yield* Fiber.join(stopping)
+      expect(writes.map((data) => JSON.parse(data))).toEqual([
+        { started: 1000 },
+        { started: 1000, stopped: 5_000 + 5_000 }
+      ])
+    })
   )
 })

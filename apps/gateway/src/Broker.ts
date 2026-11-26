@@ -13,6 +13,7 @@ import {
   makeMqttClient,
   type MqttClientOptions,
   MqttConnectionError,
+  type MqttRejected,
   parseBrokerUrl,
   readBrokerPassword
 } from "@ot-gateway/mqtt"
@@ -24,8 +25,29 @@ const DIAL_TIMEOUT = "15 seconds"
 /** How long the round trip of `broker` waits for its message to come back. */
 const ROUND_TRIP_TIMEOUT = "5 seconds"
 
+/**
+ * Why a broker command failed, for scripts and agents (`code` in `--json`): nothing answered at the address
+ * (`broker-unreachable`), something did but not in time (`broker-timeout`), the broker turned the login away
+ * (`broker-login-refused`) or the connection (`broker-refused`), the round trip's message did not come back
+ * (`no-round-trip`), the broker went away during a `watch` (`broker-lost`), or the password variable the config
+ * names is not set (`password-unset`), so nothing was sent.
+ */
+export const BrokerFailureCode = Schema.Literals([
+  "broker-unreachable",
+  "broker-timeout",
+  "broker-login-refused",
+  "broker-refused",
+  "no-round-trip",
+  "broker-lost",
+  "password-unset"
+])
+export type BrokerFailureCode = typeof BrokerFailureCode.Type
+
 export class BrokerCommandError extends Schema.TaggedError<BrokerCommandError>()("BrokerCommandError", {
-  message: Schema.String
+  message: Schema.String,
+  code: Schema.optionalKey(BrokerFailureCode),
+  /** What to check next, one sentence. */
+  hint: Schema.optionalKey(Schema.String)
 }) {}
 
 /** Six hex digits, so two commands at once never share a client id. */
@@ -43,7 +65,18 @@ export const brokerClient = Effect.fn("brokerClient")(function* (
   network?: Pick<Network, "tcp">
 ) {
   const address = yield* parseBrokerUrl(settings.url)
-  const password = yield* readBrokerPassword(settings)
+  const password = yield* readBrokerPassword(settings).pipe(
+    // The message already says where the password goes, for the status page, which shows only the message.
+    Effect.catchTag("MqttSettingsError", (error) =>
+      Effect.fail(
+        new BrokerCommandError({
+          message: error.message,
+          code: "password-unset",
+          hint: `put the broker password in ot-gateway.env next to the config (${settings.passwordEnv ?? "NAME"}=...), or in /etc/ot-gateway/gateway.env under systemd`
+        })
+      )
+    )
+  )
   const openTimeout = "10 seconds"
   const socket = network
     ? yield* network.tcp({ host: address.host, port: address.port, openTimeout })
@@ -59,24 +92,78 @@ export const brokerClient = Effect.fn("brokerClient")(function* (
   })
 })
 
+/** The CONNACK reason codes that turn a login away (MQTT 5 §3.2.2.2; 3.1.1's return codes 4 and 5 map to them). */
+const loginRefusals = new Set([0x86, 0x87, 0x8c])
+
+/** Where the broker password comes from, for a hint: the env var the config names, or that it names none. */
+const passwordSource = (settings: Pick<MqttSettings, "username" | "passwordEnv">) =>
+  settings.passwordEnv === undefined
+    ? "the config sets no mqtt.passwordEnv, so no password is sent"
+    : `the password is read from ${settings.passwordEnv}`
+
+type BrokerLogin = Pick<MqttSettings, "url" | "username" | "passwordEnv">
+
+/** A connection the broker turned away (CONNACK 0x80 or above), as a code and a hint. */
+export const refusalFailure = (error: MqttRejected, settings: BrokerLogin) =>
+  loginRefusals.has(error.reasonCode)
+    ? {
+        code: "broker-login-refused" as const,
+        hint: `check mqtt.username (${settings.username ?? "not set"}) and the password: ${passwordSource(settings)}`
+      }
+    : {
+        code: "broker-refused" as const,
+        hint: `the broker said why: ${error.message.replace(/^broker refused the connection: /, "")}`
+      }
+
+/**
+ * A connection that did not open or did not answer, as a code and a hint. Its message comes from the socket
+ * (`could not connect: connection refused by …`, `… host name … not found`, `… no answer from …`, `timed out opening
+ * the connection`), the client (`no CONNACK in time`) or `firstDialOf` (`no answer within 15 seconds`).
+ */
+export const connectionFailure = (error: MqttConnectionError, settings: BrokerLogin) => {
+  // The socket's text: `could not connect: host name … not found`, `could not connect: no answer from …`.
+  const reason = error.message.replace(/^could not connect(: )?/, "")
+  if (/^host name .* not found/.test(reason)) {
+    return { code: "broker-unreachable" as const, hint: `check the host name in mqtt.url (${settings.url})` }
+  }
+  if (/^(no answer|no CONNACK|timed out)/.test(reason)) {
+    return {
+      code: "broker-timeout" as const,
+      hint: "something is in the way or answers other than MQTT: a firewall, the wrong port, or TLS on one side only (mqtts:// for TLS, usually port 8883)"
+    }
+  }
+  return {
+    code: "broker-unreachable" as const,
+    hint: `is the broker running and listening there? Check mqtt.url (${settings.url}); ot-gateway demo runs a test broker on this machine`
+  }
+}
+
 /** The first dial's outcome, as one error a person can read. Shared by `watch --seconds`, `broker` and `publish`. */
 export const firstDialOf = (
-  client: { readonly firstDial: Effect.Effect<void, { readonly message: string }> },
-  url: string
+  client: { readonly firstDial: Effect.Effect<void, MqttConnectionError | MqttRejected> },
+  settings: BrokerLogin
 ) =>
   client.firstDial.pipe(
     Effect.timeoutOrElse({
       duration: DIAL_TIMEOUT,
       orElse: () => Effect.fail(new MqttConnectionError({ message: `no answer within ${DIAL_TIMEOUT}` }))
     }),
-    Effect.mapError(
-      (error) =>
-        // The socket's message starts with "could not connect" itself: say it once, with the URL.
-        new BrokerCommandError({
-          message: `could not connect to ${url}: ${error.message.replace(/^could not connect(: )?/, "")}`
-        })
-    )
+    Effect.catchTags({
+      MqttConnectionError: (error) => Effect.fail(dialError(error, connectionFailure(error, settings), settings)),
+      MqttRejected: (error) => Effect.fail(dialError(error, refusalFailure(error, settings), settings))
+    })
   )
+
+/** The socket's message starts with "could not connect" itself: say it once, with the URL. */
+const dialError = (
+  error: { readonly message: string },
+  failure: { readonly code: BrokerFailureCode; readonly hint: string },
+  settings: BrokerLogin
+) =>
+  new BrokerCommandError({
+    message: `could not connect to ${settings.url}: ${error.message.replace(/^could not connect(: )?/, "")}`,
+    ...failure
+  })
 
 export interface BrokerReport extends ConnectionInfo {
   /** False when the round trip's message did not come back: the gateway could not read what it publishes. */
@@ -131,7 +218,7 @@ export const checkBroker = Effect.fn("checkBroker")(function* (config: GatewayCo
     },
     network
   )
-  yield* firstDialOf(client, config.mqtt.url)
+  yield* firstDialOf(client, config.mqtt)
   const info = yield* client.connection
   if (info === undefined) {
     return yield* new BrokerCommandError({ message: `connected to ${config.mqtt.url}, then lost the connection` })
@@ -181,7 +268,9 @@ export const formatBrokerReport = (report: BrokerReport) =>
 /** `broker`'s failure after its report: the message did not come back, so the gateway would not work as it should. */
 export const roundTripFailure = (report: BrokerReport) =>
   new BrokerCommandError({
-    message: `${report.broker}: a message to ${report.roundTripTopic} did not come back within ${ROUND_TRIP_TIMEOUT}; see the warning above`
+    message: `${report.broker}: a message to ${report.roundTripTopic} did not come back within ${ROUND_TRIP_TIMEOUT}; see the warning above`,
+    code: "no-round-trip",
+    hint: `check the broker's access rules (ACL) for this user under ${topicRoot(report.roundTripTopic)}/#: they must allow publishing and subscribing`
   })
 
 export interface PublishCommandOptions {
@@ -200,7 +289,7 @@ export const publishOnce = Effect.fn("publishOnce")(function* (
   options: PublishCommandOptions
 ) {
   const client = yield* brokerClient(config.mqtt, "publish")
-  yield* firstDialOf(client, config.mqtt.url)
+  yield* firstDialOf(client, config.mqtt)
   // The client lowers the QoS to what the broker's CONNACK allows: report the one that was used.
   const connection = yield* client.connection
   const qos: 0 | 1 = options.qos === 1 && (connection?.maximumQoS ?? 1) === 1 ? 1 : 0

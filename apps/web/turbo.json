@@ -3,7 +3,7 @@
   "extends": ["//"],
   "tasks": {
     "build": {
-      "inputs": ["$TURBO_DEFAULT$", "../../packages/api/src/**"]
+      "inputs": ["$TURBO_DEFAULT$", "../../packages/api/src/**", "../../packages/core/src/**"]
     }
   }
 }

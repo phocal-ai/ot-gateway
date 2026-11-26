@@ -5,6 +5,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, FileSystem } from "effect"
+import { pointsListColumnNames } from "@ot-gateway/api"
 import { fileURLToPath } from "node:url"
 import { exampleConfigPath } from "../src/Demo.ts"
 import { importPointsList } from "../src/Import.ts"
@@ -16,6 +17,7 @@ import {
   describePointsListSchema,
   firstSentence,
   pointsListColumns,
+  pointsListJsonSchema,
   pointsListRules,
   pointsListSchema,
   pointsListTemplate,
@@ -84,6 +86,8 @@ describe("the points list schema", () => {
       const profiles = new Map([["eastron-sdm630", yield* resolveProfile("eastron-sdm630", { relativeTo: "." })]])
       for (const [list, protocols] of [
         [pointsListTemplate(), ["modbus-tcp", "modbus-tcp", "bacnet-ip"]],
+        [pointsListTemplate("modbus"), ["modbus-tcp", "modbus-tcp"]],
+        [pointsListTemplate("bacnet"), ["bacnet-ip"]],
         [example, ["modbus-tcp", "modbus-tcp", "bacnet-ip"]]
       ] as const) {
         expect(unknownColumns(parseDelimited(list)[0] ?? [])).toEqual([])
@@ -92,6 +96,43 @@ describe("the points list schema", () => {
       }
     }).pipe(Effect.provide(NodeServices.layer))
   )
+})
+
+const columnsOf = (scopes: ReadonlyArray<string>) =>
+  pointsListColumns.filter((column) => scopes.includes(column.scope)).map((column) => column.name)
+
+const exampleRows = (protocol?: "modbus" | "bacnet") => parseDelimited(pointsListTemplate(protocol)).length - 1
+
+describe("the column names the status page shows", () => {
+  it("are the format's columns, in its order", () => {
+    expect(pointsListColumns.map((column) => column.name)).toEqual([...pointsListColumnNames])
+  })
+})
+
+describe("a template for one protocol", () => {
+  it("has the columns of every row and its own, in the format's order, and none of the other protocol's", () => {
+    expect(parseDelimited(pointsListTemplate("modbus"))[0]).toEqual(columnsOf(["any", "modbus-tcp"]))
+    expect(parseDelimited(pointsListTemplate("bacnet"))[0]).toEqual(columnsOf(["any", "bacnet-ip"]))
+  })
+
+  it("leaves no example row out: the two have the rows of the whole template between them", () => {
+    expect(exampleRows("modbus") + exampleRows("bacnet")).toBe(exampleRows())
+  })
+})
+
+describe("the JSON form's JSON Schema", () => {
+  it("describes every column, requires device and point, and lists the allowed values", () => {
+    const schema = pointsListJsonSchema()
+    expect(schema.type).toBe("array")
+    expect(schema.items.required).toEqual(["device", "point"])
+    expect(Object.keys(schema.items.properties)).toEqual(pointsListColumns.map((column) => column.name))
+    expect(schema.items.properties["register"]).toMatchObject({ type: ["number", "string", "null"] })
+    expect(schema.items.properties["type"]).toMatchObject({
+      enum: [...(pointsListColumns.find((c) => c.name === "type")?.values ?? []), "", null]
+    })
+    expect(schema.items.properties["host"]?.description).toMatch(/^Modbus TCP: /)
+    expect(schema.items.additionalProperties).toBe(true)
+  })
 })
 
 describe("import --dry-run without a config", () => {
@@ -111,7 +152,7 @@ describe("import --dry-run without a config", () => {
       const bad = `${directory}/bad.csv`
       yield* fs.writeFileString(bad, "device,point,host,register,type\nMeter,p,1.2.3.4,1,float99\n")
       const error = yield* importPointsList(bad, undefined, { dryRun: true }).pipe(Effect.flip)
-      expect(error.message).toContain("would make a config invalid")
+      expect(error.message).toContain('line 2: type "float99"')
       expect(error.message).not.toContain("nothing was written")
 
       // A config that is named but not there is a mistake, dry run or not: never "ok" against a file that is missing.

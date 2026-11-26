@@ -12,10 +12,10 @@ import { makeMemoryNetwork, type ModbusPoint, parseConfig } from "@ot-gateway/co
 import { makeRegisterBank, makeSimulatorControl, serveModbus, setPointValue } from "@ot-gateway/modbus"
 import { makeBrokerControl, serveMqtt } from "@ot-gateway/mqtt"
 import { Effect, Fiber, FileSystem, Schema } from "effect"
-import { TestClock } from "effect/testing"
 import { createServer } from "node:net"
 import { runGateway } from "../src/Gateway.ts"
 import { configFileSource } from "../src/LoadConfig.ts"
+import { settle, whileTimePasses } from "./support/VirtualTime.ts"
 
 const BROKER = "10.0.0.2"
 const METER = "10.0.0.3"
@@ -33,21 +33,6 @@ const freePort = Effect.promise(
       })
     })
 )
-
-const settle = (steps: number) =>
-  Effect.gen(function* () {
-    for (let step = 0; step < steps; step++) {
-      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 2)))
-      yield* TestClock.adjust("500 millis")
-    }
-  })
-
-const whileTimePasses = <A>(request: () => Promise<A>) =>
-  Effect.gen(function* () {
-    const fiber = yield* Effect.promise(request).pipe(Effect.forkScoped)
-    for (let step = 0; step < 200 && fiber.pollUnsafe() === undefined; step++) yield* settle(1)
-    return yield* Fiber.join(fiber)
-  })
 
 interface Reply {
   readonly status: number
@@ -486,13 +471,13 @@ describe("adding a points list from the status page", () => {
         devices: [
           { name: "Main meter", id: "main-meter", protocol: "modbus-tcp", lines: [2, 3], points: 2 },
           { name: "Sub meter", lines: [4] },
-          { name: "Third meter", id: "third-meter", lines: [5] }
+          { name: "Third meter", lines: [5] }
         ],
         adds: { devices: 1, points: 2 }
       })
       const devices = checked.body["devices"]
       expect(Array.isArray(devices) && String(devices[1]?.error)).toContain("line 4")
-      expect(Array.isArray(devices) && String(devices[2]?.error)).toContain("address")
+      expect(Array.isArray(devices) && String(devices[2]?.error)).toContain('line 5: register "70000"')
       const file = yield* whileTimePasses(() => request(port, "GET", "/api/config/file", undefined, {}))
       const applied = yield* post(port, "/api/import/apply", {
         text: pointsList,
@@ -570,6 +555,10 @@ describe("adding a points list from the status page", () => {
       const format = yield* whileTimePasses(() => request(port, "GET", "/api/points/format", undefined, {}))
       expect(format.status).toBe(200)
       expect(String(format.body["template"]).split("\n")[0]).toMatch(/^device,point,name,unit/)
+      expect(format.body["templates"]).toMatchObject({
+        modbus: expect.stringMatching(/^device,[^\n]*,register,/),
+        bacnet: expect.stringMatching(/^device,[^\n]*,device_instance,/)
+      })
       const columns = format.body["columns"]
       expect(Array.isArray(columns) && columns.map((column) => column.name)).toContain("register")
       yield* Fiber.interrupt(running)

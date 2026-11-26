@@ -5,6 +5,7 @@
  * `offline` when the gateway disappears without saying goodbye.
  */
 import { Effect, Metric, Queue, Schedule, Semaphore } from "effect"
+import { contractVersion } from "./Contract.ts"
 import type { DriverError } from "./Errors.ts"
 import type { Slug } from "./Point.ts"
 import { Publisher } from "./Publisher.ts"
@@ -121,6 +122,8 @@ export interface HostHealth {
 
 export interface OnlineMessage {
   readonly status: "online"
+  /** The MQTT contract this gateway speaks (`contractVersion`, docs/mqtt-contract.md). */
+  readonly contract: string
   /** Unix ms when the gateway started. */
   readonly since: number
   /** Unix ms when this message was written. */
@@ -155,6 +158,7 @@ const healthMessageOf = (health: DeviceHealth): DeviceHealthMessage => ({
 export const onlinePayload = (registry: HealthRegistry, since: number, now: number, host?: HostHealth): string =>
   JSON.stringify({
     status: "online",
+    contract: contractVersion,
     since,
     ts: now,
     devices: Object.fromEntries(Array.from(registry.devices, ([id, health]) => [id, healthMessageOf(health)])),

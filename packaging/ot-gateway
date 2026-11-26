@@ -19,7 +19,7 @@ set -eu
 
 image=${OT_GATEWAY_IMAGE:-ghcr.io/phocal-ai/ot-gateway}
 # Moved by each release with the other pins (CONTRIBUTING.md, "Branches").
-release=v0.14.0
+release=v0.15.0
 
 tag_of() {
   [ -f "$1" ] && sed -n 's/.*ot-gateway:\${OT_GATEWAY_TAG:-\([^}]*\)}.*/\1/p' "$1" | head -n 1
@@ -39,8 +39,37 @@ fi
 [ -n "$tag" ] || tag=$(tag_of "${OT_GATEWAY_HOME:-$HOME/ot-gateway}/compose.yaml") || true
 [ -n "$tag" ] || tag=$release
 
+# Docker that cannot be reached is not a missing image: say what to do instead of pulling 460 MB that is there.
+docker_unreachable() {
+  reason=$(printf '%s\n' "$1" | sed '/^[[:space:]]*$/d' | tail -n 1)
+  case $reason in
+    *"permission denied"*)
+      echo "ot-gateway: Docker refused access to ${USER:-this user} (${reason})" >&2
+      echo "  add yourself to the docker group: sudo usermod -aG docker \"\$USER\", then log out and in again (or run: newgrp docker)" >&2
+      ;;
+    *)
+      echo "ot-gateway: Docker is not running (${reason})" >&2
+      if [ "$(uname -s)" = Linux ]; then
+        echo "  start it: sudo systemctl start docker (and at every boot: sudo systemctl enable docker)" >&2
+      else
+        echo "  start Docker Desktop, then run the command again" >&2
+      fi
+      ;;
+  esac
+  exit 1
+}
+
+# Only the two ways Docker cannot be reached stop here; anything else (no such image, in any engine's words) pulls.
 present=
-docker image inspect "$image:$tag" >/dev/null 2>&1 && present=1
+if err=$(docker image inspect "$image:$tag" 2>&1 >/dev/null); then
+  present=1
+else
+  case $err in
+    *"permission denied"* | *"Cannot connect to the Docker daemon"* | *"failed to connect to the docker API"* | *"Is the docker daemon running"*)
+      docker_unreachable "$err"
+      ;;
+  esac
+fi
 
 # A moving tag (dev, the preview of the next release, or latest) is checked for a newer image on every run, once and
 # without retries: offline, or with the registry down, the local image runs.
@@ -64,7 +93,7 @@ if [ -z "$present" ]; then
     err=$(docker pull -q "$image:$tag" 2>&1 >/dev/null) && break
     reason=$(printf '%s\n' "$err" | sed '/^[[:space:]]*$/d' | tail -n 1)
     case $reason in
-      *"manifest unknown"* | *"not found"* | *"permission denied"* | *"Cannot connect to the Docker daemon"*) backoff= ;;
+      *"manifest unknown"* | *"not found"* | *"permission denied"* | *"Cannot connect to the Docker daemon"* | *"failed to connect to the docker API"*) backoff= ;;
     esac
     if [ -z "$backoff" ]; then
       attempts="$attempt attempts"

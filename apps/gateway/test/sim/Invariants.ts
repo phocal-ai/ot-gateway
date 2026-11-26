@@ -3,8 +3,8 @@
  * check returns the violations it found, as sentences a failing test prints.
  */
 import { storeBackoffMillis } from "@ot-gateway/buffer"
-import { healthTopic } from "@ot-gateway/core"
-import { Schema } from "effect"
+import { contractMessageOf, decodeContractMessage, healthTopic } from "@ot-gateway/core"
+import { Cause, Exit, Schema } from "effect"
 import { type CommandKind, RESPONSES, type SimulationRun } from "./Simulation.ts"
 
 /** Messages the drainer may have in flight when a connection breaks (`BufferedPublisher.ts`). */
@@ -302,6 +302,25 @@ export const checkInvariants = (run: SimulationRun, totalMs: number): Verdict =>
     const top = [...counts].toSorted((a, b) => b[1] - a[1]).slice(0, 3)
     violations.push(
       `${run.problems.length} warnings and errors for ${run.faults.length} faults (budget ${budget}); most: ${top.map(([line, count]) => `${count}× ${line}`).join("; ")}`
+    )
+  }
+
+  // 9. Everything the gateway publishes matches the MQTT contract (docs/mqtt-contract.md), field for field: a field
+  // without a schema fails here before a consumer sees it. Commands are the senders' (some are invalid on purpose).
+  const offContract = new Map<string, number>()
+  let firstOffContract = ""
+  for (const message of run.received) {
+    const kind = contractMessageOf(message.topic)
+    if (kind === undefined || kind === "command") continue
+    const decoded = decodeContractMessage(kind, message.payload)
+    if (Exit.isSuccess(decoded)) continue
+    offContract.set(kind, (offContract.get(kind) ?? 0) + 1)
+    if (firstOffContract === "")
+      firstOffContract = `${message.topic} ${message.payload}: ${Cause.pretty(decoded.cause)}`
+  }
+  if (offContract.size > 0) {
+    violations.push(
+      `messages off the MQTT contract (${[...offContract].map(([kind, count]) => `${count} ${kind}`).join(", ")}), first: ${firstOffContract}`
     )
   }
 

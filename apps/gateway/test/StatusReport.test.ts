@@ -1,7 +1,8 @@
 /** `status` and `events`: what they print, in local clock time, and the exit code `status` gives. */
 import { describe, expect, it } from "@effect/vitest"
-import type { DeviceStatus, EventLog, GatewayStatus, Protocol } from "@ot-gateway/api"
+import { bacnetPortFailure, type DeviceStatus, type EventLog, type GatewayStatus, type Protocol } from "@ot-gateway/api"
 import { Effect } from "effect"
+import { HttpClientError, HttpClientRequest } from "effect/http"
 import { TestConsole } from "effect/testing"
 import { localTime } from "../src/Output.ts"
 import {
@@ -17,6 +18,7 @@ import {
   recentIncidents,
   sharedCause,
   statusJson,
+  transportReason,
   statusOutcome,
   unhealthySummary
 } from "../src/StatusReport.ts"
@@ -738,6 +740,28 @@ const failingOn = (id: string, failingSince: number): DeviceStatus => ({
   points: []
 })
 
+/** A request to the status page that found nothing, with `cause` as fetch gave it. */
+const failed = (cause: unknown) =>
+  new HttpClientError.HttpClientError({
+    reason: new HttpClientError.TransportError({ request: HttpClientRequest.get("http://127.0.0.1:8080"), cause })
+  })
+
+describe("a gateway that is not there", () => {
+  it("says why in the socket's words: fetch's cause, then the error's own", () => {
+    const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8080"), {
+      code: "ECONNREFUSED",
+      address: "127.0.0.1",
+      port: 8080
+    })
+    expect(transportReason(failed(new TypeError("fetch failed", { cause: refused })))).toBe(
+      "connection refused by 127.0.0.1:8080"
+    )
+    expect(transportReason(failed(new Error("socket hang up")))).toBe("socket hang up")
+    // Nothing more specific: the error's own words, never a guess.
+    expect(transportReason(failed("no Error at all"))).toMatch(/Transport error/)
+  })
+})
+
 describe("one outage of devices and broker on this machine", () => {
   const outage: EventLog = {
     now,
@@ -772,6 +796,26 @@ describe("one outage of devices and broker on this machine", () => {
     )
     expect(sharedCause(devices)).toContain("all 2 devices stopped answering within 2 s of each other, both on")
     expect(formatStatus({ ...failingGateway, broker, devices })).toContain("all 2 devices and the broker")
+  })
+
+  it("sees no shared cause when one of them fails on the gateway's own port, and says what is wrong in one line", () => {
+    const portTaken = {
+      ...failingOn("heat-pump", at(12, 18, 22)),
+      protocol: "bacnet-ip" as const,
+      reason: "connection",
+      lastError: bacnetPortFailure(47808, "0.0.0.0:47808 is in use by another program")
+    }
+    const devices = [failingOn("energy-meter", at(12, 18, 20)), portTaken]
+    expect(sharedCause(devices)).toBeUndefined()
+    // The others are judged without it: two on one host that failed together still share a cause.
+    const three = [...devices, failingOn("pump", at(12, 18, 21))]
+    expect(sharedCause(three)).toBe(
+      "2 devices (energy-meter, pump) stopped answering within 1 s of each other, both on 127.0.0.1: likely the host itself, its power or its network link"
+    )
+    const report = statusJson({ ...failingGateway, devices })
+    expect(report.problem).toMatch(/^2 of 2 device\(s\) failing/)
+    expect(report.devices[1]).toMatchObject({ hints: { meaning: expect.stringContaining("holds its BACnet/IP port") } })
+    expect(statusJson(healthyGateway)).not.toHaveProperty("problem")
   })
 
   it("reads the failed connects as the outage's retries, one problem, not two", () => {

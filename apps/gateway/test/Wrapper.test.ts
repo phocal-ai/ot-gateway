@@ -16,12 +16,15 @@ const image = "ghcr.io/phocal-ai/ot-gateway:v9.9.9"
 
 // FAKE_IMAGE_PRESENT=1: the image is local. FAKE_PULL_FAILURES=n: the first n pulls fail (always when "always"),
 // ending their stderr with FAKE_PULL_ERROR.
-// FAKE_RUNNING=<name>: a running container of that name.
+// FAKE_RUNNING=<name>: a running container of that name. FAKE_DOCKER_ERROR: Docker cannot be reached, with that error.
 const fakeDocker = [
   "#!/bin/sh",
   'echo "docker $*" >> "$FAKE_DIR/log"',
   'case "$1" in',
-  '  image) [ "${FAKE_IMAGE_PRESENT:-}" = 1 ] ;;',
+  "  image)",
+  '    [ -z "${FAKE_DOCKER_ERROR:-}" ] || { echo "$FAKE_DOCKER_ERROR" >&2; exit 1; }',
+  '    [ "${FAKE_IMAGE_PRESENT:-}" = 1 ] || { echo "Error response from daemon: No such image: $3" >&2; exit 1; }',
+  "    ;;",
   "  pull)",
   '    count=$(cat "$FAKE_DIR/pulls" 2>/dev/null || echo 0)',
   "    count=$((count + 1))",
@@ -112,6 +115,31 @@ describe("packaging/ot-gateway", () => {
     const result = runWrapper(["run"], { FAKE_IMAGE_PRESENT: "1" })
     expect(result.status).toBe(0)
     expect(runCall(result.log)).toContain(" -e OT_GATEWAY_DATA_DIR= -v ")
+  })
+
+  it("says what to do when Docker refuses this user or is not running, and pulls nothing", () => {
+    const refused = runWrapper(["status"], {
+      FAKE_DOCKER_ERROR: "permission denied while trying to connect to the docker API at unix:///var/run/docker.sock",
+      USER: "pi"
+    })
+    expect(refused.status).toBe(1)
+    expect(refused.stderr).toContain("ot-gateway: Docker refused access to pi")
+    expect(refused.stderr).toContain('sudo usermod -aG docker "$USER", then log out and in again')
+    expect(refused.log.some((line) => line.startsWith("docker pull"))).toBe(false)
+    const stopped = runWrapper(["status"], {
+      FAKE_DOCKER_ERROR:
+        "failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running"
+    })
+    expect(stopped.status).toBe(1)
+    expect(stopped.stderr).toContain("ot-gateway: Docker is not running")
+    expect(stopped.stderr).toContain("sudo systemctl start docker")
+    expect(stopped.log.some((line) => line.startsWith("docker pull") || line.startsWith("docker run"))).toBe(false)
+  })
+
+  it("pulls when another engine says the image is missing in its own words", () => {
+    const result = runWrapper(["--version"], { FAKE_DOCKER_ERROR: `Error: ${image}: image not known` })
+    expect(result.log.some((line) => line.startsWith("docker pull"))).toBe(true)
+    expect(result.stderr).not.toContain("Docker is not running")
   })
 
   it("pulls a missing image quietly, retrying twice with a backoff", () => {

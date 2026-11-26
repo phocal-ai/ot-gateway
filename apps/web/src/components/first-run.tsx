@@ -250,8 +250,13 @@ export const FirstRun = ({ status, onClose }: { readonly status: GatewayStatus; 
             <div className="grid gap-1">
               <p>By hand: write a list to fill in, one row per value,</p>
               <Command>ot-gateway points template &gt; points.csv</Command>
-              <p>then add it to the config and restart the gateway:</p>
+              <p>then upload it in step 2, which needs no restart. Or add it to the config,</p>
               <Command>ot-gateway import points.csv</Command>
+              <p>
+                and restart the gateway to read it:{" "}
+                <code className="font-mono text-foreground">docker compose restart</code> in its folder, or{" "}
+                <code className="font-mono text-foreground">sudo systemctl restart ot-gateway</code> under systemd.
+              </p>
             </div>
           </div>
         </details>

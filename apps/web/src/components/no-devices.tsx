@@ -44,8 +44,13 @@ export const NoDevicesYet = () => (
       <h3 className="font-medium text-foreground">By hand</h3>
       <p>Write a list to fill in, one row per value:</p>
       <Command>ot-gateway points template &gt; points.csv</Command>
-      <p>Then add it to the config and restart the gateway:</p>
+      <p>Then upload it above, which needs no restart. Or add it to the config,</p>
       <Command>ot-gateway import points.csv</Command>
+      <p>
+        and restart the gateway to read it: <code className="font-mono text-foreground">docker compose restart</code> in
+        its folder, or <code className="font-mono text-foreground">sudo systemctl restart ot-gateway</code> under
+        systemd.
+      </p>
     </div>
   </div>
 )

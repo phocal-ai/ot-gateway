@@ -4,15 +4,25 @@
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
-import { type BrokerControl, makeBrokerControl, Property, serveMqtt } from "@ot-gateway/mqtt"
+import {
+  type BrokerControl,
+  makeBrokerControl,
+  MqttConnectionError,
+  MqttRejected,
+  Property,
+  serveMqtt
+} from "@ot-gateway/mqtt"
 import { ConfigProvider, Effect } from "effect"
 import {
   brokerClient,
   brokerWarnings,
   checkBroker,
+  connectionFailure,
   formatBrokerReport,
   formatPublished,
-  publishOnce
+  publishOnce,
+  refusalFailure,
+  roundTripFailure
 } from "../src/Broker.ts"
 
 /** A broker on a free port for the current scope, and a config pointing at it. */
@@ -73,6 +83,53 @@ describe("ot-gateway broker", () => {
     })
   )
 
+  it.live("gives each failure to connect a code and what to check", () =>
+    Effect.gen(function* () {
+      const control = makeBrokerControl()
+      control.connackReason = 0x86
+      const config = yield* brokerAndConfig(control)
+      const refused = yield* Effect.flip(checkBroker(config))
+      expect(refused).toMatchObject({
+        code: "broker-login-refused",
+        hint: expect.stringMatching(/mqtt\.username \(not set\).*no mqtt\.passwordEnv/)
+      })
+      control.connackReason = 0x89
+      expect(yield* Effect.flip(checkBroker(config))).toMatchObject({
+        code: "broker-refused",
+        hint: "the broker said why: server busy"
+      })
+    })
+  )
+
+  it("tells a broker that is not there from one that does not answer", () => {
+    const settings = { url: "mqtt://broker.lan:1883" }
+    const failure = (message: string) => connectionFailure(new MqttConnectionError({ message }), settings)
+    // As the socket says it (describeSocketError), and as the client and firstDialOf do.
+    expect(failure("could not connect: connection refused by 10.0.0.5:1883")).toMatchObject({
+      code: "broker-unreachable"
+    })
+    expect(failure("could not connect: host name broker.lan not found")).toEqual({
+      code: "broker-unreachable",
+      hint: "check the host name in mqtt.url (mqtt://broker.lan:1883)"
+    })
+    expect(failure("could not connect: no answer from 10.0.0.5:1883")).toMatchObject({ code: "broker-timeout" })
+    expect(failure("timed out opening the connection")).toMatchObject({ code: "broker-timeout" })
+    expect(failure("no answer within 15 seconds")).toMatchObject({ code: "broker-timeout" })
+    expect(failure("no CONNACK in time")).toMatchObject({ code: "broker-timeout" })
+    const login = refusalFailure(
+      new MqttRejected({ reasonCode: 0x87, message: "broker refused the connection: not authorized" }),
+      {
+        ...settings,
+        username: "gateway",
+        passwordEnv: "MQTT_PASSWORD"
+      }
+    )
+    expect(login).toEqual({
+      code: "broker-login-refused",
+      hint: "check mqtt.username (gateway) and the password: the password is read from MQTT_PASSWORD"
+    })
+  })
+
   it.live(
     "fails, with ok false, when its message does not come back",
     () =>
@@ -84,6 +141,10 @@ describe("ot-gateway broker", () => {
         expect(report.roundTripMs).toBeUndefined()
         expect(report.warnings).toEqual([expect.stringContaining("did not come back")])
         expect(formatBrokerReport(report)).toContain("round trip: NO ANSWER")
+        expect(roundTripFailure(report)).toMatchObject({
+          code: "no-round-trip",
+          hint: expect.stringContaining("s/b/#")
+        })
       }),
     15_000
   )
@@ -92,8 +153,12 @@ describe("ot-gateway broker", () => {
     Effect.gen(function* () {
       const settings = { version: "auto", url: "mqtt://127.0.0.1:1", passwordEnv: "MQTT_PASSWORD" } as const
       const error = yield* Effect.flip(brokerClient(settings, "check"))
-      expect(error._tag).toBe("MqttSettingsError")
-      expect(error.message).toContain("MQTT_PASSWORD is not set")
+      expect(error).toMatchObject({
+        _tag: "BrokerCommandError",
+        code: "password-unset",
+        message: expect.stringContaining("MQTT_PASSWORD is not set"),
+        hint: expect.stringContaining("ot-gateway.env next to the config (MQTT_PASSWORD=...)")
+      })
       expect(error.message).toContain("ot-gateway.env (MQTT_PASSWORD=...)")
     }).pipe(Effect.scoped, Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))))
   )

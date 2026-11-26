@@ -29,6 +29,20 @@ describe("sharedCauses", () => {
     ])
   })
 
+  it("leaves out a device that failed on the gateway's own port: that is not a cause the others share", () => {
+    expect(
+      sharedCauses([
+        {
+          id: 1,
+          device: "heat-pump",
+          at: 1_000,
+          error: "the gateway's BACnet/IP port 47808 cannot be opened: 0.0.0.0:47808 is in use by another program"
+        },
+        { id: 2, device: "meter", at: 3_000, error: "could not connect: connection refused by 127.0.0.1:5999" }
+      ])
+    ).toEqual([])
+  })
+
   it("finds none for one device that failed twice, or for failures far apart", () => {
     expect(
       sharedCauses([

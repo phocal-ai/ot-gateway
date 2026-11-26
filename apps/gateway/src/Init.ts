@@ -17,7 +17,7 @@ import { discoverDrafts, type draftDevices } from "./Discover.ts"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { devicesFromFile } from "./Import.ts"
 import { shellArgument } from "./Output.ts"
-import type { PointsListDevice } from "./PointsList.ts"
+import { type PointsListDevice, PointsListIssue } from "./PointsList.ts"
 
 /** A simulated device with two points, to see values flow before any real device is connected. */
 export const simulatedDevice = {
@@ -86,8 +86,14 @@ export interface InitFlags {
   readonly statusPort?: number | undefined
 }
 
-/** A flag's value that its question would not accept, or a config in the way without `--force`. */
-export class InitError extends Schema.TaggedError<InitError>()("InitError", { message: Schema.String }) {}
+/**
+ * A flag's value that its question would not accept, a config in the way without `--force`, or a points list with
+ * mistakes, whose `issues` are those mistakes one by one, as `import --json` gives them.
+ */
+export class InitError extends Schema.TaggedError<InitError>()("InitError", {
+  message: Schema.String,
+  issues: Schema.optionalKey(Schema.Array(PointsListIssue))
+}) {}
 
 /**
  * The config for the answers and devices, in the file's own shape. The outbox and the history are files next to
@@ -269,11 +275,25 @@ const devicesFromList: Effect.Effect<
   )
 })
 
+/** A points list's failure under the flag that named it; several mistakes start on a line of their own. */
+const pointsFlagMessage = (path: string, message: string) =>
+  `--points ${path}:${message.includes("\n") ? "\n" : " "}${message}`
+
 /** The devices of the points list a flag named: a mistake ends init, there being nobody to ask again. */
 const devicesFromFlag = (path: string) =>
   devicesFromFile(path).pipe(
     Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
-    Effect.mapError((error) => new InitError({ message: `--points ${path}: ${error.message}` }))
+    Effect.catchTags({
+      PointsListError: (error) =>
+        Effect.fail(
+          new InitError({
+            message: pointsFlagMessage(path, error.message),
+            ...(error.issues === undefined ? {} : { issues: error.issues })
+          })
+        ),
+      ProfileError: (error) => Effect.fail(new InitError({ message: pointsFlagMessage(path, error.message) })),
+      PlatformError: (error) => Effect.fail(new InitError({ message: pointsFlagMessage(path, error.message) }))
+    })
   )
 
 /** The devices for the chosen source; discovery runs with the answers so far. */
@@ -519,7 +539,7 @@ export const initNext = (
             here ? "docker compose up -d" : `docker compose -f ${inFolder("compose.yaml")} up -d`,
             "start it in Docker, restarted after a crash or a reboot"
           ),
-          step(`${cli} status`, "one line per device")
+          step(`${cli} status${argument}`, "one line per device")
         ]
       : [step(`${cli} run${argument}`, "start the gateway")]
   // As the work goes: the broker answers, the points go in and pass the check, then the gateway starts. A wrong URL,

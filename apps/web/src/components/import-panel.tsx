@@ -171,7 +171,7 @@ const CheckList = ({
               )}
             </div>
             {device.error === undefined ? null : (
-              <p className="text-xs break-words text-destructive">
+              <p className="text-xs break-words whitespace-pre-line text-destructive">
                 <span className="sr-only">Not added: </span>
                 {pageError(device.error)}
               </p>
@@ -213,7 +213,7 @@ const FormatHelp = ({ format }: { readonly format: Outcome<PointsListFormat> | u
         <code className="font-mono">ot-gateway points schema</code> describes its columns.
       </p>
     )
-  const { template, rules, columns } = format.value
+  const { template, templates, rules, columns } = format.value
   const scopes = ["any", "modbus-tcp", "bacnet-ip"] as const
   return (
     <div className="grid gap-2">
@@ -231,6 +231,29 @@ const FormatHelp = ({ format }: { readonly format: Outcome<PointsListFormat> | u
           with every column and example rows: fill it in with a spreadsheet, one row per value.
         </span>
       </p>
+      {templates === undefined ? null : (
+        <p className="text-xs text-muted-foreground">
+          Only one kind of device? A shorter template with only its columns:{" "}
+          <a
+            className="underline underline-offset-4"
+            href={templateHref(templates.modbus)}
+            download="points-modbus.csv"
+            type="text/csv"
+          >
+            Modbus TCP
+          </a>
+          {" or "}
+          <a
+            className="underline underline-offset-4"
+            href={templateHref(templates.bacnet)}
+            download="points-bacnet.csv"
+            type="text/csv"
+          >
+            BACnet/IP
+          </a>
+          . It is the same format: upload one list after the other to add both.
+        </p>
+      )}
       <details className="text-xs">
         <summary className="cursor-pointer text-sm text-muted-foreground">What the columns mean</summary>
         <div className="mt-2 grid gap-3">
@@ -392,7 +415,7 @@ export const ImportPanel = ({
         }}
       >
         <p>
-          A points list (CSV, one row per value) or a BACnet EDE file. Drop it here, or{" "}
+          A points list (CSV or JSON, one row per value) or a BACnet EDE file. Drop it here, or{" "}
           <Button size="sm" variant="outline" onClick={() => input.current?.click()} disabled={adding}>
             choose a file
           </Button>
@@ -400,7 +423,7 @@ export const ImportPanel = ({
         <input
           ref={input}
           type="file"
-          accept=".csv,.txt,text/csv,text/plain"
+          accept=".csv,.txt,.json,text/csv,text/plain,application/json"
           className="sr-only"
           aria-label="Points list or EDE file"
           tabIndex={-1}

@@ -9,9 +9,16 @@
  * (an old config's, say), is marked with whose it is (`"stale"` in JSON), and the first one prints, once, how to
  * clear it: `ot-gateway publish <topic> --retain`.
  */
-import { type GatewayConfig, monotonicMillis } from "@ot-gateway/core"
-import type { InboundMessage } from "@ot-gateway/mqtt"
-import { Console, Duration, Effect } from "effect"
+import {
+  covPointIds,
+  type Device,
+  type GatewayConfig,
+  monotonicMillis,
+  publishOf,
+  windowIntervalMs
+} from "@ot-gateway/core"
+import { type InboundMessage, topicMatches } from "@ot-gateway/mqtt"
+import { Console, Deferred, Duration, Effect, Schema } from "effect"
 import { BrokerCommandError, brokerClient, firstDialOf } from "./Broker.ts"
 import { withoutControls } from "./Discover.ts"
 import { localTime, printResult } from "./Output.ts"
@@ -95,6 +102,144 @@ export const messageRecord = (
   })
 }
 
+/**
+ * What arrived for one device's points: the configured points that sent a value, the ones that did not, and the
+ * ones that did not but send only when their value changes (`onChange`), which a quiet building leaves silent.
+ */
+export interface DeviceArrivals {
+  readonly id: string
+  readonly arrived: ReadonlyArray<string>
+  readonly missing: ReadonlyArray<string>
+  readonly onChange: ReadonlyArray<string>
+}
+
+/**
+ * When a point's next value is due at the latest: undefined when it sends only on a change (change mode without
+ * `maxSilenceMs`, or asked for by BACnet COV), else its device's poll interval, after its publish window or its
+ * `maxSilenceMs` when it has one.
+ */
+export const valueDueMs = (device: Device, point: Device["points"][number]): number | undefined => {
+  if (covPointIds(device).includes(point.id)) return undefined
+  const publish = publishOf(device.publish, point)
+  // A resend after maxSilenceMs, or a window's value, goes out with the first read after it: up to a poll later.
+  if (publish.mode === "change") {
+    return publish.maxSilenceMs === undefined ? undefined : publish.maxSilenceMs + device.pollIntervalMs
+  }
+  const window = windowIntervalMs(publish)
+  return window === undefined ? device.pollIntervalMs : window + device.pollIntervalMs
+}
+
+/**
+ * The configured points a watch looks for: every point whose topic its filter covers. A value is a live message
+ * (not retained: that may be an older run's) with a payload, on `site/building/device/point`.
+ */
+export const pointArrivals = (config: GatewayConfig, filter: string) => {
+  const expected = config.devices.map((device) => {
+    const covered = device.points.filter((point) =>
+      topicMatches(filter, `${config.site}/${config.building}/${device.id}/${point.id}`)
+    )
+    return {
+      id: device.id,
+      points: covered.map((point) => point.id),
+      due: new Map(covered.map((point) => [point.id, valueDueMs(device, point)]))
+    }
+  })
+  const arrived = new Map(expected.map((device) => [device.id, new Set<string>()]))
+  const awaited = expected.flatMap((device) =>
+    device.points.filter((point) => device.due.get(point) !== undefined).map((point) => `${device.id}/${point}`)
+  )
+  const pending = new Set(awaited)
+  return {
+    /** Whether the filter covers any configured point at all; a watch of other topics has nothing to report. */
+    expects: expected.some((device) => device.points.length > 0),
+    /** The longest a covered point that sends on a timer can take, or undefined when none does. */
+    slowestDueMs: expected.reduce<number | undefined>(
+      (slowest, device) =>
+        [...device.due.values()].reduce<number | undefined>(
+          (max, due) => (due === undefined ? max : Math.max(max ?? 0, due)),
+          slowest
+        ),
+      undefined
+    ),
+    /** Records a message; true once every point that sends on a timer has sent a value, and some point has. */
+    record: (message: Pick<InboundMessage, "topic" | "payload" | "retain">) => {
+      if (message.retain || message.payload === "") return false
+      const [site, building, device, point, ...rest] = message.topic.split("/")
+      if (site !== config.site || building !== config.building || rest.length > 0) return false
+      if (device === undefined || point === undefined) return false
+      const configured = expected.find((candidate) => candidate.id === device)
+      if (configured === undefined || !configured.points.includes(point)) return false
+      arrived.get(device)?.add(point)
+      pending.delete(`${device}/${point}`)
+      // With only points that send on change, the first value of any of them is what there is to wait for.
+      return pending.size === 0
+    },
+    devices: (): ReadonlyArray<DeviceArrivals> =>
+      expected
+        .filter((device) => device.points.length > 0)
+        .map((device) => {
+          const points = arrived.get(device.id) ?? new Set<string>()
+          const silent = device.points.filter((point) => !points.has(point))
+          return {
+            id: device.id,
+            arrived: device.points.filter((point) => points.has(point)),
+            missing: silent.filter((point) => device.due.get(point) !== undefined),
+            onChange: silent.filter((point) => device.due.get(point) === undefined)
+          }
+        })
+  }
+}
+
+/** The last line of a watch that ended by itself: how many configured points sent a value, and which did not. */
+export interface WatchSummary {
+  readonly event: "summary"
+  readonly seconds: number
+  readonly messages: number
+  readonly points: number
+  readonly arrived: number
+  readonly missing: number
+  readonly devices: ReadonlyArray<DeviceArrivals>
+}
+
+export const watchSummary = (
+  devices: ReadonlyArray<DeviceArrivals>,
+  seconds: number,
+  messages: number
+): WatchSummary => {
+  const count = (pick: (device: DeviceArrivals) => ReadonlyArray<string>) =>
+    devices.reduce((sum, device) => sum + pick(device).length, 0)
+  const arrived = count((device) => device.arrived)
+  const missing = count((device) => device.missing)
+  const points = arrived + missing + count((device) => device.onChange)
+  return { event: "summary", seconds, messages, points, arrived, missing, devices }
+}
+
+/**
+ * The summary on the terminal: `-- 6 of 8 point(s) sent a value in 10 s (20 message(s)); none from heat-pump:
+ * flow-temp; on change only, unchanged so far: heat-pump: running`.
+ */
+export const formatSummary = (summary: WatchSummary) => {
+  const list = (pick: (device: DeviceArrivals) => ReadonlyArray<string>) =>
+    summary.devices
+      .filter((device) => pick(device).length > 0)
+      .map((device) => `${device.id}: ${pick(device).join(", ")}`)
+      .join("; ")
+  const missing = list((device) => device.missing)
+  const quiet = list((device) => device.onChange)
+  return [
+    `-- ${summary.arrived} of ${summary.points} point(s) sent a value in ${summary.seconds} s (${summary.messages} message(s))`,
+    ...(missing === "" ? [] : [`none from ${missing}`]),
+    ...(quiet === "" ? [] : [`on change only, unchanged so far: ${quiet}`])
+  ].join("; ")
+}
+
+/**
+ * How long `--until-values` waits without `--seconds`: the slowest point that sends on a timer and half a minute
+ * more, at least a minute, so a device read every five minutes is not called missing after one.
+ */
+export const untilValuesSeconds = (slowestDueMs: number | undefined) =>
+  Math.max(60, Math.ceil((slowestDueMs ?? 0) / 1000) + 30)
+
 export interface WatchOptions {
   /** A topic filter instead of the config's site and building (`#` for everything on the broker). */
   readonly topic?: string | undefined
@@ -102,6 +247,11 @@ export interface WatchOptions {
   readonly seconds?: number | undefined
   /** One JSON object per line on stdout (`messageRecord`) instead of the terminal's lines. */
   readonly json?: boolean | undefined
+  /**
+   * Stop as soon as every configured point under the filter sent a value, or fail when one has not within
+   * `seconds` (or `untilValuesSeconds`): for an agent checking that a new gateway's values arrive.
+   */
+  readonly untilValues?: boolean | undefined
 }
 
 /**
@@ -118,6 +268,18 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
   let everConnected = false
   let away: { readonly since: number; readonly at: Date; readonly error: string } | undefined
   let hinted = false
+  let messages = 0
+  const arrivals = pointArrivals(config, filter)
+  const allArrived = yield* Deferred.make<void>()
+  const untilValues = options.untilValues === true
+  if (untilValues && !arrivals.expects) {
+    return yield* new WatchError({
+      message: `${filter} covers none of the config's points, so --until-values has nothing to wait for`,
+      hint: "leave out --topic, or name a filter under the config's site and building",
+      code: "nothing-to-wait-for"
+    })
+  }
+  const seconds = options.seconds ?? (untilValues ? untilValuesSeconds(arrivals.slowestDueMs) : undefined)
   const say = (record: BrokerRecord, at: Date) =>
     json ? printResult(brokerRecordLine(record, at)) : Console.log(formatBrokerRecord(record, at))
   const client = yield* brokerClient(config.mqtt, "watch", {
@@ -133,7 +295,7 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
         }
         everConnected = true
         yield* Console.error(
-          `watching ${filter} on ${config.mqtt.url} (${options.seconds === undefined ? "Ctrl-C to stop" : `for ${options.seconds} s`})`
+          `watching ${filter} on ${config.mqtt.url} (${seconds === undefined ? "Ctrl-C to stop" : untilValues ? `until every point sent a value, at most ${seconds} s` : `for ${seconds} s`})`
         )
       }),
     // Every failed redial calls this; only the first of an outage is printed. Before the first connect, `--seconds`
@@ -149,7 +311,10 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
       Effect.gen(function* () {
         const stale = staleReason(config, message)
         const at = new Date()
+        messages += 1
         yield* json ? printResult(messageRecord(message, at, stale)) : Console.log(formatMessage(message, at, stale))
+        // After the message is out, so the summary that this may end the watch with comes after it.
+        if (arrivals.record(message)) yield* Deferred.succeed(allArrived, undefined)
         if (stale !== undefined && !hinted) {
           hinted = true
           yield* Console.error(clearHint)
@@ -157,17 +322,47 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
       })
   })
   yield* Console.error(`connecting to ${config.mqtt.url}…`)
-  if (options.seconds === undefined) return yield* Effect.never
-  yield* firstDialOf(client, config.mqtt.url)
-  yield* Effect.sleep(Duration.seconds(options.seconds))
+  if (seconds === undefined) return yield* Effect.never
+  yield* firstDialOf(client, config.mqtt)
+  // From the connection on, as the deadline counts: the dial has a timeout of its own.
+  const started = yield* monotonicMillis
+  const deadline = Effect.sleep(Duration.seconds(seconds))
+  yield* untilValues ? Effect.raceFirst(Deferred.await(allArrived), deadline) : deadline
   // A watch that ends without its broker saw only part of the time it was asked for: say so with the exit code.
   const lost = away
   if (lost !== undefined) {
     return yield* new BrokerCommandError({
-      message: `lost ${config.mqtt.url} at ${localTime(lost.at)} and it did not come back: ${lost.error}`
+      message: `lost ${config.mqtt.url} at ${localTime(lost.at)} and it did not come back: ${lost.error}`,
+      code: "broker-lost",
+      hint: "the broker or the network went away during the watch: ot-gateway broker checks the connection"
+    })
+  }
+  if (!arrivals.expects) return
+  const elapsed = Math.round(((yield* monotonicMillis) - started) / 1000)
+  const summary = watchSummary(arrivals.devices(), elapsed, messages)
+  yield* json ? printResult(JSON.stringify(summary)) : Console.log(formatSummary(summary))
+  // Points that send only on change may stay quiet, but not every one of them: then nothing shows the gateway works.
+  const nothing = summary.arrived === 0
+  if (untilValues && (summary.missing > 0 || nothing)) {
+    const silent = (device: DeviceArrivals) => (nothing ? [...device.missing, ...device.onChange] : device.missing)
+    return yield* new WatchError({
+      message: nothing
+        ? `no point sent a value within ${seconds} s`
+        : `${summary.missing} of ${summary.points} point(s) sent no value within ${seconds} s`,
+      code: "values-missing",
+      missing: summary.devices.flatMap((device) => silent(device).map((point) => `${device.id}/${point}`)),
+      hint: "ot-gateway status says why a device fails (it must be running: ot-gateway run, or docker compose up -d); a point that never changes and publishes on change only sends its first value at start"
     })
   }
 }, Effect.scoped)
+
+/** A `watch --until-values` that has nothing to wait for, or whose points did not all send a value in time. */
+export class WatchError extends Schema.TaggedError<WatchError>()("WatchError", {
+  message: Schema.String,
+  code: Schema.Literals(["nothing-to-wait-for", "values-missing"]),
+  missing: Schema.optionalKey(Schema.Array(Schema.String)),
+  hint: Schema.optionalKey(Schema.String)
+}) {}
 
 /** What `watch` says about its own connection, between the messages. */
 export type BrokerRecord =

@@ -36,7 +36,7 @@ import {
 import { endpointOf, makeModbusDriverFromClient, makeModbusLinks, type ModbusLink } from "@ot-gateway/modbus"
 import { MqttPublisher } from "@ot-gateway/mqtt"
 import { makeSimulatorDriver } from "@ot-gateway/simulator"
-import { ConfigApplyFailed, type ConfigChange } from "@ot-gateway/api"
+import { bacnetPortFailure, ConfigApplyFailed, type ConfigChange } from "@ot-gateway/api"
 import { type History, openHistory } from "@ot-gateway/history"
 import {
   Cause,
@@ -142,7 +142,7 @@ const openBacnet = Effect.fn("openBacnet")(function* (
           bacnetDevices.forEach((device) =>
             health.recordFailure(device.id, {
               reason: "connection",
-              message: `the gateway's BACnet/IP port ${config.bacnet.port} cannot be opened: ${error.message}`,
+              message: bacnetPortFailure(config.bacnet.port, error.message),
               at
             })
           )

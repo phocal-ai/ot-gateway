@@ -3,6 +3,7 @@ import { join } from "node:path"
 import { describe, expect, it } from "vitest"
 import { generatePage, headingAnchor, meta, pages, repository, rewriteLink, sectionsOf } from "../src/content/docs.ts"
 import type { PageSource } from "../src/content/docs.ts"
+import { siteDiagram } from "../src/content/diagrams.ts"
 
 const root = join(import.meta.dirname, "..", "..", "..")
 const context = { ref: "dev" }
@@ -120,7 +121,7 @@ describe("the repository's docs", () => {
       "index",
       ...pages.slice(1).map((page) => page.slug)
     ])
-    expect(listed.slice(0, 4)).toEqual(["---Start here---", "index", "how-it-works", "first-building"])
+    expect(listed.slice(0, 4)).toEqual(["---Start here---", "index", "how-it-works", "inputs"])
     expect(listed).toContain("---Reference---")
   })
 
@@ -128,5 +129,30 @@ describe("the repository's docs", () => {
     expect(headingAnchor("Set it up with AI")).toBe("set-it-up-with-ai")
     expect(headingAnchor("Moving from Plenum")).toBe("moving-from-plenum")
     expect(sectionsOf("## A\n\nx\n\n## B\n\ny").get("B")).toBe("## B\n\ny")
+  })
+})
+
+describe("site diagrams", () => {
+  it("reads the diagram a Mermaid block names on its first line", () => {
+    expect(siteDiagram("%% site: headless-path\nflowchart LR\n  a --> b")).toBe("headless-path")
+    expect(siteDiagram("flowchart LR\n  %% site: headless-path")).toBeUndefined()
+    expect(siteDiagram("flowchart LR")).toBeUndefined()
+  })
+
+  it("has a component for every diagram a docs page names", () => {
+    const components = readFileSync(
+      join(import.meta.dirname, "..", "src", "components", "docs", "diagrams.tsx"),
+      "utf8"
+    )
+    const firstLines = pages.flatMap((page) =>
+      [...readFileSync(join(root, page.source), "utf8").matchAll(/^```mermaid\n(.*)$/gm)].map((match) => match[1] ?? "")
+    )
+    // A comment on the first line is meant as the marker: one that does not read as a name would be ignored silently.
+    for (const line of firstLines.filter((each) => each.startsWith("%%"))) {
+      expect({ line, diagram: siteDiagram(line) }).toEqual({ line, diagram: expect.any(String) })
+    }
+    const named = firstLines.map(siteDiagram).filter((name) => name !== undefined)
+    expect(named.length).toBeGreaterThan(0)
+    for (const name of named) expect(components).toContain(`"${name}":`)
   })
 })

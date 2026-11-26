@@ -5,11 +5,11 @@
  */
 import { type Device, type GatewayConfig, parseConfig } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Schema } from "effect"
-import { etagOf, makeConfigStore } from "./ConfigStore.ts"
+import { configIssues, etagOf, makeConfigStore } from "./ConfigStore.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import {
   devicesFromPointsList,
-  parseDelimited,
+  listFields,
   type PointsListDevice,
   PointsListError,
   profileNames,
@@ -60,7 +60,7 @@ export const pointsListFromText = Effect.fn("pointsListFromText")(function* (tex
     } satisfies PointsListText
   }
   // A misspelt column would otherwise vanish without a word; extra columns (a description, a comment) are normal.
-  const ignored = unknownColumns(parseDelimited(text)[0] ?? [])
+  const ignored = unknownColumns(listFields(text)[0] ?? [])
   return {
     list: text,
     format: "points-list",
@@ -130,7 +130,8 @@ export const describeUnits = (units: ReadonlyArray<UnitMapping>) =>
         ...units.map((mapping) => {
           const points = `${mapping.points} point${mapping.points === 1 ? "" : "s"}`
           if (!mapping.qudt) {
-            return `  ${mapping.written}  kept as written: no QUDT name known for it; write one (unit:…) if consumers need it  (${points})`
+            const meant = mapping.suggestion === undefined ? "" : ` (did you mean ${mapping.suggestion}?)`
+            return `  ${mapping.written}  kept as written: no QUDT name known for it${meant}; write one (unit:…) if consumers need it  (${points})`
           }
           return mapping.unit === mapping.written
             ? `  ${mapping.unit}  (${points})`
@@ -189,7 +190,8 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
     Effect.catchTag("SchemaError", (error) =>
       Effect.fail(
         new PointsListError({
-          message: `the points list would make ${target} invalid${outcome}. Its devices start at devices[${devices}]:\n${error.message}`
+          message: `the points list would make ${target} invalid${outcome}. Its devices start at devices[${devices}]:\n${error.message}`,
+          issues: configIssues(error.issue).map((issue) => ({ path: issue.path.join("."), message: issue.message }))
         })
       )
     )

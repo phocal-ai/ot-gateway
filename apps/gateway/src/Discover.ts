@@ -35,6 +35,7 @@ import {
   objectTypeNumber,
   parseDeviceAddress
 } from "@ot-gateway/bacnet"
+import { parseConfig } from "@ot-gateway/core"
 import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
 import { Console, Effect, FileSystem, Result, Schema } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
@@ -254,7 +255,17 @@ export interface DiscoverOptions {
   readonly address?: string | undefined
   /** The config discover read: for an error that names the key to change there, and the import command it names. */
   readonly configPath?: string | undefined
+  /** There was no config: the BACnet defaults were used, and the next step is `init --points`, not `import`. */
+  readonly noConfig?: boolean | undefined
 }
+
+/**
+ * What `discover` asks with when there is no config yet: the BACnet/IP defaults (UDP 47808, broadcast to
+ * 255.255.255.255), no devices. Site, building and broker are placeholders it never uses.
+ */
+export const discoveryDefaults = parseConfig(
+  JSON.stringify({ site: "site", building: "building", mqtt: { url: "mqtt://localhost:1883" }, devices: [] })
+)
 
 /**
  * The BACnet/IP endpoint discovery asks from. When another program (a running gateway, the demo, a BACnet tool)
@@ -266,7 +277,8 @@ const openEndpoint = (
   config: GatewayConfig,
   network: Pick<Network, "udp"> | undefined,
   unicast: boolean,
-  configPath: string | undefined
+  configPath: string | undefined,
+  noConfig = false
 ) =>
   makeBacnetNetwork(config.bacnet, network).pipe(
     Effect.catchTag("BacnetSocketError", (error) =>
@@ -278,7 +290,9 @@ const openEndpoint = (
           return yield* makeBacnetNetwork({ ...config.bacnet, port: 0 }, network)
         }
         return yield* new DiscoverError({
-          message: `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or set "bacnet.port" in ${configPath ?? "the config"} to a free port (devices that answer a broadcast on 47808 are then only found with --address ip[:port])`
+          message: noConfig
+            ? `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or ask one device from a free port with --address ip[:port]`
+            : `the BACnet/IP port ${port} is in use by another program (a running gateway, the demo, a BACnet tool). Stop it and discover again, or set "bacnet.port" in ${configPath ?? "the config"} to a free port (devices that answer a broadcast on 47808 are then only found with --address ip[:port])`
         })
       })
     )
@@ -294,7 +308,13 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
     if (target !== undefined && Result.isFailure(target)) {
       return yield* new DiscoverError({ message: `--address takes ip or ip:port: ${target.failure}` })
     }
-    const client = yield* openEndpoint(config, network, target !== undefined, options.configPath)
+    const client = yield* openEndpoint(
+      config,
+      network,
+      target !== undefined,
+      options.configPath,
+      options.noConfig === true
+    )
     yield* Console.error(`Who-Is to ${options.address ?? config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
     const devices = yield* client.discover({
       within: LISTEN,
@@ -302,9 +322,11 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
     })
     if (devices.length === 0) {
       yield* Console.error(
-        options.address === undefined
-          ? "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD. With a device's address from a device list: discover --address ip[:port]."
-          : `No device answered at ${options.address}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
+        options.address === undefined && options.noConfig === true
+          ? "No device answered a broadcast to 255.255.255.255. Without a config, discover asks with the defaults: write one with ot-gateway init and set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), or ask one device: discover --address ip[:port]."
+          : options.address === undefined
+            ? "No device answered. Set bacnet.broadcastAddress to this subnet's broadcast (e.g. 192.168.1.255), check that UDP 47808 is not taken by another BACnet program on this machine, and that devices on other subnets have a BBMD. With a device's address from a device list: discover --address ip[:port]."
+            : `No device answered at ${options.address}. Check the address and port, that BACnet/IP is on for the device, and that no firewall drops UDP to it or from it.`
       )
     }
     if (devices.length >= MAX_DEVICES) {
@@ -428,6 +450,12 @@ export interface PointsListWritten {
 export const importCommand = (listPath: string, configPath: string | undefined, cli = "ot-gateway") =>
   `${cli} import ${shellArgument(listPath)}${configPath === undefined ? "" : ` ${shellArgument(configPath)}`}`
 
+/** What to run after a list is written: import it into the config, or with no config yet, start one from it. */
+export const pointsListNext = (path: string, options: PointsListOptions) =>
+  options.noConfig === true
+    ? `${options.command ?? "ot-gateway"} init . --points ${shellArgument(path)}`
+    : importCommand(path, options.configPath, options.command)
+
 /**
  * `text` at `path` in one step: written next to it under a temporary name, then renamed over it, so an
  * interrupted run leaves the old file or the new one, never half of one. The temporary file goes on failure.
@@ -496,7 +524,7 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
       message: `no points to list; ${path} was ${existing === undefined ? "not written" : "left as it was"}.`
     })
   }
-  const next = importCommand(path, options.configPath, options.command)
+  const next = pointsListNext(path, options)
   if (existing === undefined) {
     yield* writeAtomically(path, draftPointsList(fresh))
     yield* Console.error(

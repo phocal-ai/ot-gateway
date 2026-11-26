@@ -4,6 +4,7 @@
  * types, so the gateway encodes and the browser decodes the same contract.
  * Commands are not here on purpose: they go through MQTT and the command guard.
  */
+import { contractMessageOf, type ContractMessage } from "@ot-gateway/core/Contract"
 import { Effect, Schema, SchemaGetter } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup } from "effect/http-api"
 import { ConfigEditGroup } from "./Editor.ts"
@@ -355,14 +356,19 @@ export type Messages = typeof Messages.Type
 /** What a topic carries: a point's value, its `$meta`, the gateway's health, a command's result, or something else. */
 export type TopicKind = "value" | "metadata" | "health" | "command result" | "other"
 
-/** The kind of a full topic (`site/building/device/point`, `…/$meta`, `…/$gateway/<id>/health`, `…/$set/result`). */
+/** The status page's name for each message of the MQTT contract; commands and other topics are `other`. */
+const kindOfMessage = {
+  value: "value",
+  meta: "metadata",
+  health: "health",
+  command: "other",
+  "command-result": "command result"
+} as const satisfies Record<ContractMessage, TopicKind>
+
+/** The kind of a full topic, by the MQTT contract's topic table (`contractMessageOf`). */
 export const topicKind = (topic: string): TopicKind => {
-  const parts = topic.split("/")
-  if (parts[2] === "$gateway" && parts[4] === "health") return "health"
-  if (parts.length === 4) return "value"
-  if (parts.length === 5 && parts[4] === "$meta") return "metadata"
-  if (parts.length === 6 && parts[4] === "$set" && parts[5] === "result") return "command result"
-  return "other"
+  const message = contractMessageOf(topic)
+  return message === undefined ? "other" : kindOfMessage[message]
 }
 
 /** Messages of a list of topics added up: by kind, all of them, and what became of them. */
