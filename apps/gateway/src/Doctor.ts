@@ -143,8 +143,10 @@ export const deviceNext = (device: Device, command: (name: string, rest?: string
     if (first === undefined) return undefined
     const table = first.table === "holding" ? "" : ` --table ${first.table}`
     const unit = device.unitId === 1 ? "" : ` --unit-id ${device.unitId}`
-    const port = device.port === 502 ? "" : `:${device.port}`
-    return `${cli} probe ${shellArgument(`${device.host}${port}`)} ${first.address}${unit}${table}`
+    // An IPv6 host takes a port only in brackets, as `probe` reads it.
+    const host = device.host.includes(":") ? `[${device.host}]` : device.host
+    const endpoint = device.port === 502 && !device.host.includes(":") ? host : `${host}:${device.port}`
+    return `${cli} probe ${shellArgument(endpoint)} ${first.address}${unit}${table}`
   }
   if (device.protocol === "bacnet-ip") {
     return command("discover", device.address === undefined ? "" : `--address ${shellArgument(device.address)}`)
@@ -160,7 +162,24 @@ export const devicesFromStatus = (
   cli: string
 ): ReadonlyArray<Finding> => {
   const configured = new Map(config.devices.map((device) => [device.id, device]))
-  return status.devices.map((device: DeviceStatus): Finding => {
+  const running = new Set(status.devices.map((device) => device.id))
+  const restart =
+    "the gateway reads its config when it starts: restart it (docker compose restart in its folder, or systemctl restart ot-gateway)"
+  const notLoaded = config.devices.flatMap((device): ReadonlyArray<Finding> =>
+    running.has(device.id)
+      ? []
+      : [
+          {
+            check: "device",
+            status: "warn",
+            subject: device.id,
+            message: "in the config, but the running gateway does not read it",
+            code: "device-not-loaded",
+            hint: restart
+          }
+        ]
+  )
+  const reported = status.devices.map((device: DeviceStatus): Finding => {
     const known = configured.get(device.id)
     const next = known === undefined ? command("status") : deviceNext(known, command, cli)
     if (device.status === "failing") {
@@ -172,10 +191,11 @@ export const devicesFromStatus = (
         { answeredBefore: device.lastSuccess !== undefined }
       )
     }
+    // `status` fails on a late device too: the same here.
     if (isDeviceLate(device, status.now)) {
       return {
         check: "device",
-        status: "warn",
+        status: "fail",
         subject: device.id,
         message: "not failing, but not read lately: a polling cycle is stuck",
         code: "device-late",
@@ -186,8 +206,19 @@ export const devicesFromStatus = (
     if (device.lastSuccess === undefined) {
       return { check: "device", status: "skip", subject: device.id, message: "the gateway has not read it yet" }
     }
-    return { check: "device", status: "ok", subject: device.id, message: `${device.protocol}: read by the gateway` }
+    const read = `${device.protocol}: read by the gateway`
+    return known === undefined
+      ? {
+          check: "device",
+          status: "warn",
+          subject: device.id,
+          message: `${read}, but no longer in the config`,
+          code: "device-not-in-config",
+          hint: restart
+        }
+      : { check: "device", status: "ok", subject: device.id, message: read }
   })
+  return [...reported, ...notLoaded]
 }
 
 /** One Modbus device asked once: its first point, as the gateway would read it. */
@@ -235,7 +266,7 @@ const askBacnet = Effect.fnUntraced(function* (
   settings: GatewayConfig["bacnet"],
   devices: ReadonlyArray<BacnetDevice>,
   nextOf: (device: BacnetDevice) => string | undefined,
-  options: { readonly network: Network | undefined; readonly platform: string }
+  options: { readonly network: Network | undefined; readonly platform: string; readonly gatewayMayRun: boolean }
 ) {
   const port = `${settings.bindAddress}:${settings.port}`
   const findings: Array<Finding> = []
@@ -249,10 +280,12 @@ const askBacnet = Effect.fnUntraced(function* (
   } else {
     const inUse = opened.failure.addressInUse === true
     const reason = inUse ? "in use by another program" : opened.failure.message
+    // A gateway doctor cannot ask (no status block, another one on its port) may be what holds it.
+    const maybeOurs = inUse && options.gatewayMayRun
     findings.push({
       check: "bacnet-port",
-      status: "fail",
-      message: `UDP ${port} cannot be opened: ${reason}`,
+      status: maybeOurs ? "warn" : "fail",
+      message: `UDP ${port} cannot be opened: ${reason}${maybeOurs ? ", perhaps by this config's gateway" : ""}`,
       code: inUse ? "bacnet-port-in-use" : "bacnet-port-unavailable",
       hint: gatewayPortHintFor(reason).checks[0] ?? reason,
       ...(inUse ? { next: portOwnerCommand(settings.port, options.platform) } : {})
@@ -322,7 +355,12 @@ export const portOwnerCommand = (port: number, platform: string) =>
 const askDevices = Effect.fnUntraced(function* (
   config: GatewayConfig,
   command: (name: string, rest?: string) => string,
-  options: { readonly cli: string; readonly network: Network | undefined; readonly platform: string }
+  options: {
+    readonly cli: string
+    readonly network: Network | undefined
+    readonly platform: string
+    readonly gatewayMayRun: boolean
+  }
 ) {
   const nextOf = (device: Device) => deviceNext(device, command, options.cli)
   const byHost = new Map<string, Array<Extract<Device, { readonly protocol: "modbus-tcp" }>>>()
@@ -356,7 +394,11 @@ const askDevices = Effect.fnUntraced(function* (
   const bacnet: Effect.Effect<ReadonlyArray<Finding>> =
     bacnetDevices.length === 0
       ? Effect.succeed([])
-      : askBacnet(config.bacnet, bacnetDevices, nextOf, { network: options.network, platform: options.platform })
+      : askBacnet(config.bacnet, bacnetDevices, nextOf, {
+          network: options.network,
+          platform: options.platform,
+          gatewayMayRun: options.gatewayMayRun
+        })
   const [modbusFindings, bacnetFindings] = yield* Effect.all([modbus, bacnet], { concurrency: 2 })
   const simulated = config.devices.flatMap((device): ReadonlyArray<Finding> =>
     device.protocol === "simulator"
@@ -462,6 +504,13 @@ const clockCheck = Effect.fnUntraced(function* (path: string, platform: string) 
 // ---------------------------------------------------------------------------------------------------------------
 // The run
 
+/**
+ * Whether this config's gateway runs, as far as doctor can tell: `running` (its status is read), `stopped` (nothing
+ * answers on its status port), `other-release` (it answers in a form this CLI cannot read: it runs, so its devices
+ * and port are left alone), `unknown` (no status block, or another gateway answers there).
+ */
+export type GatewayMode = "running" | "stopped" | "other-release" | "unknown"
+
 /** The gateway check and, when it runs and is this config's, its view of the devices. */
 const gatewayCheck = Effect.fnUntraced(function* (
   path: string,
@@ -477,7 +526,7 @@ const gatewayCheck = Effect.fnUntraced(function* (
       code: "no-status-page",
       hint: 'add "status": {} to the config to get the status page and the API that status, events and doctor ask'
     }
-    return { finding, status: undefined }
+    return { finding, status: undefined, mode: "unknown" as GatewayMode }
   }
   const url = statusUrlOf(config.status)
   const target = yield* targetOf(path, config, undefined)
@@ -496,7 +545,7 @@ const gatewayCheck = Effect.fnUntraced(function* (
             hint: "the device and broker findings below say what fails; what changed and when: ot-gateway events",
             next: command("status")
           }
-    return { finding, status }
+    return { finding, status, mode: "running" as GatewayMode }
   }
   const error = outcome.failure
   switch (error._tag) {
@@ -515,7 +564,7 @@ const gatewayCheck = Effect.fnUntraced(function* (
             ? "docker compose up -d"
             : `docker compose -f ${shellArgument(compose)} up -d`
       }
-      return { finding, status: undefined }
+      return { finding, status: undefined, mode: "stopped" as GatewayMode }
     }
     case "GatewayMismatch":
       return {
@@ -527,7 +576,8 @@ const gatewayCheck = Effect.fnUntraced(function* (
           hint: "another gateway answers on this config's status port: give one of them another status.port",
           next: command("status")
         } satisfies Finding,
-        status: undefined
+        status: undefined,
+        mode: "unknown" as GatewayMode
       }
     case "GatewayAnswerUnreadable":
       return {
@@ -536,10 +586,11 @@ const gatewayCheck = Effect.fnUntraced(function* (
           status: "warn",
           message: error.message,
           code: error.code,
-          hint: "the gateway runs another release than this CLI: the devices are asked directly",
+          hint: "the gateway runs another release than this CLI: run the CLI at its version, or upgrade the gateway",
           next: command("status")
         } satisfies Finding,
-        status: undefined
+        status: undefined,
+        mode: "other-release" as GatewayMode
       }
   }
 })
@@ -573,9 +624,14 @@ export const runDoctor = Effect.fn("runDoctor")(function* (path: string, options
           : `${error.issues.length} mistake(s); the first: ${error.issues[0].path === undefined ? "" : `${error.issues[0].path}: `}${error.issues[0].message}`,
       code: error.code ?? "invalid-config",
       hint: missing
-        ? "write one with ot-gateway init, or name the config: ot-gateway doctor path/to/ot-gateway.json"
+        ? "write one with ot-gateway init, or name the config elsewhere: ot-gateway doctor path/to/ot-gateway.json"
         : "every mistake with its path: ot-gateway check",
-      next: missing ? `${cli} init` : command("check")
+      // init writes into the folder named, where doctor looked.
+      next: missing
+        ? dirname(path) === "."
+          ? `${cli} init`
+          : `${cli} init ${shellArgument(dirname(path))}`
+        : command("check")
     })
     for (const check of ["broker", "gateway"] as const) {
       findings.push({ check, status: "skip", message: "not checked without a valid config" })
@@ -591,22 +647,21 @@ export const runDoctor = Effect.fn("runDoctor")(function* (path: string, options
     message: `${config.site}/${config.building} gateway ${config.id}, ${devices} device(s)`
   })
 
-  const broker = yield* checkBroker(config, options.network).pipe(Effect.result)
-  if (Result.isSuccess(broker)) {
-    const checked = broker.success
-    const failure = checked.ok ? undefined : roundTripFailure(checked)
-    const summary = `${checked.broker}: MQTT ${checked.protocolVersion}${checked.roundTripMs === undefined ? "" : `, round trip ${checked.roundTripMs} ms`}`
-    findings.push(
-      failure !== undefined
-        ? {
-            check: "broker",
-            status: "fail",
-            message: failure.message,
-            code: "no-round-trip",
-            ...(failure.hint === undefined ? {} : { hint: failure.hint }),
-            next: command("broker")
-          }
-        : checked.warnings.length > 0
+  const brokerFailure = (message: string, code: string, hint: string | undefined): Finding => ({
+    check: "broker",
+    status: "fail",
+    message,
+    code,
+    ...(hint === undefined ? {} : { hint }),
+    next: command("broker")
+  })
+  findings.push(
+    yield* checkBroker(config, options.network).pipe(
+      Effect.map((checked): Finding => {
+        const failure = checked.ok ? undefined : roundTripFailure(checked)
+        if (failure !== undefined) return brokerFailure(failure.message, "no-round-trip", failure.hint)
+        const summary = `${checked.broker}: MQTT ${checked.protocolVersion}${checked.roundTripMs === undefined ? "" : `, round trip ${checked.roundTripMs} ms`}`
+        return checked.warnings.length > 0
           ? {
               check: "broker",
               status: "warn",
@@ -616,33 +671,51 @@ export const runDoctor = Effect.fn("runDoctor")(function* (path: string, options
               next: command("broker")
             }
           : { check: "broker", status: "ok", message: summary }
+      }),
+      Effect.catchTags({
+        BrokerCommandError: (error) =>
+          Effect.succeed(brokerFailure(error.message, error.code ?? "broker-unreachable", error.hint)),
+        // The URL or the login in the config cannot be used as it is.
+        MqttSettingsError: (error) =>
+          Effect.succeed(
+            brokerFailure(error.message, "broker-settings", "check mqtt.url and mqtt.username in the config")
+          )
+      })
     )
-  } else {
-    const error = broker.failure
-    findings.push({
-      check: "broker",
-      status: "fail",
-      message: error.message,
-      ...("code" in error && typeof error.code === "string" ? { code: error.code } : { code: "broker-unreachable" }),
-      ...("hint" in error && typeof error.hint === "string" ? { hint: error.hint } : {}),
-      next: command("broker")
-    })
-  }
+  )
 
   const gateway = yield* gatewayCheck(path, config, command)
   findings.push(gateway.finding)
 
-  if (gateway.status !== undefined) {
-    findings.push(...devicesFromStatus(gateway.status, config, command, cli))
-    if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
-      findings.push({
-        check: "bacnet-port",
-        status: "skip",
-        message: `UDP ${config.bacnet.port}: held by the running gateway`
-      })
-    }
+  const hasBacnet = config.devices.some((device) => device.protocol === "bacnet-ip")
+  if (gateway.status !== undefined || gateway.mode === "other-release") {
+    // A running gateway reads the devices and holds the port: doctor does not ask them a second time.
+    findings.push(
+      ...(gateway.status === undefined
+        ? config.devices.map((device): Finding => ({
+            check: "device",
+            status: "skip",
+            subject: device.id,
+            message: "not asked while a gateway runs: see ot-gateway status"
+          }))
+        : devicesFromStatus(gateway.status, config, command, cli)),
+      ...(hasBacnet
+        ? [
+            {
+              check: "bacnet-port",
+              status: "skip",
+              message: `UDP ${config.bacnet.port}: held by the running gateway`
+            } satisfies Finding
+          ]
+        : [])
+    )
   } else {
-    const asked = yield* askDevices(config, command, { cli, network: options.network, platform })
+    const asked = yield* askDevices(config, command, {
+      cli,
+      network: options.network,
+      platform,
+      gatewayMayRun: gateway.mode === "unknown"
+    })
     findings.push(...asked.devices, ...asked.port)
   }
 

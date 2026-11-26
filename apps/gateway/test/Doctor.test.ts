@@ -15,6 +15,7 @@ import { join } from "node:path"
 import {
   CLOCK_SLACK_MS,
   clockFinding,
+  deviceNext,
   devicesFromStatus,
   DISK_WARN_BYTES,
   diskFinding,
@@ -133,7 +134,9 @@ describe("doctor on a network", () => {
       )
       const path = yield* writeConfig({
         ...configJson({ modbusHost: "10.0.0.6", bacnetInstance: 2002 }),
-        mqtt: { url: "mqtt://10.0.0.3:1883" }
+        mqtt: { url: "mqtt://10.0.0.3:1883" },
+        // Nothing answers on its status port: the gateway is not running, so the port is someone else's.
+        status: { port: 1 }
       })
       const doctor = yield* runDoctor(path, {
         network: network.host("10.0.0.1"),
@@ -164,8 +167,33 @@ describe("doctor on a network", () => {
         code: "bacnet-port-in-use",
         next: "ss -ulpn 'sport = :47808'"
       })
+      expect(found["gateway"]).toMatchObject({
+        status: "skip",
+        code: "gateway-unreachable",
+        next: `npx ot-gateway run ${path}`
+      })
       expect(doctor.next).toBe(found["broker"]?.next)
       expect(doctorProblems(doctor)?.message).toBe("4 problem(s): broker, meter, ahu, bacnet-port")
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.live("without a status block to ask, a taken BACnet/IP port may be the gateway's own: a warning", () =>
+    Effect.gen(function* () {
+      const network = makeMemoryNetwork()
+      yield* building(network)
+      yield* Effect.flatMap(
+        network.host("10.0.0.1").udp({ address: "0.0.0.0", port: 47_808 }),
+        (socket) => socket.reader
+      )
+      const doctor = yield* runDoctor(yield* writeConfig(configJson()), { network: network.host("10.0.0.1") })
+      expect(byLabel(doctor.findings)["bacnet-port"]).toMatchObject({
+        status: "warn",
+        code: "bacnet-port-in-use",
+        message: expect.stringContaining("perhaps by this config's gateway")
+      })
+      // From a free port, the device at its fixed address is still found.
+      expect(byLabel(doctor.findings)["ahu"]?.status).toBe("ok")
+      expect(doctor.ok).toBe(true)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -181,8 +209,9 @@ describe("doctor on a network", () => {
         expect.stringMatching(/^disk (ok|skip|warn|fail)$/),
         "clock ok"
       ])
-      expect(doctor.findings[0]).toMatchObject({ code: "no-config", next: "ot-gateway init" })
-      expect(doctor.next).toBe("ot-gateway init")
+      // init writes the config where doctor looked for it.
+      expect(doctor.findings[0]).toMatchObject({ code: "no-config", next: `ot-gateway init ${folder}` })
+      expect(doctor.next).toBe(`ot-gateway init ${folder}`)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -226,62 +255,90 @@ describe("doctor's findings", () => {
     expect(diskFinding("buffer", "/data", undefined, "linux").status).toBe("skip")
   })
 
-  it("takes the devices from a running gateway, with the status page's first check", async () => {
-    const config = await Effect.runPromise(parseConfig(JSON.stringify(configJson())))
-    const now = Date.UTC(2026, 10, 26, 12)
-    const status: GatewayStatus = {
-      site: "s",
-      building: "b",
-      id: "main",
-      since: now - 60_000,
-      now,
-      configSince: now - 60_000,
-      broker: {
-        url: "mqtt://10.0.0.2:1883",
-        connected: true,
-        connects: 1,
-        failedConnects: 0,
-        published: 1,
-        publishFailures: 0
-      },
-      devices: [
-        {
-          id: "meter",
-          protocol: "modbus-tcp",
-          status: "failing",
-          pollIntervalMs: 5000,
-          reason: "timeout",
-          lastError: "no answer within 3 s",
-          lastSuccess: now - 30_000,
-          pointCount: 1,
-          points: []
-        },
-        {
-          id: "ahu",
-          protocol: "bacnet-ip",
-          status: "ok",
-          pollIntervalMs: 5000,
-          lastSuccess: now - 1_000,
-          pointCount: 1,
-          points: []
-        },
-        { id: "pv", protocol: "simulator", status: "starting", pollIntervalMs: 5000, pointCount: 1, points: [] }
-      ],
-      commands: []
-    }
-    const findings = devicesFromStatus(status, config, command, "ot-gateway")
-    expect(findings.map((finding) => `${finding.subject} ${finding.status}`)).toEqual([
-      "meter fail",
-      "ahu ok",
-      "pv skip"
-    ])
-    expect(findings[0]).toMatchObject({
-      code: "device-timeout",
-      // It answered earlier in this run: what changed leads, as on the status page.
-      hint: expect.stringContaining("answered earlier"),
-      next: "ot-gateway probe 10.0.0.5 100"
+  it.effect(
+    "takes the devices from a running gateway, with the status page's first check, and what it has not loaded",
+    () =>
+      Effect.gen(function* () {
+        const config = yield* parseConfig(JSON.stringify(configJson()))
+        const now = Date.UTC(2026, 10, 26, 12)
+        const status: GatewayStatus = {
+          site: "s",
+          building: "b",
+          id: "main",
+          since: now - 60_000,
+          now,
+          configSince: now - 60_000,
+          broker: {
+            url: "mqtt://10.0.0.2:1883",
+            connected: true,
+            connects: 1,
+            failedConnects: 0,
+            published: 1,
+            publishFailures: 0
+          },
+          devices: [
+            {
+              id: "meter",
+              protocol: "modbus-tcp",
+              status: "failing",
+              pollIntervalMs: 5000,
+              reason: "timeout",
+              lastError: "no answer within 3 s",
+              lastSuccess: now - 30_000,
+              pointCount: 1,
+              points: []
+            },
+            {
+              id: "pv",
+              protocol: "simulator",
+              status: "ok",
+              pollIntervalMs: 1000,
+              lastSuccess: now - 60_000,
+              pointCount: 1,
+              points: []
+            },
+            {
+              id: "old-meter",
+              protocol: "modbus-tcp",
+              status: "ok",
+              pollIntervalMs: 5000,
+              lastSuccess: now - 1_000,
+              pointCount: 1,
+              points: []
+            }
+          ],
+          commands: []
+        }
+        const findings = devicesFromStatus(status, config, command, "ot-gateway")
+        expect(findings.map((finding) => `${finding.subject} ${finding.status} ${finding.code ?? ""}`)).toEqual([
+          "meter fail device-timeout",
+          // Not read for a minute at a 1 s interval: status fails on it, and so does doctor.
+          "pv fail device-late",
+          "old-meter warn device-not-in-config",
+          // Added to the config after the gateway started.
+          "ahu warn device-not-loaded"
+        ])
+        expect(findings[0]).toMatchObject({
+          // It answered earlier in this run: what changed leads, as on the status page.
+          hint: expect.stringContaining("answered earlier"),
+          next: "ot-gateway probe 10.0.0.5 100"
+        })
+      })
+  )
+
+  it.effect("puts an IPv6 host in brackets when the probe it suggests names a port", () =>
+    Effect.gen(function* () {
+      const nextAt = Effect.fnUntraced(function* (host: string, port: number) {
+        const [base] = configJson().devices
+        const config = yield* parseConfig(JSON.stringify({ ...configJson(), devices: [{ ...base, host, port }] }))
+        const [device] = config.devices
+        return device === undefined ? undefined : deviceNext(device, command, "ot-gateway")
+      })
+      expect(yield* nextAt("fd00::5", 5020)).toBe("ot-gateway probe '[fd00::5]:5020' 100")
+      expect(yield* nextAt("fd00::5", 502)).toBe("ot-gateway probe '[fd00::5]:502' 100")
+      expect(yield* nextAt("10.0.0.5", 5020)).toBe("ot-gateway probe 10.0.0.5:5020 100")
     })
-  })
+  )
 
   it("prints one line per finding in a terminal, and the hint and next of each problem otherwise", () => {
     const doctor = report("ot-gateway.json", [
