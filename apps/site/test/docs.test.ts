@@ -144,11 +144,14 @@ describe("site diagrams", () => {
       join(import.meta.dirname, "..", "src", "components", "docs", "diagrams.tsx"),
       "utf8"
     )
-    const named = pages.flatMap((page) =>
-      [...readFileSync(join(root, page.source), "utf8").matchAll(/^```mermaid\n(.*)$/gm)]
-        .map((match) => siteDiagram(match[1] ?? ""))
-        .filter((name) => name !== undefined)
+    const firstLines = pages.flatMap((page) =>
+      [...readFileSync(join(root, page.source), "utf8").matchAll(/^```mermaid\n(.*)$/gm)].map((match) => match[1] ?? "")
     )
+    // A comment on the first line is meant as the marker: one that does not read as a name would be ignored silently.
+    for (const line of firstLines.filter((each) => each.startsWith("%%"))) {
+      expect({ line, diagram: siteDiagram(line) }).toEqual({ line, diagram: expect.any(String) })
+    }
+    const named = firstLines.map(siteDiagram).filter((name) => name !== undefined)
     expect(named.length).toBeGreaterThan(0)
     for (const name of named) expect(components).toContain(`"${name}":`)
   })

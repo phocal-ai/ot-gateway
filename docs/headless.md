@@ -21,7 +21,9 @@ flowchart LR
     direction TB
     init["<b>4</b> init<br/>write the folder"] --> check["<b>5</b> check<br/>validate the config"]
     check --> broker["<b>6</b> broker<br/>a message there and back"]
-    broker -. "code and hint" .-> check
+    init -. "missing: the flags to add" .-> init
+    check -. "issues: path, message" .-> check
+    broker -. "code and hint" .-> broker
   end
   subgraph live["Running"]
     direction TB
@@ -52,7 +54,7 @@ Against simulated devices the whole path takes about two minutes of commands.
 2. **`--json` is the answer, on stdout.** One JSON object with `ok: true` or `ok: false`. A failure is JSON too: `error` in words, `code` to branch on, `hint` with what to check. Progress and logs go to stderr, so `ot-gateway check --json | jq` always parses.
 3. **The exit code decides.** `0` it worked, `1` it did not (the JSON says why), `2` the command line itself was wrong (a missing answer, an unknown flag).
 
-A result also carries `next`: the commands to run after it, with the right paths filled in. A script can ignore it; an agent can follow it.
+The results of `init` and `check` also carry `next`: the commands to run after them, with the right paths filled in. A script can ignore it; an agent can follow it.
 
 ```json
 {
@@ -215,14 +217,19 @@ ot-gateway init site-1 --json \
 | `--yes`                        | take the default for whatever no flag gives: site `my-site`, a broker on localhost, a simulated device |
 | `--force`                      | replace a config that exists; without it `init` refuses and keeps yours                                |
 
-The password is the one thing `init` does not take. With a `--username` it writes an empty `MQTT_PASSWORD=` line into `ot-gateway.env`, and the result's `notes` say so. Fill that line in with an editor, or from wherever your script keeps its secrets, so that the password is never typed on a command line:
+The password is the one thing `init` does not take. With a `--username` it writes an empty `MQTT_PASSWORD=` line into `ot-gateway.env`, and the result's `notes` say so. Fill that line in with an editor. A script writes it from wherever it keeps its secrets, so that the password is never typed on a command line:
 
 ```bash
 # BROKER_PASSWORD comes from your secret store, not from the keyboard
-sed -i "s|^MQTT_PASSWORD=.*|MQTT_PASSWORD=${BROKER_PASSWORD}|" site-1/ot-gateway.env
+env=site-1/ot-gateway.env
+grep -v '^MQTT_PASSWORD=' "$env" > "$env.new"
+printf "MQTT_PASSWORD='%s'\n" "$BROKER_PASSWORD" >> "$env.new"   # printf is part of the shell: nothing shows in ps
+chmod 600 "$env.new" && mv "$env.new" "$env"
 ```
 
-`ot-gateway.env` is readable by you alone and stays out of git. Docker Compose and every `ot-gateway` command read it from the folder.
+The single quotes keep a password with spaces or a `#` whole. A password that itself contains a single quote goes in double quotes instead.
+
+`ot-gateway.env` is readable by you alone; keep it out of git. Docker Compose and every `ot-gateway` command read it from the folder.
 
 Run without a terminal and without its answers, `init` writes nothing, exits with 2 and says which flags it lacks, with a full command to copy:
 
@@ -330,7 +337,7 @@ When a point stays silent it waits for the slowest poll interval plus 30 seconds
 ```json
 {
   "ok": false,
-  "error": "2 of 4 point(s) sent no value within 8 s",
+  "error": "2 of 4 point(s) sent no value within 60 s",
   "code": "values-missing",
   "missing": ["energy-meter/active-power", "energy-meter/energy"],
   "hint": "ot-gateway status says why a device fails (it must be running: ot-gateway run, or docker compose up -d); a point that never changes and publishes on change only sends its first value at start"
@@ -388,7 +395,8 @@ flowchart TD
   why -- "connection" --> c["address, port or firewall;<br/>or another program holds<br/>the device's only connection"]
   why -- "timeout" --> t["it connects but does not answer:<br/>often a wrong unit id"]
   why -- "protocol" --> p["the device refused the request:<br/>often a wrong register or object"]
-  s -- "everything ok" --> oc["the silent points publish<br/>on change and have not changed:<br/>not a failure"]
+  s -- "ok: true, no point arrived" --> oc["every point publishes on change<br/>and none has changed yet"]
+  s -- "ok: true, some points arrived" --> pt["the missing points are read, but nothing<br/>was published in time: check their rows,<br/>then history and messages"]
 ```
 
 | What you see                                     | Where                      | What it means                                                         | Next                                                                  |
@@ -411,7 +419,7 @@ Two cases are worth knowing before they cost you time:
 
 ## The whole path as a script
 
-Everything above, for a machine with `jq`. It stops at the first step that fails and prints what that step said to fix. Each step's full answer stays in a file next to it.
+Everything above, for a machine with `jq`. It stops at the first step that fails and prints what that step said to fix. Each step's full answer stays in a file next to it. `init` keeps a config that exists, so a second run needs a new folder or `--force`.
 
 ```bash
 #!/usr/bin/env bash
@@ -425,7 +433,8 @@ ot-gateway import points.csv --dry-run --json > import.json \
   || { jq '.issues' import.json; exit 1; }
 
 # 4. the folder
-ot-gateway init "$site" --site "$site" --broker "$broker" --points points.csv --json | jq '.files'
+ot-gateway init "$site" --site "$site" --broker "$broker" --points points.csv --json > init.json \
+  || { jq '{code, error, missing, hint}' init.json; exit 1; }
 cd "$site"
 
 # 5 and 6. the config, then the broker
@@ -439,7 +448,8 @@ docker compose up -d
 if ot-gateway watch --until-values --json > watch.ndjson; then
   echo "every point has a value on the broker"
 else
-  ot-gateway status --json | jq '{problem, devices: [.devices[] | select(.status != "ok") | {id, lastError, hints}]}'
+  ot-gateway status --json \
+    | jq '{code, error, hint, problem, devices: [.devices[]? | select(.status != "ok") | {id, lastError, hints}]}'
   exit 1
 fi
 ```
@@ -455,7 +465,7 @@ Set up an OT Gateway for my site with npx ot-gateway, without asking me anything
 Read https://ot-gateway.vercel.app/docs/headless.md and follow its eight steps: learn the points list
 from `points schema --json`, translate my list into it, check it with `import --dry-run --json` until
 it is clean, write the folder with `init --json`, then `check`, `broker`, `docker compose up -d` and
-`watch --until-values --json`. Read each command's JSON and its exit code, and follow `hint` and `next`.
+`watch --until-values --json`. Read each command's JSON and its exit code, and follow `hint` when a command fails.
 Never make a point writable, and keep the broker password in ot-gateway.env only.
 ```
 

@@ -254,6 +254,8 @@ export const HeadlessMap = () => (
 /* When values are missing */
 
 interface Branch {
+  /** A branch where status finds nothing wrong, drawn in the good color. */
+  readonly ok?: boolean
   readonly says: string
   readonly means: string
   readonly fix: React.ReactNode
@@ -292,6 +294,22 @@ const branches: ReadonlyArray<Branch> = [
     says: "reason: protocol",
     means: "A device refused the request.",
     fix: "often a wrong register or object"
+  },
+  {
+    ok: true,
+    says: "ok: true, no point arrived",
+    means: "Every point publishes on change, and none has changed yet.",
+    fix: "not a failure: watch again once a value moves"
+  },
+  {
+    ok: true,
+    says: "ok: true, some arrived",
+    means: "The missing points are read, but nothing was published in time.",
+    fix: (
+      <>
+        check their rows, then <Mono>history</Mono> and <Mono>messages</Mono> for those points
+      </>
+    )
   }
 ]
 
@@ -308,9 +326,14 @@ export const HeadlessFailures = () => (
       </div>
       <ul className="divide-y">
         {branches.map((branch) => (
-          <li className="grid gap-x-4 gap-y-1 p-4 sm:grid-cols-[14rem_1fr]" key={branch.says}>
+          <li className="grid gap-x-4 gap-y-1 p-4 sm:grid-cols-[16rem_1fr]" key={branch.says}>
             <p>
-              <span className="inline-block rounded-md border border-[var(--status-critical)]/40 px-2 py-0.5 font-mono text-xs">
+              <span
+                className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs ${
+                  branch.ok === true ? "border-[var(--status-good)]/50" : "border-[var(--status-critical)]/40"
+                }`}
+              >
+                {branch.ok === true ? <Check aria-hidden="true" className="size-3 text-[var(--status-good)]" /> : null}
                 {branch.says}
               </span>
             </p>
@@ -320,20 +343,6 @@ export const HeadlessFailures = () => (
             </div>
           </li>
         ))}
-        <li className="grid gap-x-4 gap-y-1 p-4 sm:grid-cols-[14rem_1fr]">
-          <p>
-            <span className="inline-flex items-center gap-1 rounded-md border border-[var(--status-good)]/50 px-2 py-0.5 font-mono text-xs">
-              <Check aria-hidden="true" className="size-3 text-[var(--status-good)]" />
-              ok: true
-            </span>
-          </p>
-          <div className="text-sm">
-            <p>Nothing is wrong.</p>
-            <p className="text-fd-muted-foreground mt-0.5 text-xs">
-              the silent points publish on change and have not changed yet
-            </p>
-          </div>
-        </li>
       </ul>
     </div>
   </Figure>
