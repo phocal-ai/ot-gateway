@@ -74,18 +74,37 @@ const fieldLines = (node: Node, indent: string): ReadonlyArray<string> => {
   return entries.flatMap(([name, field]) => {
     const description = text(field, "description")
     const label = `${typeLabel(field)}${required.has(name) ? "" : ", optional"}`
-    // An object's own fields below it: the health message's devices and host.
-    const values = field["additionalProperties"]
-    const nested = isNode(field["properties"])
-      ? field
-      : isNode(values) && isNode(values["properties"])
-        ? values
-        : undefined
     return [
       `${indent}${name.padEnd(width)}${label}${description === undefined ? "" : `. ${description}`}`,
-      ...(nested === undefined ? [] : fieldLines(nested, `${indent}  `))
+      ...nestedLines(field, `${indent}  `)
     ]
   })
+}
+
+/**
+ * An object field's own fields, below it: the health message's devices (a map, by id) and host, and each form of
+ * `$meta`'s publish (sample, aggregate, change), named by its mode.
+ */
+const nestedLines = (field: Node, indent: string): ReadonlyArray<string> => {
+  if (isNode(field["properties"])) return fieldLines(field, indent)
+  const values = field["additionalProperties"]
+  if (isNode(values) && isNode(values["properties"])) return fieldLines(values, indent)
+  const anyOf = field["anyOf"]
+  const forms = Array.isArray(anyOf) ? anyOf.filter(isNode).filter((form) => isNode(form["properties"])) : []
+  return forms.flatMap((form, index) => [`${indent}${formName(form, index)}:`, ...fieldLines(form, `${indent}  `)])
+}
+
+/** What a form is called: its title, else its one-value field (`mode "aggregate"`), else its number. */
+const formName = (form: Node, index: number) => {
+  const title = text(form, "title")
+  if (title !== undefined) return title
+  const properties = isNode(form["properties"]) ? form["properties"] : {}
+  for (const field of Object.entries(properties)) {
+    const [name, node] = field
+    const values = isNode(node) ? node["enum"] : undefined
+    if (Array.isArray(values) && values.length === 1) return `${name} ${JSON.stringify(values[0])}`
+  }
+  return `form ${index + 1}`
 }
 
 /** Each form of a message (the members of its `anyOf`, or the message itself) with its title and fields. */

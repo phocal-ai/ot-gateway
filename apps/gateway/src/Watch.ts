@@ -333,7 +333,8 @@ export interface WatchOptions {
   readonly untilValues?: boolean | undefined
   /**
    * Check every message under the config's site and building against the MQTT contract and print only those off
-   * it (`contractViolation`); a watch that ends by itself fails when one was.
+   * it (`contractViolation`); a watch that ends by itself fails when one was (`off-contract`), or when none
+   * arrived to check (`nothing-checked`).
    */
   readonly check?: boolean | undefined
 }
@@ -436,45 +437,56 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
       hint: "the broker or the network went away during the watch: ot-gateway broker checks the connection"
     })
   }
-  if (check) {
-    const summary: ContractSummary = { event: "contract", version: contractVersion, checked, off: offContract }
-    yield* json ? printResult(JSON.stringify(summary)) : Console.log(formatContractSummary(summary))
-  }
-  const contractFailure =
-    check && offContract > 0
-      ? new WatchError({
-          message: `${offContract} of ${checked} message(s) under ${config.site}/${config.building} were off the MQTT contract ${contractVersion}`,
-          code: "off-contract",
-          hint: "each one is printed with what is wrong; ot-gateway contract <message> lists the fields. A gateway newer than this CLI may send fields a later contract version added: compare the contract in its health message"
-        })
-      : undefined
-  if (!arrivals.expects) return contractFailure === undefined ? undefined : yield* contractFailure
+  // The points' summary first, then the contract's: with --check, the last line before a failure is the contract's.
   const elapsed = Math.round(((yield* monotonicMillis) - started) / 1000)
-  const summary = watchSummary(arrivals.devices(), elapsed, messages)
-  yield* json ? printResult(JSON.stringify(summary)) : Console.log(formatSummary(summary))
+  const summary = arrivals.expects ? watchSummary(arrivals.devices(), elapsed, messages) : undefined
+  if (summary !== undefined) {
+    yield* json ? printResult(JSON.stringify(summary)) : Console.log(formatSummary(summary))
+  }
+  if (check) {
+    const checkedSummary: ContractSummary = { event: "contract", version: contractVersion, checked, off: offContract }
+    yield* json ? printResult(JSON.stringify(checkedSummary)) : Console.log(formatContractSummary(checkedSummary))
+  }
+  const offLine = `${offContract} of ${checked} message(s) under ${config.site}/${config.building} were off the MQTT contract ${contractVersion}`
   // Points that send only on change may stay quiet, but not every one of them: then nothing shows the gateway works.
-  const nothing = summary.arrived === 0
-  if (untilValues && (summary.missing > 0 || nothing)) {
+  const nothing = summary !== undefined && summary.arrived === 0
+  if (untilValues && summary !== undefined && (summary.missing > 0 || nothing)) {
     const silent = (device: DeviceArrivals) => (nothing ? [...device.missing, ...device.onChange] : device.missing)
+    const missingLine = nothing
+      ? `no point sent a value within ${seconds} s`
+      : `${summary.missing} of ${summary.points} point(s) sent no value within ${seconds} s`
+    // Missing values win the code, since they are what to fix first; the message still says the contract was broken.
     return yield* new WatchError({
-      message: nothing
-        ? `no point sent a value within ${seconds} s`
-        : `${summary.missing} of ${summary.points} point(s) sent no value within ${seconds} s`,
+      message: check && offContract > 0 ? `${missingLine}; and ${offLine}` : missingLine,
       code: "values-missing",
       missing: summary.devices.flatMap((device) => silent(device).map((point) => `${device.id}/${point}`)),
       hint: "ot-gateway status says why a device fails (it must be running: ot-gateway run, or docker compose up -d); a point that never changes and publishes on change only sends its first value at start"
     })
   }
-  if (contractFailure !== undefined) return yield* contractFailure
+  if (check && offContract > 0) {
+    return yield* new WatchError({
+      message: offLine,
+      code: "off-contract",
+      hint: "each one is printed with what is wrong; ot-gateway contract <message> lists the fields. A gateway newer than this CLI may send fields a later contract version added: compare the contract in its health message"
+    })
+  }
+  // A check of nothing is no pass: the gateway is not running, or --topic is outside the site and building.
+  if (check && checked === 0) {
+    return yield* new WatchError({
+      message: `no message under ${config.site}/${config.building} arrived within ${seconds} s, so nothing was checked against the MQTT contract`,
+      code: "nothing-checked",
+      hint: "is the gateway running (ot-gateway status)? --check looks only at topics under the config's site and building; the gateway's retained $meta and health arrive at once when it has published them"
+    })
+  }
 }, Effect.scoped)
 
 /**
  * A `watch --until-values` that has nothing to wait for, or whose points did not all send a value in time; or a
- * `watch --check` that saw a message off the contract.
+ * `watch --check` that saw a message off the contract, or no message to check at all.
  */
 export class WatchError extends Schema.TaggedError<WatchError>()("WatchError", {
   message: Schema.String,
-  code: Schema.Literals(["nothing-to-wait-for", "values-missing", "off-contract"]),
+  code: Schema.Literals(["nothing-to-wait-for", "values-missing", "off-contract", "nothing-checked"]),
   missing: Schema.optionalKey(Schema.Array(Schema.String)),
   hint: Schema.optionalKey(Schema.String)
 }) {}

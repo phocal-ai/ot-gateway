@@ -355,7 +355,7 @@ ot-gateway contract value --json    # one message's JSON Schema alone, to hand t
 ot-gateway watch --check --seconds 60 --json
 ```
 
-`watch --check` checks every message under the site and building against the contract, with the same strict check as the gateway's own tests, and prints only the ones off it, each with `contract: {message, issues[]}` next to the message. Its last lines are `{"event":"contract","version":"1.0","checked":120,"off":0}` and, when one was off, a failure with `code: off-contract`. Use it when a consumer chokes on something: it tells whether the gateway or another publisher sent it.
+`watch --check` checks every message under the site and building against the contract, with the same strict check as the gateway's own tests, and prints only the ones off it, each with `contract: {message, issues[]}` next to the message. After the usual `{"event":"summary"}` line (when the config has points) comes `{"event":"contract","version":"1.0","checked":120,"off":0}`, and then, when one was off, a failure with `code: off-contract`. A check that saw no message under the site and building fails with `code: nothing-checked`, since that proves nothing. With `--until-values` as well, missing values keep the code `values-missing` and the `error` adds the messages off the contract. Use it when a consumer chokes on something: it tells whether the gateway or another publisher sent it.
 
 ## When something fails
 
@@ -419,6 +419,7 @@ flowchart TD
 | `code: broker-…`, or `ok: false` with `warnings`               | `broker`, `watch`          | the broker cannot be reached, refuses, or does not return the message | step 6's table                                                        |
 | `code: values-missing`                                         | `watch --until-values`     | some points sent nothing in time                                      | `ot-gateway status --json`                                            |
 | `code: off-contract`                                           | `watch --check`            | a message under the site and building is not what the contract says   | its `contract.issues[]`; `ot-gateway contract <message>`              |
+| `code: nothing-checked`                                        | `watch --check`            | no message under the site and building arrived to check               | `ot-gateway status --json`                                            |
 | `code: gateway-unreachable`                                    | `status`, `events`, `logs` | no gateway answers on the status port                                 | start it; `docker compose logs gateway` when it does not stay up      |
 | a device `failing`                                             | `status`                   | the device does not answer as configured                              | follow its `hints.checks`, then [Troubleshooting](troubleshooting.md) |
 
@@ -498,7 +499,7 @@ Every result that can fail has `ok`. `status`, `events`, `logs`, `history` and `
 | `check --json`                  | `site`, `building`, `broker`, `devices[]`, `warnings[]`, `next[]`                                        | `code`, `issues[]`: `path`, `message`                           |
 | `broker --json`                 | `protocolVersion`, `maximumQoS`, `retainAvailable`, `roundTripMs`                                        | `code`, `hint`; or the report with `ok: false` and `warnings[]` |
 | `watch --json`                  | one line per message: `at`, `topic`, `retained`, `payload`; then `{"event":"summary"}`                   | `code`, `missing[]`, `hint`                                     |
-| `watch --check --json`          | one line per message off the contract, with `contract`; then `{"event":"contract"}`                      | `code: off-contract`, `hint`                                    |
+| `watch --check --json`          | one line per message off the contract, with `contract`; then the summary and `{"event":"contract"}`      | `code: off-contract` or `nothing-checked`, `hint`               |
 | `contract --json`               | `version`, `url`, `topics[]`, `schemas` (one JSON Schema per message)                                    |                                                                 |
 | `status --json`                 | `broker`, `buffer`, `host`, `devices[]` with `points[]`                                                  | the same, with `problem` and per device `hints`                 |
 | `events --json`                 | `events[]`: `at`, `type`, and what happened                                                              | `code`, `hint`                                                  |

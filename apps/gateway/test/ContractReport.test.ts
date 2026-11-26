@@ -44,6 +44,10 @@ describe("contract", () => {
     expect(value).toMatch(/^ {4}unit +string, optional\./m)
     expect(describeContractMessage("health")).toMatch(/^ {6}failingSince +integer, optional\./m)
     expect(describeContractMessage("command")).toContain("nothing else is accepted")
+    // $meta's publish has a form per mode, each listed by its mode.
+    expect(describeContractMessage("meta")).toMatch(
+      /^ {4}mode "aggregate":\n {6}mode +"aggregate"\n {6}intervalMs +integer$/m
+    )
   })
 
   it("prints the JSON Schemas as the contract generates them, with the topic table", () => {
