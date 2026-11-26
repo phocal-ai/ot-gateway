@@ -13,7 +13,7 @@
 #
 # The first run pulls the image (retried, its progress kept off stdout, which carries --json output); the moving tags
 # dev and latest are checked for a newer image on every run. The long-running
-# commands get a fixed container name, so `docker stop ot-gateway-demo` (-run, -watch) stops one started in the
+# commands get a fixed container name, so `docker stop ot-gateway-demo` (-run, -watch, -simulate) stops one started in the
 # background; only one of each runs at a time. The Compose service's container is `ot-gateway`.
 set -eu
 
@@ -109,7 +109,7 @@ fi
 
 # Long-running commands get a name to stop them by; the others may run side by side, unnamed.
 name=
-case ${1:-} in demo | run | watch) name=ot-gateway-$1 ;; esac
+case ${1:-} in demo | run | watch | simulate) name=ot-gateway-$1 ;; esac
 if [ -n "$name" ]; then
   state=$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null) || state=
   case $state in

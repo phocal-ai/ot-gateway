@@ -51,6 +51,12 @@ export const pages: ReadonlyArray<PageSource> = [
     description: "From your list of points to values arriving on your broker, in five steps."
   },
   {
+    source: "docs/try-bacnet.md",
+    slug: "try-bacnet",
+    description:
+      "A simulated BACnet device on one machine, the gateway on another: discover it, read it and write a setpoint."
+  },
+  {
     source: "docs/headless.md",
     slug: "headless",
     description:
