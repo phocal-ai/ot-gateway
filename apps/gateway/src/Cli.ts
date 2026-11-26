@@ -42,7 +42,9 @@
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Duration, Effect, FileSystem, Option, References, Result } from "effect"
 import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
+import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
+import { saveDiscovered } from "./DiscoverSave.ts"
 import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
@@ -70,10 +72,14 @@ import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./P
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
+  broadcastAddress,
+  discoverInteractively,
   initNext,
   initSummary,
   initTarget,
   isEmptyFolder,
+  lanInterfaces,
+  suggestedModbusRange,
   isInteractive,
   nextSteps,
   runInit,
@@ -494,6 +500,58 @@ const discoverModbusCommand = Command.make(
   ])
 )
 
+/**
+ * `discover` for a person at a terminal: Who-Is on this network (the one picked when there are several), the points
+ * and writable setpoints to keep, the read interval, then a save into the config (devices it has get the new
+ * points), and the offer to start. When nobody answers: one device by address, a Modbus scan, a points list.
+ */
+const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, address: string | undefined) {
+  const fs = yield* FileSystem.FileSystem
+  const cli = yield* invocation
+  // The file as it is before any question: the save merges into it and refuses when it changed meanwhile.
+  const fileText = yield* fs.readFileString(path)
+  const config = yield* loadConfig(path)
+  const lans = lanInterfaces(networkInterfaces())
+  // The default broadcast reaches no device behind most routers' settings: ask on this machine's network instead.
+  const unset = config.bacnet.broadcastAddress === "255.255.255.255"
+  const broadcast = unset && address === undefined ? yield* broadcastAddress(lans, {}) : undefined
+  const asked =
+    broadcast === undefined ? config : { ...config, bacnet: { ...config.bacnet, broadcastAddress: broadcast } }
+  const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), address)
+  if (picked.length === 0) return yield* Console.log(`nothing to save; ${path} is as it was`)
+  const points = picked.reduce((total, device) => total + device.points.length, 0)
+  const save = yield* Prompt.Confirm({
+    message: `Save ${picked.length} device(s), ${points} point(s), to ${path}?`,
+    initial: true
+  })
+  if (!save) return yield* Console.log(`nothing saved; ${path} is as it was`)
+  const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
+  const merged = yield* saveDiscovered(path, fileText, picked, located ? undefined : broadcast)
+  const saved = yield* loadConfig(path)
+  const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
+  yield* Console.log(
+    [
+      "",
+      ...merged.added.map((id) => `✓ added ${id}`),
+      ...merged.extended.map((id) => `✓ added points to ${id} (it keeps its read interval)`),
+      ""
+    ].join("\n")
+  )
+  const question = startNowQuestion(saved, process.env)
+  if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {
+    return yield* Console.log(
+      [
+        "",
+        `read once:    ${cli} read${argument}`,
+        `start it:     ${cli} run${argument}`,
+        `all commands: ${cli} --help`
+      ].join("\n")
+    )
+  }
+  yield* Console.log(`\nstatus page: http://127.0.0.1:${saved.status?.port ?? 8080}   Ctrl-C stops the gateway\n`)
+  return yield* runConfigured(saved, path).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
+})
+
 const discoverCommand = Command.make(
   "discover",
   {
@@ -522,6 +580,15 @@ const discoverCommand = Command.make(
       if (append && Option.isNone(pointsList)) {
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
+      // A person at a terminal picks what to keep and saves it into the config; scripts and agents get the draft.
+      // Without a config there is nothing to save into: the draft, as before, and init named as the way to one.
+      const fs = yield* FileSystem.FileSystem
+      if (!json && Option.isNone(pointsList) && process.stdin.isTTY && process.stdout.isTTY) {
+        if (yield* fs.exists(config)) return yield* discoverAndSave(config, Option.getOrUndefined(address))
+        yield* Console.error(
+          `no ${config} here, so the devices found are printed, not saved: ${yield* invocation} init sets up the broker and the site, then discover saves the devices you pick`
+        )
+      }
       const found = yield* configForDiscovery(config)
       const decoded = found.config
       const options = {
@@ -540,10 +607,14 @@ const discoverCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "Find BACnet devices through the config's bacnet settings (the defaults when there is no config yet) and print a draft of their devices entries, read-only"
+    "Find BACnet devices through the config's bacnet settings. In a terminal: pick their points and writable setpoints and save them into the config. Otherwise (--json, a pipe, no config yet): print a draft of their devices entries; nothing is written"
   ),
   Command.withExamples([
-    { command: "ot-gateway discover", description: "Print the draft as JSON, in the config's shape" },
+    {
+      command: "ot-gateway discover",
+      description: "In a terminal: pick what to keep and save it into ot-gateway.json"
+    },
+    { command: "ot-gateway discover --json", description: "Print the draft as JSON, in the config's shape" },
     { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
     {
       command: "ot-gateway discover --points-list points.csv --append",
@@ -755,7 +826,7 @@ const init = Command.make(
       // The folder's ot-gateway.env may hold the broker password already (a folder init kept it in).
       yield* loadFolderEnv(config)
       const summary = initSummary(config, written, files, context, process.env)
-      yield* Console.log(["", ...summary.lines, ""].join("\n"))
+      yield* Console.log(["", ...summary.lines].join("\n"))
       const question = startNowQuestion(written, process.env)
       if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {
         return yield* Console.log(["", ...summary.later].join("\n"))

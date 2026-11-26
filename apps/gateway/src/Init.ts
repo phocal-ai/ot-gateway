@@ -1,8 +1,9 @@
 /**
- * `ot-gateway init`: a few questions, then a config that `check` accepts. It asks for the site and building
- * (the first two topic segments), the broker, and where the devices come from: a simulated device to try
- * things with, the BACnet devices that answer a Who-Is (drafted read-only, as `discover` does), or none yet. When
- * no BACnet device answers, the other ways include a Modbus TCP scan of a range (as `discover modbus` does).
+ * `ot-gateway init`: a few questions, then a config that `check` accepts. A person answers the broker, the site and
+ * the building, and adds devices next with `discover`, which runs `discoverInteractively` below: Who-Is, the points
+ * to keep and the writable setpoints, and when nobody answers, the other ways (one device by its address, a Modbus
+ * TCP scan of a range, a points list, the simulated device). Scripts give init its devices as flags: a points list,
+ * the simulated device, or `--devices discover` (drafted read-only).
  *
  * The answers become the config in `initConfig`, a pure function, and the result is decoded with the gateway's
  * own schema before anything is written, so `init` never leaves a config that `run` refuses. An existing file
@@ -272,7 +273,7 @@ const login = Effect.fn("login")(function* (flags: InitFlags) {
  * Where Who-Is goes: the flag's address, the only LAN's broadcast address, or the one picked from several (the
  * first with `--yes`, said on stderr).
  */
-const broadcastAddress = (lans: ReadonlyArray<LanInterface>, flags: InitFlags) => {
+export const broadcastAddress = (lans: ReadonlyArray<LanInterface>, flags: InitFlags) => {
   const [only] = lans
   if (flags.broadcast !== undefined) return Effect.succeed(flags.broadcast)
   if (lans.length <= 1) return Effect.succeed(only?.broadcast ?? "255.255.255.255")
@@ -508,7 +509,11 @@ const otherWayChoices: ReadonlyArray<Prompt.SelectChoice<OtherWay>> = [
     description: "a CSV or JSON of devices and points (Modbus, or BACnet from an EDE file)"
   },
   { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" },
-  { title: "None yet", value: "none", description: "add devices later, on the status page" }
+  {
+    title: "None for now",
+    value: "none",
+    description: "discover again once a device is reachable, or add it on the status page"
+  }
 ]
 
 const otherWays = Prompt.Select<OtherWay>({ message: "No BACnet device answered. What now?", choices: otherWayChoices })
@@ -594,11 +599,12 @@ const validDeviceAddress = (value: string) =>
  * found. When nobody answers, discovery cannot run (another program holds UDP 47808), or they pick no point, the
  * other ways: one device by its address, again, a points list, the simulated device, or none yet.
  */
-const discoverInteractively = Effect.fn("discoverInteractively")(function* (
+export const discoverInteractively = Effect.fn("discoverInteractively")(function* (
   probe: GatewayConfig,
-  modbusRange: () => string
+  modbusRange: () => string,
+  firstAddress?: string
 ) {
-  let address: string | undefined = undefined
+  let address: string | undefined = firstAddress
   let modbus = false
   while (true) {
     if (modbus) {
@@ -697,7 +703,8 @@ export const runInit = Effect.fn("runInit")(function* (
   // As the work goes: where values go, which devices they come from, then the names their topics take.
   const broker = { brokerUrl: yield* brokerUrl(flags, localBroker), login: yield* login(flags) }
   // Discovery is the first way to devices for a person at the terminal; the others come when nobody answers.
-  const source: DeviceSource = flags.points === undefined ? (flags.devices ?? (yes ? "simulated" : "discover")) : "list"
+  // init sets up the project; a person adds devices next, with discover. Scripts get the simulated device with --yes.
+  const source: DeviceSource = flags.points === undefined ? (flags.devices ?? (yes ? "simulated" : "none")) : "list"
   // Discovery reads only the BACnet settings; the names come after it.
   const answers: InitAnswers = { site: "site", building: "building", ...broker }
   // Discovery needs the network before it can run; any other source has its devices first.
@@ -1020,10 +1027,9 @@ export const initSummary = (
   const files = folder.written.map((file) => basename(file))
   const passwordEnv = config.mqtt.passwordEnv
   const envFile = [...folder.written, ...folder.kept].find((file) => file.endsWith("ot-gateway.env"))
-  const devices =
-    config.devices.length === 0
-      ? ["· no devices yet: add them on the status page, or with a points list (ot-gateway import)"]
-      : config.devices.map((device) => `✓ ${deviceLine(device)}`)
+  const devices = config.devices.map((device) => `✓ ${deviceLine(device)}`)
+  // The command with the config named as `run` names it: nothing in its folder, the path from elsewhere.
+  const discover = `${cli} discover${run.slice(`${cli} run`.length)}`
   return {
     lines: [
       `✓ wrote ${files.join(", ")}${folder.written.length > 0 && dirname(path) !== "." ? ` in ${dirname(path)}` : ""}`,
@@ -1033,11 +1039,19 @@ export const initSummary = (
         : [`· put the broker password after ${passwordEnv}= in ${envFile ?? "the environment"} before you start`])
     ],
     /** Said when the gateway is not started now. */
-    later: [
-      `start it:     ${run}${compose === undefined ? "" : `   (or in Docker: ${compose})`}`,
-      `status page:  ${url}`,
-      `all commands: ${cli} --help`
-    ]
+    later:
+      config.devices.length === 0
+        ? [
+            `next: ${discover}`,
+            "      finds the BACnet devices on this network, lets you pick their points and saves them here",
+            `      (Modbus TCP: it offers a scan of a range; a points list: ${cli} import points.csv${run.slice(`${cli} run`.length)})`
+          ]
+        : [
+            `start it:     ${run}${compose === undefined ? "" : `   (or in Docker: ${compose})`}`,
+            `read once:    ${cli} read${run.slice(`${cli} run`.length)}`,
+            `status page:  ${url}`,
+            `all commands: ${cli} --help`
+          ]
   }
 }
 

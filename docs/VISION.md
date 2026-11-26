@@ -120,7 +120,7 @@ any other list, PDF ── AI agent ──────────────�
 On the machine on the building network:
 
 ```bash
-npx ot-gateway init site-1   # a folder, as create-next-app makes one: questions or a points list, finds BACnet devices, checks everything
+npx ot-gateway init site-1   # a folder, as create-next-app makes one: broker and site from a few questions (or a points list), checks everything
 cd site-1
 docker compose up -d            # runs it, restarts it, keeps its logs
 npx ot-gateway status           # one line per device

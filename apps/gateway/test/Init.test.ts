@@ -640,6 +640,7 @@ describe("init for a person at the terminal", () => {
       ])
       expect(summary.later).toEqual([
         "start it:     ot-gateway run   (or in Docker: docker compose up -d)",
+        "read once:    ot-gateway read",
         "status page:  http://127.0.0.1:8080",
         "all commands: ot-gateway --help"
       ])
@@ -654,6 +655,17 @@ describe("init for a person at the terminal", () => {
       )
       expect(mac.lines[0]).toBe("✓ wrote ot-gateway.json in site-1")
       expect(mac.later[0]).toBe("start it:     ot-gateway run site-1/ot-gateway.json")
+    })
+  )
+
+  it.effect("points at discover as the next step when there are no devices yet, naming the config from elsewhere", () =>
+    Effect.gen(function* () {
+      const config = yield* decode(initConfig(answers, []))
+      const here = initSummary("ot-gateway.json", config, { written: ["ot-gateway.json"], kept: [] }, { cwd: "." })
+      expect(here.lines).toEqual(["✓ wrote ot-gateway.json"])
+      expect(here.later[0]).toBe("next: ot-gateway discover")
+      const elsewhere = initSummary("site-1/ot-gateway.json", config, { written: [], kept: [] }, { cwd: "." })
+      expect(elsewhere.later[0]).toBe("next: ot-gateway discover site-1/ot-gateway.json")
     })
   )
 
