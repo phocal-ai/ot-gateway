@@ -27,6 +27,7 @@ pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file 
 pnpm ot-gateway contract                   # the MQTT contract: topics and each message's fields (--json: the JSON Schemas; contract value --json: one)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker (--check: only what is off the contract)
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
+pnpm ot-gateway read                       # every point of ./ot-gateway.json read once, without a running gateway or broker (read <device>[/<point>], --json; exit 1 when one fails)
 pnpm ot-gateway probe 127.0.0.1:5020 100   # read Modbus registers once (read-only): every type and byte order they read as, a points list row
 pnpm ot-gateway simulate bacnet            # a simulated BACnet/IP device on the LAN (a room: temperature, writable setpoint, heating) to try from another machine (docs/try-bacnet.md)
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)

@@ -16,6 +16,7 @@
  *   ot-gateway history <device/point> [config]  what a point did lately, from the gateway's history
  *   ot-gateway messages [device/point] [config]  what the gateway published per topic since it started (--since: the last minutes)
  *   ot-gateway logs [config]        the running gateway's recent log lines: warnings and errors, and info
+ *   ot-gateway read [device[/point]] [config]  read every configured point (or the ones named) once, without a running gateway
  *   ot-gateway probe <host[:port]> <register>  read Modbus registers once and show every type and byte order they read as
  *   ot-gateway simulate bacnet      a simulated BACnet/IP device with three objects on the LAN, to try against
  *
@@ -29,7 +30,7 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Effect, FileSystem, Option, References } from "effect"
+import { Config, Console, Duration, Effect, FileSystem, Option, References } from "effect"
 import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { pointAlarmWhen } from "./Alarms.ts"
@@ -65,6 +66,16 @@ import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
 import { contractJson, contractMessageNames, describeContract, describeContractMessage } from "./ContractReport.ts"
+import {
+  DEFAULT_READ_SECONDS,
+  formatReadReport,
+  incompleteMessage,
+  parseReadSelection,
+  readOnce,
+  ReadIncomplete,
+  selectDevices
+} from "./ReadOnce.ts"
+import { printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { defaultCount, formatProbeReport, parseEndpoint, probe, ProbeError, probeJson, probeTables } from "./Probe.ts"
 import {
   BrokerCommandError,
@@ -1334,6 +1345,113 @@ const logsCommand = Command.make(
   ])
 )
 
+/**
+ * `read`'s arguments: the points and the config, either order. A word ending in `.json` is the config (`read
+ * site-1/ot-gateway.json`, `read room site-1/ot-gateway.json`, `read site-1/ot-gateway.json room`); `--config` names
+ * it too.
+ */
+const isJsonPath = (word: string | undefined) => word !== undefined && word.toLowerCase().endsWith(".json")
+
+export const readArguments = (
+  first: string | undefined,
+  second: string | undefined,
+  flag: string | undefined
+): { readonly points?: string; readonly config: string } | { readonly error: string } => {
+  if (isJsonPath(first) && isJsonPath(second)) return { error: `two configs: ${first} and ${second}; name one` }
+  const [config, selection] = isJsonPath(first) ? [first, second] : [second, first]
+  if (config !== undefined && flag !== undefined && config !== flag) {
+    return { error: `two configs: ${config} and --config ${flag}; name one` }
+  }
+  return { ...(selection === undefined ? {} : { points: selection }), config: config ?? flag ?? DEFAULT_CONFIG }
+}
+
+const readCommand = Command.make(
+  "read",
+  {
+    points: Argument.String("points").pipe(
+      Argument.withDescription(
+        "device/point, a device for all its points, or several of either comma-separated; every point when left out"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    positionalConfig: Argument.String("config").pipe(
+      Argument.withDescription(`Path of the gateway's JSON config (default ${DEFAULT_CONFIG})`),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    config: Flag.String("config").pipe(
+      Flag.withDescription("Path of the gateway's JSON config, the same as naming it as an argument"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    timeout: Flag.Int("timeout").pipe(
+      Flag.withDescription(
+        `Seconds each device may take, connecting and finding it included (default ${DEFAULT_READ_SECONDS})`
+      ),
+      Flag.filter(
+        (seconds) => seconds >= 1 && seconds <= 600,
+        (seconds) => `--timeout takes 1 to 600 seconds, not ${seconds}`
+      ),
+      Flag.withDefault(DEFAULT_READ_SECONDS)
+    ),
+    json: jsonFlag
+  },
+  ({ points: first, positionalConfig, config: configFlag, timeout, json }) => {
+    const chosen = readArguments(first, positionalConfig, configFlag)
+    return Effect.gen(function* () {
+      if ("error" in chosen) {
+        return yield* new UsageMistake({
+          code: "usage",
+          message: chosen.error,
+          missing: [],
+          hint: "ot-gateway read --help"
+        })
+      }
+      const decoded = yield* loadConfig(chosen.config)
+      const selection = chosen.points === undefined ? [] : parseReadSelection(chosen.points)
+      if (selection === undefined) {
+        return yield* new UsageMistake({
+          code: "usage",
+          message: `no device or point named in "${chosen.points ?? ""}"; leave it out to read every point`,
+          missing: [],
+          hint: "ot-gateway read --help"
+        })
+      }
+      const devices = yield* selectDevices(decoded, selection)
+      if (!json && process.stderr.isTTY) {
+        const count = devices.reduce((sum, device) => sum + device.points.length, 0)
+        yield* Console.error(`reading ${count} point(s) of ${devices.length} device(s) once …`)
+      }
+      // The report says what failed and why; the drivers' warnings about it would only repeat it, unformatted.
+      return yield* readOnce(decoded, devices, { timeout: Duration.seconds(timeout) }).pipe(
+        Effect.provideService(References.MinimumLogLevel, "Error")
+      )
+    }).pipe(
+      jsonFailure(json, { path: "error" in chosen ? null : chosen.config }),
+      Effect.flatMap((report) =>
+        Effect.gen(function* () {
+          yield* json ? printJsonWithLocalTimes(report) : printResult(formatReadReport(report))
+          if (!report.ok) return yield* new ReadIncomplete({ message: incompleteMessage(report) })
+        })
+      )
+    )
+  }
+).pipe(
+  Command.withDescription(
+    "Read every configured point (or the ones named) once through the gateway's drivers and exit, without a running gateway or a broker; exits with 1 when a point was not read. Read-only: it never writes"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway read", description: "Every point of ot-gateway.json in this folder" },
+    { command: "ot-gateway read demo-room", description: "Every point of one device" },
+    {
+      command: "ot-gateway read demo-room/setpoint,meter",
+      description: "One point, and every point of another device"
+    },
+    { command: "ot-gateway read site-1/ot-gateway.json --json", description: "Another config, as JSON" }
+  ])
+)
+
 const probeCommand = Command.make(
   "probe",
   {
@@ -1512,6 +1630,7 @@ export const cli = Command.make("ot-gateway").pipe(
     historyCommand,
     messagesCommand,
     logsCommand,
+    readCommand,
     probeCommand,
     simulate
   ])
@@ -1535,6 +1654,7 @@ const subcommands = new Set([
   "history",
   "messages",
   "logs",
+  "read",
   "probe",
   "simulate"
 ])
