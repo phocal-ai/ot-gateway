@@ -26,6 +26,7 @@ import {
   type RegisterReadCode
 } from "@ot-gateway/modbus"
 import { Duration, Effect, FileSystem, Result, Schema, Semaphore } from "effect"
+import * as Socket from "effect/socket/Socket"
 import { toCsv } from "./Csv.ts"
 import { pointsListNext, type PointsListOptions, type PointsListWritten, writeAtomically } from "./Discover.ts"
 import { isEde } from "./Ede.ts"
@@ -217,8 +218,12 @@ export interface ScannedHost {
   readonly gateway: boolean
   /** Unit ids asked that did not answer in time. */
   readonly silent: ReadonlyArray<number>
-  /** Every unit id asked answered alike: a device that ignores the unit id, kept as its first one. */
+  /** Every unit id asked answered alike: maybe one device that ignores the unit id, every unit kept. */
   readonly anyUnitId: boolean
+  /** It took the connection and closed it before any answer: one that takes one connection at a time. */
+  readonly dropped: boolean
+  /** The scan's time for this address ran out before every unit id was asked: the units found are kept. */
+  readonly timedOut: boolean
 }
 
 export interface NotModbus {
@@ -307,51 +312,83 @@ const answersAlike = (units: ReadonlyArray<FoundUnit>) => {
   )
 }
 
+/** What one address has answered so far, kept outside its deadline so a timeout keeps what was found. */
+interface HostProgress {
+  readonly units: Array<FoundUnit>
+  readonly silent: Array<number>
+  gateway: boolean
+  /** The TCP connection opened. */
+  opened: boolean
+  /** Something answered on it (a response, a refusal, or a timeout on an open connection). */
+  connected: boolean
+}
+
+/** What an address answered, as the report keeps it. */
+const hostOf = (target: ScanTarget, progress: HostProgress, flags: { dropped?: boolean; timedOut?: boolean } = {}) => {
+  const { units, silent, gateway } = progress
+  const host: ScannedHost = {
+    ...target,
+    units,
+    gateway,
+    silent,
+    anyUnitId: !gateway && silent.length === 0 && units.length > 1 && answersAlike(units),
+    dropped: flags.dropped === true,
+    timedOut: flags.timedOut === true
+  }
+  return { _tag: "Host", host } satisfies HostOutcome
+}
+
 /** One address: its connection opened once, each unit id asked over it, read-only. */
 const scanTarget = Effect.fn("scanModbusTarget")(function* (
   target: ScanTarget,
   request: ModbusScanRequest,
   options: ModbusScanOptions,
-  slot: Effect.Effect<void>
+  slot: Effect.Effect<void>,
+  progress: HostProgress
 ) {
   const endpoint = endpointText(target)
   const connectTimeout = options.connectTimeout ?? "1 second"
   const socketOptions = { host: target.host, port: target.port, openTimeout: connectTimeout }
   const socket = yield* options.network ? options.network.tcp(socketOptions) : NodeSocket.makeNet(socketOptions)
-  const link = yield* makeModbusLink(socket, {
+  // Whether the connection opened tells a port nothing listens on from a device that hangs up at once.
+  const watched = Socket.make({
+    reader: socket.reader.pipe(Effect.tap(() => Effect.sync(() => (progress.opened = true)))),
+    writer: socket.writer
+  })
+  const link = yield* makeModbusLink(watched, {
     endpoint,
     requestGap: REQUEST_GAP,
     requestTimeout: options.requestTimeout ?? "1 second"
   })
   const auto = request.unitIds === undefined
-  const units: Array<FoundUnit> = []
-  const silent: Array<number> = []
-  let gateway = false
-  let connected = false
   for (const unitId of unitOrder(request.unitIds)) {
     const answer: UnitAnswer = yield* askUnit(link.unit(unitId), target, unitId, slot)
     if (answer._tag === "NotModbus") {
-      const notModbus: NotModbus = { ...target, message: answer.message }
-      return { _tag: "NotModbus", notModbus } satisfies HostOutcome
+      // On the first exchange it is not Modbus; after answers, a reply that does not match (a device that answers
+      // every unit id as its own) is that unit not answering.
+      if (!progress.connected) {
+        const notModbus: NotModbus = { ...target, message: answer.message }
+        return { _tag: "NotModbus", notModbus } satisfies HostOutcome
+      }
+      progress.silent.push(unitId)
+      continue
     }
-    // Refused or dropped before anything answered: nothing listens. After an answer, the device hung up.
     if (answer._tag === "Closed") {
-      if (!connected) return { _tag: "Closed" } satisfies HostOutcome
-      break
+      if (progress.connected) break
+      // Took the connection, then closed it unanswered; otherwise nothing listens.
+      return progress.opened ? hostOf(target, progress, { dropped: true }) : ({ _tag: "Closed" } satisfies HostOutcome)
     }
-    connected = true
-    if (answer._tag === "Silent") silent.push(unitId)
-    if (answer._tag === "NoTarget") gateway = true
+    progress.connected = true
+    if (answer._tag === "Silent") progress.silent.push(unitId)
+    if (answer._tag === "NoTarget") progress.gateway = true
     if (answer._tag === "Found") {
-      units.push(answer.unit)
+      progress.units.push(answer.unit)
       if (auto) break
     }
     // A gateway answers for unit 1: 255 and 0 are not where its devices are.
-    if (auto && gateway) break
+    if (auto && progress.gateway) break
   }
-  const anyUnitId = !gateway && silent.length === 0 && units.length > 2 && answersAlike(units)
-  const host: ScannedHost = { ...target, units: anyUnitId ? units.slice(0, 1) : units, gateway, silent, anyUnitId }
-  return { _tag: "Host", host } satisfies HostOutcome
+  return hostOf(target, progress)
 }, Effect.scoped)
 
 /**
@@ -385,17 +422,25 @@ export const scanModbus = Effect.fn("scanModbus")(function* (
   let done = 0
   const outcomes = yield* Effect.forEach(
     request.targets,
-    (target) =>
-      scanTarget(target, request, options, slot).pipe(
-        // A hung peer turns into a closed address, not a scan that never ends.
-        Effect.timeoutOrElse({ duration: deadline, orElse: () => Effect.succeed({ _tag: "Closed" } as const) }),
+    (target) => {
+      const progress: HostProgress = { units: [], silent: [], gateway: false, opened: false, connected: false }
+      return scanTarget(target, request, options, slot, progress).pipe(
+        // A hung peer ends the address, not the scan; what it answered until then is kept.
+        Effect.timeoutOrElse({
+          duration: deadline,
+          orElse: () =>
+            Effect.succeed(
+              progress.opened ? hostOf(target, progress, { timedOut: true }) : ({ _tag: "Closed" } as const)
+            )
+        }),
         Effect.tap(() =>
           Effect.suspend(() => {
             done++
             return options.onDone?.(done, request.targets.length) ?? Effect.void
           })
         )
-      ),
+      )
+    },
     { concurrency: CONCURRENCY }
   )
   const ports = new Set(request.targets.map((target) => target.port))
@@ -444,8 +489,10 @@ export const modbusDraftPointsList = (units: ReadonlyArray<FoundUnit>) =>
   toCsv([modbusDraftColumns, ...modbusDraftRows(units)])
 
 /** The row of a unit as `--json` gives it, in the points list's column names. */
-const rowOf = (unit: FoundUnit) =>
-  Object.fromEntries(modbusDraftColumns.map((column, index) => [column, modbusDraftRows([unit])[0]?.[index] ?? ""]))
+const rowOf = (unit: FoundUnit) => {
+  const [row = []] = modbusDraftRows([unit])
+  return Object.fromEntries(modbusDraftColumns.map((column, index) => [column, row[index] ?? ""]))
+}
 
 /** How a unit answered, in a few words. */
 const answerText = (unit: FoundUnit) => {
@@ -455,26 +502,69 @@ const answerText = (unit: FoundUnit) => {
   return `answers, ${refused}`
 }
 
-/** The command that scans again with what was asked, plus `extra`. */
-export const scanCommand = (report: Pick<ModbusScanReport, "range" | "askedPort">, extra: string, cli = "ot-gateway") =>
-  `${cli} discover modbus ${shellArgument(report.range)}${report.askedPort === MODBUS_PORT ? "" : ` --port ${report.askedPort}`}${extra}`
-
-/** What to look at next, for a host that answered without a unit found on it. */
-const hostHint = (host: ScannedHost, report: ModbusScanReport) => {
-  if (host.units.length > 0) return undefined
-  const asked = report.unitIds === "auto" ? "1" : report.unitIds.join(",")
-  return host.gateway
-    ? `a Modbus gateway: no device behind it answers on unit id ${asked}; ask its units with --unit-ids 1-247`
-    : `takes connections but no unit id ${report.unitIds === "auto" ? "of 1, 255 and 0" : asked} answered in time; a gateway in front of RS-485 meters needs --unit-ids 1-247, or it is not a Modbus device`
+/** Unit ids as `--unit-ids` takes them, runs of ids as first-last: 1-247, 1,3,5-9. */
+export const unitIdsText = (ids: ReadonlyArray<number>) => {
+  const parts: Array<string> = []
+  let index = 0
+  while (index < ids.length) {
+    const first = ids[index] ?? 0
+    let last = first
+    while (ids[index + 1] === last + 1) {
+      last++
+      index++
+    }
+    parts.push(first === last ? `${first}` : last === first + 1 ? `${first},${last}` : `${first}-${last}`)
+    index++
+  }
+  return parts.join(",")
 }
 
-/** What to run after a scan without `--points-list`. */
-export const scanNext = (report: ModbusScanReport, options: Pick<PointsListOptions, "command"> = {}) =>
-  foundUnits(report).length > 0
-    ? scanCommand(report, " --points-list modbus.csv", options.command)
-    : (report.hosts.find((host) => host.gateway) ?? report.hosts[0]) !== undefined
-      ? scanCommand(report, " --unit-ids 1-247", options.command)
-      : undefined
+/** The command that scans again with what was asked (range, port, unit ids, rate), plus `extra`. */
+export const scanCommand = (
+  report: Pick<ModbusScanReport, "range" | "askedPort" | "unitIds" | "rate">,
+  extra: string,
+  cli = "ot-gateway"
+) =>
+  [
+    `${cli} discover modbus ${shellArgument(report.range)}`,
+    report.askedPort === MODBUS_PORT ? "" : ` --port ${report.askedPort}`,
+    report.unitIds === "auto" ? "" : ` --unit-ids ${unitIdsText(report.unitIds)}`,
+    report.rate === DEFAULT_RATE ? "" : ` --rate ${report.rate}`,
+    extra
+  ].join("")
+
+/** What to look at next for an address: why it has no unit, or what to keep in mind about the ones it has. */
+const hostHint = (host: ScannedHost, report: ModbusScanReport) => {
+  const auto = report.unitIds === "auto"
+  const asked = auto ? "1" : unitIdsText(report.unitIds)
+  if (host.dropped) {
+    return "takes the connection, then closes it before answering: a device that takes one connection at a time does that while a gateway or another client polls it; stop that one and scan again"
+  }
+  if (host.timedOut) {
+    return `the scan's time for this address ran out${host.units.length > 0 ? " with the units above found" : ""}: scan it alone, with fewer unit ids at a time`
+  }
+  if (host.anyUnitId) {
+    return "every unit id asked answered alike: one device that ignores the unit id answers on any, so keep one of its rows; meters behind a gateway can answer alike too"
+  }
+  if (host.units.length > 0) return undefined
+  if (host.gateway) {
+    return auto
+      ? `a Modbus gateway: no device behind it answers on unit id ${asked}; ask its units with --unit-ids 1-247`
+      : `a Modbus gateway: no device behind it answers on unit ids ${asked}; check the meters' Modbus addresses and the gateway's serial settings`
+  }
+  return auto
+    ? "takes connections but no unit id of 1, 255 and 0 answered in time; a gateway in front of RS-485 meters needs --unit-ids 1-247, or it is not a Modbus device"
+    : `takes connections but no unit id of ${asked} answered in time: is it a Modbus device on this port?`
+}
+
+/** What to run after a scan without `--points-list`: write the list, or ask a gateway's unit ids. */
+export const scanNext = (report: ModbusScanReport, options: Pick<PointsListOptions, "command"> = {}) => {
+  if (foundUnits(report).length > 0) return scanCommand(report, " --points-list modbus.csv", options.command)
+  const answering = report.hosts.find((host) => host.gateway) ?? report.hosts.find((host) => !host.dropped)
+  return report.unitIds === "auto" && answering !== undefined
+    ? scanCommand(report, " --unit-ids 1-247", options.command)
+    : undefined
+}
 
 /** What `discover modbus` prints: each device found, one line each, then what else answered and what next. */
 export const formatScan = (report: ModbusScanReport, options: Pick<PointsListOptions, "command"> = {}) => {
@@ -487,7 +577,6 @@ export const formatScan = (report: ModbusScanReport, options: Pick<PointsListOpt
     for (const unit of host.units) {
       lines.push(`  ${endpoint.padEnd(21)} unit ${String(unit.unitId).padEnd(4)} ${answerText(unit)}`)
     }
-    if (host.anyUnitId) lines.push(`  ${endpoint.padEnd(21)} answers on every unit id asked: kept as one`)
     const hint = hostHint(host, report)
     if (hint !== undefined) lines.push(`  ${endpoint.padEnd(21)} ${hint}`)
   }
@@ -531,6 +620,8 @@ export const scanJson = (report: ModbusScanReport, options: Pick<PointsListOptio
       units: host.units.map((unit) => unit.unitId),
       silent: host.silent,
       anyUnitId: host.anyUnitId,
+      dropped: host.dropped,
+      timedOut: host.timedOut,
       hint: hostHint(host, report) ?? null
     })),
     notModbus: report.notModbus.map((each) => ({ endpoint: endpointText(each), message: each.message })),
@@ -550,6 +641,7 @@ export const nothingFound = (report: ModbusScanReport, options: Pick<PointsListO
         : `no Modbus unit answered on ${report.range}: ${listening} address(es) took a connection, none answered as a unit`,
     hint:
       next ??
+      report.hosts.map((host) => hostHint(host, report)).find((hint) => hint !== undefined) ??
       (report.notModbus.length > 0
         ? "what answers there is not Modbus TCP: check the port (--port) on the device's datasheet"
         : "check the range and the port (Modbus TCP is 502 unless the device says otherwise; --port), that this machine reaches that network, and that no firewall drops it")

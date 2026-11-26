@@ -7,7 +7,16 @@
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { makeMemoryNetwork, type MemoryNetwork } from "@ot-gateway/core"
-import { makeRegisterBank, makeSimulatorControl, type SimulatedUnits, serveModbus } from "@ot-gateway/modbus"
+import {
+  answerRead,
+  appendChunks,
+  decodeRequest,
+  makeRegisterBank,
+  makeSimulatorControl,
+  type SimulatedUnits,
+  serveModbus,
+  takeFrame
+} from "@ot-gateway/modbus"
 import { type Duration, Effect, Fiber, FileSystem, Result } from "effect"
 import { TestClock, TestConsole } from "effect/testing"
 import { runCli } from "../src/Cli.ts"
@@ -21,7 +30,9 @@ import {
   parseUnitIds,
   scanJson,
   scanModbus,
-  scanToPointsList
+  scanCommand,
+  scanToPointsList,
+  unitIdsText
 } from "../src/ModbusDiscover.ts"
 import { suggestedModbusRange } from "../src/Init.ts"
 import { devicesFromPointsList } from "../src/PointsList.ts"
@@ -63,6 +74,19 @@ describe("parseRange", () => {
     expect(Result.isFailure(parseRange(" , "))).toBe(true)
     expect(Result.isFailure(parseRange("a b"))).toBe(true)
     expect(Result.getOrThrow(parseRange("10.0.0.0/22"))).toHaveLength(1022)
+  })
+})
+
+describe("the command to run next", () => {
+  it("repeats the unit ids, the port and the rate asked", () => {
+    expect(unitIdsText([1, 2, 3, 5, 7, 8, 247])).toBe("1-3,5,7,8,247")
+    const report = { range: "10.0.0.0/24", askedPort: 5020, unitIds: [1, 2, 3], rate: 5 } as const
+    expect(scanCommand(report, " --points-list m.csv")).toBe(
+      "ot-gateway discover modbus 10.0.0.0/24 --port 5020 --unit-ids 1-3 --rate 5 --points-list m.csv"
+    )
+    expect(scanCommand({ range: "10.0.0.9", askedPort: 502, unitIds: "auto", rate: 20 }, "")).toBe(
+      "ot-gateway discover modbus 10.0.0.9"
+    )
   })
 })
 
@@ -144,7 +168,7 @@ describe("scanModbus", () => {
       expect(text).toContain("2 Modbus unit(s) found on 4 address(es)")
       expect(text).toContain("10.0.0.11:502")
       expect(text).toContain("--unit-ids 1-247")
-      expect(text).toContain("next: ot-gateway discover modbus 10.0.0.10-13 --points-list modbus.csv")
+      expect(text).toContain("next: ot-gateway discover modbus 10.0.0.10-13 --rate 200 --points-list modbus.csv")
     }).pipe(Effect.scoped)
   )
 
@@ -173,12 +197,57 @@ describe("scanModbus", () => {
     }).pipe(Effect.scoped)
   )
 
-  it.effect("keeps a device that answers on every unit id as one", () =>
+  it.effect("keeps every unit of a device that answers alike on each, and says so", () =>
     Effect.gen(function* () {
       const { network } = yield* site
-      const report = yield* scanned(network, request("10.0.0.10", { unitIds: [1, 2, 3, 4] }))
-      expect(foundUnits(report).map((unit) => unit.unitId)).toEqual([1])
+      const report = yield* scanned(network, request("10.0.0.10", { unitIds: [1, 2] }))
+      expect(foundUnits(report).map((unit) => unit.unitId)).toEqual([1, 2])
       expect(report.hosts[0]?.anyUnitId).toBe(true)
+      expect(formatScan(report)).toContain("every unit id asked answered alike")
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("keeps the units found on a device that answers every unit id as its own", () =>
+    Effect.gen(function* () {
+      const network = makeMemoryNetwork()
+      const bank = holdingUnit(5)
+      const server = yield* network.listen("10.0.0.50", 502)
+      yield* server
+        .run((socket) =>
+          Effect.gen(function* () {
+            const writer = yield* socket.writer
+            const { pull } = yield* socket.reader
+            let buffer: Uint8Array = new Uint8Array(0)
+            while (true) {
+              buffer = appendChunks(buffer, yield* pull)
+              let split = takeFrame(buffer)
+              while (split._tag === "Frame") {
+                buffer = split.rest
+                const decoded = yield* decodeRequest(split.frame)
+                if (decoded._tag === "Read") yield* writer.write(answerRead(bank, { ...decoded.request, unitId: 1 }))
+                split = takeFrame(buffer)
+              }
+            }
+          }).pipe(Effect.scoped, Effect.ignore)
+        )
+        .pipe(Effect.forkScoped)
+      const report = yield* scanned(network, request("10.0.0.50", { unitIds: [1, 2, 3] }))
+      expect(report.notModbus).toEqual([])
+      expect(foundUnits(report).map((unit) => unit.unitId)).toEqual([1])
+      expect(report.hosts[0]?.silent).toEqual([2, 3])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("names a device that takes the connection and closes it, as one polled elsewhere does", () =>
+    Effect.gen(function* () {
+      const network = makeMemoryNetwork()
+      const control = yield* serve(network, "10.0.0.60", holdingUnit(1))
+      control.maxConnections = 0
+      const report = yield* scanned(network, request("10.0.0.60"))
+      expect(report.hosts).toMatchObject([{ host: "10.0.0.60", dropped: true, units: [] }])
+      const failure = nothingFound(report)
+      expect(failure.message).toContain("1 address(es) took a connection")
+      expect(failure.hint).toContain("one connection at a time")
     }).pipe(Effect.scoped)
   )
 

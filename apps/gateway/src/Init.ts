@@ -549,7 +549,15 @@ const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (sugg
   const targets = parseRange(range)
   if (Result.isFailure(targets)) return []
   yield* Console.error(`  asking ${targets.success.length} address(es) on port ${MODBUS_PORT}, read-only`)
-  const report = yield* scanModbus({ range, targets: targets.success })
+  const report = yield* scanModbus(
+    { range, targets: targets.success },
+    {
+      onDone: (done, total) =>
+        total >= 20 && (done === total || done % Math.ceil(total / 10) === 0)
+          ? Console.error(`  ${done}/${total} addresses asked`)
+          : Effect.void
+    }
+  )
   yield* Console.error(
     formatScan(report)
       .split("\n")
@@ -557,7 +565,13 @@ const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (sugg
       .map((line) => `  ${line}`.trimEnd())
       .join("\n")
   )
-  const readable = foundUnits(report).filter((unit) => unit.table !== undefined)
+  const units = foundUnits(report)
+  const readable = units.filter((unit) => unit.table !== undefined)
+  if (readable.length < units.length) {
+    yield* Console.error(
+      `  ${units.length - readable.length} unit(s) left out, register 0 refused on both tables: draft them with ot-gateway discover modbus ${shellArgument(range)} --points-list modbus.csv and fill in their registers from the datasheet`
+    )
+  }
   if (readable.length === 0) return []
   const devices = yield* devicesFromPointsList(modbusDraftPointsList(readable)).pipe(
     Effect.catchTag("PointsListError", (error) => Console.error(`  ${error.message}`).pipe(Effect.as([])))
