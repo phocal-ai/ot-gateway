@@ -8,6 +8,8 @@
  *   ot-gateway doctor [config]      every check in order (config, broker, gateway, devices, port, disk, clock), one list
  *   ot-gateway discover [config]    find BACnet devices and print a draft of their config
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
+ *   ot-gateway points export [config]  the config's devices as a points list again, for import (CSV or JSON)
+ *   ot-gateway diff [config]        what the config changes on the broker against the running gateway (or --against a file)
  *   ot-gateway contract [message]   the MQTT contract: its topics and payloads (--json: the JSON Schemas)
  *   ot-gateway watch [config]       print what arrives at the config's broker (--check: what is off the contract)
  *   ot-gateway broker [config]      which MQTT the config's broker speaks, what it allows, a round trip
@@ -42,6 +44,8 @@ import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
 import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
+import { clearCommands, diffReport, diffTitle, formatDiff } from "./Diff.ts"
+import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
@@ -796,6 +800,62 @@ const fromEdeCommand = Command.make(
   ])
 )
 
+const exportCommand = Command.make(
+  "export",
+  {
+    config: configPath,
+    format: Flag.Literals("format", ["csv", "json"] as const).pipe(
+      Flag.withDescription("csv (default), or json: the points list's JSON form, an array of rows"),
+      Flag.withDefault("csv" as const)
+    ),
+    json: jsonFlag
+  },
+  ({ config, format, json }) =>
+    Effect.gen(function* () {
+      const decoded = yield* loadConfig(config)
+      const list = exportPointsList(decoded)
+      const text = format === "json" ? exportJson(list) : exportCsv(list)
+      const file = format === "json" ? "points.json" : "points.csv"
+      const next = [
+        {
+          command: `${yield* invocation} import ${file} --dry-run`,
+          description: "Check the list; import adds its devices to a config that does not have them yet"
+        }
+      ]
+      if (json) {
+        return yield* printJson({
+          ok: true,
+          path: config,
+          format,
+          devices: list.devices,
+          points: list.rows.length,
+          columns: list.columns,
+          rows: list.rows,
+          ...(format === "csv" ? { csv: text } : {}),
+          notCarried: list.notCarried,
+          next
+        })
+      }
+      yield* Effect.sync(() => process.stdout.write(text))
+      yield* Console.error(
+        [
+          `✓ ${list.rows.length} point(s) of ${list.devices} device(s) from ${config}`,
+          ...describeNotCarried(list.notCarried),
+          ...next.map((step) => `next: ${step.command}`)
+        ].join("\n")
+      )
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "The config's devices as a points list on stdout (CSV, or --format json), the columns import reads, so the list follows edits made in the config or on the status page. What a list cannot say (writable points, semantics, a register's bit, …) is named on stderr; --json: rows, columns and notCarried [{kind, device, point, detail, skipped}]"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway points export > points.csv", description: "The list of ot-gateway.json" },
+    { command: "ot-gateway points export site-1/ot-gateway.json --format json > points.json", description: "As JSON" },
+    { command: "ot-gateway points export --json", description: "The rows and what the list leaves out, for agents" }
+  ])
+)
+
 const profilesList = Command.make("list", { json: jsonFlag }, ({ json }) =>
   Effect.gen(function* () {
     const profiles = yield* libraryProfiles()
@@ -852,7 +912,7 @@ const profiles = Command.make("profiles").pipe(
 
 const points = Command.make("points").pipe(
   Command.withDescription("The points list, the CSV (or JSON) that import and init read: its schema and a template"),
-  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand])
+  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand, exportCommand])
 )
 
 const contractCommand = Command.make(
@@ -1094,6 +1154,57 @@ const targetConfigFlag = Flag.String("config").pipe(
 /** The gateway status, events and history ask: the config named either way, or `--url`, or the defaults. */
 const targetFrom = (positional: string | undefined, flag: string | undefined, url: string | undefined) =>
   chooseConfig(positional, flag).pipe(Effect.flatMap((config) => resolveTarget({ config, url })))
+
+const diffCommand = Command.make(
+  "diff",
+  {
+    config: configPath,
+    against: Flag.String("against").pipe(
+      Flag.withDescription(
+        "Compare with this config file (the one before; ot-gateway.json.bak after a save on the status page) instead of the running gateway"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    url: urlFlag,
+    json: jsonFlag
+  },
+  ({ config, against, url, json }) =>
+    Effect.gen(function* () {
+      if (against !== undefined && url !== undefined) {
+        return yield* new UsageMistake({
+          message: "--against compares with a file and --url with a running gateway: give one of them",
+          code: "usage",
+          missing: [],
+          hint: "ot-gateway diff --help"
+        })
+      }
+      const report = yield* diffReport(config, { against, url })
+      const context = {
+        command: yield* invocation,
+        config: config === DEFAULT_CONFIG ? undefined : config,
+        against
+      }
+      const next = clearCommands(report.diff, context).map((command) => ({
+        command,
+        description: "After the change: clear a retained message nobody publishes any more"
+      }))
+      if (json) return yield* printJson({ ok: true, path: config, against: report.against, ...report.diff, next })
+      yield* Console.log(formatDiff(report.diff, diffTitle(report), context))
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "What a config change does on the broker before it is applied, against the running gateway (or --against an older file): topics new (+), silent (-) and moved (→: a point, device, site or building renamed), points that take commands now (!), $meta that changes (~), settings that change, and the retained messages left behind with the command to clear each. --json: changed, added, removed, moved, writable, meta, settings, stale, next"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway diff", description: "ot-gateway.json against the gateway running now" },
+    {
+      command: "ot-gateway diff ot-gateway.json --against ot-gateway.json.bak",
+      description: "Against the config before the last save"
+    },
+    { command: "ot-gateway diff --json", description: "The same as JSON, for agents" }
+  ])
+)
 
 const writeCommand = Command.make(
   "write",
@@ -1800,6 +1911,8 @@ export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
+  "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
+  "    points export --json             the config's devices as a points list again, and what a list cannot carry",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
@@ -1826,6 +1939,7 @@ export const cli = Command.make("ot-gateway").pipe(
     doctorCommand,
     discoverCommand,
     importCommand,
+    diffCommand,
     points,
     profiles,
     contractCommand,
@@ -1855,6 +1969,7 @@ const subcommands = new Set([
   "doctor",
   "discover",
   "import",
+  "diff",
   "points",
   "profiles",
   "contract",
