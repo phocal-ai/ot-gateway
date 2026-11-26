@@ -13,6 +13,7 @@ import { DatagramSocketError, DatagramSocketOpenError } from "effect/socket/Data
 import { TestConsole } from "effect/testing"
 import { isLongRunning, runCli, toCliArgs } from "../src/Cli.ts"
 import {
+  failureFields,
   isUsageError,
   printJson,
   reportFailure,
@@ -102,6 +103,12 @@ describe("--json output", () => {
 })
 
 describe("failures of one-shot commands", () => {
+  it("pass on what an error knows for --json: its code, hint and the address it asked", () => {
+    expect(
+      failureFields({ message: "m", code: "gateway-unreachable", hint: "is it running?", url: "http://127.0.0.1:8080" })
+    ).toEqual({ code: "gateway-unreachable", hint: "is it running?", url: "http://127.0.0.1:8080" })
+  })
+
   it("put the hint, what to check, below the error, as --json has it in hint", () => {
     expect(withHint("error: could not connect", "is the broker running?")).toBe(
       "error: could not connect\n  is the broker running?"

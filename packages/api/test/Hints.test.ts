@@ -2,11 +2,36 @@
  * What to check for a failing device: the hint follows the failure class, the driver's words and the protocol.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { fallbackHint, flappingAlarmHint, hintRules, whatToCheck } from "../src/Hints.ts"
+import {
+  fallbackHint,
+  flappingAlarmHint,
+  bacnetPortFailure,
+  gatewaySideFailure,
+  hintRules,
+  whatToCheck
+} from "../src/Hints.ts"
 
 const mentions = (checks: ReadonlyArray<string>, word: RegExp) => checks.some((check) => word.test(check))
 
 describe("whatToCheck", () => {
+  it("points at the gateway's own machine when its BACnet/IP port cannot be opened, by the system's reason", () => {
+    const inUse = bacnetPortFailure(47808, "could not open the UDP socket: 0.0.0.0:47808 is in use by another program")
+    expect(gatewaySideFailure(inUse)).toBe(true)
+    expect(gatewaySideFailure("could not connect: connection refused by 127.0.0.1:5999")).toBe(false)
+    expect(gatewaySideFailure(undefined)).toBe(false)
+    // Not reordered as a device gone, though others failed with it: the device is not the question.
+    const held = whatToCheck("bacnet-ip", "connection", inUse, { answeredBefore: true, sharedCause: true })
+    expect(held.meaning).toMatch(/Another program on the gateway's machine holds its BACnet\/IP port/)
+    expect(held.checks[0]).toMatch(/second gateway, the demo or a BACnet tool/)
+    const notHere = bacnetPortFailure(
+      47808,
+      "could not open the UDP socket: 192.168.1.5 is not an address of this machine"
+    )
+    expect(whatToCheck("bacnet-ip", "connection", notHere).checks[0]).toMatch(/bacnet\.bindAddress/)
+    const other = bacnetPortFailure(47808, "could not open the UDP socket: EACCES")
+    expect(whatToCheck("bacnet-ip", "connection", other).meaning).toMatch(/cannot open its own BACnet\/IP port/)
+  })
+
   it("asks whether the device is on, the port right and a firewall in between when the connection is refused", () => {
     const hint = whatToCheck("modbus-tcp", "connection", "could not connect: connection refused by 127.0.0.1:5999")
     expect(hint.meaning).toMatch(/nothing accepts a connection/)

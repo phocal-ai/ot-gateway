@@ -111,7 +111,7 @@ export const exitsAsUsage = (error: unknown) =>
 /**
  * What `--json` prints for an expected failure besides `ok` and `error`: the fields an agent acts on when the
  * failure has them, `code` (what kind of failure), `issues` (each mistake on its own, with where it is),
- * `missing` (the flags to add) and `hint` (what to run).
+ * `missing` (the flags to add), `hint` (what to run) and `url` (the address it asked).
  */
 export const failureFields = (error: unknown): Readonly<Record<string, unknown>> => {
   if (!Predicate.isObject(error)) return {}
@@ -122,6 +122,8 @@ export const failureFields = (error: unknown): Readonly<Record<string, unknown>>
   }
   if (Predicate.hasProperty(error, "missing") && Array.isArray(error.missing)) fields["missing"] = error.missing
   if (Predicate.hasProperty(error, "hint") && typeof error.hint === "string") fields["hint"] = error.hint
+  // The address a command asked (the status page's), when the error knows it.
+  if (Predicate.hasProperty(error, "url") && typeof error.url === "string") fields["url"] = error.url
   return fields
 }
 

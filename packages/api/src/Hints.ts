@@ -34,6 +34,50 @@ const bacnetRouted =
   "Behind a BACnet router (an MS/TP trunk, another network number): is the router up, and does it route the device's network number?"
 const bacnetFirewall = "Is a firewall or a VLAN between the gateway and the device blocking UDP 47808?"
 
+/** How the gateway says it cannot open its own BACnet/IP port (`openBacnet`), as `gatewaySideFailure` reads it. */
+export const bacnetPortFailure = (port: number, reason: string) =>
+  `the gateway's BACnet/IP port ${port} cannot be opened: ${reason}`
+
+/**
+ * Whether a device fails because the gateway cannot open its own BACnet/IP port (`bacnetPortFailure`): the cause is
+ * on the gateway's machine. The device and the network are not the question then, and the devices that fail with
+ * it share no cause beyond it.
+ */
+export const gatewaySideFailure = (error: string | undefined) =>
+  error !== undefined && /\bBACnet\/IP port \d+ cannot be opened\b/.test(error)
+
+const portInUseHint: Hint = {
+  meaning: "Another program on the gateway's machine holds its BACnet/IP port: the device is not the question.",
+  checks: [
+    "Is a second gateway, the demo or a BACnet tool running on this machine? Stop it (on Linux, ss -ulpn lists which program holds which UDP port); the gateway keeps trying and takes the port once it is free.",
+    "Or set bacnet.port in the config to a free port: devices that answer a broadcast on 47808 then need a fixed address in the config."
+  ]
+}
+
+const bindAddressHint: Hint = {
+  meaning: "The address the gateway opens BACnet/IP on is not one of its machine's: the device is not the question.",
+  checks: [
+    "Is bacnet.bindAddress in the config an address of this machine? At boot the network may not be up yet: the gateway keeps trying.",
+    "Leave bacnet.bindAddress out (0.0.0.0) to open it on every interface."
+  ]
+}
+
+const gatewayPortHint: Hint = {
+  meaning: "The gateway cannot open its own BACnet/IP port: the cause is on the gateway's machine, not the device.",
+  checks: [
+    "The words after 'cannot be opened' say why. Are bacnet.port and bacnet.bindAddress in the config right for this machine?",
+    "The gateway keeps trying, so once the cause is gone the devices are read without a restart."
+  ]
+}
+
+/** What to check when the gateway cannot open its own BACnet/IP port, by the system's reason. */
+export const gatewayPortHintFor = (error: string): Hint =>
+  /in use by another program/.test(error)
+    ? portInUseHint
+    : /not an address of this machine/.test(error)
+      ? bindAddressHint
+      : gatewayPortHint
+
 /** The hints, most specific first: the first rule whose reason, protocol and words match is the one shown. */
 export const hintRules: ReadonlyArray<Rule> = [
   {
@@ -291,6 +335,7 @@ export const whatToCheck = (
   error: string | undefined,
   context: FailureContext = {}
 ): Hint => {
+  if (error !== undefined && gatewaySideFailure(error)) return gatewayPortHintFor(error)
   const hint =
     hintRules.find(
       (rule) =>
