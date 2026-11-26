@@ -52,7 +52,7 @@ Modbus devices can't describe themselves, so their points come from your list. T
 | Energy meter | Breaker tripped |      | 5          | 192.168.1.50 | 0        | coil  |         |            |       | on    |
 
 ```bash
-pnpm ot-gateway points template > points.csv  # every column and example rows, to fill in
+pnpm ot-gateway points template > points.csv  # every column and example rows, to fill in (--protocol modbus or bacnet: only its columns)
 pnpm ot-gateway import points.csv --dry-run    # checks the list and prints its devices (alone, without an ot-gateway.json here)
 pnpm ot-gateway import points.csv              # adds the devices to ot-gateway.json (replaced in one step, the old one kept as ot-gateway.json.bak)
 ```

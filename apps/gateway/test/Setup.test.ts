@@ -570,6 +570,10 @@ describe("adding a points list from the status page", () => {
       const format = yield* whileTimePasses(() => request(port, "GET", "/api/points/format", undefined, {}))
       expect(format.status).toBe(200)
       expect(String(format.body["template"]).split("\n")[0]).toMatch(/^device,point,name,unit/)
+      expect(format.body["templates"]).toMatchObject({
+        modbus: expect.stringMatching(/^device,[^\n]*,register,/),
+        bacnet: expect.stringMatching(/^device,[^\n]*,device_instance,/)
+      })
       const columns = format.body["columns"]
       expect(Array.isArray(columns) && columns.map((column) => column.name)).toContain("register")
       yield* Fiber.interrupt(running)
