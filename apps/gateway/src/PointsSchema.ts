@@ -358,13 +358,13 @@ const templateRows: ReadonlyArray<Readonly<Record<string, string>>> = [
 export const templateProtocols = { modbus: "modbus-tcp", bacnet: "bacnet-ip" } as const
 export type TemplateProtocol = keyof typeof templateProtocols
 
-/** The protocol of a template row: only a Modbus TCP row has a host, as in the reader. */
+/** The protocol of a template row, by the reader's rule: a host is Modbus TCP, a device_instance is BACnet/IP. */
 const rowScope = (row: Readonly<Record<string, string>>): ColumnScope =>
-  row["host"] === undefined ? "bacnet-ip" : "modbus-tcp"
+  row["host"] !== undefined ? "modbus-tcp" : row["device_instance"] !== undefined ? "bacnet-ip" : "any"
 
 /**
  * A points list with a few example rows, to fill in: every column and both protocols, or with a protocol only its
- * rows and the columns they can use. Either way it is the one format, so lists can be joined later.
+ * rows and the columns they can use. Either way it is the one format: import takes one list after the other.
  */
 export const pointsListTemplate = (protocol?: TemplateProtocol) => {
   const scope = protocol === undefined ? undefined : templateProtocols[protocol]

@@ -100,10 +100,16 @@ describe("the points list schema", () => {
 const columnsOf = (scopes: ReadonlyArray<string>) =>
   pointsListColumns.filter((column) => scopes.includes(column.scope)).map((column) => column.name)
 
+const exampleRows = (protocol?: "modbus" | "bacnet") => parseDelimited(pointsListTemplate(protocol)).length - 1
+
 describe("a template for one protocol", () => {
   it("has the columns of every row and its own, in the format's order, and none of the other protocol's", () => {
     expect(parseDelimited(pointsListTemplate("modbus"))[0]).toEqual(columnsOf(["any", "modbus-tcp"]))
     expect(parseDelimited(pointsListTemplate("bacnet"))[0]).toEqual(columnsOf(["any", "bacnet-ip"]))
+  })
+
+  it("leaves no example row out: the two have the rows of the whole template between them", () => {
+    expect(exampleRows("modbus") + exampleRows("bacnet")).toBe(exampleRows())
   })
 })
 

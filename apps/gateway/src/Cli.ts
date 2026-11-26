@@ -632,7 +632,9 @@ const templateCommand = Command.make(
   {
     protocol: Flag.ChoiceWithValue("protocol", [
       ["modbus", "modbus"],
-      ["bacnet", "bacnet"]
+      ["bacnet", "bacnet"],
+      ["modbus-tcp", "modbus"],
+      ["bacnet-ip", "bacnet"]
     ] as const).pipe(
       Flag.withDescription("Only this protocol's example rows and the columns they can use"),
       Flag.optional

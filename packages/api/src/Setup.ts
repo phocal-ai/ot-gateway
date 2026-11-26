@@ -273,7 +273,8 @@ export type PointsListColumn = typeof PointsListColumn.Type
 export const PointsListFormat = Schema.Struct({
   version: Schema.Number,
   template: Schema.String,
-  templates: Schema.Struct({ modbus: Schema.String, bacnet: Schema.String }),
+  /** Absent from a gateway older than the page. */
+  templates: Schema.optionalKey(Schema.Struct({ modbus: Schema.String, bacnet: Schema.String })),
   rules: Schema.Array(Schema.String),
   columns: Schema.Array(PointsListColumn)
 })
