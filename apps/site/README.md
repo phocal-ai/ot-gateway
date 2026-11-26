@@ -4,6 +4,8 @@ The project and docs site: a landing page and the docs, built with [Fumadocs](ht
 
 The docs pages are not written here. `scripts/content.ts` generates them into `content/docs/` (git-ignored) from the repository's `docs/*.md` and the README's quick-start sections. It also rewrites links: a link to another docs page goes to its site URL, and a link to any other repository file goes to GitHub. To change a page, edit the Markdown in `docs/` or the README; `src/content/docs.ts` lists the pages, their order and descriptions. `test/docs.test.ts` fails when a listed file or README section is missing, or a relative link is left unrewritten.
 
+A ` ```mermaid ` block in that Markdown is a diagram: GitHub draws it, and here `source.config.ts` turns it into `src/components/mermaid.tsx`, which loads Mermaid in the browser on pages that have one and follows the light and dark theme.
+
 ```bash
 pnpm --filter @ot-gateway/site dev     # http://localhost:3001, regenerates the docs on start
 pnpm --filter @ot-gateway/site build   # writes out/

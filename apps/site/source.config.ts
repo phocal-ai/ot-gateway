@@ -1,3 +1,4 @@
+import { remarkMdxMermaid } from "fumadocs-core/mdx-plugins"
 import { pageSchema } from "fumadocs-core/source/schema"
 import { defineConfig, defineDocs } from "fumadocs-mdx/config"
 import { z } from "zod"
@@ -17,4 +18,9 @@ export const docs = defineDocs({
   }
 })
 
-export default defineConfig({})
+export default defineConfig({
+  mdxOptions: {
+    // A ```mermaid block, which GitHub draws from the same Markdown, becomes the Mermaid component.
+    remarkPlugins: [remarkMdxMermaid]
+  }
+})

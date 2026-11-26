@@ -45,6 +45,12 @@ export const pages: ReadonlyArray<PageSource> = [
     description: "From your list of points to values arriving on your broker, in five steps."
   },
   {
+    source: "docs/headless.md",
+    slug: "headless",
+    description:
+      "For scripts, CI and AI agents: eight commands, the JSON each one prints, and what to do when one fails."
+  },
+  {
     source: "docs/operations.md",
     slug: "operations",
     description:
