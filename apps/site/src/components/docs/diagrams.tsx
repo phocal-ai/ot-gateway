@@ -4,6 +4,7 @@
  */
 import type * as React from "react"
 import { InputsOverview, InputsRow } from "./inputs.tsx"
+import { StatusPageTabs } from "./status-page.tsx"
 import { HeadlessFailures, HeadlessMap, HeadlessPath } from "./headless.tsx"
 
 export const diagrams: Readonly<Record<string, React.ComponentType>> = {
@@ -11,7 +12,8 @@ export const diagrams: Readonly<Record<string, React.ComponentType>> = {
   "inputs-row": InputsRow,
   "headless-path": HeadlessPath,
   "headless-map": HeadlessMap,
-  "headless-failures": HeadlessFailures
+  "headless-failures": HeadlessFailures,
+  "status-page-tabs": StatusPageTabs
 }
 
 export const Diagram = ({ name }: { readonly name: string }) => {
