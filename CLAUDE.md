@@ -26,6 +26,8 @@ pnpm ot-gateway discover modbus 192.168.1.0/24   # find Modbus TCP devices and u
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in (--protocol modbus|bacnet: only that protocol's columns)
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
+pnpm ot-gateway points export > points.csv   # the config's devices as a points list again, for import (--format json; what a list cannot carry is named on stderr)
+pnpm ot-gateway diff                       # what ./ot-gateway.json changes on the broker against the running gateway: topics new, silent, moved, writable, stale $meta (--against <old.json>, --json)
 pnpm ot-gateway contract                   # the MQTT contract: topics and each message's fields (--json: the JSON Schemas; contract value --json: one)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker (--check: only what is off the contract)
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip

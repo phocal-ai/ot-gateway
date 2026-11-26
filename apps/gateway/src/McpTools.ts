@@ -391,6 +391,35 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ brief }) => ["points", "schema", flag("brief", brief)]
   }),
   defineTool({
+    name: "points_export",
+    title: "Export a points list",
+    description:
+      "The config's devices as a points list again (rows, the columns import reads), so the list follows edits made in the config or on the status page; notCarried names what a list cannot say (writable points, semantics, a register's bit). Writes no file",
+    input: {
+      config: configArgument,
+      format: Schema.optionalKey(
+        Schema.Literals(["csv", "json"]).annotate({ description: "csv (default: rows and the csv text) or json" })
+      )
+    },
+    annotations: local,
+    argv: ({ config, format }) => ["points", "export", config, flag("format", format)]
+  }),
+  defineTool({
+    name: "diff",
+    title: "What a config change does",
+    description:
+      "What a config change does on the broker before it is applied, against the running gateway (or against an older config file): topics added, removed and moved (renames), points that take commands now, $meta and settings that change, and stale retained messages with the command that clears each (next)",
+    input: {
+      config: configArgument,
+      against: flagText(
+        "Compare with this config file instead of the running gateway (ot-gateway.json.bak: before the last save)"
+      ),
+      url: urlArgument
+    },
+    annotations: asks,
+    argv: ({ config, against, url }) => ["diff", config, flag("against", against), flag("url", url)]
+  }),
+  defineTool({
     name: "contract",
     title: "MQTT contract",
     description:
