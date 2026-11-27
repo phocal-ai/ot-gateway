@@ -3,6 +3,8 @@
  *
  *   Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@latest
  *
+ * The command is the one for the package manager that installed it (`pnpm add -g ot-gateway@latest` for pnpm).
+ *
  * At most once a day the CLI asks the npm registry for the newest version, next to the command and never in its way:
  * the question has a short deadline, the answer is kept in `~/.config/ot-gateway/update-check.json`, and a command
  * that ends first prints from what the last question found. Nothing is asked or printed for `--json`, the commands
@@ -30,16 +32,20 @@ const JOIN_GRACE = "1 second"
 /** Commands that get no notice: they run until stopped (Ctrl-C would cut the line off), or speak a protocol on stdout. */
 const quietCommands = new Set(["run", "demo", "simulate", "mcp", "watch"])
 
+/** npx, pnpm dlx, bunx and yarn dlx run from a cache: there is no install to update. */
+const runsFromCache =
+  /[\\/]_npx[\\/]|[\\/]pnpm[^\\/]*[\\/]dlx[\\/]|[\\/]\.bun[\\/]install[\\/]cache[\\/]|[\\/]dlx-[^\\/]+[\\/]/
+
 /** Whether to check and print a notice at all, for these arguments in this environment. */
 export const updateNoticeWanted = (
   args: ReadonlyArray<string>,
   env: Readonly<Record<string, string | undefined>>,
   stderrIsTerminal: boolean,
-  /** The script that runs (`process.argv[1]`): one in npx's cache is not an install to update. */
+  /** The script that runs (`process.argv[1]`, symlinks resolved): one in npx's cache is not an install to update. */
   script = ""
 ) => {
   const [command] = args
-  if (/[\\/]_npx[\\/]/.test(script)) return false
+  if (runsFromCache.test(script)) return false
   if (command === undefined || quietCommands.has(command)) return false
   if (args.some((arg) => arg === "--json" || arg === "--follow" || arg === "--version" || arg === "-v")) return false
   const set = (name: string) => (env[name] ?? "") !== "" && env[name] !== "0"
@@ -56,8 +62,21 @@ export const isNewer = (latest: string, current: string) => {
 
 const withV = (version: string) => (version.startsWith("v") ? version : `v${version}`)
 
-export const noticeLine = (current: string, latest: string) =>
-  `Update available: ${withV(current)} → ${withV(latest)}. Run npm i -g ot-gateway@latest`
+/**
+ * The command that updates a global install, for the package manager that made it, told by where the script lies once
+ * symlinks are resolved: pnpm keeps global packages under `<PNPM_HOME>/global/<n>/`, yarn under `yarn/global` (`Yarn\Data\global`
+ * on Windows), bun under `.bun/install/global`, and anything else is npm's. The user agent is not asked: a script run by
+ * pnpm passes it on to an `ot-gateway` that npm installed.
+ */
+export const updateCommand = (script: string) => {
+  if (/[\\/]global[\\/]\d+[\\/]/.test(script)) return "pnpm add -g ot-gateway@latest"
+  if (/[\\/]yarn[\\/](data[\\/])?global[\\/]/i.test(script)) return "yarn global add ot-gateway@latest"
+  if (/[\\/]\.bun[\\/]install[\\/]global[\\/]/.test(script)) return "bun add -g ot-gateway@latest"
+  return "npm i -g ot-gateway@latest"
+}
+
+export const noticeLine = (current: string, latest: string, command = "npm i -g ot-gateway@latest") =>
+  `Update available: ${withV(current)} → ${withV(latest)}. Run ${command}`
 
 /** What the last question found, and when (Unix ms). */
 const SavedCheck = Schema.Struct({ checkedAt: Schema.Finite, latest: Schema.String })
@@ -86,6 +105,8 @@ export interface UpdateCheckOptions {
   readonly now: number
   /** The registry question; `latestOnNpm` unless a test gives another. */
   readonly latest?: Effect.Effect<string, unknown>
+  /** The command the notice names (`updateCommand`); npm's unless given. */
+  readonly command?: string
 }
 
 /**
@@ -129,7 +150,7 @@ export const withUpdateNotice =
       if (refresh !== undefined) yield* Fiber.interrupt(refresh)
       const latest = Option.orElse(fresh, () => previous)
       if (Option.isSome(latest) && isNewer(latest.value, current)) {
-        yield* Console.error(noticeLine(current, latest.value))
+        yield* Console.error(noticeLine(current, latest.value, options.command))
       }
       return result
     })

@@ -3,7 +3,15 @@ import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, FileSystem } from "effect"
 import { TestConsole } from "effect/testing"
-import { CHECK_INTERVAL_MS, isNewer, noticeLine, updateNoticeWanted, withUpdateNotice } from "../src/UpdateNotice.ts"
+import { realpathSync } from "node:fs"
+import {
+  CHECK_INTERVAL_MS,
+  isNewer,
+  noticeLine,
+  updateCommand,
+  updateNoticeWanted,
+  withUpdateNotice
+} from "../src/UpdateNotice.ts"
 
 describe("updateNoticeWanted", () => {
   it("is on for a command in a terminal, and off for --json, mcp, long-running commands, CI and the opt-out", () => {
@@ -20,7 +28,63 @@ describe("updateNoticeWanted", () => {
     expect(updateNoticeWanted(["status"], {}, true, "/home/u/.npm/_npx/1a2b/node_modules/ot-gateway/main.mjs")).toBe(
       false
     )
+    expect(
+      updateNoticeWanted(["status"], {}, true, "/home/u/.cache/pnpm/dlx/abc/19a-1/node_modules/ot-gateway/main.mjs")
+    ).toBe(false)
+    expect(
+      updateNoticeWanted(["status"], {}, true, "/Users/u/Library/Caches/pnpm/dlx/abc/node_modules/ot-gateway/main.mjs")
+    ).toBe(false)
+    expect(updateNoticeWanted(["status"], {}, true, "/home/u/.bun/install/cache/ot-gateway@0.17.0/main.mjs")).toBe(
+      false
+    )
+    expect(updateNoticeWanted(["status"], {}, true, "/tmp/xfs-1a2b/dlx-4242/node_modules/ot-gateway/main.mjs")).toBe(
+      false
+    )
   })
+})
+
+describe("updateCommand", () => {
+  it("names the package manager whose global folder holds the CLI, and npm otherwise", () => {
+    const npm = "npm i -g ot-gateway@latest"
+    const pnpm = "pnpm add -g ot-gateway@latest"
+    expect(updateCommand("/usr/local/lib/node_modules/ot-gateway/main.mjs")).toBe(npm)
+    expect(updateCommand("")).toBe(npm)
+    expect(updateCommand("/home/u/.local/share/pnpm/global/5/node_modules/ot-gateway/main.mjs")).toBe(pnpm)
+    expect(
+      updateCommand("/Users/u/Library/pnpm/global/5/.pnpm/ot-gateway@0.17.0/node_modules/ot-gateway/main.mjs")
+    ).toBe(pnpm)
+    expect(updateCommand("C:\\Users\\u\\AppData\\Local\\pnpm\\global\\5\\node_modules\\ot-gateway\\main.mjs")).toBe(
+      pnpm
+    )
+    // A project's own pnpm install is not the global one.
+    expect(updateCommand("/srv/app/node_modules/.pnpm/ot-gateway@0.17.0/node_modules/ot-gateway/main.mjs")).toBe(npm)
+    expect(updateCommand("/home/u/.config/yarn/global/node_modules/ot-gateway/main.mjs")).toBe(
+      "yarn global add ot-gateway@latest"
+    )
+    expect(updateCommand("C:\\Users\\u\\AppData\\Local\\Yarn\\Data\\global\\node_modules\\ot-gateway\\main.mjs")).toBe(
+      "yarn global add ot-gateway@latest"
+    )
+    expect(updateCommand("/home/u/.bun/install/global/node_modules/ot-gateway/main.mjs")).toBe(
+      "bun add -g ot-gateway@latest"
+    )
+    expect(noticeLine("v0.16.3", "0.17.0", pnpm)).toBe(
+      "Update available: v0.16.3 → v0.17.0. Run pnpm add -g ot-gateway@latest"
+    )
+  })
+
+  it.effect("finds a global install through the symlink in a bin folder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const root = yield* fs.makeTempDirectoryScoped()
+      const target = `${root}/.bun/install/global/node_modules/ot-gateway`
+      yield* fs.makeDirectory(target, { recursive: true })
+      yield* fs.writeFileString(`${target}/main.mjs`, "")
+      yield* fs.makeDirectory(`${root}/.bun/bin`, { recursive: true })
+      yield* fs.symlink(`${target}/main.mjs`, `${root}/.bun/bin/ot-gateway`)
+      expect(updateCommand(`${root}/.bun/bin/ot-gateway`)).toBe("npm i -g ot-gateway@latest")
+      expect(updateCommand(realpathSync(`${root}/.bun/bin/ot-gateway`))).toBe("bun add -g ot-gateway@latest")
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
 })
 
 describe("isNewer", () => {

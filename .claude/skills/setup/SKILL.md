@@ -12,7 +12,7 @@ Say in one line what is about to happen, then start with step 1. Keep the user p
 Everything goes through the `ot-gateway` command. Call it `otg` below:
 
 - in a checkout of the ot-gateway repository: `pnpm -s ot-gateway` (after `pnpm install`; `-s` keeps pnpm from printing its own command line, so `--json` is all that stdout holds). It always runs from the repository root, whatever folder you are in, so give every command the config's absolute path (`pnpm ot-gateway broker /home/me/site-1/ot-gateway.json`) and the points list's too; without it, a command looks for `ot-gateway.json` in the repository root. The outbox, the history and `ot-gateway.env` are found next to the config;
-- anywhere else with Node: `npx -y ot-gateway`, in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`);
+- anywhere else with Node: `npx -y ot-gateway` (or `pnpm dlx ot-gateway` when the user works with pnpm), in a folder of its own for this gateway (`mkdir -p ~/ot-gateway && cd ~/ot-gateway`);
 - with Docker and no Node (a Raspberry Pi, most edge boxes): `~/.local/bin/ot-gateway`, from that folder. It runs the CLI from the image at the gateway's version and leaves out `-t` when there is no terminal. Install it once, no sudo:
   `mkdir -p ~/.local/bin && curl -fsSL --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/packaging/ot-gateway -o ~/.local/bin/ot-gateway && chmod +x ~/.local/bin/ot-gateway`. Use the full path: a command over SSH does not read the login profile that puts `~/.local/bin` on the PATH.
 
