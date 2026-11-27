@@ -37,7 +37,7 @@ import {
 } from "@ot-gateway/bacnet"
 import { parseConfig } from "@ot-gateway/core"
 import type { BacnetDevice, GatewayConfig, Network } from "@ot-gateway/core"
-import { Console, Effect, FileSystem, Result, Schema } from "effect"
+import { Console, Context, Effect, FileSystem, Result, Schema } from "effect"
 import * as NetAddress from "effect/net/NetAddress"
 import { basename, dirname, join } from "node:path"
 import { toCsv } from "./Csv.ts"
@@ -48,8 +48,27 @@ import { slugify } from "./Slug.ts"
 
 export { slugify }
 
-/** How long Who-Is answers are collected. */
-const LISTEN = "3 seconds"
+/**
+ * How long Who-Is answers are collected at least, in seconds (`discover --wait`). Devices on one network answer
+ * within a second; past this, discovery keeps listening while new devices still answer, a second at a time, so a
+ * large site behind routers is not cut off, and stops after `MAX_LISTEN` whatever comes.
+ */
+export const LISTEN_SECONDS = 3
+const QUIET = "1 second"
+const MAX_LISTEN = "30 seconds"
+
+/** Waiting for Who-Is answers, shown: a line on stderr by default, a spinner for a person (Ui.ts). */
+export type WhoIsShown = (
+  target: string,
+  seconds: number
+) => <E, R>(listen: Effect.Effect<ReadonlyArray<FoundDevice>, E, R>) => Effect.Effect<ReadonlyArray<FoundDevice>, E, R>
+
+export const WhoIsProgress = Context.Reference<WhoIsShown>("@ot-gateway/gateway/WhoIsProgress", {
+  defaultValue: () => (target, seconds) => (listen) =>
+    Console.error(`Who-Is to ${target}, listening for ${seconds} seconds or longer while devices answer…`).pipe(
+      Effect.andThen(listen)
+    )
+})
 
 /** Where the operator should take a device's address from. */
 const TRUSTED_SOURCE = "a source you trust (commissioning sheet, device display, DHCP reservation)"
@@ -257,6 +276,8 @@ export interface DiscoverOptions {
   readonly configPath?: string | undefined
   /** There was no config: the BACnet defaults were used, and the next step is `init --points`, not `import`. */
   readonly noConfig?: boolean | undefined
+  /** How long to listen for answers at least, in seconds (`LISTEN_SECONDS` when undefined). */
+  readonly wait?: number | undefined
 }
 
 /**
@@ -315,11 +336,16 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
       options.configPath,
       options.noConfig === true
     )
-    yield* Console.error(`Who-Is to ${options.address ?? config.bacnet.broadcastAddress}, listening for ${LISTEN}…`)
-    const devices = yield* client.discover({
-      within: LISTEN,
-      ...(target === undefined ? {} : { target: { address: target.success } })
-    })
+    const seconds = options.wait ?? LISTEN_SECONDS
+    const shown = yield* WhoIsProgress
+    const devices = yield* client
+      .discover({
+        within: `${seconds} seconds`,
+        quiet: QUIET,
+        atMost: MAX_LISTEN,
+        ...(target === undefined ? {} : { target: { address: target.success } })
+      })
+      .pipe(shown(options.address ?? config.bacnet.broadcastAddress, seconds))
     if (devices.length === 0) {
       yield* Console.error(
         options.address === undefined && options.noConfig === true

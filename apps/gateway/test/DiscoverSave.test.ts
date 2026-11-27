@@ -144,13 +144,13 @@ describe("savedLines", () => {
       const fileText = JSON.stringify(base)
       const merged = yield* mergeDiscovered("ot-gateway.json", fileText, [newPoint, simulatedDevice])
       expect(savedLines(merged.config, merged.added, merged.extended)).toEqual([
-        "✓ added sim-1: read every 2 s, none writable",
-        "✓ added points to demo-room: read every 5 s, none writable",
-        "  a setpoint becomes writable on the status page or in the config, with the limits commands may set"
+        "✔ Added sim-1: read every 2 s, none writable",
+        "✔ Added points to demo-room: read every 5 s, none writable",
+        "  setpoints become writable on the status page or in the config"
       ])
       const setpoint = { ...newPoint.points[0], writable: true, limits: { min: 15, max: 30 } }
       const saved = yield* parseConfig(JSON.stringify({ ...base, devices: [{ ...newPoint, points: [setpoint] }] }))
-      expect(savedLines(saved, ["demo-room"], [])).toEqual(["✓ added demo-room: read every 5 s, 1 writable"])
+      expect(savedLines(saved, ["demo-room"], [])).toEqual(["✔ Added demo-room: read every 5 s, 1 writable"])
     })
   )
 })
