@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { humanRun } from "../src/Cli.ts"
-import { answeredLines, changeLine, humanLogLine, overviewLines, settled } from "../src/RunView.ts"
+import { answeredLines, devicesLines, changeLine, humanLogLine, overviewLines, settled } from "../src/RunView.ts"
 import { plainUi } from "../src/Ui.ts"
 
 const config = {
@@ -9,6 +9,9 @@ const config = {
   mqtt: { url: "mqtt://localhost:1883" },
   devices: [{ id: "room" }, { id: "meter" }]
 } as const
+
+const okDevice = (id: string) => ({ id, status: "ok", pointCount: 3 }) as const
+const failingDevice = (id: string) => ({ id, status: "failing", pointCount: 2, lastError: "no reply" }) as const
 
 describe("run in a terminal", () => {
   it("shows the overview and the changes only when both ends are a terminal and --verbose is not given", () => {
@@ -42,8 +45,8 @@ describe("run in a terminal", () => {
     )
     expect(lines).toEqual([
       "✔ Broker mqtt://localhost:1883 connected",
-      "✔ room: reading 3 points",
-      "✖ meter: could not connect: connection refused",
+      "✔ Reading 1 of 2 devices, 3 points",
+      "✖ 1 failing: meter, could not connect: connection refused",
       "",
       "  Status page  http://127.0.0.1:8080\n  Topics       hall/main/<device>/<point>\n  Stop         Ctrl-C  the changes that matter show up below"
     ])
@@ -87,5 +90,16 @@ describe("run in a terminal", () => {
     expect(humanLogLine(plainUi, { ...entry, level: "Info" })).toBeUndefined()
     expect(humanLogLine(plainUi, { ...entry, annotations: { device: "room" } })).toBeUndefined()
     expect(humanLogLine(plainUi, { ...entry, message: "MQTT connection lost" })).toBeUndefined()
+  })
+
+  it("sums the devices up in a line however many there are, and names the failing ones", () => {
+    expect(devicesLines(plainUi, [okDevice("room")])).toEqual(["✔ Reading 1 device and 3 points"])
+    expect(devicesLines(plainUi, [okDevice("room"), okDevice("hall")])).toEqual(["✔ Reading 2 devices and 6 points"])
+    const many = ["a", "b", "c", "d", "e", "f", "g"].map(failingDevice)
+    expect(devicesLines(plainUi, [okDevice("room"), ...many, { id: "x", status: "starting", pointCount: 1 }])).toEqual([
+      "✔ Reading 1 of 9 devices, 3 points",
+      "✖ 7 failing: a, b, c, d, e and 2 more",
+      "! 1 not answering yet: x"
+    ])
   })
 })
