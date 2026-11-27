@@ -93,6 +93,14 @@ export interface GatewayOptions {
    * Without it (the demo, a test) the page is read-only.
    */
   readonly configFile?: ConfigFileSource
+  /**
+   * Run next to the gateway, in its scope, with its events and its status (when it has a status page): what a person
+   * at a terminal sees of `run` (RunView.ts).
+   */
+  readonly watch?: (view: {
+    readonly events: GatewayEventsShape
+    readonly status: StatusState | undefined
+  }) => Effect.Effect<void>
 }
 
 /**
@@ -796,6 +804,9 @@ export const runGateway = Effect.fn("Gateway")(
         editor,
         setup
       ).pipe(Effect.forkScoped)
+    }
+    if (options.watch !== undefined) {
+      yield* options.watch({ events, status: status?.state }).pipe(Effect.forkScoped)
     }
     // A stop (SIGTERM from Docker, Ctrl-C) interrupts the gateway: say so, so a clean stop is told from a crash.
     yield* Effect.addFinalizer((exit) =>
