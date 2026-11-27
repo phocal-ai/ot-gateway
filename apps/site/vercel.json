@@ -2,6 +2,14 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
   "ignoreCommand": "bash scripts/ignore-build.sh",
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "dev": true,
+      "site/**": true,
+      "**": false
+    }
+  },
   "cleanUrls": true,
   "rewrites": [
     {

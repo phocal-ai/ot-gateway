@@ -21,14 +21,17 @@ Every docs page opens with "Explore with an AI agent": prompts to copy into any 
 The site is the Vercel project `ot-gateway` (team `wimluks-projects`), live at https://ot-gateway.vercel.app. Vercel's GitHub integration builds it:
 
 - a push to `main` (a release) deploys production, so the public docs match the latest release;
-- a push to `dev` deploys a preview when the site or the Markdown it renders (`docs/`, the README) changed: the docs of the next release;
-- a push to any other branch deploys a preview only when the site's code or build setup changed (`apps/site`, the root's `package.json`, lockfile, workspace, `tsconfig.base.json` and `.nvmrc`).
+- a push to `dev` deploys a preview when the site, the lockfile or the Markdown it renders (`docs/`, the README) changed: the docs of the next release;
+- a push to a `site/...` branch deploys a preview when the site's code or build setup changed (`apps/site`, the root's `package.json`, workspace, `tsconfig.base.json` and `.nvmrc`);
+- a push to any other branch deploys nothing.
 
-`scripts/ignore-build.sh` decides this as the project's Ignored Build Step (`ignoreCommand` in `vercel.json`); a skipped push uses none of the plan's daily deployments. Most pull requests change `docs/` along with the gateway, so a preview per docs change would still be nearly every push: CI builds the site on every pull request instead (`Build the docs site` in `ci.yml`), so a page that no longer builds fails there. Change the lists in the script when the site starts reading another file.
+The plan allows 100 deployments a day, and most pull requests change only the gateway and its docs. `git.deploymentEnabled` in `vercel.json` turns deployments off for every branch but `main`, `dev` and `site/**`, so their pushes create no deployment at all. On the branches left, `scripts/ignore-build.sh` is the Ignored Build Step (`ignoreCommand`): it compares with the commit Vercel last deployed for the branch and skips the build when nothing the site reads changed (a skipped deployment may still count toward the daily limit, but costs no build time). `scripts/test-ignore-build.sh` tests it in CI. Change its lists when the site starts reading another file.
+
+A pull request gets no Vercel preview unless its branch is named `site/...`; CI builds the site on every pull request instead (`Build the docs site` in `ci.yml`), so a page that no longer builds fails there. For a one-off preview of another branch, run `vercel deploy` from `apps/site` or redeploy it from the Vercel dashboard.
 
 Project settings: root directory `apps/site` and Node.js 24.x. The rest lives in this directory, so it is reviewed with the code:
 
-- `vercel.json` sets the Next.js framework and the Ignored Build Step, rewrites `/` to the exported `index` page (without it, `/` is a 404 under clean URLs) and serves the `.md` twins.
+- `vercel.json` sets the Next.js framework, the branches that deploy and the Ignored Build Step, rewrites `/` to the exported `index` page (without it, `/` is a 404 under clean URLs) and serves the `.md` twins.
 - `package.json` pins `engines.node` to `24.x`, the version in `.nvmrc`. Vercel otherwise resolves the root's `>=22.18` to a Node version it does not support.
 
 Links to GitHub point at the commit being built (`VERCEL_GIT_COMMIT_SHA`), or at `dev` in a local build.

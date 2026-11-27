@@ -39,13 +39,14 @@ jobs:
       - run: pnpm check
       - run: scripts/test-health-gh.sh
       - run: scripts/test-routines.sh
+      - run: apps/site/scripts/test-ignore-build.sh
       - name: Build the status page
         run: pnpm --filter @ot-gateway/web build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
-      # The docs site, whose pages come from docs/*.md and the README. Vercel builds a preview only when the
-      # site's own code changed (apps/site/scripts/ignore-build.sh), so this is where a docs change is built
-      # before it reaches dev.
+      # The docs site, whose pages come from docs/*.md and the README. Vercel deploys no preview for a pull
+      # request's branch (apps/site/vercel.json, apps/site/README.md), so this is where a docs or site change is
+      # built before it reaches dev.
       - name: Build the docs site
         run: pnpm --filter @ot-gateway/site build
         env:
