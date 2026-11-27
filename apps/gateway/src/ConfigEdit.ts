@@ -9,7 +9,7 @@
  * may set: that is `points allow-commands`, the one door for writes.
  */
 import { GatewayConfig, type Limits, parseConfig } from "@ot-gateway/core"
-import { Effect, FileSystem, Predicate, Result, Schema } from "effect"
+import { Effect, FileSystem, Option, Predicate, Result, Schema } from "effect"
 import { describeConfigChange } from "./ConfigChange.ts"
 import { configIssues, describeIssues, makeConfigStore } from "./ConfigStore.ts"
 import { afterSave, ConfigEditFailed, type ConfigEdited, editConfigFile, type RawConfig } from "./ConfigFileEdit.ts"
@@ -42,10 +42,14 @@ export const parseValue = (text: string): unknown => {
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   Predicate.isObject(value) && !Array.isArray(value)
 
-/** Where `segment` is in a list: the item with that id (a device, a point), or a position. */
+/**
+ * Where `segment` is in a list: the item with that id (devices, points), or a position in a list whose items have
+ * no ids (Haystack tags). A list with ids is never asked by position, so a number that is no id names nothing.
+ */
 const indexIn = (list: ReadonlyArray<unknown>, segment: string) => {
-  const byId = list.findIndex((item) => isRecord(item) && item["id"] === segment)
-  if (byId >= 0) return byId
+  if (list.some((item) => isRecord(item) && Object.hasOwn(item, "id"))) {
+    return list.findIndex((item) => isRecord(item) && item["id"] === segment)
+  }
   return /^\d+$/.test(segment) && Number(segment) < list.length ? Number(segment) : -1
 }
 
@@ -65,7 +69,7 @@ export const valueAt = (node: unknown, segments: ReadonlyArray<string>): unknown
     const index = indexIn(list, head)
     return index < 0 ? undefined : valueAt(list[index], rest)
   }
-  return isRecord(node) ? valueAt(node[head], rest) : undefined
+  return isRecord(node) && Object.hasOwn(node, head) ? valueAt(node[head], rest) : undefined
 }
 
 const noSuch = (message: string, hint: string) => new ConfigEditFailed({ message, code: "unknown-key", hint })
@@ -101,18 +105,23 @@ const changedAt = (
     const { [head]: _removed, ...kept } = record
     return Result.succeed(kept)
   }
-  if (value === undefined && !(head in record)) return Result.succeed(record)
-  return Result.map(changedAt(record[head], rest, value, [...walked, head]), (child) => ({ ...record, [head]: child }))
+  const has = Object.hasOwn(record, head)
+  if (value === undefined && !has) return Result.succeed(record)
+  return Result.map(changedAt(has ? record[head] : undefined, rest, value, [...walked, head]), (child) => ({
+    ...record,
+    [head]: child
+  }))
 }
 
 /** The config file's object with one key set, or taken out (`value` undefined). */
 export const withValue = (
   raw: RawConfig,
   segments: ReadonlyArray<string>,
-  value: unknown
+  value: unknown,
+  cli = "ot-gateway"
 ): RawConfig | ConfigEditFailed => {
   if (segments.length === 0) {
-    return noSuch("name a key: mqtt.url, devices.<device>.pollIntervalMs", "ot-gateway config get lists the config")
+    return noSuch("name a key: mqtt.url, devices.<device>.pollIntervalMs", `${cli} config get lists the config`)
   }
   const changed = changedAt(raw, segments, value)
   if (Result.isFailure(changed)) return changed.failure
@@ -121,19 +130,57 @@ export const withValue = (
 
 const sameLimits = (a: Limits | undefined, b: Limits | undefined) => a?.min === b?.min && a?.max === b?.max
 
+type AnyDevice = GatewayConfig["devices"][number]
+
+/** What says where a device is: a writable point of a device that moved takes its commands somewhere else. */
+const whereDeviceIs = (device: AnyDevice): unknown => {
+  switch (device.protocol) {
+    case "modbus-tcp":
+      return [device.protocol, device.host, device.port, device.unitId]
+    case "bacnet-ip":
+      return [device.protocol, device.deviceInstance, device.address]
+    case "simulator":
+      return [device.protocol]
+  }
+}
+
+/**
+ * A point without what does not matter to a command: its name, unit, how its values are sent, its semantics and
+ * its alarm. What is left says where a command is written and what it may set: register or object, type, byte
+ * order, scaling, priority, limits.
+ */
+const whatACommandWrites = (point: AnyDevice["points"][number]) => {
+  const {
+    name: _name,
+    unit: _unit,
+    deadband: _deadband,
+    publish: _publish,
+    semantics: _semantics,
+    alarmWhen: _alarmWhen,
+    ...rest
+  } = point
+  return JSON.stringify(rest)
+}
+
 /**
  * Every point whose commands a change would touch, as `device/point`: one that takes commands and did not before
- * (under this id: a renamed device's `$set` topics are new ones), or whose limits are other ones, writable or not.
- * A point that takes none any more, or is gone, is not among them: less may always be written.
+ * under this id (a renamed device's `$set` topics are new ones), one that takes commands and would write somewhere
+ * else or something else (another register, object, scaling or priority, or its device at another address), and
+ * one whose limits are other ones, writable or not. A point that takes none any more, or is gone, is not among
+ * them: less may always be written.
  */
 export const writesTouched = (before: GatewayConfig, after: GatewayConfig): ReadonlyArray<string> =>
   after.devices.flatMap((device) => {
     const was = before.devices.find((each) => each.id === device.id)
+    const moved = was !== undefined && JSON.stringify(whereDeviceIs(was)) !== JSON.stringify(whereDeviceIs(device))
     return device.points.flatMap((point) => {
       const previous = was?.points.find((each) => each.id === point.id)
       const allowed = point.writable && previous?.writable !== true
+      const elsewhere =
+        point.writable &&
+        (moved || (previous !== undefined && whatACommandWrites(previous) !== whatACommandWrites(point)))
       const limits = point.limits !== undefined && !sameLimits(point.limits, previous?.limits)
-      return allowed || limits ? [`${device.id}/${point.id}`] : []
+      return allowed || elsewhere || limits ? [`${device.id}/${point.id}`] : []
     })
   })
 
@@ -143,9 +190,9 @@ const writesStayAsTheyAre = (cli: string) => (before: GatewayConfig, after: Gate
   return touched.length === 0
     ? undefined
     : new ConfigEditFailed({
-        message: `this would change which commands the gateway takes on ${touched.slice(0, 5).join(", ")}${touched.length > 5 ? `, and ${touched.length - 5} more` : ""}, which config set does not do`,
+        message: `this would change which commands the gateway takes, or where it writes them, on ${touched.slice(0, 5).join(", ")}${touched.length > 5 ? `, and ${touched.length - 5} more` : ""}, which config set does not do`,
         code: "writes-not-here",
-        hint: `${cli} points allow-commands <device/point> --min=<lowest> --max=<highest> lets one point take commands, on purpose; to rename a device or point that takes commands, make it read-only first (${cli} points read-only) and allow them again after`
+        hint: `${cli} points allow-commands <device/point> --min=<lowest> --max=<highest> lets one point take commands, on purpose; to rename or move a device or point that takes commands, make it read-only first (${cli} points read-only), change it, and allow commands again`
       })
 }
 
@@ -160,6 +207,8 @@ export interface ConfigChangeReport {
   readonly after: unknown
   /** The value the gateway runs with, defaults filled in. */
   readonly effective: unknown
+  /** Whether the key, device or point is taken out, rather than set. */
+  readonly removed: boolean
   readonly changed: boolean
   /** What the change does, part by part. */
   readonly changes: ReadonlyArray<string>
@@ -173,7 +222,8 @@ const reportOf = (
   dryRun: boolean,
   edited: ConfigEdited<{ readonly before: unknown; readonly after: unknown; readonly effective: unknown }>,
   again: string,
-  cli: string
+  cli: string,
+  removed: boolean
 ): ConfigChangeReport => ({
   ok: true,
   path,
@@ -182,6 +232,7 @@ const reportOf = (
   before: edited.report.before ?? null,
   after: edited.report.after ?? null,
   effective: edited.report.effective ?? null,
+  removed,
   changed: edited.changed,
   changes: edited.changes,
   ...(edited.backup === undefined ? {} : { backup: edited.backup }),
@@ -212,7 +263,7 @@ export const setConfigValue = Effect.fn("setConfigValue")(function* (
       refused: `${key} cannot be ${"set" in value ? `set to ${value.set}` : "taken out"}`,
       change: (raw) => {
         const wanted = "set" in value ? parseValue(value.set) : undefined
-        const changed = withValue(raw, segments, wanted)
+        const changed = withValue(raw, segments, wanted, cli)
         if (changed instanceof ConfigEditFailed) return changed
         return {
           raw: changed,
@@ -228,7 +279,7 @@ export const setConfigValue = Effect.fn("setConfigValue")(function* (
     },
     options
   )
-  return reportOf(path, key, options.dryRun, edited, again, cli)
+  return reportOf(path, key, options.dryRun, edited, again, cli, !("set" in value))
 })
 
 /** Take the device `target` (or its point, `device/point`) out of the config at `path`. */
@@ -264,14 +315,14 @@ export const removeFromConfig = Effect.fn("removeFromConfig")(function* (
             listed(within)
           )
         }
-        const changed = withValue(raw, segments, undefined)
+        const changed = withValue(raw, segments, undefined, cli)
         if (changed instanceof ConfigEditFailed) return changed
         return { raw: changed, report: () => ({ before, after: undefined, effective: undefined }) }
       }
     },
     options
   )
-  return reportOf(path, target, options.dryRun, edited, again, cli)
+  return reportOf(path, target, options.dryRun, edited, again, cli, true)
 })
 
 export interface ConfigGetReport {
@@ -285,12 +336,20 @@ export interface ConfigGetReport {
 }
 
 /** The value of `key` in the config at `path`: as the file has it, and as the gateway runs with it. */
-export const getConfigValue = Effect.fn("getConfigValue")(function* (path: string, key: string) {
+export const getConfigValue = Effect.fn("getConfigValue")(function* (
+  path: string,
+  key: string,
+  options: { readonly command?: string | undefined } = {}
+) {
   const fs = yield* FileSystem.FileSystem
+  const cli = options.command ?? "ot-gateway"
   const config = yield* loadConfig(path)
-  const raw = yield* Effect.orElseSucceed(
-    Effect.flatMap(fs.readFileString(path), Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))),
-    () => undefined
+  // The file as it is written; it was read and understood a moment ago, so a failure here is said as it is.
+  const raw = yield* fs.readFileString(path).pipe(
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Unknown))),
+    Effect.mapError(
+      (error) => new ConfigEditFailed({ message: `could not read ${path} again: ${error.message}`, code: "no-config" })
+    )
   )
   const segments = parsePath(key)
   const value = valueAt(raw, segments)
@@ -299,7 +358,7 @@ export const getConfigValue = Effect.fn("getConfigValue")(function* (path: strin
   if (value === undefined && effective === undefined) {
     return yield* noSuch(
       `${path} has no ${key}`,
-      "ot-gateway config get lists the config; docs/configuration.md has every key"
+      `${cli} config get lists the config; docs/configuration.md has every key`
     )
   }
   return {
@@ -338,17 +397,26 @@ export const undoConfig = Effect.fn("undoConfig")(function* (
   const cli = options.command ?? "ot-gateway"
   const backup = `${path}.bak`
   const again = `${cli} config undo${configFlag(path)}`
-  const current = yield* loadConfig(path)
   const store = yield* makeConfigStore(path)
-  const file = yield* store.read.pipe(Effect.mapError((error) => notSaved(error.message)))
+  const file = yield* store.read.pipe(
+    Effect.mapError((error) => new ConfigEditFailed({ message: error.message, code: "no-config" }))
+  )
+  // A config that is not valid now is the one most in need of the previous one: it only cannot be compared.
+  const current = yield* Effect.option(parseConfig(file.text))
   const previous = yield* fs.readFileString(backup).pipe(
-    Effect.mapError(
-      () =>
+    Effect.catchReason("PlatformError", "NotFound", () =>
+      Effect.fail(
         new ConfigEditFailed({
           message: `no ${backup}: nothing to go back to`,
           code: "no-backup",
           hint: "a save from this CLI or the status page keeps the previous config there"
         })
+      )
+    ),
+    Effect.catchTag("PlatformError", (error) =>
+      Effect.fail(
+        notSaved(`could not read ${backup}: ${error.message}`, "the user running this must be able to read it")
+      )
     )
   )
   const restored = yield* parseConfig(previous).pipe(
@@ -364,7 +432,10 @@ export const undoConfig = Effect.fn("undoConfig")(function* (
     })
   )
   const changed = previous !== file.text
-  const changes = describeConfigChange(current, restored).changes
+  const changes = Option.match(current, {
+    onNone: () => [`${path} is not a valid config now`],
+    onSome: (config) => describeConfigChange(config, restored).changes
+  })
   const saved = changed && !options.dryRun
   if (saved) {
     yield* store.save(previous, file.etag).pipe(
@@ -397,10 +468,9 @@ const nextLines = (next: Next) => next.map((step) => `  next: ${step.command}   
 export const formatConfigChange = (report: ConfigChangeReport) => {
   const would = report.dryRun && report.changed
   const mark = would ? "–" : "✓"
-  const removed = report.after === null && report.before !== null
   const head = !report.changed
     ? `${mark} ${report.key} is ${shown(report.before)} already, nothing was written`
-    : removed
+    : report.removed
       ? `${mark} ${report.key} ${would ? "would be" : "was"} taken out of ${report.path}`
       : `${mark} ${report.key}: ${shown(report.before)} → ${shown(report.after)}${would ? " (not written)" : ""}`
   return [

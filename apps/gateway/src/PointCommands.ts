@@ -74,6 +74,8 @@ export const withPointCommands = (
   )
 })
 
+const sameLimits = (a: Limits | undefined, b: Limits | undefined) => a?.min === b?.min && a?.max === b?.max
+
 const pointNames = (device: Device) => {
   const ids = device.points.map((point) => `${device.id}/${point.id}`)
   return `${ids.slice(0, 10).join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}`
@@ -161,16 +163,27 @@ export const setPointCommands = Effect.fn("setPointCommands")(function* (
         if (found instanceof ConfigEditFailed) return found
         const limits = change.allow ? limitsFor(found.device, found.point, change, cli) : undefined
         if (limits instanceof ConfigEditFailed) return limits
+        // A point that is as asked already stays as it is written: no file is rewritten for a key in another place.
+        const asAsked = change.allow
+          ? found.point.writable && sameLimits(found.point.limits, limits)
+          : !found.point.writable && found.point.limits === undefined
         return {
-          raw: withPointCommands(raw, target, change.allow ? { writable: true, limits } : { writable: false }),
-          // The change keeps every device and point, so the point is in the config after it too.
+          raw: asAsked
+            ? raw
+            : withPointCommands(raw, target, change.allow ? { writable: true, limits } : { writable: false }),
+          // The change keeps every device and point, so the point is in the config after it too; if it ever is
+          // not, that is said before anything is written.
           report: (after) => {
             const point = find(after, target, path)
+            if (point instanceof ConfigEditFailed) return point
             const info = pointCatalog(after).points.find(
               (each) => each.device === target.device && each.id === target.point
             )
-            return point instanceof ConfigEditFailed || info === undefined
-              ? undefined
+            return info === undefined
+              ? new ConfigEditFailed({
+                  message: `${name} is not among the points of ${path} after the change, so nothing was written`,
+                  code: "unknown-point"
+                })
               : { ...point, source: info.source, topic: info.topic }
           }
         }
@@ -179,13 +192,6 @@ export const setPointCommands = Effect.fn("setPointCommands")(function* (
     options
   )
   const after = edited.report
-  if (after === undefined) {
-    return yield* new ConfigEditFailed({
-      message: `${name} is not in ${path} after the change: nothing was written`,
-      code: "config-not-saved",
-      hint: `run it again: ${command}`
-    })
-  }
   const { changed } = edited
   const limits = after.point.limits
   const next = !changed

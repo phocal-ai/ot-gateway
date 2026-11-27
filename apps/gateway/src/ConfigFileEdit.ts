@@ -37,11 +37,14 @@ export interface ConfigEdit<A> {
   readonly again: string
   /** What the change is called in a refusal: `heat-pump/setpoint cannot take commands`. */
   readonly refused: string
-  /** The new raw object and what the command reports about it, or why not. */
+  /**
+   * The new raw object and what the command reports about the config it makes, or why not. The report is made
+   * before anything is written, so a refusal there leaves the file as it was.
+   */
   readonly change: (
     raw: RawConfig,
     current: GatewayConfig
-  ) => { readonly raw: RawConfig; readonly report: (after: GatewayConfig) => A } | ConfigEditFailed
+  ) => { readonly raw: RawConfig; readonly report: (after: GatewayConfig) => A | ConfigEditFailed } | ConfigEditFailed
   /** A last word on the config the change makes, before it is written. */
   readonly allowed?: (before: GatewayConfig, after: GatewayConfig) => ConfigEditFailed | undefined
 }
@@ -94,6 +97,8 @@ export const editConfigFile = Effect.fn("editConfigFile")(function* <A>(
   )
   const refusal = edit.allowed?.(current, config)
   if (refusal !== undefined) return yield* refusal
+  const report = change.report(config)
+  if (report instanceof ConfigEditFailed) return yield* report
   const changed = text !== configText(raw)
   const saved = changed && !options.dryRun
   if (saved) {
@@ -116,7 +121,7 @@ export const editConfigFile = Effect.fn("editConfigFile")(function* <A>(
     )
   }
   return {
-    report: change.report(config),
+    report,
     changed,
     ...(saved ? { backup: `${path}.bak` } : {}),
     config,

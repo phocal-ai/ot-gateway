@@ -122,7 +122,15 @@ describe("mcp tools", () => {
 
   it("mark write, making a point writable, removing a device, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
-    expect(changing).toEqual(["write", "points_allow_commands", "config_remove", "restart", "down", "upgrade"])
+    expect(changing).toEqual([
+      "write",
+      "points_allow_commands",
+      "config_remove",
+      "config_undo",
+      "restart",
+      "down",
+      "upgrade"
+    ])
   })
 
   it("config_set only checks unless told otherwise, and passes the value as JSON in a flag", () => {
@@ -157,7 +165,8 @@ describe("mcp tools", () => {
       Exit.succeed(["config", "remove", "meter/power", "--dry-run"])
     )
     expect(argvOf("config_get", {})).toEqual(Exit.succeed(["config", "get"]))
-    expect(argvOf("config_undo", { dryRun: true })).toEqual(Exit.succeed(["config", "undo", "--dry-run"]))
+    expect(argvOf("config_undo", {})).toEqual(Exit.succeed(["config", "undo", "--dry-run"]))
+    expect(argvOf("config_undo", { dryRun: false })).toEqual(Exit.succeed(["config", "undo"]))
   })
 
   it("points_allow_commands only checks unless told otherwise, and passes limits as flags, negative ones too", () => {

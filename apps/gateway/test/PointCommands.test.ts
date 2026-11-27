@@ -142,6 +142,36 @@ describe("setPointCommands", () => {
     )
   )
 
+  it.effect("leaves a file alone whose point is as asked already, wherever its keys are written", () =>
+    run(
+      Effect.gen(function* () {
+        const { fs, path } = yield* folder
+        // By hand: writable first, a read-only point that says so.
+        const byHand = text
+          .replace('"id": "enable",', '"writable": true,\n          "id": "enable",')
+          .replace('"id": "power",', '"writable": false,\n          "id": "power",')
+        expect(byHand).not.toBe(text)
+        yield* fs.writeFileString(path, byHand)
+        const allowed = yield* setPointCommands(
+          path,
+          { device: "heat-pump", point: "enable" },
+          { allow: true },
+          { dryRun: false }
+        )
+        expect(allowed).toMatchObject({ writable: true, changed: false, next: [] })
+        const readOnly = yield* setPointCommands(
+          path,
+          { device: "heat-pump", point: "power" },
+          { allow: false },
+          { dryRun: false }
+        )
+        expect(readOnly).toMatchObject({ writable: false, changed: false })
+        expect(yield* fs.readFileString(path)).toBe(byHand)
+        expect(yield* fs.exists(`${path}.bak`)).toBe(false)
+      })
+    )
+  )
+
   it.effect("takes a switch without limits, and refuses limits on one", () =>
     run(
       Effect.gen(function* () {

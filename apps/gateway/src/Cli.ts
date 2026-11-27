@@ -1448,7 +1448,7 @@ const configGetCommand = Command.make(
   },
   ({ key, config, json }) =>
     Effect.gen(function* () {
-      const report = yield* getConfigValue(config, key)
+      const report = yield* getConfigValue(config, key, { command: yield* invocation })
       yield* json ? printJson(report) : Console.log(formatConfigGet(report))
     }).pipe(jsonFailure(json, { path: config, key }))
 ).pipe(

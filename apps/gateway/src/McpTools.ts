@@ -582,13 +582,15 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     name: "config_undo",
     title: "Put the previous config back",
     description:
-      "Put the previous config back: the file and its .bak (what the last save replaced) change places, so calling it again brings the change back. Returns changes and next",
+      "Put the previous config back: the file and its .bak (what the last save replaced) change places, so calling it again brings the change back. changes names what comes back with it, a point that takes commands again too (writes allowed). dryRun defaults to true: only return changes and next",
     input: {
       config: configArgument,
-      dryRun: Schema.optionalKey(Schema.Boolean.annotate({ description: "Only return what would change" }))
+      dryRun: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Only return what would change (default true)" })
+      )
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    argv: ({ config, dryRun }) => ["config", "undo", flag("config", config), flag("dry-run", dryRun)]
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    argv: ({ config, dryRun }) => ["config", "undo", flag("config", config), flag("dry-run", dryRun ?? true)]
   }),
   defineTool({
     name: "diff",

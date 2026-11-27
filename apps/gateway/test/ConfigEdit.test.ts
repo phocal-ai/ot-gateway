@@ -76,7 +76,10 @@ describe("paths and values", () => {
 
   it("finds devices and points by id, sets a key, makes missing blocks and takes a key out", () => {
     expect(valueAt(base, parsePath("devices.meter.points.power.address"))).toBe(2)
-    expect(valueAt(base, parsePath("devices.1.host"))).toBe("10.0.0.6")
+    // A device is named by its id, never by its position; a list without ids by position.
+    expect(valueAt(base, parsePath("devices.1.host"))).toBeUndefined()
+    expect(valueAt({ tags: ["a", "b"] }, ["tags", "1"])).toBe("b")
+    expect(valueAt(base, ["constructor"])).toBeUndefined()
     expect(valueAt(base, parsePath("devices.nope.host"))).toBeUndefined()
     expect(valueAt(withValue(base, parsePath("status.bindAddress"), "0.0.0.0"), ["status"])).toEqual({
       bindAddress: "0.0.0.0"
@@ -119,6 +122,25 @@ describe("paths and values", () => {
         return draft
       })
       expect(writesTouched(before, readOnly)).toEqual([])
+      // A point that takes commands does not move to another register or device, and keeps its scaling.
+      for (const move of [
+        (draft: typeof base) => Object.assign(draft.devices[0]?.points[1] ?? {}, { address: 99 }),
+        (draft: typeof base) => Object.assign(draft.devices[0] ?? {}, { host: "10.0.0.99" }),
+        (draft: typeof base) => Object.assign(draft.devices[0] ?? {}, { unitId: 7 })
+      ]) {
+        const moved = yield* config((draft) => {
+          move(draft)
+          return draft
+        })
+        expect(writesTouched(before, moved)).toEqual(["heat-pump/enable"])
+      }
+      // What a command does not depend on may change: a name, how often the device is read.
+      const renamedPoint = yield* config((draft) => {
+        Object.assign(draft.devices[0]?.points[1] ?? {}, { name: "Enable heating" })
+        Object.assign(draft.devices[0] ?? {}, { pollIntervalMs: 10_000 })
+        return draft
+      })
+      expect(writesTouched(before, renamedPoint)).toEqual([])
       expect(writesTouched(allowed, before)).toEqual([])
     })
   )
@@ -207,7 +229,9 @@ describe("config set and unset", () => {
             "devices.heat-pump.points.setpoint",
             '{"id":"setpoint","name":"S","table":"holding","address":10,"dataType":"int16","writable":true,"limits":{"min":0,"max":1}}'
           ],
-          ["devices.heat-pump.id", "hp"]
+          ["devices.heat-pump.id", "hp"],
+          ["devices.heat-pump.host", "10.0.0.99"],
+          ["devices.heat-pump.points.enable.address", "40"]
         ] as const) {
           const refused = yield* Effect.flip(setConfigValue(path, key, { set: value }, write))
           expect(["writes-not-here", "invalid-config"]).toContain("code" in refused ? refused.code : key)
@@ -255,7 +279,7 @@ describe("config remove", () => {
       Effect.gen(function* () {
         const { fs, path } = yield* folder
         const point = yield* removeFromConfig(path, "heat-pump/setpoint", write)
-        expect(point).toMatchObject({ key: "heat-pump/setpoint", after: null, changed: true })
+        expect(point).toMatchObject({ key: "heat-pump/setpoint", after: null, removed: true, changed: true })
         expect(formatConfigChange(point)).toContain("heat-pump/setpoint was taken out")
         const device = yield* removeFromConfig(path, "meter", { dryRun: true })
         expect(device).toMatchObject({ dryRun: true, changes: ["device meter removed"] })
@@ -298,6 +322,12 @@ describe("config undo", () => {
         expect(yield* fs.readFileString(path)).toBe(text)
         yield* undoConfig(path, write)
         expect(yield* fs.readFileString(path)).toBe(changed)
+
+        // A config broken by hand is the one that needs it most.
+        yield* fs.writeFileString(path, "{ not json")
+        const repaired = yield* undoConfig(path, write)
+        expect(repaired).toMatchObject({ changed: true, changes: [`${path} is not a valid config now`] })
+        expect(yield* fs.readFileString(path)).toBe(text)
       })
     )
   )

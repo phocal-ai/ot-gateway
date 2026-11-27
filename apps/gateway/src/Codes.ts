@@ -119,8 +119,8 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "config",
     reportedBy: ["config set", "config unset"],
     meaning:
-      "The change would make a point writable or set the limits of what a command may write, which config set never does.",
-    fix: "Allow commands on one named point with points allow-commands, on purpose; to rename a device or point that takes commands, make it read-only first and allow them again after.",
+      "The change would make a point writable, set the limits of what a command may write, or move a point that takes commands (another id, register, object, scaling or device address), which config set never does.",
+    fix: "Allow commands on one named point with points allow-commands, on purpose; to rename or move a device or point that takes commands, make it read-only first, change it, and allow commands again.",
     next: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25"
   },
   {
