@@ -76,6 +76,7 @@ import {
 } from "./ModbusDiscover.ts"
 import { clearCommands, diffConfigs, diffReport, diffTitle, formatDiff, sideOfConfig } from "./Diff.ts"
 import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
+import { formatPointCommands, setPointCommands } from "./PointCommands.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
@@ -781,7 +782,7 @@ export const savedLines = (
     ...extended.map((id) => ({ verb: `Added points to ${id}`, ...describe(id) }))
   ]
   const hint = lines.every((line) => line.writable === 0)
-    ? [ui.note("setpoints become writable on the status page or in the config")]
+    ? [ui.note("a setpoint takes commands after ot-gateway points allow-commands <device/point>")]
     : []
   return [...lines.map((line) => ui.done(`${line.verb}: ${line.text}`)), ...hint]
 }
@@ -1338,6 +1339,84 @@ const exportCommand = Command.make(
   ])
 )
 
+const commandsTarget = Argument.String("point").pipe(
+  Argument.withDescription("One point as device/point, as in the config: heat-pump/setpoint"),
+  Argument.filter(
+    (text) => parseTarget(text) !== undefined,
+    () => "name one device/point"
+  )
+)
+
+const limitFlag = (name: "min" | "max", which: string) =>
+  Flag.Finite(name).pipe(
+    Flag.withDescription(
+      `The ${which} value a command may set, in the point's unit (after scaling); a number needs both, a switch neither`
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined)
+  )
+
+const pointCommandsDryRun = dryRunFlag("Check the change and print what it would do, without writing the config")
+
+const allowCommandsCommand = Command.make(
+  "allow-commands",
+  {
+    target: commandsTarget,
+    config: configPath,
+    min: limitFlag("min", "lowest"),
+    max: limitFlag("max", "highest"),
+    dryRun: pointCommandsDryRun,
+    json: jsonFlag
+  },
+  ({ target, config, min, max, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* setPointCommands(
+        config,
+        parseTarget(target) ?? { device: "", point: "" },
+        { allow: true, min, max },
+        { dryRun, command: yield* invocation }
+      )
+      yield* json ? printJson(report) : Console.log(formatPointCommands(report))
+    }).pipe(jsonFailure(json, { path: config, point: target }))
+).pipe(
+  Command.withDescription(
+    "Let one point take commands on its $set topic: writes writable and, for a number, the limits a command may set into the config, checked first. One point per call, on purpose; nothing is sent to the device, and the running gateway takes it with a restart. --json: point, source, setTopic, limits, changed, next"
+  ),
+  Command.withExamples([
+    {
+      command: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25",
+      description: "A setpoint, 15 to 25 in its unit"
+    },
+    { command: "ot-gateway points allow-commands plant/pump-enable", description: "A switch: on or off, no limits" },
+    {
+      command: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25 --dry-run --json",
+      description: "Only check it, for agents"
+    }
+  ])
+)
+
+const readOnlyCommand = Command.make(
+  "read-only",
+  { target: commandsTarget, config: configPath, dryRun: pointCommandsDryRun, json: jsonFlag },
+  ({ target, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* setPointCommands(
+        config,
+        parseTarget(target) ?? { device: "", point: "" },
+        { allow: false },
+        { dryRun, command: yield* invocation }
+      )
+      yield* json ? printJson(report) : Console.log(formatPointCommands(report))
+    }).pipe(jsonFailure(json, { path: config, point: target }))
+).pipe(
+  Command.withDescription(
+    "Make one point read-only again: takes writable and its limits out of the config, so the gateway refuses commands on it after a restart"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway points read-only heat-pump/setpoint", description: "No more commands on the setpoint" }
+  ])
+)
+
 const profilesList = Command.make("list", { json: jsonFlag }, ({ json }) =>
   Effect.gen(function* () {
     const profiles = yield* libraryProfiles()
@@ -1393,8 +1472,17 @@ const profiles = Command.make("profiles").pipe(
 )
 
 const points = Command.make("points").pipe(
-  Command.withDescription("The points list, the CSV (or JSON) that import and init read: its schema and a template"),
-  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand, exportCommand])
+  Command.withDescription(
+    "Points: the points list, the CSV (or JSON) that import and init read (its schema, a template, an export), and which points take commands"
+  ),
+  Command.withSubcommands([
+    schemaCommand,
+    templateCommand,
+    fromEdeCommand,
+    exportCommand,
+    allowCommandsCommand,
+    readOnlyCommand
+  ])
 )
 
 const contractCommand = Command.make(
@@ -2721,6 +2809,7 @@ export const rootDescription = [
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
+  "    points allow-commands <device/point> --min=15 --max=25 --json   one point takes commands (read-only undoes it): only when the user names it",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",

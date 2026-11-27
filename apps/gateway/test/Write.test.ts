@@ -138,7 +138,9 @@ describe("findPoint and parseValue", () => {
       )
       const readOnly = findPoint(gateway, { device: "room", point: "temperature" })
       expect(readOnly).toMatchObject({ code: "not-writable", written: false })
-      expect(readOnly instanceof WriteFailed && readOnly.hint).toContain('"writable": true')
+      expect(readOnly instanceof WriteFailed && readOnly.hint).toContain(
+        "ot-gateway points allow-commands room/temperature"
+      )
     })
   )
 

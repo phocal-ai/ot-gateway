@@ -56,7 +56,7 @@ export const writablePoints = (config: Pick<GatewayConfig, "devices">) =>
 
 const listed = (names: ReadonlyArray<string>) =>
   names.length === 0
-    ? "the config has no writable point: set writable to true (and limits for a number) on one"
+    ? "the config has no writable point: ot-gateway points allow-commands <device/point> makes one"
     : `writable points: ${names.slice(0, 10).join(", ")}${names.length > 10 ? `, and ${names.length - 10} more` : ""}`
 
 /** The device and point `target` names in `config`, or why there is none. */
@@ -78,7 +78,7 @@ export const findPoint = (
     return new WriteFailed({
       message: `${target.device}/${target.point} is not writable in the config`,
       code: "not-writable",
-      hint: `set "writable": true on it${point.limits === undefined ? ', with "limits": {"min": …, "max": …} for a number,' : ""} in the config or on the status page, and restart the gateway; ${listed(writablePoints(config))}`,
+      hint: `ot-gateway points allow-commands ${target.device}/${target.point}${point.limits === undefined ? " (with --min and --max for a number)" : ""} lets it take commands, then restart the gateway; ${listed(writablePoints(config))}`,
       written: false
     })
   }

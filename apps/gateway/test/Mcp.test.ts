@@ -120,9 +120,22 @@ describe("mcp tools", () => {
     )
   })
 
-  it("mark write, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
+  it("mark write, making a point writable, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
-    expect(changing).toEqual(["write", "restart", "down", "upgrade"])
+    expect(changing).toEqual(["write", "points_allow_commands", "restart", "down", "upgrade"])
+  })
+
+  it("points_allow_commands only checks unless told otherwise, and passes limits as flags, negative ones too", () => {
+    expect(argvOf("points_allow_commands", { point: "heat-pump/setpoint", min: -5, max: 25 })).toEqual(
+      Exit.succeed(["points", "allow-commands", "heat-pump/setpoint", "--min=-5", "--max=25", "--dry-run"])
+    )
+    expect(
+      argvOf("points_allow_commands", { point: "plant/enable", config: "site/ot-gateway.json", dryRun: false })
+    ).toEqual(Exit.succeed(["points", "allow-commands", "plant/enable", "site/ot-gateway.json"]))
+    expect(Exit.isFailure(argvOf("points_allow_commands", { point: "--config=/etc/passwd" }))).toBe(true)
+    expect(argvOf("points_read_only", { point: "heat-pump/setpoint" })).toEqual(
+      Exit.succeed(["points", "read-only", "heat-pump/setpoint"])
+    )
   })
 
   it("passes up and upgrade's flags as flags", () => {

@@ -54,7 +54,21 @@ const areas: ReadonlyArray<CodeArea> = [
 ]
 
 /** Commands that read the config file before anything else. */
-const configCommands = ["check", "run", "doctor", "read", "write", "broker", "watch", "publish", "discover", "import"]
+/** Commands that change whether a point takes commands. */
+const pointCommands = ["points allow-commands", "points read-only"]
+const configCommands = [
+  "check",
+  "run",
+  "doctor",
+  "read",
+  "write",
+  "broker",
+  "watch",
+  "publish",
+  "discover",
+  "import",
+  ...pointCommands
+]
 /** Commands that ask the running gateway at its status page. */
 const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
 /** Commands that run the gateway under Docker Compose. */
@@ -602,17 +616,35 @@ export const codes: ReadonlyArray<CodeEntry> = [
   {
     code: "unknown-point",
     area: "command",
-    reportedBy: commandReporters,
+    reportedBy: [...commandReporters, ...pointCommands],
     meaning: "No such device or point in the config (of this CLI, or of the running gateway).",
-    fix: "Use a device/point from the config; the hint lists the writable ones. When this config has it, the running gateway runs another: restart it.",
-    next: "ot-gateway status"
+    fix: "Use a device/point from the config; the hint lists them (for write, the writable ones). When write names one this config has, the running gateway runs another config: restart it.",
+    next: "ot-gateway check"
   },
   {
     code: "not-writable",
     area: "command",
     reportedBy: commandReporters,
     meaning: "The point lacks writable: true, so the guard refused the command before it reached the device.",
-    fix: "Set writable: true on it (with limits for a number) in the config or on the status page, and restart the gateway.",
+    fix: "Allow commands on it with ot-gateway points allow-commands (with --min and --max for a number), or on the status page, and restart the gateway.",
+    next: "ot-gateway check"
+  },
+  {
+    code: "invalid-limits",
+    area: "command",
+    reportedBy: ["points allow-commands"],
+    meaning:
+      "A point that takes a number needs the lowest and the highest value a command may set, lowest first; a switch takes none.",
+    fix: "Name both with --min and --max in the point's unit, as the person who runs the building gave them; leave both out for a switch.",
+    next: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25"
+  },
+  {
+    code: "config-not-saved",
+    area: "command",
+    reportedBy: pointCommands,
+    meaning:
+      "The config file could not be written, or changed while the command ran, so it is as it was and no point changed.",
+    fix: "Run the command again; when it names a file it may not write, run it as a user who may write the config and its folder.",
     next: "ot-gateway check"
   },
   {
