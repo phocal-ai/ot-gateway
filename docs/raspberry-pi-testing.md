@@ -69,7 +69,7 @@ On the Pi, in the gateway's folder (`~/ot-gateway`):
 3. Back to a release: the command from `main` (the install line in [raspberry-pi-install.md](raspberry-pi-install.md)), the release's tag in `compose.yaml`, then pull and restart. Remove the preview image to free the space.
 
    ```bash
-   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.17.3/' compose.yaml && docker compose pull && docker compose up -d && docker image rm ghcr.io/phocal-ai/ot-gateway:dev
+   sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.18.0/' compose.yaml && docker compose pull && docker compose up -d && docker image rm ghcr.io/phocal-ai/ot-gateway:dev
    ```
 
 ## The tests, in order
@@ -81,7 +81,7 @@ Stop at the first one that fails, fix it, and start that test again.
 Install with Compose as in [raspberry-pi-install.md](raspberry-pi-install.md) (the tag in `compose.yaml`, or `image:` set to `ot-gateway:test`), with your config and real devices. Without hardware, use `examples/gateway.json` and run the bench on the Pi next to the gateway, from the same image: it serves a test broker and simulated Modbus and BACnet devices, on `localhost` only. Start it before the gateway, so the gateway finds its broker at once:
 
 ```bash
-IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.17.3      # or ot-gateway:test
+IMAGE=ghcr.io/phocal-ai/ot-gateway:v0.18.0      # or ot-gateway:test
 docker run -d --name ot-gateway-bench --network host --log-driver local --restart unless-stopped \
   --entrypoint node $IMAGE apps/gateway/src/bench.ts examples/gateway.json
 ```
