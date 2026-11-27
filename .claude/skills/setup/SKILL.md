@@ -135,13 +135,13 @@ Before the first run, also run `otg doctor --json` once: it checks the broker, a
 
    Fix what the answers show (the `alarm` column, or the point's address), import again, and check those points once more.
 
-6. With Docker Compose, stop the test run before step 8 (`docker stop ot-gateway-test`, which also removes it). With `otg start` or `otg run` (macOS and Windows), the test run is the real run: leave it running and go to step 8's "This machine, for now".
+6. With Docker Compose, stop the test run before step 8 (`docker stop ot-gateway-test`, which also removes it). With `otg start` or `otg run` (macOS and Windows), leave the test run up for now and go to step 8's "This machine, for now", which says when to stop it.
 
 ## 8. Run it for real
 
 - **Docker Compose** (the default on Linux where `docker compose version` worked; not on macOS or Windows, where Docker Desktop cannot reach the building network, step 1): with a yes from the user, `otg up` in the folder: it checks the config, runs `docker compose up -d` and returns once every point has a value, or exits 1 with a `code`, `hint` and `next` (`--json`). It pins a release tag, restarts the gateway after a crash and at boot, uses host networking for BACnet and caps Docker's logs; the outbox and the history live in the `ot-gateway_data` volume. Check it with `otg status` and `docker compose logs --tail 20`; when something failed, `otg events` says what broke, since when and why, and when it came back (`--follow` while you fix it), `otg logs --level warn` the warnings and errors behind it in detail (the gateway keeps them in memory, so this works without access to Docker), and `otg history <device>/<point>` what a value did meanwhile. `otg restart` after an `ot-gateway.env` change; `otg upgrade` moves to the newest release and back again when values stop (docs/operations.md, "Upgrade").
 - **No Docker** (systemd, from a checkout): with a yes, `sudo packaging/install.sh ot-gateway.json`, then `sudo install -m 640 -g ot-gateway ot-gateway.env /etc/ot-gateway/gateway.env` and `sudo systemctl restart ot-gateway`. Check it with `systemctl status ot-gateway` and `journalctl -u ot-gateway -n 20`.
-- **This machine, for now** (macOS and Windows always): on macOS `otg start` in the folder runs it in the background and `otg stop` stops it (`otg start <config path>` elsewhere); its log is in the gateway's memory, `otg logs --level warn`. On Windows `otg run` in the folder; its logs go to the terminal, and when you start it in the background, send them to a file in the folder (`otg run > gateway.log 2>&1`) and name that file in the wrap-up. `otg events` and the status page say what broke without the logs. Say that it stops with `otg stop`, a reboot (or, with `otg run`, the terminal or the session), and that a Linux box with Compose is the way to run it unattended.
+- **This machine, for now** (macOS and Windows always): on macOS `otg start` in the folder runs it in the background and `otg stop` stops it (`otg start <config path>` elsewhere); its log is in the gateway's memory, `otg logs --level warn`. On Windows `otg run` in the folder; its logs go to the terminal, and when you start it in the background, send them to a file in the folder (`otg run > gateway.log 2>&1`) and name that file in the wrap-up. `otg events` and the status page say what broke without the logs. A gateway you started here is not left behind: unless the user asked to keep it running, stop it before the wrap-up, once values reached the broker and the checks of step 7 are done: `otg stop` (the `stop` tool) on macOS, `kill <pid>` for `otg run`; `otg status` then finds no running gateway. Tell the user the one command that starts it again, from the folder (`otg start`, on Windows `otg run`; with its config's absolute path elsewhere). When it keeps running, say that it stops with `otg stop`, a reboot (or, with `otg run`, the terminal or the session). Either way, a Linux box with Compose is the way to run it unattended.
 
 The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:8080 <user>@<pi>` (any free local port works). Only on a trusted network, set `status.bindAddress` to `"0.0.0.0"`; the Settings tab then saves nothing unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env`. On loopback, the user can change the site, building and broker, and find, add, test and edit devices (commands on a point included, with limits) or upload a points list, on the Settings tab without a restart (each form field names its points list column in grey); a gateway without devices shows a setup guide on the Status tab (docs/operations.md, "Editing in the status page").
 
@@ -149,9 +149,9 @@ The status page binds to 127.0.0.1. From a laptop, use `ssh -L 8080:127.0.0.1:80
 
 Five lines at most (six with an open alarm question):
 
-- what's running and where;
+- what's running and where, or that the gateway is stopped and the command that starts it again (step 8);
 - the folder;
-- the status page URL;
+- the status page URL (while the gateway runs);
 - where the logs are;
 - the open alarm question from step 7.5, if there is one;
 - one next step, picked from:
