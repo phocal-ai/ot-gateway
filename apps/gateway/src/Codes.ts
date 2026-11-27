@@ -54,9 +54,21 @@ const areas: ReadonlyArray<CodeArea> = [
 ]
 
 /** Commands that read the config file before anything else. */
-const configCommands = ["check", "run", "doctor", "read", "write", "broker", "watch", "publish", "discover", "import"]
 /** Commands that change whether a point takes commands. */
 const pointCommands = ["points allow-commands", "points read-only"]
+const configCommands = [
+  "check",
+  "run",
+  "doctor",
+  "read",
+  "write",
+  "broker",
+  "watch",
+  "publish",
+  "discover",
+  "import",
+  ...pointCommands
+]
 /** Commands that ask the running gateway at its status page. */
 const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
 /** Commands that run the gateway under Docker Compose. */
@@ -606,8 +618,8 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "command",
     reportedBy: [...commandReporters, ...pointCommands],
     meaning: "No such device or point in the config (of this CLI, or of the running gateway).",
-    fix: "Use a device/point from the config; the hint lists the writable ones. When this config has it, the running gateway runs another: restart it.",
-    next: "ot-gateway status"
+    fix: "Use a device/point from the config; the hint lists them (for write, the writable ones). When write names one this config has, the running gateway runs another config: restart it.",
+    next: "ot-gateway check"
   },
   {
     code: "not-writable",

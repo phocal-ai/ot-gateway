@@ -105,7 +105,7 @@ describe("setPointCommands", () => {
         expect(report.next.map((step) => step.command)).toEqual([
           `ot-gateway diff ${path}`,
           `ot-gateway restart ${path}`,
-          "ot-gateway write heat-pump/setpoint <value>"
+          `ot-gateway write heat-pump/setpoint <value> ${path}`
         ])
         expect(formatPointCommands(report)).toContain("takes commands now: a number, 15 to 25")
         const saved = yield* fs.readFileString(path)
@@ -187,6 +187,25 @@ describe("setPointCommands", () => {
     )
   )
 
+  it.effect("does not take limits left on a read-only point as the ones a command may use", () =>
+    run(
+      Effect.gen(function* () {
+        const { fs, path } = yield* folder
+        const withLimits = text.replace(
+          '"dataType": "int16"',
+          '"dataType": "int16",\n          "limits": { "min": 0, "max": 90 }'
+        )
+        expect(withLimits).not.toBe(text)
+        yield* fs.writeFileString(path, withLimits)
+        const refused = yield* Effect.flip(
+          setPointCommands(path, { device: "heat-pump", point: "setpoint" }, { allow: true }, { dryRun: false })
+        )
+        expect(refused).toMatchObject({ code: "invalid-limits" })
+        expect(yield* fs.readFileString(path)).toBe(withLimits)
+      })
+    )
+  )
+
   it.effect("refuses what the gateway's schema refuses, each issue with its path, and writes nothing", () =>
     run(
       Effect.gen(function* () {
@@ -244,7 +263,7 @@ describe("setPointCommands", () => {
         )
         expect(report).toMatchObject({ dryRun: true, writable: true, changed: true })
         expect(report.next.map((step) => step.command)).toEqual([
-          "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25"
+          `ot-gateway points allow-commands heat-pump/setpoint ${path} --min=15 --max=25`
         ])
         expect(formatPointCommands(report)).toContain("would take commands")
         expect(yield* fs.readFileString(path)).toBe(text)
