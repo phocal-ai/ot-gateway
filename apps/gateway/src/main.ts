@@ -24,7 +24,7 @@ import { loadEnvFile } from "./EnvFile.ts"
 import { hideSqliteExperimentalWarning } from "./NodeWarnings.ts"
 import { isJsonMode, reportFailure, ResultConsole, stderrConsole, stdoutClosed } from "./Output.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
-import { configFolder, updateNoticeWanted, withUpdateNotice } from "./UpdateNotice.ts"
+import { configFolder, updateCommand, updateNoticeWanted, withUpdateNotice } from "./UpdateNotice.ts"
 
 // First: Node 22's notice that node:sqlite is experimental is queued by the imports above and printed on the
 // next tick. It stays off stderr (NodeWarnings.ts); every other warning prints.
@@ -53,7 +53,13 @@ const json = isJsonMode(argv)
 const notice = updateNoticeWanted(toCliArgs(argv), process.env, process.stderr.isTTY, process.argv[1])
 
 runCli(argv).pipe(
-  notice ? withUpdateNotice({ folder: configFolder(process.env), now: Date.now() }) : identity,
+  notice
+    ? withUpdateNotice({
+        folder: configFolder(process.env),
+        now: Date.now(),
+        command: updateCommand(process.argv[1] ?? "", process.env)
+      })
+    : identity,
   // A reader that closes stdout (`watch | head`) ends a command as done, exit code 0: every streaming command.
   Effect.raceFirst(stdoutClosed(process.stdout)),
   Effect.tapCause(reportFailure({ json, longRunning: isLongRunning(argv) })),
