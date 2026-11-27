@@ -2,7 +2,7 @@
 
 How to install, change, upgrade, back up and watch an OT Gateway on a Raspberry Pi or any Linux host. The README covers what the gateway does; [configuration.md](configuration.md) covers every config key; [troubleshooting.md](troubleshooting.md) covers what goes wrong.
 
-The fastest way to a first config is `/setup` in Claude Code (README, "Set it up with AI"). This page is what to do with the result.
+The fastest way to a first config is to let an AI agent follow the setup guide ([Set it up with any agent](agents.md)). This page is what to do with the result.
 
 ## Install
 
@@ -26,7 +26,7 @@ The first line installs the command, without `sudo` ([`packaging/ot-gateway`](..
 Fill in the password (`ot-gateway secret set broker-password` asks for it and writes it there), then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.18.1/packaging/compose.yaml
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.19.0/packaging/compose.yaml
 ```
 
 and copy `ot-gateway.json` into the folder, and `ot-gateway.env` too if the config names secrets (the broker password under `mqtt.passwordEnv`, `OTEL_*` variables). Compose reads the env file as you, so keep it yours alone: `chmod 600 ot-gateway.env`. Check the config with the gateway itself, then start it:
@@ -50,7 +50,7 @@ Without Compose, the same as one command, from the same folder:
 ```bash
 docker run -d --name ot-gateway --network host --restart unless-stopped --log-driver local \
   -v "$PWD:/etc/ot-gateway" -v ot-gateway_data:/var/lib/ot-gateway \
-  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.18.1 /etc/ot-gateway/ot-gateway.json
+  -w /var/lib/ot-gateway --env-file ot-gateway.env ghcr.io/phocal-ai/ot-gateway:v0.19.0 /etc/ot-gateway/ot-gateway.json
 ```
 
 Leave out `--env-file ot-gateway.env` when there is no such file.
@@ -67,7 +67,7 @@ npx ot-gateway init my-building         # a few questions → my-building/: ot-g
 npx ot-gateway check ot-gateway.json
 ```
 
-The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, and from the folder of the config a command names, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked. Without a terminal on stdin (or with `--json`), `init` never waits for an answer: it needs the folder, `--site`, `--broker` and `--points` or `--devices` as flags, or `--yes` for the defaults; given neither, it writes nothing and exits with 2, naming the flags it needs (`"code": "missing-answers"` and `missing` in its JSON). A cancelled `init` exits 1: `npx ot-gateway init site-1 --yes --site site-1 --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `--json` on `init`, `check`, `discover`, `import`, `points schema` and `status` prints the result as JSON on stdout, and a failure as `{"ok": false, "error": …}` with exit code 1; logs go to stderr. In the `--json` of `status`, `events`, `history`, `messages` and `logs`, every time stays Unix ms, for scripts, and has the same moment next to it as `<key>Local`: ISO 8601 in the CLI's machine time zone, the one its text output uses, with the UTC offset of that moment (`"at": 1795526463109, "atLocal": "2026-11-24T14:21:03.109+01:00"`). The answer names that zone as `timeZone` (IANA, such as `Europe/Vienna`; the Docker wrapper passes the host's zone into its container as `TZ`, from `/etc/timezone` or `/etc/localtime`, and a `TZ` already set wins). An agent quotes the local string to a person rather than converting the ms, since jq's `todate` gives UTC. A counter event's `from` and `to` are readings, not times, and a history bucket's `first` and `last` have no local string, to keep long series small (its start `t` has `tLocal`). `events --follow --json` and `logs --follow --json` lines have the local strings but no `timeZone`; each string carries its offset. The HTTP API (`/api/*`) answers Unix ms only. `init`'s JSON carries what it prints after the config: `notes` (where the broker password goes, what the history takes on disk, and on macOS and Windows why not Docker Compose) `next`, the commands to run next as `{"command", "description"}`, and the status page apart from them: `url` and `page`, the sentence that says what to do there (with no devices yet: add them there, or upload a points list). The text prints each description on its own line under its command. When the folder is not the working directory, every command in `next` names the config's path, so they run from where `init` ran. `check --json` carries the same `next`, `url` and `page` for a valid config (leaving out a points template when the folder has a `points.csv`), and for an invalid one `code: "invalid-config"` with every mistake in `issues: [{path, message}]` (`mqtt.url`, `devices.0.points.2.dataType`); a missing config is `code: "no-config"`. A points list's mistakes (`import`, `init --points`) are `issues: [{line, column, value, message}]`. Run over SSH, `init` adds the tunnel that opens the status page on the laptop (`ssh -L 8080:127.0.0.1:<port> <user>@<host>`, then `http://localhost:8080`); the Docker wrapper passes `SSH_CONNECTION` and `USER` into the container for it. Without `--json`, a failed command prints one line on stderr, such as `error: no points to list; points.csv was not written.`, and exits with 1 (2 for a usage mistake); only `run` and `demo` report a failed start as a log line, like the rest of their log. `init --dry-run` and `import --dry-run` write nothing: they show the config and files, or the devices, that would be written. `npx` (or `pnpm dlx`) runs the latest release; `npm install -g ot-gateway` (or `pnpm add -g ot-gateway`) keeps it installed, and then says when a newer release is out: once a day it asks the npm registry next to a command (never holding it up), keeps the answer in `~/.config/ot-gateway/update-check.json` (`$XDG_CONFIG_HOME/ot-gateway` when that is set), and prints one line on stderr after the command (a failed question is kept too, so a machine without internet asks once a day), `Update available: v0.16.3 → v0.18.1. Run npm i -g ot-gateway@latest`, with `pnpm add -g ot-gateway@0.18.0` when pnpm installed it (told by the folder the CLI is installed in, symlinks resolved; yarn and bun get theirs, npm is the fallback). For pnpm the line names the release: with pnpm's `minimumReleaseAge` set, `@latest` quietly installs an older release while the new one is younger than that, and the exact version fails with the reason instead (add `ot-gateway` to `minimumReleaseAgeExclude`, or wait). It stays off for `--json`, `mcp`, `run`, `demo`, `simulate`, `watch` and `--follow`, under `npx`, `pnpm dlx`, `bunx` and `yarn dlx`, without a terminal, in CI, in the container image (which `ot-gateway upgrade` moves instead), and with `OT_GATEWAY_NO_UPDATE_CHECK=1`. To run a gateway unattended, use Docker Compose or systemd.
+The CLI reads `ot-gateway.env` from the folder it runs in, as Docker Compose does, and from the folder of the config a command names, so `run`, `watch` and `discover` find the broker password there; a variable already set in the environment wins. For scripts and AI agents, every answer is a flag and `--yes` takes the defaults for the rest, so nothing is asked. Without a terminal on stdin (or with `--json`), `init` never waits for an answer: it needs the folder, `--site`, `--broker` and `--points` or `--devices` as flags, or `--yes` for the defaults; given neither, it writes nothing and exits with 2, naming the flags it needs (`"code": "missing-answers"` and `missing` in its JSON). A cancelled `init` exits 1: `npx ot-gateway init site-1 --yes --site site-1 --broker mqtts://broker.example:8883 --username gateway --points points.csv`. `--json` on `init`, `check`, `discover`, `import`, `points schema` and `status` prints the result as JSON on stdout, and a failure as `{"ok": false, "error": …}` with exit code 1; logs go to stderr. In the `--json` of `status`, `events`, `history`, `messages` and `logs`, every time stays Unix ms, for scripts, and has the same moment next to it as `<key>Local`: ISO 8601 in the CLI's machine time zone, the one its text output uses, with the UTC offset of that moment (`"at": 1795526463109, "atLocal": "2026-11-24T14:21:03.109+01:00"`). The answer names that zone as `timeZone` (IANA, such as `Europe/Vienna`; the Docker wrapper passes the host's zone into its container as `TZ`, from `/etc/timezone` or `/etc/localtime`, and a `TZ` already set wins). An agent quotes the local string to a person rather than converting the ms, since jq's `todate` gives UTC. A counter event's `from` and `to` are readings, not times, and a history bucket's `first` and `last` have no local string, to keep long series small (its start `t` has `tLocal`). `events --follow --json` and `logs --follow --json` lines have the local strings but no `timeZone`; each string carries its offset. The HTTP API (`/api/*`) answers Unix ms only. `init`'s JSON carries what it prints after the config: `notes` (where the broker password goes, what the history takes on disk, and on macOS and Windows why not Docker Compose) `next`, the commands to run next as `{"command", "description"}`, and the status page apart from them: `url` and `page`, the sentence that says what to do there (with no devices yet: add them there, or upload a points list). The text prints each description on its own line under its command. When the folder is not the working directory, every command in `next` names the config's path, so they run from where `init` ran. `check --json` carries the same `next`, `url` and `page` for a valid config (leaving out a points template when the folder has a `points.csv`), and for an invalid one `code: "invalid-config"` with every mistake in `issues: [{path, message}]` (`mqtt.url`, `devices.0.points.2.dataType`); a missing config is `code: "no-config"`. A points list's mistakes (`import`, `init --points`) are `issues: [{line, column, value, message}]`. Run over SSH, `init` adds the tunnel that opens the status page on the laptop (`ssh -L 8080:127.0.0.1:<port> <user>@<host>`, then `http://localhost:8080`); the Docker wrapper passes `SSH_CONNECTION` and `USER` into the container for it. Without `--json`, a failed command prints one line on stderr, such as `error: no points to list; points.csv was not written.`, and exits with 1 (2 for a usage mistake); only `run` and `demo` report a failed start as a log line, like the rest of their log. `init --dry-run` and `import --dry-run` write nothing: they show the config and files, or the devices, that would be written. `npx` (or `pnpm dlx`) runs the latest release; `npm install -g ot-gateway` (or `pnpm add -g ot-gateway`) keeps it installed, and then says when a newer release is out: once a day it asks the npm registry next to a command (never holding it up), keeps the answer in `~/.config/ot-gateway/update-check.json` (`$XDG_CONFIG_HOME/ot-gateway` when that is set), and prints one line on stderr after the command (a failed question is kept too, so a machine without internet asks once a day), `Update available: v0.16.3 → v0.19.0. Run npm i -g ot-gateway@latest`, with `pnpm add -g ot-gateway@0.18.0` when pnpm installed it (told by the folder the CLI is installed in, symlinks resolved; yarn and bun get theirs, npm is the fallback). For pnpm the line names the release: with pnpm's `minimumReleaseAge` set, `@latest` quietly installs an older release while the new one is younger than that, and the exact version fails with the reason instead (add `ot-gateway` to `minimumReleaseAgeExclude`, or wait). It stays off for `--json`, `mcp`, `run`, `demo`, `simulate`, `watch` and `--follow`, under `npx`, `pnpm dlx`, `bunx` and `yarn dlx`, without a terminal, in CI, in the container image (which `ot-gateway upgrade` moves instead), and with `OT_GATEWAY_NO_UPDATE_CHECK=1`. To run a gateway unattended, use Docker Compose or systemd.
 
 ### systemd, without Docker
 
@@ -213,7 +213,7 @@ curl -s -X PUT http://127.0.0.1:8080/api/config/file -H 'Origin: http://127.0.0.
 Pull the release, rebuild the status page, run the installer again. It builds the new version in `/opt/ot-gateway.new`, checks the config against it, and only then swaps it in for `/opt/ot-gateway` and restarts the service; `/etc/ot-gateway` and the outbox stay. The gateway is down for the few seconds of the restart (it stops cleanly on SIGINT), and nothing waiting in the outbox is lost.
 
 ```bash
-git fetch --tags && git checkout v0.18.1
+git fetch --tags && git checkout v0.19.0
 ```
 
 ```bash
@@ -235,7 +235,7 @@ ot-gateway upgrade
 By hand, write the new tag into `compose.yaml` and recreate the container, from the folder with `compose.yaml`; going back is the same with the old one. The file keeps the tag, so a later `docker compose up -d` after a config change stays on it. The config, the outbox and the history stay, and the container stops cleanly first:
 
 ```bash
-sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.18.1/' compose.yaml && docker compose up -d
+sed -i 's/OT_GATEWAY_TAG:-[^}]*/OT_GATEWAY_TAG:-v0.19.0/' compose.yaml && docker compose up -d
 ```
 
 ### From a `compose.yaml` that mounts the config file (v0.12.0 and earlier)
@@ -276,11 +276,11 @@ docker stop -t 30 ot-gateway && docker rm ot-gateway
 ```
 
 ```bash
-curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.18.1/packaging/compose.yaml && docker compose create
+curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.19.0/packaging/compose.yaml && docker compose create
 ```
 
 ```bash
-docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.18.1 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+docker run --rm --user 0 --entrypoint sh -v /var/lib/ot-gateway:/from:ro -v ot-gateway_data:/to ghcr.io/phocal-ai/ot-gateway:v0.19.0 -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
 ```
 
 ```bash
@@ -325,14 +325,14 @@ sudo sed -i 's#/var/lib/plenum/#/var/lib/ot-gateway/#; s#service.namespace=plenu
 ```
 
 ```bash
-docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.18.1 --check /etc/ot-gateway/gateway.json
+docker run --rm -v /etc/ot-gateway:/etc/ot-gateway:ro ghcr.io/phocal-ai/ot-gateway:v0.19.0 --check /etc/ot-gateway/gateway.json
 ```
 
 Then go on with [From the `/etc/ot-gateway` layout](#from-the-etcot-gateway-layout-v070-and-earlier), from its first step: it fetches the new `compose.yaml` and moves the config and the outbox next to it. Fetching `compose.yaml` replaces one in the same folder: carry over any change you made to it, and rename `PLENUM_TAG` to `OT_GATEWAY_TAG` in a `.env` next to it. The outbox's rows survive the move: what was waiting is delivered once the new container has the broker. `docker image rm ghcr.io/phocal-ai/plenum-gateway:v0.5.0` frees the old image.
 
 ### With systemd
 
-Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.18.1 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
+Stop and remove the old service (a drop-in in `plenum-gateway.service.d/` with your overrides moves to `ot-gateway.service.d/`), move the config and the outbox, then install from a v0.19.0 checkout. The installer creates the new user, rewrites the outbox's path and gives the env file to the new group:
 
 ```bash
 sudo systemctl disable --now plenum-gateway && sudo rm /etc/systemd/system/plenum-gateway.service && sudo systemctl daemon-reload
@@ -347,7 +347,7 @@ sudo sed -i 's#service.namespace=plenum#service.namespace=ot-gateway#' /etc/ot-g
 ```
 
 ```bash
-git fetch --tags && git checkout v0.18.1
+git fetch --tags && git checkout v0.19.0
 ```
 
 ```bash
@@ -588,6 +588,43 @@ A command whose output is cut short by its reader (`ot-gateway watch | head`, `e
 `ot-gateway support` in the gateway's folder writes one Markdown file, `ot-gateway-support-<date>-<time>.md`, with what a report needs first: the CLI's version and the host (OS, CPUs, memory, whether it runs in a container, the time zone), the config file and whether it is valid, which `OT_GATEWAY_*` and `OTEL_*` variables are set (names only), and from the running gateway its status, the events of the last 24 hours and every log line it keeps. A section it cannot fill says why (no config, the gateway not running), so it works while something is broken. `--output report.md` names the file, `--output -` prints it, `--url` asks a gateway elsewhere, `--json` says where it went and what each section holds.
 
 The broker password, `OT_GATEWAY_EDIT_TOKEN`, the values in `ot-gateway.env` whose names say they are secret (`*PASSWORD*`, `*TOKEN*`, `*SECRET*`, `*KEY*`), the OTLP headers, credentials in a URL and config keys that hold a secret are replaced by `<redacted>`. Device addresses, ids and names stay, as they are what the report is about: read the file before you attach it.
+
+### Report a bug
+
+When ot-gateway itself does something wrong, `ot-gateway report` turns it into an issue on GitHub. It is made for the agent that set the gateway up: the agent hits the bug, writes it up, shows you the text, and files it only after your yes. Nothing is sent on its own, there is no setting that files without asking, and ot-gateway sends no usage data.
+
+```bash
+ot-gateway report draft --title "read fails on a float64 input register" \
+  --what "$(cat output.txt)" --command "ot-gateway read meter/energy" --code invalid-response \
+  --ruled-out "the same register reads correctly with probe"
+ot-gateway report send ot-gateway-report-20261127-101500.md         # what it would file, and how
+ot-gateway report send ot-gateway-report-20261127-101500.md --yes   # file it
+```
+
+`report draft` writes the issue text to `ot-gateway-report-<date>-<time>.md` and files nothing. Besides `--title` and `--what` (the lines that show the failure) it takes `--expected`, `--steps`, `--ruled-out`, the failing `--command` with its `--code` and `--error`, and for a bug about one device `--device <id>` (its protocol is added) and `--model` (vendor, model, firmware). It adds the versions of ot-gateway and Node and the OS, and tells you three things before you file: whether a newer release is out, what the code means when it is one `explain` covers (most failures on a site are wiring, an address or the config, not a bug), and which issues carry the same fingerprint already.
+
+An issue is public, so the text is stricter than the support bundle's. Replaced by placeholders, in everything the draft holds:
+
+| What                                                                                        | Becomes                                                    |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| the config's site, building, gateway id (unless `main`), device ids, point ids and names    | `site-1`, `building-1`, `gateway-1`, `device-1`, `point-1` |
+| IP addresses (not loopback), MAC addresses                                                  | `ip-1`, `mac-1`                                            |
+| host names: the broker's, a device's, the status page's, this machine's, and any URL's host | `host-1`, `this-machine`                                   |
+| the broker's login and client id, e-mail addresses                                          | `broker-login`, `client-id`, `email`                       |
+| the home folder in a path                                                                   | `~`, `/home/user`                                          |
+| secrets, as in the support bundle, and a URL's credentials                                  | `[redacted]`                                               |
+
+What stays is what a bug is about: the protocol, register addresses and types, BACnet object types and instances, the device's vendor and model, versions. A frame's bytes (`response 00:01:00:00:00:05:01:03`) and a version with four parts (`firmware 2.1.0.14`) are left as they are, although they look like addresses. A name the config does not hold (a person, a street, a customer in a sentence) cannot be found, which is why you read the text first. A word of yours that happens to be an id in the config is replaced too: a device called `meter` turns "the meter" into "the device-1".
+
+The fingerprint is twelve hex digits made from the code, the command and the error with numbers and placeholders taken out, so the same bug has the same fingerprint on another site. `draft` searches the repository's issues for it (the one request it makes, without a login) and lists what it finds; `report send <draft> --to <number>` then adds your report to that issue as a comment instead of opening a second one.
+
+`report send` runs the same replacements over the draft once more, so a line you added by hand is covered, and then:
+
+- with the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`) it says what it would file, where and under which account, and with `--yes` files it (when `gh` does not finish within 30 seconds, the code is `report-unconfirmed`: look at the repository's issues before sending again);
+- without it, or with `--link`, it prints a link that opens GitHub's issue form with the text filled in, for you to submit in a browser;
+- without a GitHub account, the file is the report: pass it on to whoever supports the gateway.
+
+The same two steps are the MCP tools `report_draft` and `report_send`, which files only with `confirmed: true`. The setup guide's "Report a bug" tells an agent when to offer a report and to ask first.
 
 ## Health on MQTT
 

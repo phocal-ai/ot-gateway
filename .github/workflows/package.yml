@@ -93,8 +93,12 @@ jobs:
           # Node 22's notice that node:sqlite is experimental stays off the terminal (apps/gateway/src/NodeWarnings.ts).
           if "$bin" check examples/gateway.json 2>&1 | grep -F "ExperimentalWarning"; then exit 1; fi
           # The files the package ships and finds through import.meta.url: the profile library and init's compose.yaml.
-          "$bin" profiles list --json | grep -q '"id": "eastron-sdm630"'
-          "$bin" guide setup --json | grep -q '"name": "setup"'
+          # Into a file, then grep: a grep -q on a pipe stops reading at the first match, and the setup guide is
+          # longer than the pipe's buffer, so the CLI fails writing the rest (EPIPE) under pipefail.
+          "$bin" profiles list --json > "$work/profiles.json"
+          grep -q '"id": "eastron-sdm630"' "$work/profiles.json"
+          "$bin" guide setup --json > "$work/guide.json"
+          grep -q '"name": "setup"' "$work/guide.json"
           "$bin" init "$work/site" --dry-run --json --yes --site s --broker mqtt://127.0.0.1:1883
           # The demo from the package: example config, simulated devices, broker and status page, all from inside it.
           (cd "$work" && "$bin" demo >"$work/demo.log" 2>&1 &)

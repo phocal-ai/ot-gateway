@@ -50,6 +50,7 @@ pnpm ot-gateway messages                   # messages per topic since the gatewa
 pnpm ot-gateway logs --level warn          # the running gateway's recent log lines from memory, without docker logs (/api/logs; --follow, --json)
 pnpm ot-gateway explain broker-unreachable # what a code means, what to do, the next command (no code: all of them; --json; the table is apps/gateway/src/Codes.ts, docs/troubleshooting.md's "Codes" is checked against it)
 pnpm ot-gateway support                    # one redacted file for an issue report: versions, host, config, status, a day of events, the logs (--output -, --json)
+pnpm ot-gateway report draft --title "…" --what "…"   # a bug in ot-gateway as a public issue text in a file: names, addresses and secrets replaced by placeholders, existing issues with the same fingerprint (report send <draft> --yes files it with gh, else prints the link; apps/gateway/src/Report.ts)
 pnpm ot-gateway mcp                        # the commands as MCP tools over stdio, each result the command's --json (the tools: apps/gateway/src/McpTools.ts), and the setup guide as the setup prompt and the setup_guide tool
 pnpm ot-gateway guide setup                # the setup guide (.claude/skills/setup/SKILL.md, shipped as guides/setup.md; apps/gateway/src/SetupGuide.ts)
 OT_GATEWAY_JSON=1 pnpm ot-gateway status    # --json on every command that takes it; a terminal gets the short view, a pipe the full text, --all expands (docs/operations.md, "People and agents")
@@ -171,7 +172,7 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Quickstart
 
-`/setup` (`.claude/skills/setup/SKILL.md`, which the npm package and the image carry as `guides/setup.md` for `guide setup` and the MCP server's `setup` prompt) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
+`/setup` (`.claude/skills/setup/SKILL.md`, which the npm package and the image carry as `guides/setup.md` for `guide setup` and the MCP server's `setup` prompt) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. Every other agent gets the same file: the docs site serves it as `/docs/setup-guide` (and in `llms.txt`), `docs/agents.md` installs the MCP server in each client, and the Claude Code plugin (`.claude-plugin/marketplace.json`, `plugins/ot-gateway/`) is the server plus a skill that only points at the server's guide. None of them holds steps of its own, so keep the steps in the skill, keep it agent-neutral, and update it when config or commands change. `AGENTS.md` sends agents here, or to the guide.
 
 ## Health and budget
 

@@ -1,0 +1,13 @@
+{
+  "name": "ot-gateway",
+  "owner": { "name": "OT Gateway", "url": "https://github.com/phocal-ai/ot-gateway" },
+  "description": "OT Gateway for Claude Code: its MCP server and the setup skill (docs/agents.md)",
+  "plugins": [
+    {
+      "name": "ot-gateway",
+      "source": "./plugins/ot-gateway",
+      "description": "Set up and run an OT Gateway (Modbus TCP and BACnet/IP to MQTT) with its MCP server: every ot-gateway command as a tool, and the setup guide that ships with it",
+      "category": "development"
+    }
+  ]
+}

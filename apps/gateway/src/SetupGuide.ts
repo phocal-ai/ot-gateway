@@ -34,7 +34,10 @@ export const mcpPreface = [
   "with --json is a tool of this server (otg init is the init tool, otg discover --save the discover_save tool,",
   "otg points allow-commands the points_allow_commands tool, otg start the start tool). Use the tools; where a step",
   "needs something no tool does (a shell command such as uname or docker compose version), run it only if you can,",
-  "and otherwise ask the user. Steps about the repository checkout or `pnpm` do not apply.",
+  "and otherwise ask the user. Steps about the repository checkout or `pnpm` do not apply. This server runs in",
+  "the folder your client started it in, which need not be the gateway's: give init a directory as an absolute",
+  "path (the user's choice, or an ot-gateway folder in their home), and every tool after it that folder's",
+  "ot-gateway.json as config, also as an absolute path.",
   ""
 ].join("\n")
 

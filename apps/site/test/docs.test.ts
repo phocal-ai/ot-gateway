@@ -73,6 +73,23 @@ describe("generatePage", () => {
     expect(page.text).toContain("[y](configuration.md)\n```")
   })
 
+  it("leaves a skill's frontmatter out of the page", () => {
+    const skill: PageSource = {
+      source: ".claude/skills/setup/SKILL.md",
+      slug: "setup-guide",
+      title: "Setup guide",
+      description: "Steps."
+    }
+    const page = generatePage(
+      skill,
+      "---\nname: setup\ndescription: Set up.\n---\n\nGet the user going.\n\n## The CLI\n\nRun it.",
+      context
+    )
+    expect(page.text).toContain('title: "Setup guide"')
+    expect(page.text).not.toContain("name: setup")
+    expect(page.text).toContain("---\n\nGet the user going.")
+  })
+
   it("builds a README page from the named sections only", () => {
     const markdown =
       "# OT Gateway\n\nIntro.\n\n## Quick start\n\nRun it. See [roadmap](#roadmap).\n\n```bash\n## not a heading\n```\n\n## Roadmap\n\nLater."
@@ -110,7 +127,7 @@ describe("the repository's docs", () => {
       const text = generatePage(page, readFileSync(join(root, page.source), "utf8"), context).text
       const relative = [...text.matchAll(/\]\(([^)\s]+)\)/g)]
         .map((match) => match[1] ?? "")
-        .filter((target) => !/^(https?:|mailto:|#|\/docs)/.test(target))
+        .filter((target) => !/^([a-z][a-z0-9+.-]*:|#|\/docs)/i.test(target))
       expect({ source: page.source, relative }).toEqual({ source: page.source, relative: [] })
     }
   })

@@ -206,6 +206,7 @@ import { humanLogger, runView } from "./RunView.ts"
 import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
 import { count as countOf, firstOf, LISTED, named, plural } from "./Words.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
+import { draftReport, formatDraft, formatSend, gitHubLayer, reportFileName, sendReport } from "./Report.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
 import { serveMcp } from "./Mcp.ts"
@@ -3115,6 +3116,129 @@ const supportCommand = Command.make(
   ])
 )
 
+const reportText = (name: string, description: string) =>
+  Flag.String(name).pipe(Flag.withDescription(description), Flag.optional, Flag.map(Option.getOrUndefined))
+
+const reportDraftCommand = Command.make(
+  "draft",
+  {
+    config: targetConfig,
+    configFlag: targetConfigFlag,
+    title: Flag.String("title").pipe(Flag.withDescription("The bug in one line, as the issue's title")),
+    what: Flag.String("what").pipe(
+      Flag.withDescription("What happened: the lines of output that show the failure, not the whole log")
+    ),
+    expected: reportText("expected", "What should have happened instead"),
+    steps: reportText("steps", "The commands that lead to it, in order, so that someone else can see it too"),
+    ruledOut: reportText(
+      "ruled-out",
+      "What was checked and is not the cause: wiring, addresses, the config, an older release"
+    ),
+    failed: reportText("command", "The command that failed, as it was run"),
+    printed: reportText("code", "The code the command printed, when it printed one"),
+    error: reportText("error", "The error's message, one line"),
+    model: reportText("model", "The device's vendor, model and firmware, when the bug is about a device"),
+    device: reportText("device", "The config's device the bug is about, by its id: its protocol is added"),
+    output: Flag.String("output").pipe(
+      Flag.withAlias("o"),
+      Flag.withDescription("Where to write the draft (default ot-gateway-report-<date>-<time>.md in this folder)"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    json: jsonFlag
+  },
+  ({
+    config,
+    configFlag,
+    title,
+    what,
+    expected,
+    steps,
+    ruledOut,
+    failed,
+    printed,
+    error,
+    model,
+    device,
+    output,
+    json
+  }) =>
+    Effect.gen(function* () {
+      const draft = yield* draftReport({
+        input: { title, what, expected, steps, ruledOut, command: failed, code: printed, error, model, device },
+        config: yield* chooseConfig(config, configFlag),
+        cli: yield* invocation,
+        output: output ?? reportFileName(Date.now())
+      })
+      yield* json ? printJson({ ok: true, filed: false, ...draft }) : printResult(formatDraft(draft))
+    }).pipe(Effect.provide(gitHubLayer), jsonFailure(json, { path: config ?? configFlag ?? null }))
+).pipe(
+  Command.withDescription(
+    "Write up a bug in ot-gateway itself as an issue text, in a file, and file nothing: site, device and point names, addresses and secrets are replaced by placeholders, the versions are added, and it says whether a newer release is out, what the code means and which issues report the same already. Show the user the text before report send"
+  ),
+  Command.withExamples([
+    {
+      command:
+        'ot-gateway report draft --title "read fails on a float64 input register" --what "$(cat output.txt)" --command "ot-gateway read meter/energy" --code invalid-response',
+      description: "A draft from a failed command"
+    }
+  ])
+)
+
+const reportSendCommand = Command.make(
+  "send",
+  {
+    draft: Argument.String("draft").pipe(Argument.withDescription("The draft report draft wrote")),
+    config: targetConfigFlag,
+    to: Flag.Int("to").pipe(
+      Flag.withDescription(
+        "Add the report as a comment to this issue, which reports the same bug, instead of a new one"
+      ),
+      Flag.filter(
+        (issue) => issue >= 1,
+        (issue) => `--to takes an issue's number, not ${issue}`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    yes: Flag.Boolean("yes").pipe(
+      Flag.withDescription(
+        "File it: the user has read the text and agreed. Without it, send only shows what it would file and where"
+      ),
+      Flag.withDefault(false)
+    ),
+    link: Flag.Boolean("link").pipe(
+      Flag.withDescription("Print a link that opens the issue form filled in, instead of filing with the GitHub CLI"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ draft, config, to, yes, link, json }) =>
+    Effect.gen(function* () {
+      const result = yield* sendReport({ draft, config, to, yes, link, cli: yield* invocation })
+      yield* json ? printJson({ ok: true, ...result }) : printResult(formatSend(result))
+    }).pipe(Effect.provide(gitHubLayer), jsonFailure(json, { path: draft }))
+).pipe(
+  Command.withDescription(
+    "File a draft of report draft as a public issue on GitHub, after the user has read it: with the GitHub CLI (gh) signed in and --yes it is filed under the user's account, otherwise a link opens the issue form filled in. The draft is checked for names and addresses once more first"
+  ),
+  Command.withExamples([
+    {
+      command: "ot-gateway report send ot-gateway-report-20261127-101500.md",
+      description: "What it would file, and how"
+    },
+    { command: "ot-gateway report send ot-gateway-report-20261127-101500.md --yes", description: "File it" },
+    { command: "ot-gateway report send draft.md --to 212 --yes", description: "Add it to the issue that reports it" }
+  ])
+)
+
+const reportCommand = Command.make("report").pipe(
+  Command.withDescription(
+    "Report a bug in ot-gateway itself: draft writes the issue text without site names, addresses or secrets, send files it once the user has read it. Nothing is sent without --yes"
+  ),
+  Command.withSubcommands([reportDraftCommand, reportSendCommand])
+)
+
 /** `guide setup`: the setup guide (SetupGuide.ts); `--mcp` starts it with how its commands map to the MCP tools. */
 const guideCommand = Command.make(
   "guide",
@@ -3433,6 +3557,7 @@ export const cli = Command.make("ot-gateway").pipe(
     probeCommand,
     explainCommand,
     supportCommand,
+    reportCommand,
     simulate,
     guideCommand,
     mcpCommand
@@ -3473,6 +3598,7 @@ const subcommands = new Set([
   "probe",
   "explain",
   "support",
+  "report",
   "simulate",
   "guide",
   "mcp"

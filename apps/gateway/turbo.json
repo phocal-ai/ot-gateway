@@ -17,6 +17,10 @@
         "../../docs/raspberry-pi-install.md",
         "../../README.md",
         "../../.claude/skills/setup/SKILL.md",
+        "../../.claude-plugin/**",
+        "../../plugins/**",
+        "../../docs/agents.md",
+        "../../AGENTS.md",
         "../../profiles/**"
       ]
     }
