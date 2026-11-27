@@ -93,7 +93,7 @@ describe("isNewer", () => {
     expect(isNewer("0.16.3", "v0.16.3")).toBe(false)
     expect(isNewer("0.16.2", "v0.16.3")).toBe(false)
     expect(isNewer("1.0.0", "dev")).toBe(false)
-    expect(noticeLine("v0.16.3", "0.17.0")).toBe("Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@0.17.0")
+    expect(noticeLine("v0.16.3", "0.17.0")).toBe("Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@latest")
   })
 })
 
@@ -112,7 +112,7 @@ describe("withUpdateNotice", () => {
       const now = Date.UTC(2026, 10, 27)
       const first = yield* Effect.succeed("done").pipe(withUpdateNotice({ current: "v0.16.3", folder, now, latest }))
       expect(first).toBe("done")
-      expect(yield* errors).toEqual(["Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@0.17.0"])
+      expect(yield* errors).toEqual(["Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@latest"])
       // Within the day the saved answer serves: no second question, the same line.
       yield* Effect.void.pipe(withUpdateNotice({ current: "v0.16.3", folder, now: now + 1000, latest }))
       expect(asked).toBe(1)

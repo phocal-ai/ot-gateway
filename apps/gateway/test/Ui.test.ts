@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { pickedSummary, pickerLines, visibleRange } from "../src/Picker.ts"
-import { textInputAnswer, textInputLines } from "../src/TextInput.ts"
+import { printable, textInputAnswer, textInputLines } from "../src/TextInput.ts"
 import { colorsWanted, makeUi, plain, plainUi, wrap } from "../src/Ui.ts"
 
 describe("one column", () => {
@@ -95,5 +95,11 @@ describe("a question with a placeholder", () => {
     expect(lines).toEqual(["? Site? › plant", "  › lowercase letters"])
     expect(column).toBe("? Site? › ".length + 3)
     expect(textInputAnswer("plant", "my-site")).toBe("plant")
+  })
+
+  it("keeps a paste's text up to its first line break, without control characters", () => {
+    expect(printable("mqtt://broker:1883\n")).toBe("mqtt://broker:1883")
+    expect(printable("a\tb")).toBe("ab")
+    expect(printable("one\r\ntwo")).toBe("one")
   })
 })

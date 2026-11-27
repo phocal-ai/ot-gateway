@@ -1,9 +1,11 @@
 /**
  * The line a globally installed CLI prints when a newer release is out, as the Vercel and npm CLIs do:
  *
- *   Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@0.17.0
+ *   Update available: v0.16.3 → v0.17.0. Run npm i -g ot-gateway@latest
  *
- * The command is the one for the package manager that installed it (`pnpm add -g ot-gateway@latest` for pnpm).
+ * The command is the one for the package manager that installed it, and for pnpm it names the release
+ * (`pnpm add -g ot-gateway@0.17.0`): under pnpm's minimumReleaseAge, `@latest` quietly installs an older release
+ * while the new one is younger than the minimum, and the exact version says why it waits.
  *
  * At most once a day the CLI asks the npm registry for the newest version, next to the command and never in its way:
  * the question has a short deadline, the answer is kept in `~/.config/ot-gateway/update-check.json`, and a command
@@ -75,12 +77,9 @@ export const updateCommand = (script: string) => {
   return "npm i -g ot-gateway@latest"
 }
 
-/**
- * The line, the command naming the release itself rather than `@latest`: pnpm's minimum release age would install an
- * older one for `@latest` while the new release is younger than a day.
- */
+/** The line; pnpm's command names the release (see the top of this file). */
 export const noticeLine = (current: string, latest: string, command = "npm i -g ot-gateway@latest") =>
-  `Update available: ${withV(current)} → ${withV(latest)}. Run ${command.replace("@latest", `@${withV(latest).slice(1)}`)}`
+  `Update available: ${withV(current)} → ${withV(latest)}. Run ${command.startsWith("pnpm ") ? command.replace("@latest", `@${withV(latest).slice(1)}`) : command}`
 
 /** What the last question found, and when (Unix ms). */
 const SavedCheck = Schema.Struct({ checkedAt: Schema.Finite, latest: Schema.String })

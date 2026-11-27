@@ -38,13 +38,23 @@ export const textInputAnswer = (value: string, placeholder: string) => (value ==
 /** How many terminal rows `line` takes at `columns`. */
 const rows = (line: string, columns: number) => Math.max(1, Math.ceil(plain(line).length / Math.max(1, columns)))
 
-/** Whether `text` holds a control character (an escape, a newline): not text to put in the input. */
-const hasControl = (text: string) => {
-  for (let at = 0; at < text.length; at++) {
-    const code = text.charCodeAt(at)
-    if (code < 0x20 || code === 0x7f) return true
+/** `text` up to its first line break, without control characters: what of a paste goes in the input. */
+export const printable = (text: string) => {
+  let kept = ""
+  for (const char of text.split(/\r|\n/u)[0] ?? "") {
+    const code = char.charCodeAt(0)
+    if (code >= 0x20 && code !== 0x7f) kept += char
   }
-  return false
+  return kept
+}
+
+/**
+ * The row (of the question's line) and column the cursor is on, `column` characters in. A line that fills its last row
+ * exactly leaves the terminal on that row, waiting to wrap, not on the next one.
+ */
+const cursorAt = (column: number, rowsOfLine: number, columns: number) => {
+  const row = Math.floor(column / columns)
+  return row < rowsOfLine ? { row, column: column % columns } : { row: rowsOfLine - 1, column: columns - 1 }
 }
 
 const step = (state: TextInputState, value: string, cursor: number) =>
@@ -74,12 +84,9 @@ export const textInput = (options: {
               // Back from the end of what was drawn to the cursor: up over the error and the rows the line wrapped
               // onto past the cursor, then to its column.
               const [first = "", ...under] = lines
-              const up =
-                rows(first, columns) -
-                1 -
-                Math.floor(column / columns) +
-                under.reduce((sum, line) => sum + rows(line, columns), 0)
-              const back = `${up > 0 ? `\u001b[${up}A` : ""}\r${column % columns > 0 ? `\u001b[${column % columns}C` : ""}`
+              const at = cursorAt(column, rows(first, columns), columns)
+              const up = rows(first, columns) - 1 - at.row + under.reduce((sum, line) => sum + rows(line, columns), 0)
+              const back = `${up > 0 ? `\u001b[${up}A` : ""}\r${at.column > 0 ? `\u001b[${at.column}C` : ""}`
               return `${lines.join("\n")}${back}`
             }),
           Submit: ({ value }) =>
@@ -91,8 +98,9 @@ export const textInput = (options: {
       clear: (state) =>
         Effect.map(draw(state), ({ columns, lines, column }) => {
           // Down from the cursor to the last row drawn, then each row erased on the way up; an error wraps too.
+          const [first = ""] = lines
           const total = lines.reduce((sum, line) => sum + rows(line, columns), 0)
-          const below = total - 1 - Math.floor(column / columns)
+          const below = total - 1 - cursorAt(column, rows(first, columns), columns).row
           return `${below > 0 ? `\u001b[${below}B` : ""}${"\u001b[2K\u001b[1A".repeat(total - 1)}\u001b[2K\r`
         }),
       process: (input, state) => {
@@ -136,9 +144,11 @@ export const textInput = (options: {
           case "tab":
             return value === "" ? step(state, placeholder, placeholder.length) : Effect.succeed(Action.Beep())
           default: {
-            const typed = Option.getOrElse(input.input, () => "")
-            // Only printable text goes in: no escape sequences of keys this input does not use.
-            if (typed === "" || hasControl(typed)) return Effect.succeed(Action.Beep())
+            const received = Option.getOrElse(input.input, () => "")
+            // A key this input does not use (F1, a mouse event) is an escape sequence: not text. A paste keeps its
+            // text up to the first line break, without the other control characters (a tab).
+            const typed = received.startsWith("\u001b") ? "" : printable(received)
+            if (typed === "") return Effect.succeed(Action.Beep())
             return step(state, value.slice(0, cursor) + typed + value.slice(cursor), cursor + typed.length)
           }
         }
