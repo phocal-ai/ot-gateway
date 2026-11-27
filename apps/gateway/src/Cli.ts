@@ -101,7 +101,7 @@ import {
   pointsListTemplate
 } from "./PointsSchema.ts"
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
-import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
+import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
@@ -307,19 +307,19 @@ const jsonFailure =
 const dryRunFlag = (description: string) =>
   Flag.Boolean("dry-run").pipe(Flag.withDescription(description), Flag.withDefault(false))
 
-/**
- * The gateway for `config`, with host monitoring and telemetry, until it is stopped. With the file it came from,
- * the status page can edit it.
- */
 /** Whether `run` shows a person the overview and the changes (RunView.ts) instead of the log: both ends a terminal. */
 export const humanRun = (verbose: boolean, stdoutIsTTY: boolean | undefined, stderrIsTTY: boolean | undefined) =>
   !verbose && stdoutIsTTY === true && stderrIsTTY === true
 
+/**
+ * The gateway for `config`, with host monitoring and telemetry, until it is stopped. With the file it came from,
+ * the status page can edit it.
+ */
 const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfig, path?: string, human = false) {
   const version = yield* readVersion
   const configFile = path === undefined ? undefined : yield* configFileSource(path)
   const ui = terminalUi()
-  const pageUrl = config.status === undefined ? undefined : `http://127.0.0.1:${config.status.port}`
+  const pageUrl = config.status === undefined ? undefined : statusUrlOf(config.status)
   if (human) yield* Console.error(ui.header("ot-gateway run", version))
   const running = Effect.scoped(
     Effect.flatMap(liveHostSources, (host) =>

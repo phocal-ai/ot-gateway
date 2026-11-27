@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { humanRun } from "../src/Cli.ts"
-import { changeLine, overviewLines, settled } from "../src/RunView.ts"
+import { answeredLines, changeLine, humanLogLine, overviewLines, settled } from "../src/RunView.ts"
 import { plainUi } from "../src/Ui.ts"
 
 const config = {
@@ -59,5 +59,33 @@ describe("run in a terminal", () => {
     expect(failing).toMatch(/^✖ 10:40:07 {2}room {2}failing: no reply/)
     const back = changeLine(plainUi, { id: 3, at, type: "broker-connected", retries: 0 }, at)
     expect(back).toMatch(/^✔ 10:40:07 {2}broker/)
+  })
+
+  it("gives a device that had no answer yet its line once it answers, and none when it fails instead", () => {
+    const broker = { url: "mqtt://localhost:1883", connected: true }
+    const waiting = new Set(["room", "meter"])
+    const still = answeredLines(plainUi, waiting, {
+      broker,
+      devices: [
+        { id: "room", status: "starting", pointCount: 3 },
+        { id: "meter", status: "failing", pointCount: 2 }
+      ]
+    })
+    expect(still).toEqual([])
+    expect([...waiting]).toEqual(["room"])
+    const answered = answeredLines(plainUi, waiting, { broker, devices: [{ id: "room", status: "ok", pointCount: 3 }] })
+    expect(answered).toEqual(["✔ room: 3 points read"])
+    expect(waiting.size).toBe(0)
+  })
+
+  it("prints errors and warnings with why, but not what the changes already say", () => {
+    const entry = { level: "Warn", message: "the outbox's disk is nearly full", cause: undefined, annotations: {} }
+    expect(humanLogLine(plainUi, entry)).toBe("! the outbox's disk is nearly full")
+    expect(humanLogLine(plainUi, { ...entry, level: "Error", annotations: { error: "EACCES", port: 47808 } })).toBe(
+      "✖ the outbox's disk is nearly full: EACCES"
+    )
+    expect(humanLogLine(plainUi, { ...entry, level: "Info" })).toBeUndefined()
+    expect(humanLogLine(plainUi, { ...entry, annotations: { device: "room" } })).toBeUndefined()
+    expect(humanLogLine(plainUi, { ...entry, message: "MQTT connection lost" })).toBeUndefined()
   })
 })
