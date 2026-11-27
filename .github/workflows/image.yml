@@ -99,8 +99,12 @@ jobs:
           sed 's#"path": "./ot-gateway-buffer.sqlite"#"path": "/var/lib/ot-gateway/buffer.sqlite"#' examples/gateway.json > "$work/gateway.json"
           docker run --rm -v "$work/gateway.json:/etc/ot-gateway/gateway.json:ro" ot-gateway:smoke --check /etc/ot-gateway/gateway.json
           # The files the CLI finds next to the bundle: the device profiles and the version.
-          docker run --rm ot-gateway:smoke profiles list --json | grep -q '"id": "eastron-sdm630"'
-          docker run --rm ot-gateway:smoke guide setup --json | grep -q '"name": "setup"'
+          # Into a file, then grep: a grep -q on a pipe stops reading at the first match, and the setup guide is
+          # longer than the pipe's buffer, so docker run fails writing the rest (broken pipe) under pipefail.
+          docker run --rm ot-gateway:smoke profiles list --json > "$work/profiles.json"
+          grep -q '"id": "eastron-sdm630"' "$work/profiles.json"
+          docker run --rm ot-gateway:smoke guide setup --json > "$work/guide.json"
+          grep -q '"name": "setup"' "$work/guide.json"
           docker run --rm ot-gateway:smoke --version
           # A preview build names itself (the status page, health and telemetry read the same VERSION file).
           if [ -n "$VERSION" ]; then docker run --rm ot-gateway:smoke --version | grep -qF "$VERSION"; fi
