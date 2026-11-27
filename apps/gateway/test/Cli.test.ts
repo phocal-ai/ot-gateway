@@ -135,7 +135,7 @@ describe("check", () => {
     Effect.gen(function* () {
       const config = yield* bacnetConfig({})
       expect(describeConfig(config)).toContain(
-        "heat-pump: bacnet-ip device 2001 at 127.0.0.1:47809, 3 point(s): 2 by COV where the device supports it, polled every 5000 ms otherwise"
+        "heat-pump: bacnet-ip device 2001 at 127.0.0.1:47809, 3 points: 2 by COV where the device supports it, polled every 5000 ms otherwise"
       )
       expect(configSummary(config).devices).toEqual([
         {
@@ -153,10 +153,10 @@ describe("check", () => {
         points: [{ id: "flow", name: "Flow", objectType: "analog-input", instance: 1 }]
       })
       expect(describeConfig(allPushed)).toContain(
-        "1 point(s): COV where the device supports it, polled every 5000 ms otherwise"
+        "1 point: COV where the device supports it, polled every 5000 ms otherwise"
       )
       const polled = yield* bacnetConfig({ cov: false })
-      expect(describeConfig(polled)).toContain("3 point(s), every 5000 ms")
+      expect(describeConfig(polled)).toContain("3 points, every 5000 ms")
       expect(configSummary(polled).devices[0]?.covPoints).toEqual([])
     })
   )

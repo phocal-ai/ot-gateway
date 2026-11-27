@@ -47,6 +47,7 @@ pnpm ot-gateway logs --level warn          # the running gateway's recent log li
 pnpm ot-gateway explain broker-unreachable # what a code means, what to do, the next command (no code: all of them; --json; the table is apps/gateway/src/Codes.ts, docs/troubleshooting.md's "Codes" is checked against it)
 pnpm ot-gateway support                    # one redacted file for an issue report: versions, host, config, status, a day of events, the logs (--output -, --json)
 pnpm ot-gateway mcp                        # the commands as MCP tools over stdio, each result the command's --json (the tools: apps/gateway/src/McpTools.ts)
+OT_GATEWAY_JSON=1 pnpm ot-gateway status    # --json on every command that takes it; a terminal gets the short view, a pipe the full text, --all expands (docs/operations.md, "People and agents")
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
 SOAK_SPEED=60 scripts/soak.sh 30m   # accelerated soak with broker, device and disk faults (see the script header)

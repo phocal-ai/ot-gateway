@@ -271,7 +271,7 @@ const scopeTitles: Record<ColumnScope, string> = {
 }
 
 /** The schema as `points schema` prints it, for people; `brief` keeps each description's first sentence. */
-export const describePointsListSchema = (options: { readonly brief?: boolean } = {}) => {
+export const describePointsListSchema = (options: { readonly brief?: boolean; readonly allHint?: boolean } = {}) => {
   const width = Math.max(...pointsListColumns.map((column) => column.name.length)) + 2
   const sections = scopes.map((scope) => [
     `${scopeTitles[scope]}:`,
@@ -293,7 +293,8 @@ export const describePointsListSchema = (options: { readonly brief?: boolean } =
     ...pointsListRules.map((rule) => `- ${rule}`),
     "",
     ...sections.flatMap((lines) => [...lines, ""]),
-    "ot-gateway points template > points.csv starts one; ot-gateway import points.csv --dry-run checks it."
+    "ot-gateway points template > points.csv starts one; ot-gateway import points.csv --dry-run checks it.",
+    ...(options.brief === true && options.allHint === true ? ["--all prints every column in full."] : [])
   ].join("\n")
 }
 

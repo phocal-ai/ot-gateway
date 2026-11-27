@@ -41,7 +41,7 @@
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Duration, Effect, FileSystem, Logger, Option, References, Result } from "effect"
-import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
+import { Argument, CliOutput, Command, CommandSpec, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { mergeDiscovered, writeMerged } from "./DiscoverSave.ts"
@@ -122,7 +122,9 @@ import { contractJson, contractMessageNames, describeContract, describeContractM
 import {
   DEFAULT_READ_SECONDS,
   formatReadReport,
+  formatReadSummary,
   incompleteMessage,
+  VALUES_SHOWN,
   parseReadSelection,
   readOnce,
   readingsToSend,
@@ -161,11 +163,16 @@ import {
   printResult,
   shellArgument,
   stderrConsole,
-  UsageMistake
+  UsageMistake,
+  AgentHints,
+  agentHint,
+  isJsonFlag,
+  jsonFromEnvironment
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 import { humanLogger, runView } from "./RunView.ts"
 import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
+import { count as countOf, LISTED, plural } from "./Words.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
@@ -205,8 +212,51 @@ export const shownPath = (path: string, cwd: string) => {
   return inside !== "" && !outside ? `./${inside}` : path
 }
 
-/** What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about. */
-export const describeConfig = (config: GatewayConfig, cwd = process.cwd()) => {
+/** A device's line in `check`: what it is, where, how many points and how they are read. */
+const deviceLine = (device: Device) => {
+  const where =
+    device.protocol === "modbus-tcp"
+      ? `${device.host}:${device.port} unit ${device.unitId}`
+      : device.protocol === "bacnet-ip"
+        ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
+        : "simulated"
+  const writable = device.points.filter((point) => point.writable).length
+  const alarms = alarmPointIds(device).length
+  const reading = readingLabel(device)
+  return `  ${device.id}: ${device.protocol} ${where}, ${plural(device.points.length, "point")}${writable > 0 ? `, ${writable} writable` : ""}${alarms > 0 ? `, ${plural(alarms, "alarm")}` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
+}
+
+const pointsOf = (some: ReadonlyArray<Device>) => some.reduce((sum, device) => sum + device.points.length, 0)
+const writableOf = (some: ReadonlyArray<Device>) =>
+  some.reduce((sum, device) => sum + device.points.filter((point) => point.writable).length, 0)
+
+/** `12 devices, 24 points, 1 writable`. */
+const counted = (some: ReadonlyArray<Device>) => {
+  const writable = writableOf(some)
+  return `${plural(some.length, "device")}, ${plural(pointsOf(some), "point")}${writable > 0 ? `, ${countOf(writable)} writable` : ""}`
+}
+const devicesByProtocol = (devices: ReadonlyArray<Device>) => {
+  const protocols = [...new Set(devices.map((device) => device.protocol))]
+  const width = Math.max(0, ...protocols.map((protocol) => protocol.length))
+  return [
+    `  ${counted(devices)}`,
+    ...protocols.map(
+      (protocol) =>
+        `    ${protocol.padEnd(width)}  ${counted(devices.filter((device) => device.protocol === protocol))}`
+    ),
+    "  --all lists every device"
+  ]
+}
+
+/**
+ * What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about.
+ * `brief` (a terminal) sums more than a few devices up by protocol.
+ */
+export const describeConfig = (
+  config: GatewayConfig,
+  options: { readonly brief?: boolean } = {},
+  cwd = process.cwd()
+) => {
   const passwordWarning = mqttPasswordWarning(config.mqtt)
   return [
     `config ok: ${config.site}/${config.building}, gateway ${config.id}, broker ${config.mqtt.url}`,
@@ -224,18 +274,9 @@ export const describeConfig = (config: GatewayConfig, cwd = process.cwd()) => {
       : config.status.bindAddress === "0.0.0.0"
         ? `  status page on port ${config.status.port} at every address of this machine (http://localhost:${config.status.port} here)`
         : `  status page http://${config.status.bindAddress}:${config.status.port}`,
-    ...config.devices.map((device) => {
-      const where =
-        device.protocol === "modbus-tcp"
-          ? `${device.host}:${device.port} unit ${device.unitId}`
-          : device.protocol === "bacnet-ip"
-            ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
-            : "simulated"
-      const writable = device.points.filter((point) => point.writable).length
-      const alarms = alarmPointIds(device).length
-      const reading = readingLabel(device)
-      return `  ${device.id}: ${device.protocol} ${where}, ${device.points.length} point(s)${writable > 0 ? `, ${writable} writable` : ""}${alarms > 0 ? `, ${alarms} alarm(s)` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
-    })
+    ...((options.brief ?? false) && config.devices.length > LISTED
+      ? devicesByProtocol(config.devices)
+      : config.devices.map(deviceLine))
   ].join("\n")
 }
 
@@ -280,6 +321,14 @@ export const deviceSummary = (device: Device) => ({
 
 const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Print the result as JSON, for scripts and agents; a failure too, as {ok: false, error}"),
+  Flag.withDefault(false)
+)
+
+/** In a terminal, every device on its own line rather than a sum and the failing ones: what a pipe gets anyway. */
+const allFlag = Flag.Boolean("all").pipe(
+  Flag.withDescription(
+    "In a terminal, list every device (or point) rather than a summary and the ones that need a look; a pipe and --json always get every one"
+  ),
   Flag.withDefault(false)
 )
 
@@ -413,10 +462,12 @@ const checkNext = Effect.fn("checkNext")(function* (path: string, config: Gatewa
   }
 })
 
-const check = Command.make("check", { config: configPath, json: jsonFlag }, ({ config, json }) =>
+const check = Command.make("check", { config: configPath, all: allFlag, json: jsonFlag }, ({ config, all, json }) =>
   Effect.gen(function* () {
     const decoded = yield* loadConfig(config)
-    if (!json) return yield* Console.log(describeConfig(decoded))
+    if (!json) {
+      return yield* Console.log(describeConfig(decoded, { brief: process.stdout.isTTY && !all }))
+    }
     const { next, url, page } = yield* checkNext(config, decoded)
     yield* printJson({ ...configSummary(decoded), next, url, page })
   }).pipe(jsonFailure(json, { path: config }))
@@ -509,9 +560,10 @@ const discoverModbusCommand = Command.make(
       if (ids !== undefined && Result.isFailure(ids))
         return yield* modbusUsage(`--unit-ids ${ids.failure}`, "--unit-ids 1-247")
       const asked = ids === undefined ? undefined : ids.success
-      const perAddress = asked === undefined ? "unit id 1 (255 and 0 where 1 is silent)" : `${asked.length} unit id(s)`
+      const perAddress =
+        asked === undefined ? "unit id 1 (255 and 0 where 1 is silent)" : plural(asked.length, "unit id")
       yield* Console.error(
-        `asking ${targets.success.length} address(es), ${perAddress} each, at most ${rate} requests a second; read-only`
+        `asking ${plural(targets.success.length, "address", "addresses")}, ${perAddress} each, at most ${rate} requests a second; read-only`
       )
       const report = yield* scanModbus(
         { range, targets: targets.success, unitIds: asked, rate, askedPort: port },
@@ -588,7 +640,7 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
   if (config.devices.length > 0) {
     const diff = diffConfigs(sideOfConfig(merged.before), sideOfConfig(merged.config))
     yield* Console.log(
-      `\n${ui.indent(formatDiff(diff, "What saving changes on the broker:", { command: cli, config: path === DEFAULT_CONFIG ? undefined : path }))}\n`
+      `\n${ui.indent(formatDiff(diff, "What saving changes on the broker:", { command: cli, config: path === DEFAULT_CONFIG ? undefined : path }, { brief: true }))}\n`
     )
   }
   const points = picked.reduce((total, device) => total + device.points.length, 0)
@@ -995,9 +1047,10 @@ const importCommand = Command.make(
     dryRun: dryRunFlag(
       "Check the list and print its devices instead of adding them; without a config named or here, on their own"
     ),
+    all: allFlag,
     json: jsonFlag
   },
-  ({ list, config, dryRun, json }) =>
+  ({ list, config, dryRun, all, json }) =>
     Effect.gen(function* () {
       const {
         added,
@@ -1030,9 +1083,11 @@ const importCommand = Command.make(
         if (unitLines.length > 0) yield* Console.error(unitLines.join("\n"))
         return yield* printJson({ devices: added })
       }
-      yield* Console.log(`added ${added.length} device(s) with ${points} point(s) to ${against}, none writable`)
+      yield* Console.log(
+        `added ${plural(added.length, "device")} with ${plural(points, "point")} to ${against}, none writable`
+      )
       if (unitLines.length > 0) yield* Console.log(unitLines.join("\n"))
-      yield* Console.log(describeConfig(written))
+      yield* Console.log(describeConfig(written, { brief: process.stdout.isTTY && !all }))
     }).pipe(jsonFailure(json, { path: config ?? defaultConfigPath }))
 ).pipe(
   Command.withDescription(
@@ -1050,8 +1105,16 @@ const schemaCommand = Command.make(
   "schema",
   {
     json: jsonFlag,
+    all: Flag.Boolean("all").pipe(
+      Flag.withDescription(
+        "In a terminal, every column in full rather than one line each; a pipe and --json always get them in full"
+      ),
+      Flag.withDefault(false)
+    ),
     brief: Flag.Boolean("brief").pipe(
-      Flag.withDescription("Each column's name, scope, required, first sentence and values, one line each; no aliases"),
+      Flag.withDescription(
+        "One line per column (name, scope, required, first sentence, values; no aliases), in a pipe and with --json too"
+      ),
       Flag.withDefault(false)
     ),
     jsonSchema: Flag.Boolean("json-schema").pipe(
@@ -1059,18 +1122,20 @@ const schemaCommand = Command.make(
       Flag.withDefault(false)
     )
   },
-  ({ json, brief, jsonSchema }) =>
+  ({ json, all, brief, jsonSchema }) =>
     jsonSchema
       ? printJson(pointsListJsonSchema())
       : json
         ? brief
           ? printResult(briefPointsListSchemaJson())
           : printJson(pointsListSchema())
-        : Console.log(describePointsListSchema({ brief }))
+        : Console.log(
+            describePointsListSchema({ brief: brief || (process.stdout.isTTY && !all), allHint: !brief && !all })
+          )
 ).pipe(
   Command.withDescription("The points list's columns, rules and allowed values"),
   Command.withExamples([
-    { command: "ot-gateway points schema", description: "Every column, for people" },
+    { command: "ot-gateway points schema", description: "Every column, one line each in a terminal (--all: in full)" },
     { command: "ot-gateway points schema --brief --json", description: "The columns in short, for agents" },
     { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" },
     { command: "ot-gateway points schema --json-schema", description: "The JSON form's JSON Schema" }
@@ -1156,7 +1221,7 @@ const exportCommand = Command.make(
       yield* Effect.sync(() => process.stdout.write(text))
       yield* Console.error(
         [
-          `✓ ${list.rows.length} point(s) of ${list.devices} device(s) from ${config}`,
+          `✓ ${plural(list.rows.length, "point")} of ${plural(list.devices, "device")} from ${config}`,
           ...describeNotCarried(list.notCarried),
           ...next.map((step) => `next: ${step.command}`)
         ].join("\n")
@@ -1374,8 +1439,8 @@ const gatewaysList = Command.make("list", fleetFlags, ({ broker, username, confi
 
 const gatewaysStatus = Command.make(
   "status",
-  { gateway: gatewayArgument, ...fleetFlags },
-  ({ gateway, broker, username, config, wait, json }) =>
+  { gateway: gatewayArgument, ...fleetFlags, all: allFlag },
+  ({ gateway, broker, username, config, wait, all, json }) =>
     fleetBroker({ broker, username, config }).pipe(
       Effect.flatMap((settings) => gatewayStatus(settings, gateway, Duration.seconds(wait))),
       jsonFailure(json, { gateway }),
@@ -1386,7 +1451,7 @@ const gatewaysStatus = Command.make(
             ? printJsonWithLocalTimes(
                 failure === undefined ? report : { ...report, code: failure.code, hint: failure.hint }
               )
-            : Console.log(formatGatewayStatus(report.gateway, Date.now()))
+            : Console.log(formatGatewayStatus(report.gateway, Date.now(), { brief: process.stdout.isTTY && !all }))
           if (failure !== undefined) return yield* failure
         })
       )
@@ -1399,12 +1464,14 @@ const gatewaysStatus = Command.make(
 
 const gatewaysPoints = Command.make(
   "points",
-  { gateway: gatewayArgument, ...fleetFlags },
-  ({ gateway, broker, username, config, wait, json }) =>
+  { gateway: gatewayArgument, ...fleetFlags, all: allFlag },
+  ({ gateway, broker, username, config, wait, all, json }) =>
     fleetBroker({ broker, username, config }).pipe(
       Effect.flatMap((settings) => gatewayPoints(settings, gateway, Duration.seconds(wait))),
       jsonFailure(json, { gateway }),
-      Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatGatewayPoints(report))))
+      Effect.flatMap((report) =>
+        json ? printJson(report) : Console.log(formatGatewayPoints(report, { brief: process.stdout.isTTY && !all }))
+      )
     )
 ).pipe(
   Command.withDescription("One gateway's points from their retained $meta on the broker: topic, name, unit, writable")
@@ -1580,9 +1647,10 @@ const diffCommand = Command.make(
       Flag.map(Option.getOrUndefined)
     ),
     url: urlFlag,
+    all: allFlag,
     json: jsonFlag
   },
-  ({ config, against, url, json }) =>
+  ({ config, against, url, all, json }) =>
     Effect.gen(function* () {
       if (against !== undefined && url !== undefined) {
         return yield* new UsageMistake({
@@ -1603,7 +1671,7 @@ const diffCommand = Command.make(
         description: "After the change: clear a retained message nobody publishes any more"
       }))
       if (json) return yield* printJson({ ok: true, path: config, against: report.against, ...report.diff, next })
-      yield* Console.log(formatDiff(report.diff, diffTitle(report), context))
+      yield* Console.log(formatDiff(report.diff, diffTitle(report), context, { brief: process.stdout.isTTY && !all }))
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
@@ -1701,21 +1769,24 @@ const status = Command.make(
     config: targetConfig,
     configFlag: targetConfigFlag,
     url: urlFlag,
+    all: allFlag,
     json: jsonFlag,
     failOnAlarm: Flag.Boolean("fail-on-alarm").pipe(
       Flag.withDescription("Also exit with 1 while an alarm point is active, for scripts that act on alarms"),
       Flag.withDefault(false)
     )
   },
-  ({ config, configFlag, url, json, failOnAlarm }) =>
+  ({ config, configFlag, url, all, json, failOnAlarm }) =>
     targetFrom(config, configFlag, url).pipe(
       Effect.flatMap((target) => fetchStatusFor(target, { json })),
       jsonFailure(json, { url: url ?? null, path: config ?? configFlag ?? null }),
-      Effect.flatMap(({ status: report, recent }) => statusOutcome(json, { failOnAlarm })(report, recent))
+      Effect.flatMap(({ status: report, recent }) =>
+        statusOutcome(json, { failOnAlarm, brief: process.stdout.isTTY && !all })(report, recent)
+      )
     )
 ).pipe(
   Command.withDescription(
-    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one. Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
+    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one (in a terminal, more than 10 devices are counted and only the ones not ok listed; --all lists each). Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
   ),
   Command.withExamples([
     { command: "ot-gateway status", description: "The gateway of ot-gateway.json in this folder" },
@@ -1860,9 +1931,10 @@ const messagesCommand = Command.make(
       Flag.optional,
       Flag.map(Option.getOrUndefined)
     ),
+    all: allFlag,
     json: jsonFlag
   },
-  ({ points: pointsArgument, positionalConfig, config: configFlag, url, since, json }) => {
+  ({ points: pointsArgument, positionalConfig, config: configFlag, url, since, all, json }) => {
     const chosen = messagesArguments(pointsArgument, positionalConfig, configFlag)
     const config = "error" in chosen ? undefined : chosen.config
     return Effect.gen(function* () {
@@ -1871,6 +1943,7 @@ const messagesCommand = Command.make(
       const selection = chosen.points === undefined ? [] : (parseSelection(chosen.points) ?? [])
       return yield* messagesReport(target, selection, {
         json,
+        brief: process.stdout.isTTY && !all,
         since,
         sinceMs: since === undefined ? undefined : parseSince(since)
       })
@@ -1999,9 +2072,10 @@ const readCommand = Command.make(
       ),
       Flag.withDefault(false)
     ),
+    all: allFlag,
     json: jsonFlag
   },
-  ({ points: first, positionalConfig, config: configFlag, timeout, publish, json }) => {
+  ({ points: first, positionalConfig, config: configFlag, timeout, publish, all, json }) => {
     const chosen = readArguments(first, positionalConfig, configFlag)
     return Effect.gen(function* () {
       if ("error" in chosen) {
@@ -2024,17 +2098,18 @@ const readCommand = Command.make(
       }
       const devices = yield* selectDevices(decoded, selection)
       if (!json && process.stderr.isTTY) {
-        const count = devices.reduce((sum, device) => sum + device.points.length, 0)
-        yield* Console.error(`reading ${count} point(s) of ${devices.length} device(s) once …`)
+        const total = devices.reduce((sum, device) => sum + device.points.length, 0)
+        yield* Console.error(`Reading ${plural(total, "point")} of ${plural(devices.length, "device")} once …`)
       }
       // The report says what failed and why; the drivers' warnings about it would only repeat it, unformatted.
       const report = yield* readOnce(decoded, devices, { timeout: Duration.seconds(timeout) }).pipe(
         Effect.provideService(References.MinimumLogLevel, "Error")
       )
-      if (!publish) return { report, sent: undefined }
+      const chose = selection.length > 0
+      if (!publish) return { report, sent: undefined, chose }
       const { readings, skipped } = readingsToSend(decoded, report)
       if (readings.length === 0) {
-        return { report, sent: { _tag: "nothing" as const, skipped, broker: decoded.mqtt.url } }
+        return { report, sent: { _tag: "nothing" as const, skipped, broker: decoded.mqtt.url }, chose }
       }
       // The values are shown either way; a broker that cannot take them is said after them. Its client's own
       // warnings would only repeat that, between the values.
@@ -2045,10 +2120,10 @@ const readCommand = Command.make(
         ),
         Effect.provideService(References.MinimumLogLevel, "Error")
       )
-      return { report, sent }
+      return { report, sent, chose }
     }).pipe(
       jsonFailure(json, { path: "error" in chosen ? null : chosen.config }),
-      Effect.flatMap(({ report, sent }) =>
+      Effect.flatMap(({ report, sent, chose }) =>
         Effect.gen(function* () {
           const failure =
             sent === undefined || sent._tag === "nothing"
@@ -2058,7 +2133,10 @@ const readCommand = Command.make(
                 : sent.failed.length === 0
                   ? undefined
                   : new BrokerCommandError({
-                      message: `${sent.failed.length} of ${sent.failed.length + sent.sent} value(s) not sent: ${sent.failed.map((each) => `${each.topic}: ${each.message}`).join("; ")}`,
+                      message: `${countOf(sent.failed.length)} of ${plural(sent.failed.length + sent.sent, "value")} not sent: ${sent.failed
+                        .slice(0, 3)
+                        .map((each) => `${each.topic}: ${each.message}`)
+                        .join("; ")}${sent.failed.length > 3 ? `; and ${countOf(sent.failed.length - 3)} more` : ""}`,
                       hint: "ot-gateway broker checks the connection; the broker's access rules (ACL) must allow publishing to these topics"
                     })
           const published =
@@ -2085,14 +2163,18 @@ const readCommand = Command.make(
               ...(published === undefined ? {} : { published })
             })
           } else {
-            yield* printResult(formatReadReport(report))
+            // A terminal shows every value of a few points, or of the ones named; of many, how many and what failed.
+            const brief = process.stdout.isTTY && !all && !chose && report.summary.points > VALUES_SHOWN
+            yield* printResult(brief ? formatReadSummary(report) : formatReadReport(report))
             if (published !== undefined && failure === undefined) {
               const aggregated =
-                published.skipped === undefined ? "" : `; ${published.skipped} aggregated point(s) left to the gateway`
+                published.skipped === undefined
+                  ? ""
+                  : `; ${plural(published.skipped, "aggregated point")} left to the gateway`
               yield* printResult(
                 published.sent === 0
                   ? `nothing sent: no value was read${aggregated}`
-                  : `sent ${published.sent} value(s) to ${published.broker}${aggregated}`
+                  : `sent ${plural(published.sent, "value")} to ${published.broker}${aggregated}`
               )
             }
           }
@@ -2256,14 +2338,19 @@ const simulateBacnetCommand = Command.make(
   ])
 )
 
-const doctorCommand = Command.make("doctor", { config: configPath, json: jsonFlag }, ({ config, json }) =>
-  Effect.gen(function* () {
-    const report = yield* runDoctor(config, { cli: yield* invocation })
-    // A terminal gets one line per check and the one command to run; a pipe or a log the hint for each problem too.
-    yield* json ? printJson(report) : Console.log(formatDoctor(report, { brief: process.stdout.isTTY }))
-    const problems = doctorProblems(report)
-    if (problems !== undefined) return yield* problems
-  })
+const doctorCommand = Command.make(
+  "doctor",
+  { config: configPath, all: allFlag, json: jsonFlag },
+  ({ config, all, json }) =>
+    Effect.gen(function* () {
+      const cli = yield* invocation
+      const report = yield* runDoctor(config, { cli })
+      // A terminal gets one line per check, the devices summed up, and the one command to run; a pipe or a log every
+      // device and the hint for each problem too.
+      yield* json ? printJson(report) : Console.log(formatDoctor(report, { brief: process.stdout.isTTY, all, cli }))
+      const problems = doctorProblems(report)
+      if (problems !== undefined) return yield* problems
+    })
 ).pipe(
   Command.withDescription(
     "Run every check in order: the config, the broker (a round trip), the running gateway, each device (read-only: its first point, or a Who-Is for its instance, when the gateway does not run), the BACnet/IP port, the disk and the clock. One line per finding and the command to run next; --json: findings [{check, status, subject, message, code, hint, next}]. Exits with 1 when one fails"
@@ -2531,7 +2618,7 @@ const simulate = Command.make("simulate").pipe(
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
-  "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
+  "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
@@ -2659,12 +2746,79 @@ const looksLikePath = (arg: string) => arg.includes("/") || arg.includes("\\") |
 export const versionLine = (name: string, version: string) =>
   `${name} ${/^\d+\.\d/.test(version) ? `v${version}` : version}`
 
-/** The CLI's output, with `--version` printed by `versionLine`; help and errors as the CLI prints them. */
+/**
+ * The command `args` (as `toCliArgs` gives them) runs, as its path from `ot-gateway` down: the words that name a
+ * subcommand, flags and their values skipped. `["--log-level", "debug", "status"]` is `["ot-gateway", "status"]`.
+ */
+export const commandPath = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const path: Array<string> = [cli.name]
+  let index = 0
+  while (index < args.length) {
+    const arg = args[index] ?? ""
+    const spec = CommandSpec.resolve(cli, path)
+    if (arg === "--" || Option.isNone(spec)) break
+    if (arg.startsWith("-")) {
+      // A flag that takes a value has it in the next argument, unless it is written `--flag=value`.
+      const name = arg.replace(/^-+/, "")
+      const flag = spec.value.flags.find((each) => each.name === name || each.aliases.includes(name))
+      index += flag !== undefined && flag.typeName !== "boolean" && !arg.includes("=") ? 2 : 1
+      continue
+    }
+    const sub = spec.value.subcommands.find((each) => each.name === arg || each.alias === arg)
+    if (sub === undefined) break
+    path.push(sub.name)
+    index += 1
+  }
+  return path
+}
+
+/** Whether the command at `path` (from `ot-gateway` down) takes `--json`. */
+export const takesJson = (path: ReadonlyArray<string>) =>
+  Option.match(CommandSpec.resolve(cli, path), {
+    onNone: () => false,
+    onSome: (spec) => spec.flags.some((flag) => flag.name === "json")
+  })
+
+/** Arguments that print help or the version, which stay text whatever `OT_GATEWAY_JSON` says. */
+const helpFlags = new Set(["--help", "-h", "--version", "-v"])
+
+/**
+ * `argv` with `--json` added when `OT_GATEWAY_JSON` asks for it and the command takes it: one setting for an agent's
+ * whole session instead of the flag on every command. A command without `--json` (run, demo), `--help`, and a
+ * `--json` typed out (`--json=false` for text once) stay as typed.
+ */
+export const withJsonFromEnvironment = (
+  argv: ReadonlyArray<string>,
+  env: Readonly<Record<string, string | undefined>>
+): ReadonlyArray<string> => {
+  if (
+    !jsonFromEnvironment(env) ||
+    argv.some((arg) => isJsonFlag(arg) || helpFlags.has(arg)) ||
+    !takesJson(commandPath(toCliArgs(argv)))
+  ) {
+    return argv
+  }
+  const end = argv.indexOf("--")
+  return end === -1 ? [...argv, "--json"] : [...argv.slice(0, end), "--json", ...argv.slice(end)]
+}
+
+/**
+ * The CLI's output, with `--version` printed by `versionLine`; help and errors as the CLI prints them. Under an agent
+ * (`AgentHints`), a command's help ends with `agentHint` when the command takes `--json`.
+ */
 const presenter: CliOutput.Presenter = {
   present: (event) =>
     event._tag === "Version"
       ? Console.log(versionLine(event.name, event.version))
-      : CliOutput.defaultPresenter.present(event)
+      : CliOutput.defaultPresenter
+          .present(event)
+          .pipe(
+            Effect.andThen(
+              event._tag === "Help" && takesJson(event.commandPath)
+                ? Effect.flatMap(AgentHints, (hints) => (hints ? Console.log(`\n${agentHint}`) : Effect.void))
+                : Effect.void
+            )
+          )
 }
 
 /** Runs the command line for `argv` (without node and the script). */

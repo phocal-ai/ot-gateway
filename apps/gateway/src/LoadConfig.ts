@@ -13,6 +13,7 @@ import { Config, Effect, FileSystem, Option, Schema } from "effect"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { configIssues } from "./ConfigStore.ts"
 import { envFileName, loadEnvFile } from "./EnvFile.ts"
+import { LISTED, named, plural } from "./Words.ts"
 
 /**
  * One mistake in a config: where (`mqtt.url`, `devices.0.points.2.dataType`; none for the file as a whole) and what
@@ -54,6 +55,31 @@ export const resolveConfigPaths = (config: GatewayConfig, base: string): Gateway
     : { history: { ...config.history, path: resolvePath(base, config.history.path) } })
 })
 
+/** How many kinds of mistake the message names when there are many; check --json has every one. */
+const KINDS = 5
+
+/**
+ * Many mistakes in a few lines: a mistake repeated on every device (a column missing from a points list) is one
+ * line with the first paths and how many more, rather than a line pair for each of 3,000 points.
+ */
+export const mistakesText = (issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>) => {
+  const byMessage = new Map<string, Array<string>>()
+  for (const issue of issues) {
+    const paths = byMessage.get(issue.message) ?? []
+    if (issue.path !== undefined) paths.push(issue.path)
+    byMessage.set(issue.message, paths)
+  }
+  const kinds = [...byMessage]
+  return [
+    `${plural(issues.length, "mistake")}${kinds.length > 1 ? `, ${plural(kinds.length, "kind")}` : ""}`,
+    ...kinds
+      .slice(0, KINDS)
+      .flatMap(([message, paths]) => [message, ...(paths.length === 0 ? [] : [`  at ${named(paths, 3)}`])]),
+    ...(kinds.length > KINDS ? [`and ${plural(kinds.length - KINDS, "other kind")}`] : []),
+    "check --json lists every mistake with its path"
+  ].join("\n")
+}
+
 export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
   const fs = yield* FileSystem.FileSystem
   const text = yield* fs.readFileString(path).pipe(
@@ -68,21 +94,20 @@ export const loadConfig = Effect.fn("loadConfig")(function* (path: string) {
     )
   )
   const config = yield* parseConfig(text).pipe(
-    Effect.catchTag("SchemaError", (error) =>
-      Effect.fail(
+    Effect.catchTag("SchemaError", (error) => {
+      // A mistake in the file as a whole (not JSON at all) has no path.
+      const issues = configIssues(error.issue).map((issue) =>
+        issue.path.length === 0 ? { message: issue.message } : { path: issue.path.join("."), message: issue.message }
+      )
+      return Effect.fail(
         new ConfigFileError({
           path,
           code: "invalid-config",
-          message: `${path} is not a valid config:\n${error.message}`,
-          // A mistake in the file as a whole (not JSON at all) has no path.
-          issues: configIssues(error.issue).map((issue) =>
-            issue.path.length === 0
-              ? { message: issue.message }
-              : { path: issue.path.join("."), message: issue.message }
-          )
+          message: `${path} is not a valid config${issues.length <= LISTED ? `:\n${error.message}` : `: ${mistakesText(issues)}`}`,
+          issues
         })
       )
-    )
+    })
   )
   yield* loadFolderEnv(path)
   return (yield* configFileSource(path)).resolve(config)

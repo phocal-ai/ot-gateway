@@ -32,6 +32,7 @@ import {
   type Protocol,
   roughDuration,
   SHARED_CAUSE_WINDOW_MS,
+  firstNames,
   sharedCauseLine,
   sharedCauses,
   unitLabel,
@@ -56,6 +57,7 @@ import { checkIdentity, gatewayName, type GatewayTarget } from "./GatewayTarget.
 import { jsonLineWithLocalTimes, printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { localTime, printResult } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+import { count, firstOf, LISTED, named, plural } from "./Words.ts"
 
 /** Something answered at the gateway's address, in a form this CLI cannot read: most likely another release. */
 export class GatewayAnswerUnreadable extends Schema.TaggedError<GatewayAnswerUnreadable>()("GatewayAnswerUnreadable", {
@@ -138,7 +140,7 @@ export const sharedCause = (all: ReadonlyArray<DeviceStatus>, broker?: GatewaySt
   const who =
     devices.length === all.length
       ? `all ${devices.length} devices`
-      : `${devices.length} devices (${devices.map((device) => device.id).join(", ")})`
+      : `${devices.length} devices (${firstNames(devices.map((device) => device.id))})`
   const away =
     broker === undefined || broker.connected || broker.disconnectedSince === undefined
       ? undefined
@@ -379,12 +381,12 @@ const recentLines = (recent: RecentIncidents, now: number) => {
       ? []
       : outages.length === 0
         ? [
-            `  ${recent.failedDevices.length} device(s) failed in the last ${minutes} (${span(recent.from, recent.to, now)}: ${recent.failedDevices.join(", ")}), see ot-gateway events`
+            `  ${plural(recent.failedDevices.length, "device")} failed in the last ${minutes} (${span(recent.from, recent.to, now)}: ${named(recent.failedDevices)}), see ot-gateway events`
           ]
         : [
-            `  ${recent.failedDevices.length} device(s) failed in the last ${minutes}, see ot-gateway events:`,
+            `  ${plural(recent.failedDevices.length, "device")} failed in the last ${minutes}, see ot-gateway events:`,
             ...(outages.length > shown.length
-              ? [`    (${outages.length - shown.length} earlier failure(s) left out)`]
+              ? [`    (${plural(outages.length - shown.length, "earlier failure")} left out)`]
               : []),
             ...shown.map((outage) => `    ${outage.device.padEnd(width)}  ${outageText(outage, outage.noDataMs, now)}`)
           ]
@@ -418,21 +420,23 @@ export const patternText = (pattern: AlarmPattern) =>
   [
     ...(pattern.onMs === undefined ? [] : [`on ${ago(pattern.onMs)}`]),
     ...(pattern.offMs === undefined ? [] : [`off ${ago(pattern.offMs)}`]),
-    `${pattern.raised} time(s) in ${ago(pattern.overMs)}`
+    `${plural(pattern.raised, "time")} in ${ago(pattern.overMs)}`
   ].join(", ")
 
 /**
  * The alarm lines: how many alarm points there are and how many are active, then one line for each that is active
  * or was raised in the last 15 minutes. Nothing for a config without alarm points.
  */
-const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number) => {
+const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number, brief = false) => {
   if (alarms.length === 0) return []
   const active = alarms.filter((alarm) => alarm.active === true)
-  const noteworthy = alarms.filter((alarm) => alarm.active === true || alarm.raised > 0)
+  const all = [...active, ...alarms.filter((alarm) => alarm.active !== true && alarm.raised > 0)]
+  // A terminal names the first few, the active ones first; --json has every alarm.
+  const { shown: noteworthy, more } = brief ? firstOf(all, LISTED) : { shown: all, more: 0 }
   const width = Math.max(0, ...noteworthy.map((alarm) => `${alarm.device}/${alarm.point}`.length))
   const minutes = `${Math.round(ALARM_WINDOW_MS / 60_000)} min`
   return [
-    `  ${alarms.length} alarm point(s), ${active.length === 0 ? "none" : active.length} active`,
+    `  ${plural(alarms.length, "alarm point")}, ${active.length === 0 ? "none" : count(active.length)} active`,
     ...noteworthy.flatMap((alarm) => {
       const state =
         alarm.active === true
@@ -441,12 +445,13 @@ const alarmLines = (alarms: ReadonlyArray<AlarmStatus>, now: number) => {
       const raised =
         alarm.raised === 0
           ? ""
-          : `, raised ${alarm.raised} time(s) in the last ${minutes}${alarm.flapping ? ` (flapping${alarm.pattern === undefined ? "" : `, ${patternText(alarm.pattern)}`}: its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)})` : ""}`
+          : `, raised ${plural(alarm.raised, "time")} in the last ${minutes}${alarm.flapping ? ` (flapping${alarm.pattern === undefined ? "" : `, ${patternText(alarm.pattern)}`}: its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)})` : ""}`
       return [
         `    ${`${alarm.device}/${alarm.point}`.padEnd(width)}  ${state}${raised}`,
         ...(alarm.flapping ? [`    ${" ".repeat(width)}  check: ${flappingAlarmHint.checks[0] ?? ""}`] : [])
       ]
-    })
+    }),
+    ...(more > 0 ? [`    and ${count(more)} more: --json lists every alarm`] : [])
   ]
 }
 
@@ -464,13 +469,13 @@ const deviceStateName = (device: GatewayStatus["devices"][number], now: number) 
 
 /** What is wrong, in one line, for the exit code's message; undefined when nothing is. */
 export const unhealthySummary = (status: GatewayStatus) => {
-  const count = (state: string) =>
+  const inState = (state: string) =>
     status.devices.filter((device) => deviceStateName(device, status.now) === state).length
-  const failing = count("failing")
-  const late = count("late")
+  const failing = inState("failing")
+  const late = inState("late")
   const problems = [
-    ...(failing > 0 ? [`${failing} of ${status.devices.length} device(s) failing`] : []),
-    ...(late > 0 ? [`${late} of ${status.devices.length} device(s) late`] : []),
+    ...(failing > 0 ? [`${count(failing)} of ${plural(status.devices.length, "device")} failing`] : []),
+    ...(late > 0 ? [`${count(late)} of ${plural(status.devices.length, "device")} late`] : []),
     ...(brokerAway(status.broker) ? ["broker not connected"] : [])
   ]
   return problems.length === 0 ? undefined : problems.join(", ")
@@ -497,7 +502,7 @@ const deviceState = (device: GatewayStatus["devices"][number], now: number) => {
 }
 
 /**
- * `connected since 12:00:01, 3 failed connect(s) since start`, `NOT CONNECTED since 12:18:20 (1 min): <why>`, or
+ * `connected since 12:00:01, 3 failed connects since start`, `NOT CONNECTED since 12:18:20 (1 min): <why>`, or
  * `connecting (started 2 s ago)` while the first connect is under way. A connected broker whose failed connects are
  * all retries of the outages `recent` lists says nothing of them here: the outage line has them, as one problem.
  */
@@ -507,7 +512,8 @@ const brokerState = (broker: GatewayStatus["broker"], now: number, started: numb
     broker.connected && spans.length > 0 && spans.every((outage) => outage.retries !== undefined)
       ? spans.reduce((sum, outage) => sum + (outage.retries ?? 0), 0)
       : 0
-  const failed = broker.failedConnects > explained ? `, ${broker.failedConnects} failed connect(s) since start` : ""
+  const failed =
+    broker.failedConnects > explained ? `, ${plural(broker.failedConnects, "failed connect")} since start` : ""
   if (broker.connected) {
     return `${broker.connectedAt === undefined ? "connected" : `connected since ${localTime(broker.connectedAt, now)}`}${failed}`
   }
@@ -522,37 +528,70 @@ const brokerState = (broker: GatewayStatus["broker"], now: number, started: numb
 
 /**
  * The report: the gateway, its broker and buffer, then one aligned line per device, and a hint when failing; then
- * the alarms, and with `recent` what failed in the last 15 minutes.
+ * the alarms, and with `recent` what failed in the last 15 minutes. `brief` (a terminal) with more than a few devices
+ * counts them and lists only the ones not ok, the first few, each hint once: `status --all`, a pipe and --json have
+ * every device.
  */
-export const formatStatus = (status: GatewayStatus, recent?: RecentIncidents) => {
-  const width = Math.max(0, ...status.devices.map((device) => device.id.length))
+export const formatStatus = (
+  status: GatewayStatus,
+  recent?: RecentIncidents,
+  options: { readonly brief?: boolean } = {}
+) => {
+  const stateOf = (device: GatewayStatus["devices"][number]) => deviceStateName(device, status.now)
   const failing = status.devices.filter((device) => device.status === "failing").length
   const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
   const shared = sharedCause(status.devices, status.broker)
   const sharedHost = shared === undefined ? undefined : sharedHostOf(deviceSide(status.devices))
+  const brief = (options.brief ?? false) && status.devices.length > LISTED
+  // The failing first, then late, then starting: what needs a look most is never behind "and N more".
+  const rank: Readonly<Record<string, number>> = { failing: 0, late: 1, starting: 2 }
+  const needing = status.devices
+    .filter((device) => stateOf(device) !== "ok")
+    .toSorted((a, b) => (rank[stateOf(a)] ?? 3) - (rank[stateOf(b)] ?? 3))
+  const { shown, more } = brief ? firstOf(needing) : { shown: status.devices, more: 0 }
+  const width = Math.max(0, ...shown.map((device) => device.id.length))
+  const states = ["ok", "failing", "late", "starting"].flatMap((state) => {
+    const many = status.devices.filter((device) => stateOf(device) === state).length
+    return many === 0 ? [] : [`${count(many)} ${state}`]
+  })
+  const deviceHeader = brief
+    ? `  ${plural(status.devices.length, "device")}: ${states.join(", ")}`
+    : `  ${plural(status.devices.length, "device")}${failing > 0 ? `, ${count(failing)} failing` : ""}${late > 0 ? `, ${count(late)} late` : ""}`
+  let lastCheck: string | undefined
+  const deviceLines = shown.flatMap((device) => {
+    const check =
+      device.status === "failing" ? (hintsFor(device, shared !== undefined, sharedHost).checks[0] ?? "") : undefined
+    // In a terminal, devices failing the same way share their hint: it is said once, under the first.
+    const repeated = brief && check !== undefined && check === lastCheck
+    if (check !== undefined) lastCheck = check
+    return [
+      `    ${device.id.padEnd(width)}  ${stateOf(device).padEnd(8)} ${device.protocol}, ${plural(device.pointCount, "point")} every ${intervalText(device.pollIntervalMs)}, ${deviceState(device, status.now)}`,
+      ...(check === undefined || repeated ? [] : [`    ${" ".repeat(width)}  check: ${check}`])
+    ]
+  })
   return [
     `${status.site}/${status.building} gateway ${status.id}, up ${ago(status.now - status.since)} (since ${localTime(status.since, status.now)})`,
     `  broker ${status.broker.url}: ${brokerState(status.broker, status.now, status.since, recent)}`,
     ...(status.buffer === undefined
       ? []
       : [
-          `  buffer: ${status.buffer.rows} of ${status.buffer.maxRows} message(s) waiting` +
-            (status.buffer.dropped > 0 ? `, ${status.buffer.dropped} DROPPED since start` : "")
+          `  buffer: ${count(status.buffer.rows)} of ${plural(status.buffer.maxRows, "message")} waiting` +
+            (status.buffer.dropped > 0 ? `, ${count(status.buffer.dropped)} DROPPED since start` : "")
         ]),
-    `  ${status.devices.length} device(s)${failing > 0 ? `, ${failing} failing` : ""}${late > 0 ? `, ${late} late` : ""}`,
-    ...status.devices.flatMap((device) => [
-      `    ${device.id.padEnd(width)}  ${deviceStateName(device, status.now).padEnd(8)} ${device.protocol}, ${device.pointCount} point(s) every ${intervalText(device.pollIntervalMs)}, ${deviceState(device, status.now)}`,
-      ...(device.status === "failing"
-        ? [`    ${" ".repeat(width)}  check: ${hintsFor(device, shared !== undefined, sharedHost).checks[0] ?? ""}`]
-        : [])
-    ]),
+    deviceHeader,
+    ...deviceLines,
+    ...(more > 0 ? [`    and ${count(more)} more ${restState(needing.slice(shown.length).map(stateOf))}`] : []),
+    ...(brief ? ["    --all lists every device"] : []),
     ...(shared === undefined ? [] : [`  ${shared}`]),
-    ...alarmLines(status.alarms ?? [], status.now),
+    ...alarmLines(status.alarms ?? [], status.now, brief),
     ...(recent === undefined ? [] : recentLines(recent, status.now)),
     ...(servesEvents(status) ? [] : [noEventsLine(status)]),
     ...(isHealthy(status) ? [] : ["", ...failingHint])
   ].join("\n")
 }
+
+/** The state the devices left out share (`failing`), or `not ok` when they differ. */
+const restState = (states: ReadonlyArray<string>) => (new Set(states).size === 1 ? (states[0] ?? "not ok") : "not ok")
 
 /** Under the report of a gateway before v0.13, which keeps no events: why nothing recent is listed. */
 const noEventsLine = (status: Pick<GatewayStatus, "host">) =>
@@ -711,9 +750,14 @@ export class AlarmActive extends Schema.TaggedError<AlarmActive>()("AlarmActive"
  * The exit code is about the gateway's health: an active alarm is the building's, not the gateway's, so it sets
  * the code only with `failOnAlarm` (`AlarmActive`), for a script that wants to act on one.
  */
-export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: boolean } = {}) =>
+export const statusOutcome = (
+  json: boolean,
+  options: { readonly failOnAlarm?: boolean; readonly brief?: boolean } = {}
+) =>
   Effect.fnUntraced(function* (status: GatewayStatus, recent?: RecentIncidents) {
-    yield* json ? printJsonWithLocalTimes(statusJson(status, recent)) : Console.log(formatStatus(status, recent))
+    yield* json
+      ? printJsonWithLocalTimes(statusJson(status, recent))
+      : Console.log(formatStatus(status, recent, { brief: options.brief ?? false }))
     const summary = unhealthySummary(status)
     if (summary !== undefined) return yield* new GatewayUnhealthy({ message: summary })
     const active = activeAlarms(status)
@@ -721,7 +765,7 @@ export const statusOutcome = (json: boolean, options: { readonly failOnAlarm?: b
       const which = (status.alarms ?? [])
         .filter((alarm) => alarm.active === true)
         .map((alarm) => `${alarm.device}/${alarm.point}`)
-      return yield* new AlarmActive({ message: `${active} alarm(s) active: ${which.join(", ")}` })
+      return yield* new AlarmActive({ message: `${plural(active, "alarm")} active: ${named(which)}` })
     }
   })
 
@@ -737,7 +781,7 @@ export const statusJson = (status: GatewayStatus, recent?: RecentIncidents) => {
   const problem = unhealthySummary(status)
   return {
     ok: isHealthy(status),
-    // What is wrong in one line, as the text's last line: `2 of 3 device(s) failing, broker not connected`.
+    // What is wrong in one line, as the text's last line: `2 of 3 devices failing, broker not connected`.
     ...(problem === undefined ? {} : { problem }),
     alarmsActive: activeAlarms(status),
     ...status,
@@ -818,7 +862,7 @@ const describeEvent = (event: AnyEvent, now: number) => {
     case "counter-jumped":
       return counterText(event)
     case "gateway-started":
-      return `started (${event.version}, ${event.devices} device(s))${
+      return `started (${event.version}, ${plural(event.devices, "device")})${
         event.previousRun === undefined
           ? ""
           : event.previousRun.stopped === undefined
@@ -842,14 +886,14 @@ const describeEvent = (event: AnyEvent, now: number) => {
         event.downMs === undefined ? "connected" : `connected again after ${preciseDuration(event.downMs)}`,
         ...(event.buffered === undefined || event.buffered === 0
           ? []
-          : [`${event.buffered} message(s) waiting in the buffer at reconnect`])
+          : [`${plural(event.buffered, "message")} waiting in the buffer at reconnect`])
       ].join(", ")
     case "buffer-drained": {
       if (event.delivered === undefined) return "drained: every waiting message delivered"
       const parts = drainedParts(event)
       return parts === undefined
-        ? `drained: ${event.delivered} message(s) delivered from the buffer`
-        : `drained: ${event.delivered} message(s) delivered from the buffer since the broker came back: the ${parts.buffered} waiting at reconnect and ${parts.queued} queued behind them${parts.dropped > 0 ? `, less ${parts.dropped} the buffer dropped` : ""}`
+        ? `drained: ${plural(event.delivered, "message")} delivered from the buffer`
+        : `drained: ${plural(event.delivered, "message")} delivered from the buffer since the broker came back: the ${parts.buffered} waiting at reconnect and ${parts.queued} queued behind them${parts.dropped > 0 ? `, less ${parts.dropped} the buffer dropped` : ""}`
     }
     case "config-applied":
       return `applied from the status page: ${withoutControls(event.summary)}`
@@ -858,7 +902,7 @@ const describeEvent = (event: AnyEvent, now: number) => {
     case "gateway-conflict":
       return event.sameId
         ? "another gateway with this gateway's id is online: both publish into the same topics"
-        : `another gateway is online with the same device ids (${event.devices.join(", ")}): both publish into the same topics`
+        : `another gateway is online with the same device ids (${named(event.devices)}): both publish into the same topics`
     case "alarm-raised":
       return event.first === true
         ? `alarm active at its first read (value ${valueText(event.value)})`
@@ -872,7 +916,7 @@ const describeEvent = (event: AnyEvent, now: number) => {
     case "alarm-flapping":
       return `alarm raised ${event.raised} times in the last ${ago(ALARM_WINDOW_MS)}: flapping${event.pattern === undefined ? "" : ` (${patternText(event.pattern)})`}, so its changes are counted, not listed, until it keeps still for ${ago(ALARM_SETTLE_MS)}`
     case "alarm-settled":
-      return `alarm keeps still, ${event.active ? "ACTIVE" : "off"} since ${localTime(event.since, now)}; ${event.unlisted} change(s) were counted, not listed${event.pattern === undefined ? "" : ` (it flapped ${patternText(event.pattern)})`}`
+      return `alarm keeps still, ${event.active ? "ACTIVE" : "off"} since ${localTime(event.since, now)}; ${plural(event.unlisted, "change")} ${event.unlisted === 1 ? "was" : "were"} counted, not listed${event.pattern === undefined ? "" : ` (it flapped ${patternText(event.pattern)})`}`
   }
 }
 
@@ -932,6 +976,8 @@ export const formatEvents = (
     sharedShown.add(shared)
     sharedAfter.add(event.id)
   }
+  // Devices that fail together share their advice: a check said under the one before is not said again.
+  let previous: ReadonlyArray<string> = []
   return [
     ...before,
     ...gap,
@@ -939,9 +985,13 @@ export const formatEvents = (
       const line = eventLine(event, log.now, width)
       const indent = " ".repeat(localTime(event.at, log.now).length + 2 + width + 2)
       const found = advice.get(event.id)
+      const checks = adviceLines(found?.hint, indent, found?.leads === true ? LEAD_CHECKS : 1)
+      // Only for failures in a row: any other event in between, and the next failure has its checks again.
+      const repeated = checks.length > 0 && checks.every((check, index) => previous[index] === check)
+      previous = checks
       return [
         line,
-        ...adviceLines(found?.hint, indent, found?.leads === true ? LEAD_CHECKS : 1),
+        ...(repeated ? [] : checks),
         ...(found?.sharedCause !== undefined && sharedAfter.has(event.id) ? [`${indent}${found.sharedCause}`] : [])
       ]
     })
@@ -951,9 +1001,9 @@ export const formatEvents = (
 /** Checks `events` lists under a failure that leads its group, or failed alone. */
 export const LEAD_CHECKS = 3
 
-/** `check: <the most likely cause>` under a device's failure, then up to `count - 1` more, most likely first. */
-const adviceLines = (hint: Hint | undefined, indent: string, count: number) => {
-  const checks = hint?.checks.slice(0, count) ?? []
+/** `check: <the most likely cause>` under a device's failure, then up to `most - 1` more, most likely first. */
+const adviceLines = (hint: Hint | undefined, indent: string, most: number) => {
+  const checks = hint?.checks.slice(0, most) ?? []
   return checks.map((check, index) => `${indent}${index === 0 ? "check: " : "  then: "}${check}`)
 }
 

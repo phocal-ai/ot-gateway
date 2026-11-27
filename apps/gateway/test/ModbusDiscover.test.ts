@@ -165,7 +165,7 @@ describe("scanModbus", () => {
       // Read-only: reads, never a write.
       expect(controls.flatMap((control) => control.writes)).toEqual([])
       const text = formatScan(report)
-      expect(text).toContain("2 Modbus unit(s) found on 4 address(es)")
+      expect(text).toContain("2 Modbus units found on 4 addresses")
       expect(text).toContain("10.0.0.11:502")
       expect(text).toContain("--unit-ids 1-247")
       expect(text).toContain("next: ot-gateway discover modbus 10.0.0.10-13 --rate 200 --points-list modbus.csv")
@@ -246,7 +246,7 @@ describe("scanModbus", () => {
       const report = yield* scanned(network, request("10.0.0.60"))
       expect(report.hosts).toMatchObject([{ host: "10.0.0.60", dropped: true, units: [] }])
       const failure = nothingFound(report)
-      expect(failure.message).toContain("1 address(es) took a connection")
+      expect(failure.message).toContain("1 address took a connection")
       expect(failure.hint).toContain("one connection at a time")
     }).pipe(Effect.scoped)
   )

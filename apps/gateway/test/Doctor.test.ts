@@ -173,7 +173,7 @@ describe("doctor on a network", () => {
         next: `npx ot-gateway run ${path}`
       })
       expect(doctor.next).toBe(found["broker"]?.next)
-      expect(doctorProblems(doctor)?.message).toBe("4 problem(s): broker, meter, ahu, bacnet-port")
+      expect(doctorProblems(doctor)?.message).toBe("4 problems: broker, meter, ahu and bacnet-port")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -342,7 +342,7 @@ describe("doctor's findings", () => {
 
   it("prints one line per finding in a terminal, and the hint and next of each problem otherwise", () => {
     const doctor = report("ot-gateway.json", [
-      { check: "config", status: "ok", message: "s/b gateway main, 1 device(s)" },
+      { check: "config", status: "ok", message: "s/b gateway main, 1 device" },
       {
         check: "broker",
         status: "fail",
@@ -362,21 +362,21 @@ describe("doctor's findings", () => {
     ])
     expect(doctor).toMatchObject({ ok: false, next: "ot-gateway broker", counts: { ok: 1, warn: 1, fail: 1, skip: 0 } })
     expect(formatDoctor(doctor, { brief: true }).split("\n")).toEqual([
-      "✓ config  s/b gateway main, 1 device(s)",
+      "✓ config  s/b gateway main, 1 device",
       "✗ broker  could not connect",
       "! meter   late",
       "",
-      "1 problem(s), 1 warning(s). Next: ot-gateway broker"
+      "1 problem, 1 warning. Next: ot-gateway broker"
     ])
     expect(formatDoctor(doctor, { brief: false }).split("\n")).toEqual([
-      "✓ config  s/b gateway main, 1 device(s)",
+      "✓ config  s/b gateway main, 1 device",
       "✗ broker  could not connect",
       "    is it running?",
       "    next: ot-gateway broker",
       "! meter   late",
       "    next: ot-gateway logs",
       "",
-      "1 problem(s), 1 warning(s). Next: ot-gateway broker"
+      "1 problem, 1 warning. Next: ot-gateway broker"
     ])
     expect(formatDoctor(report("x.json", [{ check: "clock", status: "ok", message: "fine" }]), { brief: true })).toBe(
       "✓ clock  fine\n\nNo problems."

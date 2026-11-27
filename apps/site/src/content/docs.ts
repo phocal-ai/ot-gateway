@@ -70,6 +70,13 @@ export const pages: ReadonlyArray<PageSource> = [
     group: "Run it"
   },
   {
+    source: "docs/fleet.md",
+    slug: "fleet",
+    title: "See your whole fleet",
+    description:
+      "Every gateway, its devices and its points from any machine that reaches the broker, or from an AI agent: no database, no server."
+  },
+  {
     source: "docs/raspberry-pi-install.md",
     slug: "raspberry-pi-install",
     title: "Install on a Raspberry Pi",

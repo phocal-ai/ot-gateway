@@ -46,7 +46,7 @@ mkdir demo-room && cd demo-room
 npx ot-gateway discover --points-list points.csv
 ```
 
-It broadcasts Who-Is, lists what answers (`device 1001 at 192.168.1.20:47808: "Demo room", 3 point(s)`) and writes its three points to `points.csv`. If nothing answers, ask the device by its address, which the device printed when it started: `npx ot-gateway discover --address 192.168.1.20 --points-list points.csv`. [When it does not work](#when-it-does-not-work) has the usual causes.
+It broadcasts Who-Is, lists what answers (`device 1001 at 192.168.1.20:47808: "Demo room", 3 points`) and writes its three points to `points.csv`. If nothing answers, ask the device by its address, which the device printed when it started: `npx ot-gateway discover --address 192.168.1.20 --points-list points.csv`. [When it does not work](#when-it-does-not-work) has the usual causes.
 
 ## 3. A broker and a config
 
@@ -88,7 +88,7 @@ demo-room/room-temperature      20.5 °C
 demo-room/temperature-setpoint  21 °C
 demo-room/heating               true
 
-3 point(s) of 1 device(s) read in 42 ms
+3 points of 1 device read in 42 ms
 ```
 
 `read demo-room/temperature-setpoint` reads one point, `--json` gives each value with its unit and topic, or why it failed.

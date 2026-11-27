@@ -30,6 +30,7 @@ import { LOW_DISK_BYTES } from "./Host.ts"
 import { defaultConfigPath } from "./Import.ts"
 import { ConfigFileError, loadConfig } from "./LoadConfig.ts"
 import { shellArgument } from "./Output.ts"
+import { count, firstOf, named, plural } from "./Words.ts"
 import { probe, type ProbeFailure } from "./Probe.ts"
 import { fetchStatusFor, unhealthySummary } from "./StatusReport.ts"
 
@@ -558,11 +559,8 @@ const gatewayCheck = Effect.fnUntraced(function* (
         message: `not running at ${url}: the devices are asked directly`,
         code: "gateway-unreachable",
         hint: "start it once the checks above pass",
-        next: !hasCompose
-          ? command("run")
-          : dirname(compose) === process.cwd()
-            ? "docker compose up -d"
-            : `docker compose -f ${shellArgument(compose)} up -d`
+        // up starts it with the folder's compose.yaml and waits for values; without one, run in this terminal.
+        next: hasCompose ? command("up") : command("run")
       }
       return { finding, status: undefined, mode: "stopped" as GatewayMode }
     }
@@ -621,7 +619,7 @@ export const runDoctor = Effect.fn("runDoctor")(function* (path: string, options
         ? `no config at ${path}`
         : error.issues?.[0] === undefined
           ? error.message
-          : `${error.issues.length} mistake(s); the first: ${error.issues[0].path === undefined ? "" : `${error.issues[0].path}: `}${error.issues[0].message}`,
+          : `${plural(error.issues.length, "mistake")}; the first: ${error.issues[0].path === undefined ? "" : `${error.issues[0].path}: `}${error.issues[0].message}`,
       code: error.code ?? "invalid-config",
       hint: missing
         ? "write one with ot-gateway init, or name the config elsewhere: ot-gateway doctor path/to/ot-gateway.json"
@@ -644,7 +642,7 @@ export const runDoctor = Effect.fn("runDoctor")(function* (path: string, options
   findings.push({
     check: "config",
     status: "ok",
-    message: `${config.site}/${config.building} gateway ${config.id}, ${devices} device(s)`
+    message: `${config.site}/${config.building} gateway ${config.id}, ${plural(devices, "device")}`
   })
 
   const brokerFailure = (message: string, code: string, hint: string | undefined): Finding => ({
@@ -743,13 +741,65 @@ const marks: Readonly<Record<FindingStatus, string>> = { ok: "✓", warn: "!", f
 /** The line's label: the check, or the device's id. */
 const labelOf = (finding: Finding) => (finding.check === "device" ? (finding.subject ?? "device") : finding.check)
 
+/** The worst of the statuses: a failure before a warning before ok, and skip only when all are. */
+const worst = (statuses: ReadonlyArray<FindingStatus>): FindingStatus =>
+  statuses.includes("fail") ? "fail" : statuses.includes("warn") ? "warn" : statuses.includes("ok") ? "ok" : "skip"
+
+/** The devices in one finding: how many are fine, and how many fail, warn or were not checked. */
+export const devicesFinding = (devices: ReadonlyArray<Finding>): Finding => {
+  const counts = { ok: 0, warn: 0, fail: 0, skip: 0 }
+  for (const device of devices) counts[device.status] += 1
+  const total = devices.length
+  const parts = [
+    counts.fail > 0 ? `${count(counts.fail)} failing` : undefined,
+    counts.warn > 0 ? `${count(counts.warn)} with a warning` : undefined,
+    counts.skip > 0 ? `${count(counts.skip)} not checked` : undefined
+  ].filter((part) => part !== undefined)
+  const message =
+    counts.ok === total
+      ? `${plural(total, "device")}, all ok`
+      : [
+          counts.ok > 0 ? `${count(counts.ok)} of ${plural(total, "device")} ok` : plural(total, "device"),
+          ...parts
+        ].join(", ")
+  // A line of the text only, labelled `devices`: --json keeps a finding per device.
+  return { check: "device", subject: "devices", status: worst(devices.map((device) => device.status)), message }
+}
+
 /**
- * The report for a person. `brief` (a terminal) is one line per finding and the one command to run; otherwise
- * (piped, a log) each problem also has its hint and its own next command, for whoever reads it later.
+ * The lines of the findings. A terminal (`brief`) sums the devices up in one line, then names the failing ones and
+ * those with a warning, the first few, so a site of 300 devices fits a screen: `all` (`--all`), a pipe and --json
+ * have every device. One device keeps its own line, which says more than a sum.
  */
-export const formatDoctor = (doctor: DoctorReport, options: { readonly brief: boolean }) => {
-  const width = Math.max(0, ...doctor.findings.map((finding) => labelOf(finding).length))
-  const lines = doctor.findings.flatMap((finding) => {
+const shownFindings = (
+  findings: ReadonlyArray<Finding>,
+  options: { readonly brief: boolean; readonly all: boolean }
+) => {
+  const devices = findings.filter((finding) => finding.check === "device")
+  if (!options.brief || options.all || devices.length <= 1) return { rows: findings, more: 0 }
+  const attention = devices.filter((device) => device.status === "fail" || device.status === "warn")
+  const { shown, more } = firstOf([
+    ...attention.filter((device) => device.status === "fail"),
+    ...attention.filter((device) => device.status === "warn")
+  ])
+  const [first] = devices
+  const at = first === undefined ? 0 : findings.indexOf(first)
+  const others = findings.filter((finding) => finding.check !== "device")
+  return { rows: [...others.slice(0, at), devicesFinding(devices), ...shown, ...others.slice(at)], more }
+}
+
+/**
+ * The report for a person. `brief` (a terminal) is one line per finding, the devices summed up (`all` lists each),
+ * and the one command to run; otherwise (piped, a log) every device, and each problem also has its hint and its own
+ * next command, for whoever reads it later.
+ */
+export const formatDoctor = (
+  doctor: DoctorReport,
+  options: { readonly brief: boolean; readonly all?: boolean; readonly cli?: string }
+) => {
+  const { rows, more } = shownFindings(doctor.findings, { brief: options.brief, all: options.all ?? false })
+  const width = Math.max(0, ...rows.map((finding) => labelOf(finding).length))
+  const lines = rows.flatMap((finding) => {
     const line = `${marks[finding.status]} ${labelOf(finding).padEnd(width)}  ${finding.message}`
     if (options.brief || finding.status === "ok" || finding.status === "skip") return [line]
     return [
@@ -758,14 +808,23 @@ export const formatDoctor = (doctor: DoctorReport, options: { readonly brief: bo
       ...(finding.next === undefined ? [] : [`    next: ${finding.next}`])
     ]
   })
+  const afterDevices =
+    more === 0
+      ? []
+      : [
+          `  ${" ".repeat(width)}  and ${count(more)} more: ${commandFor(options.cli ?? "ot-gateway", doctor.config)("doctor", "--all")} lists every device`
+        ]
+  const lastDevice = lines.findLastIndex((_, index) => rows[index]?.check === "device")
+  const listed =
+    lastDevice < 0 ? lines : [...lines.slice(0, lastDevice + 1), ...afterDevices, ...lines.slice(lastDevice + 1)]
   const { fail, warn } = doctor.counts
   const summary =
     fail > 0
-      ? `${fail} problem(s)${warn > 0 ? `, ${warn} warning(s)` : ""}.`
+      ? `${plural(fail, "problem")}${warn > 0 ? `, ${plural(warn, "warning")}` : ""}.`
       : warn > 0
-        ? `No problems, ${warn} warning(s).`
+        ? `No problems, ${plural(warn, "warning")}.`
         : "No problems."
-  return [...lines, "", doctor.next === null ? summary : `${summary} Next: ${doctor.next}`].join("\n")
+  return [...listed, "", doctor.next === null ? summary : `${summary} Next: ${doctor.next}`].join("\n")
 }
 
 /** What `doctor --json` prints: the report, each finding complete. */
@@ -777,6 +836,6 @@ export const doctorProblems = (doctor: DoctorReport) => {
   if (failed.length === 0) return undefined
   return new DoctorProblems({
     code: "doctor-problems",
-    message: `${failed.length} problem(s): ${failed.map((finding) => labelOf(finding)).join(", ")}`
+    message: `${plural(failed.length, "problem")}: ${named(failed.map((finding) => labelOf(finding)))}`
   })
 }
