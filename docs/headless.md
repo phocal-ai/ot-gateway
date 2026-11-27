@@ -70,7 +70,7 @@ The results of `init` and `check` also carry `next`: the commands to run after t
 
 You need three things on the machine that sits on the building network:
 
-- **The `ot-gateway` command.** With Node.js 22.18 or newer, `npx ot-gateway` runs it with nothing to install. On a box with Docker and no Node (a Raspberry Pi), [one line installs a wrapper](operations.md#docker-compose-recommended) that runs the same CLI from the gateway's image. In a checkout it is `pnpm ot-gateway`. The examples below write `ot-gateway`.
+- **The `ot-gateway` command.** With Node.js 22.18 or newer, `npx ot-gateway` (or `pnpm dlx ot-gateway`) runs it with nothing to install; `npm i -g ot-gateway` or `pnpm add -g ot-gateway` keeps it installed. On a box with Docker and no Node (a Raspberry Pi), [one line installs a wrapper](operations.md#docker-compose-recommended) that runs the same CLI from the gateway's image. In a checkout it is `pnpm ot-gateway`. The examples below write `ot-gateway`.
 - **Docker with Compose 2.24 or newer**, to keep the gateway running. Step 7 has the alternative without Docker.
 - **A broker URL**, `mqtt://host:1883` or `mqtts://host:8883` for TLS, and its username if it has one. The password never goes on a command line or into the config: step 4 says where it goes.
 
@@ -502,7 +502,7 @@ An agent that does not run a shell (a desktop chat app, an IDE assistant) reache
 
 ```bash
 claude mcp add ot-gateway -- npx ot-gateway mcp   # Claude Code; other clients take the same command
-claude mcp add -s user ot-gateway -- ot-gateway mcp   # installed globally (npm i -g ot-gateway): in every folder, for the gateways_* tools
+claude mcp add -s user ot-gateway -- ot-gateway mcp   # installed globally (npm i -g ot-gateway, or pnpm add -g ot-gateway): in every folder, for the gateways_* tools
 ```
 
 Each tool is a command with `--json`, and its result is that command's JSON (as `structuredContent` too when it is one object), `isError` when the command exits with 1 or 2: `check`, `doctor`, `broker`, `gateways_list`, `gateways_status`, `gateways_points` (every gateway on a broker, from its retained health and `$meta`: `broker` names one, so they work outside a gateway's folder too), `status`, `events`, `logs`, `history`, `messages`, `read`, `write`, `watch` (for `seconds`, 1 to 300), `discover`, `discover_modbus` (its rows come back in the JSON; no file is written), `probe`, `import` (`dryRun` unless told otherwise), `points_schema`, `contract`, `profiles_list`, `profiles_show`, `explain`, `support` (the report as text, no file written), `up`, `restart`, `down` and `upgrade` (`check` only compares). Their arguments are the command's flags in camelCase (`failOnAlarm`, `untilValues`, `unitId`); `tools/list` gives each one's JSON Schema. An argument the tool does not know, or one that starts with `-`, is refused with `code: "usage"`, so no argument becomes a flag. `up`, `restart`, `down` and `upgrade` run Docker Compose on the gateway's machine (Linux), as the commands do. `write` is the one tool that changes a device, and it goes through the running gateway's command guard as `ot-gateway write` does: writable points only, within their limits, always logged. Commands that ask questions or run until stopped (`init`, `run`, `demo`, `simulate`) are not tools; `publish` is not one either. A call runs at most 15 minutes, its wait for a turn included, four at a time (`import`, `write`, `up`, `restart`, `down` and `upgrade` one at a time), and a call the client cancels is stopped.

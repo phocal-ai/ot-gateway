@@ -13,6 +13,6 @@ npx ot-gateway status                  # the running gateway's devices, one line
 npx ot-gateway gateways list --broker mqtt://broker.local:1883   # every gateway on a broker, from its retained health
 ```
 
-Needs Node.js 22.18 or newer. Installed with `npm i -g ot-gateway`, it says once a day when a newer release is out (`OT_GATEWAY_NO_UPDATE_CHECK=1` turns that off). To run a gateway unattended, use the container image with Docker Compose: see [Running a gateway](https://github.com/phocal-ai/ot-gateway/blob/main/docs/operations.md).
+Needs Node.js 22.18 or newer. With pnpm, `pnpm dlx ot-gateway` runs it as `npx` does. Installed with `npm i -g ot-gateway` (or `pnpm add -g ot-gateway`), it is `ot-gateway`, and it says once a day when a newer release is out (`OT_GATEWAY_NO_UPDATE_CHECK=1` turns that off). To run a gateway unattended, use the container image with Docker Compose: see [Running a gateway](https://github.com/phocal-ai/ot-gateway/blob/main/docs/operations.md).
 
 Documentation, source and issues: https://github.com/phocal-ai/ot-gateway (MIT).
