@@ -13,6 +13,7 @@ import { DatagramSocketError, DatagramSocketOpenError } from "effect/socket/Data
 import { TestConsole } from "effect/testing"
 import { isLongRunning, runCli, toCliArgs } from "../src/Cli.ts"
 import {
+  agentHint,
   failureFields,
   isUsageError,
   printJson,
@@ -119,8 +120,15 @@ describe("failures of one-shot commands", () => {
   const main = fileURLToPath(new URL("../src/main.ts", import.meta.url))
   // The real entry point, as a person or an agent runs it: what reaches stderr, stdout and the exit code.
   // On Node 22 this also checks that Node's notice about node:sqlite stays off stderr (NodeWarnings.ts).
-  const runMain = (args: ReadonlyArray<string>) =>
-    spawnSync(process.execPath, [main, ...args], { encoding: "utf8", env: { ...process.env, NO_COLOR: "1" } })
+  // Without the variables of the agent or the shell that runs the tests: each test sets what it checks.
+  const quietEnv = Object.fromEntries(
+    Object.entries(process.env).filter(
+      ([name]) =>
+        !["OT_GATEWAY_JSON", "AI_AGENT", "CLAUDECODE", "CURSOR_AGENT", "GEMINI_CLI", "CODEX_SANDBOX"].includes(name)
+    )
+  )
+  const runMain = (args: ReadonlyArray<string>, env: Readonly<Record<string, string>> = {}) =>
+    spawnSync(process.execPath, [main, ...args], { encoding: "utf8", env: { ...quietEnv, NO_COLOR: "1", ...env } })
   const missing = "no-such-config.json"
   const message = `no config at ${missing}.`
 
@@ -131,6 +139,23 @@ describe("failures of one-shot commands", () => {
     expect(result.stderr.startsWith(`error: ${message}`)).toBe(true)
     expect(result.stderr).not.toMatch(/\[\d{2}:\d{2}:\d{2}\.\d{3}\]|ERROR \(#\d+\)/)
     expect(result.stderr.trimEnd().split("\n")).toHaveLength(1)
+  })
+
+  it("under an agent, point at --json and mcp below the failure", () => {
+    const result = runMain(["check", missing], { CLAUDECODE: "1" })
+    expect(result.status).toBe(1)
+    expect(result.stdout).toBe("")
+    const [line = "", hint, ...rest] = result.stderr.trimEnd().split("\n")
+    expect(line.startsWith(`error: ${message}`)).toBe(true)
+    expect(hint).toBe(`  ${agentHint}`)
+    expect(rest).toEqual([])
+  })
+
+  it("take OT_GATEWAY_JSON=1 as --json: the failure as JSON on stdout, nothing on stderr, no agent hint", () => {
+    const result = runMain(["check", missing], { OT_GATEWAY_JSON: "1", CLAUDECODE: "1" })
+    expect(result.status).toBe(1)
+    expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, code: "no-config" })
+    expect(result.stderr).toBe("")
   })
 
   it("leave --json as it was: the failure as JSON on stdout, nothing on stderr", () => {

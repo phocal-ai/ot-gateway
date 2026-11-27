@@ -175,6 +175,8 @@ if [ -z "${TZ:-}" ]; then
 fi
 
 # SSH_CONNECTION and USER (passed only when set): over SSH, init's next steps name the tunnel to the status page.
+# OT_GATEWAY_JSON and the variables coding agents set (passed only when set): --json on every command, and the hint
+# that points an agent at it, as the CLI has them without Docker.
 # OT_GATEWAY_DATA_DIR empty: relative paths in the config (the outbox, the history) resolve against the config's
 # folder under /work, as the CLI does without Docker, not against the image's data volume, which --rm would discard.
 if [ -n "$deploy" ]; then
@@ -185,6 +187,8 @@ else
   set -- -v "$PWD:/work" -w /work "$@"
 fi
 if [ -t 0 ] && [ -t 1 ]; then
-  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ -e OT_GATEWAY_DATA_DIR= "$@"
+  exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ \
+    -e OT_GATEWAY_JSON -e AI_AGENT -e CLAUDECODE -e CURSOR_AGENT -e GEMINI_CLI -e CODEX_SANDBOX -e OT_GATEWAY_DATA_DIR= "$@"
 fi
-exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ -e OT_GATEWAY_DATA_DIR= "$@"
+exec docker run --rm -i --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ \
+  -e OT_GATEWAY_JSON -e AI_AGENT -e CLAUDECODE -e CURSOR_AGENT -e GEMINI_CLI -e CODEX_SANDBOX -e OT_GATEWAY_DATA_DIR= "$@"

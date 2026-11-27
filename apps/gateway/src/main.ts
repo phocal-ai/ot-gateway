@@ -19,10 +19,26 @@ import { Console, Effect, Logger } from "effect"
 import { identity } from "effect/Function"
 import { existsSync, realpathSync } from "node:fs"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
-import { isLongRunning, runCli, toCliArgs, withFirstRun } from "./Cli.ts"
+import {
+  commandPath,
+  isLongRunning,
+  runCli,
+  takesJson,
+  toCliArgs,
+  withFirstRun,
+  withJsonFromEnvironment
+} from "./Cli.ts"
 import { loadEnvFile } from "./EnvFile.ts"
 import { hideSqliteExperimentalWarning } from "./NodeWarnings.ts"
-import { isJsonMode, reportFailure, ResultConsole, stderrConsole, stdoutClosed } from "./Output.ts"
+import {
+  AgentHints,
+  isJsonMode,
+  reportFailure,
+  ResultConsole,
+  runsUnderAgent,
+  stderrConsole,
+  stdoutClosed
+} from "./Output.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
 import { configFolder, updateCommand, updateNoticeWanted, withUpdateNotice } from "./UpdateNotice.ts"
 
@@ -43,12 +59,17 @@ loadEnvFile()
 const extraEnvFile = process.env["OT_GATEWAY_ENV_FILE"]
 if (extraEnvFile !== undefined && extraEnvFile !== "") loadEnvFile(extraEnvFile)
 
-// A bare `ot-gateway` in a terminal, with no config here yet, is a first run: it starts init.
-const argv = withFirstRun(process.argv.slice(2), {
+// A bare `ot-gateway` in a terminal, with no config here yet, is a first run: it starts init. OT_GATEWAY_JSON=1 adds
+// --json to every command that takes it.
+// The variable first: a first run's init stays the questions in a terminal.
+const argv = withFirstRun(withJsonFromEnvironment(process.argv.slice(2), process.env), {
   terminal: process.stdin.isTTY && process.stdout.isTTY,
   configHere: existsSync("ot-gateway.json")
 })
 const json = isJsonMode(argv)
+// Under a coding agent, help and failures say where --json and mcp are; the output itself stays the same.
+const agentHints = !json && runsUnderAgent(process.env)
+const takesJsonHere = takesJson(commandPath(toCliArgs(argv)))
 // A globally installed CLI says once a day when a newer release is out (UpdateNotice.ts); never for --json or mcp.
 // The script with symlinks resolved: bun and yarn link their bin folder to the install.
 const script = (() => {
@@ -70,7 +91,7 @@ runCli(argv).pipe(
     : identity,
   // A reader that closes stdout (`watch | head`) ends a command as done, exit code 0: every streaming command.
   Effect.raceFirst(stdoutClosed(process.stdout)),
-  Effect.tapCause(reportFailure({ json, longRunning: isLongRunning(argv) })),
+  Effect.tapCause(reportFailure({ json, longRunning: isLongRunning(argv), agentHint: agentHints && takesJsonHere })),
   // --json: stdout is the JSON result alone (Output.ts), so help, banners and progress go to stderr.
   json
     ? (effect) =>
@@ -79,6 +100,7 @@ runCli(argv).pipe(
           Effect.provideService(ResultConsole, globalThis.console)
         )
     : identity,
+  Effect.provideService(AgentHints, agentHints),
   // Logs, a long-running command's final failure among them, go to stderr: stdout is for results, so `check --json | jq` gets JSON only.
   Effect.provideService(Logger.LogToStderr, true),
   Effect.provide(NodeServices.layer),
