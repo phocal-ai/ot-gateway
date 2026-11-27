@@ -38,10 +38,8 @@ const debugging: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
   ]
 ]
 
-/** The prompt from the README's "Set it up with AI", for agents other than Claude Code; keep the two the same. */
-const setupPrompt = `Set up an OT Gateway for my site. Read https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my devices reach the broker.`
-
-const setupSkill = `${site.repository}/blob/main/.claude/skills/setup/SKILL.md`
+/** The README's "Set it up with AI" prompt for an agent without the MCP server: the guide holds the steps. */
+const setupPrompt = `Set up OT Gateway for my site: follow ${site.publicUrl}/docs/setup-guide.md. Never write to a device unless I name the point, and keep secrets out of the config.`
 
 /** A horizontal line of the page's frame, with a small square where it meets each side rail. */
 const Rule = () => (
@@ -135,10 +133,15 @@ const HomePage = () => (
               its path.
             </p>
             <p className="text-fd-muted-foreground mt-4">
-              Copy the prompt from the top of the page, or type <code>/setup</code> in Claude Code. It follows{" "}
-              <a className="text-fd-foreground font-medium underline" href={setupSkill}>
-                the setup skill
-              </a>
+              Copy the prompt from the top of the page into any agent, or give yours the MCP server or the Claude Code
+              plugin:{" "}
+              <Link className="text-fd-foreground font-medium underline" href="/docs/agents">
+                Set it up with any agent
+              </Link>
+              . Each follows the same{" "}
+              <Link className="text-fd-foreground font-medium underline" href="/docs/setup-guide">
+                setup guide
+              </Link>
               . Rather do it yourself?{" "}
               <Link className="text-fd-foreground font-medium underline" href="/docs/first-building">
                 Your first site

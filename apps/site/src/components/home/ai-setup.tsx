@@ -65,7 +65,7 @@ export const AiSetup = () => {
       <div className="space-y-4 p-4 leading-relaxed md:p-5">
         <div {...line(0)}>
           <p>
-            <span className="text-[var(--series-1)]">&gt; /setup</span> {request}
+            <span className="text-[var(--series-1)]">&gt;</span> {request}
           </p>
           <p className="text-fd-muted-foreground mt-1.5 flex items-center gap-1.5">
             <Paperclip aria-hidden="true" className="size-3.5" /> meter-datasheet.pdf

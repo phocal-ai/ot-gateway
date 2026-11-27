@@ -63,6 +63,20 @@ export const pages: ReadonlyArray<PageSource> = [
       "For scripts, CI and AI agents: eight commands, the JSON each one prints, and what to do when one fails."
   },
   {
+    source: "docs/agents.md",
+    slug: "agents",
+    title: "Set it up with any agent",
+    description:
+      "Claude Code, Cursor, VS Code, Codex or any other agent: one MCP server and one setup guide, a few lines of install for each."
+  },
+  {
+    source: ".claude/skills/setup/SKILL.md",
+    slug: "setup-guide",
+    title: "Setup guide",
+    description:
+      "The steps an AI agent follows from nothing to your devices' values on your broker: the same guide the MCP server and the CLI serve."
+  },
+  {
     source: "docs/operations.md",
     slug: "operations",
     description:
@@ -235,11 +249,15 @@ const plainAlerts = (markdown: string): string =>
 
 const yamlString = (value: string): string => JSON.stringify(value)
 
+/** A skill's YAML frontmatter (its name and description, for the agent that loads it), which a page does not show. */
+export const withoutFrontmatter = (markdown: string): string => markdown.replace(/^---\n[\s\S]*?\n---\n+/, "")
+
 /** The H1 of a Markdown document, or undefined when it has none. */
 export const titleOf = (markdown: string): string | undefined => /^# (.+)$/m.exec(markdown)?.[1]?.trim()
 
 /** Builds one page from its source file's text. */
-export const generatePage = (page: PageSource, markdown: string, context: LinkContext): GeneratedPage => {
+export const generatePage = (page: PageSource, source: string, context: LinkContext): GeneratedPage => {
+  const markdown = withoutFrontmatter(source)
   const title = page.title ?? titleOf(markdown)
   if (title === undefined) throw new Error(`${page.source} has no H1 and no title in pages`)
 
