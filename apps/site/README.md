@@ -14,6 +14,8 @@ python3 -m http.server 3001 -d apps/site/out   # preview the export (add .html t
 
 Each docs page also exists as Markdown. The build writes it to `/llms.mdx/docs/<page>/content.md`, and `vercel.json` serves it at the page's URL plus `.md`. `/llms.txt` indexes the pages and `/llms-full.txt` holds all of them in one file. Search uses a static index that the browser downloads from `/api/search`.
 
+Every docs page opens with "Explore with an AI agent": prompts to copy into any agent that can read a web page (a TL;DR and one about the reader's own site), each pointing at the page's `.md` twin on the production address (also in a local build, since an agent cannot read localhost), so a reader gets the page explained and keeps asking in their own chat. The prompts are in `src/content/explore.ts`, the block in `src/components/docs/explore-prompt.tsx`.
+
 ## Vercel
 
 The site is the Vercel project `ot-gateway` (team `wimluks-projects`), live at https://ot-gateway.vercel.app. Vercel's GitHub integration builds it:

@@ -8,5 +8,10 @@ export const site = {
   url: process.env["VERCEL_PROJECT_PRODUCTION_URL"]
     ? `https://${process.env["VERCEL_PROJECT_PRODUCTION_URL"]}`
     : "http://localhost:3001",
+  /**
+   * The address an agent outside this machine can read: the production one, also in a local build, so the
+   * prompts that point agents at a page's Markdown never point at localhost.
+   */
+  publicUrl: `https://${process.env["VERCEL_PROJECT_PRODUCTION_URL"] ?? "ot-gateway.vercel.app"}`,
   repository
 } as const

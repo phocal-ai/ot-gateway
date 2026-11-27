@@ -9,14 +9,13 @@ import { Effect, FileSystem } from "effect"
 import type { NetworkInterfaceInfo } from "node:os"
 import { configSummary, withFirstRun } from "../src/Cli.ts"
 import {
-  brokerQuestion,
+  brokerNote,
   defaultFolder,
   type DraftedDevice,
   initSummary,
-  isEmptyFolder,
   keepPicked,
   pointChoices,
-  siteSuggestion,
+  topicPattern,
   startNowQuestion,
   dockerDesktopNote,
   historyDiskBytes,
@@ -530,10 +529,10 @@ describe("picking discovered points", () => {
       ["demo-room/fan", true],
       ["demo-room/temperature-setpoint", true]
     ])
-    expect(pointChoices([room])[0]?.title).toBe("Room temperature (°C)  ·  analog-input 1")
-    expect(pointChoices([room])[1]?.title).toBe("Heating  ·  binary-input 1")
+    expect(pointChoices([room])[0]).toMatchObject({ title: "Room temperature", details: ["°C", "analog-input 1"] })
+    expect(pointChoices([room])[1]).toMatchObject({ title: "Heating", details: ["", "binary-input 1"] })
     const other: DraftedDevice = { ...room, id: "ahu-1", deviceInstance: 2001 }
-    expect(pointChoices([room, other])[4]?.title).toBe("Room temperature (°C)  ·  ahu-1 · analog-input 1")
+    expect(pointChoices([room, other])[4]?.details).toEqual(["°C", "analog-input 1", "ahu-1"])
   })
 
   it("keeps the picked points, drops a device left with none, and leaves the drafts as they were", () => {
@@ -544,28 +543,14 @@ describe("picking discovered points", () => {
 })
 
 describe("init for a person at the terminal", () => {
-  it("writes into an empty folder (hidden files aside), and suggests the folder's name as the site", () => {
-    expect(isEmptyFolder([])).toBe(true)
-    expect(isEmptyFolder([".git", ".DS_Store"])).toBe(true)
-    expect(isEmptyFolder([".git", "points.csv"])).toBe(false)
-    expect(siteSuggestion("/srv/plant-3/ot-gateway.json")).toBe("plant-3")
-    expect(siteSuggestion(`/srv/${defaultFolder}/ot-gateway.json`)).toBe("my-site")
-    expect(siteSuggestion("/srv/My Plant/ot-gateway.json")).toBe("my-site")
+  it("shows the topic the site and building go into", () => {
+    expect(topicPattern("<site>", "<building>")).toBe("<site>/<building>/<device>/<point>")
+    expect(topicPattern("plant-3", "hall-a")).toBe("plant-3/hall-a/<device>/<point>")
   })
 
-  it.effect("takes this folder when it is empty and no folder is named", () =>
-    Effect.gen(function* () {
-      expect(yield* initTarget(undefined, false, { empty: true })).toBe("ot-gateway.json")
-      expect(yield* initTarget("site-1", false, { empty: true })).toBe("site-1/ot-gateway.json")
-      expect(yield* initTarget(undefined, true, { empty: false })).toBe(`${defaultFolder}/ot-gateway.json`)
-      // Scripts get the folder they always got, empty or not.
-      expect(yield* initTarget(undefined, true, { empty: true })).toBe(`${defaultFolder}/ot-gateway.json`)
-    }).pipe(Effect.provide(NodeServices.layer))
-  )
-
   it("says whether a broker answers on localhost", () => {
-    expect(brokerQuestion(true)).toContain("one answers on localhost:1883")
-    expect(brokerQuestion(false)).toContain("nothing answers on localhost:1883 yet")
+    expect(brokerNote(true)).toContain("answers on localhost:1883")
+    expect(brokerNote(false)).toContain("nothing answers on localhost:1883 yet")
   })
 
   it.effect("offers to start only with devices, and not before the broker password is set", () =>
@@ -590,14 +575,16 @@ describe("init for a person at the terminal", () => {
       const files = { written: ["ot-gateway.json", "compose.yaml", "ot-gateway.env"], kept: [] }
       const summary = initSummary("ot-gateway.json", config, files, { platform: "linux", cwd: "." })
       expect(summary.lines).toEqual([
-        "✓ wrote ot-gateway.json, compose.yaml, ot-gateway.env",
-        "✓ demo-room at 192.168.0.171: 4 points, 1 writable"
+        "✔ Wrote ot-gateway.json, compose.yaml, ot-gateway.env",
+        "✔ demo-room at 192.168.0.171: 4 points, 1 writable"
       ])
       expect(summary.later).toEqual([
-        "start it:     ot-gateway run   (or in Docker: docker compose up -d)",
-        "read once:    ot-gateway read",
-        "status page:  http://127.0.0.1:8080",
-        "all commands: ot-gateway --help"
+        [
+          "  Start it      ot-gateway run  or in Docker: docker compose up -d",
+          "  Read once     ot-gateway read",
+          "  Status page   http://127.0.0.1:8080",
+          "  All commands  ot-gateway --help"
+        ].join("\n")
       ])
       const mac = initSummary(
         "site-1/ot-gateway.json",
@@ -608,8 +595,8 @@ describe("init for a person at the terminal", () => {
           cwd: "."
         }
       )
-      expect(mac.lines[0]).toBe("✓ wrote ot-gateway.json in site-1")
-      expect(mac.later[0]).toBe("start it:     ot-gateway run site-1/ot-gateway.json")
+      expect(mac.lines[0]).toBe("✔ Wrote ot-gateway.json in site-1")
+      expect(mac.later[0]?.split("\n")[0]).toBe("  Start it      ot-gateway run site-1/ot-gateway.json")
     })
   )
 
@@ -617,10 +604,12 @@ describe("init for a person at the terminal", () => {
     Effect.gen(function* () {
       const config = yield* decode(initConfig(answers, []))
       const here = initSummary("ot-gateway.json", config, { written: ["ot-gateway.json"], kept: [] }, { cwd: "." })
-      expect(here.lines).toEqual(["✓ wrote ot-gateway.json"])
-      expect(here.later[0]).toBe("next: ot-gateway discover")
+      expect(here.lines).toEqual(["✔ Wrote ot-gateway.json"])
+      expect(here.later[0]).toBe("  Next  ot-gateway discover  find BACnet/IP or Modbus TCP devices")
       const elsewhere = initSummary("site-1/ot-gateway.json", config, { written: [], kept: [] }, { cwd: "." })
-      expect(elsewhere.later[0]).toBe("next: ot-gateway discover site-1/ot-gateway.json")
+      expect(elsewhere.later[0]).toBe(
+        "  Next  ot-gateway discover site-1/ot-gateway.json  find BACnet/IP or Modbus TCP devices"
+      )
     })
   )
 

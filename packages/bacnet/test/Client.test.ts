@@ -567,6 +567,49 @@ const discoverHearing = Effect.fnUntraced(function* (network: MemoryNetwork, fra
 
 const sourceOf = (source: DeviceAddress) => ({ at: NetAddress.formatInet(source.address), network: source.network })
 
+describe("discover with a quiet period", () => {
+  /** Discover under the test clock while a peer sends one I-Am at each of `at` (milliseconds after Who-Is). */
+  const discoverWithLate = Effect.fnUntraced(function* (times: ReadonlyArray<number>) {
+    const network = makeMemoryNetwork()
+    const peer = yield* network.host("10.0.2.9").udp({ address: "10.0.2.9", port: 47_808 })
+    yield* peer.reader
+    const peerWriter = yield* peer.writer
+    const socket = yield* network.host("10.0.0.1").udp({ address: "10.0.0.1", port: 47_808 })
+    const client = yield* makeBacnetClient(socket, {
+      broadcastAddress: at("255.255.255.255"),
+      requestTimeout: "1 second"
+    })
+    const discovering = yield* client
+      .discover({ within: "1 second", quiet: "500 millis", atMost: "3 seconds" })
+      .pipe(Effect.forkChild)
+    let now = 0
+    for (const [index, when] of times.entries()) {
+      yield* TestClock.adjust(`${when - now} millis`)
+      now = when
+      yield* peerWriter.write({ payload: iAmFrame(6000 + index), address: at("10.0.0.1") })
+      yield* Effect.yieldNow
+    }
+    yield* TestClock.adjust("5 seconds")
+    return (yield* Fiber.join(discovering)).map((device) => device.instance)
+  })
+
+  it.effect("keeps listening while new devices answer, and stops after a quiet period", () =>
+    Effect.gen(function* () {
+      // 1.3 s and 1.7 s are after `within` but each within 500 ms of the one before: both found.
+      expect(yield* discoverWithLate([900, 1300, 1700])).toEqual([6000, 6001, 6002])
+      // 2.5 s comes after 1.5 s without a new device: discovery had stopped.
+      expect(yield* discoverWithLate([900, 2500])).toEqual([6000])
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("stops at atMost however long answers keep coming", () =>
+    Effect.gen(function* () {
+      const found = yield* discoverWithLate([400, 800, 1200, 1600, 2000, 2400, 2800, 3200, 3600])
+      expect(found).toEqual([6000, 6001, 6002, 6003, 6004, 6005, 6006])
+    }).pipe(Effect.scoped)
+  )
+})
+
 describe("discover on an in-memory network", () => {
   it.effect("keeps every other address that answered for an instance, and an answer resent from one only once", () =>
     Effect.gen(function* () {

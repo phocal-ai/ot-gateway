@@ -161,6 +161,13 @@ export interface DiscoverOptions {
   readonly target?: DeviceAddress
   /** How long to collect I-Am answers (default: the request timeout). */
   readonly within?: Duration.Input
+  /**
+   * After `within`, keep listening while answers still come, until none came for this long: a large site's I-Am
+   * answers trickle in for longer than a small one's. Without it, discovery stops at `within`.
+   */
+  readonly quiet?: Duration.Input
+  /** With `quiet`, the longest discovery listens in all, however long answers keep coming (default: 30 seconds). */
+  readonly atMost?: Duration.Input
 }
 
 export interface BacnetClient {
@@ -794,6 +801,27 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
         const found = makeDiscoveryCollector()
         const whoIs: WhoIs = discoverOptions.range === undefined ? {} : { range: discoverOptions.range }
         const target = discoverOptions.target
+        const within = Duration.toMillis(Duration.fromInputUnsafe(discoverOptions.within ?? requestTimeout))
+        const quiet =
+          discoverOptions.quiet === undefined
+            ? undefined
+            : Duration.toMillis(Duration.fromInputUnsafe(discoverOptions.quiet))
+        const atMost = Math.max(
+          within,
+          Duration.toMillis(Duration.fromInputUnsafe(discoverOptions.atMost ?? "30 seconds"))
+        )
+        // New devices counted, not answers: one device repeating its I-Am does not keep discovery listening.
+        const answers = () => found.devices().length
+        // Waited in virtual-time-safe steps of `quiet`: stops on the first step without a new answer, or at `atMost`.
+        const settle = (waited: number): Effect.Effect<void> =>
+          Effect.suspend(() => {
+            if (quiet === undefined || quiet <= 0 || waited >= atMost) return Effect.void
+            const before = answers()
+            const step = Math.min(quiet, atMost - waited)
+            return Effect.sleep(Duration.millis(step)).pipe(
+              Effect.andThen(Effect.suspend(() => (answers() === before ? Effect.void : settle(waited + step))))
+            )
+          })
         return listening(
           (device) => {
             // Asked one address: an I-Am from anywhere else answers someone else's Who-Is.
@@ -801,7 +829,8 @@ export const makeBacnetClient = Effect.fn("makeBacnetClient")(function* (
             if (whoIsMatches(whoIs, device.instance)) found.add(device)
           },
           sendWhoIs(whoIs, discoverOptions.target).pipe(
-            Effect.andThen(Effect.sleep(discoverOptions.within ?? requestTimeout))
+            Effect.andThen(Effect.sleep(Duration.millis(within))),
+            Effect.andThen(settle(within))
           )
         ).pipe(Effect.map(found.devices))
       }),

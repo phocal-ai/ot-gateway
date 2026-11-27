@@ -1,25 +1,28 @@
 "use client"
-/** Copying for the home page: a prompt cut to one row, with a copy button. */
+/** Copying for the home page: a prompt cut to one row, with a copy button. The docs pages' prompts copy with `useCopy` too. */
 import { Check, ChevronDown, Copy } from "lucide-react"
 import { useEffect, useState } from "react"
 
-/** Copies `text` and reports `copied` for two seconds. */
-const useCopy = (text: string) => {
-  const [copied, setCopied] = useState(false)
+/**
+ * Copies `text` and reports `copied` for two seconds, only while `text` is still the one copied: switching to
+ * another text shows it as not copied yet.
+ */
+export const useCopy = (text: string) => {
+  const [copiedText, setCopiedText] = useState<string | undefined>(undefined)
 
   useEffect(() => {
-    if (!copied) return
-    const timer = setTimeout(() => setCopied(false), 2000)
+    if (copiedText === undefined) return
+    const timer = setTimeout(() => setCopiedText(undefined), 2000)
     return () => clearTimeout(timer)
-  }, [copied])
+  }, [copiedText])
 
   const copy = () => {
     navigator.clipboard.writeText(text).then(
-      () => setCopied(true),
-      () => setCopied(false)
+      () => setCopiedText(text),
+      () => setCopiedText(undefined)
     )
   }
-  return { copied, copy }
+  return { copied: copiedText === text, copy }
 }
 
 /**
