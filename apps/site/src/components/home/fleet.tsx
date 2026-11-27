@@ -22,9 +22,9 @@ const Window = ({ title, children }: { readonly title: string; readonly children
 )
 
 const lines: ReadonlyArray<readonly [string, "good" | "warn" | "bad", string]> = [
-  ["site-1/building-a/main", "good", "online   3 device(s): 3 ok"],
-  ["site-1/building-b/main", "warn", "online   2 device(s): 1 ok, 1 failing"],
-  ["site-2/plant/main", "bad", "offline  connection-lost"]
+  ["site-1/building-a/main", "good", "online      3 device(s): 3 ok"],
+  ["site-1/building-b/main", "warn", "online      2 device(s): 1 ok, 1 failing"],
+  ["site-2/plant/main", "bad", "offline     connection-lost"]
 ]
 
 const width = Math.max(...lines.map(([name]) => name.length))

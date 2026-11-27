@@ -9,27 +9,25 @@ flowchart LR
     direction TB
     a["site-1/building-a/main"]
     b["site-1/building-b/main"]
-    c["site-2/plant/main"]
+    c["site-2/plant/main<br/>last will: offline"]
   end
   broker[("Your MQTT broker<br/>retained: …/$gateway/&lt;id&gt;/health<br/>and …/&lt;point&gt;/$meta")]
   subgraph readers["Anywhere that reaches the broker"]
     direction TB
     cli["ot-gateway gateways list"]
     agent["an AI agent: gateways_list"]
+    software["your own software"]
   end
-  a -- "publishes" --> broker
-  b -- "publishes" --> broker
-  c -- "last will: offline" --> broker
-  broker -- "reads" --> cli
-  broker -- "reads" --> agent
+  sites -- "publish, retained" --> broker
+  broker -- "subscribe, read-only" --> readers
 ```
 
 ## Three commands
 
 ```bash
 ot-gateway gateways list --broker mqtts://broker.example:8883 --username viewer   # every gateway: online or offline, its devices by status
-ot-gateway gateways status site-1/building-b/main                                 # one gateway: each device and why it fails, its machine
-ot-gateway gateways points site-1/building-b/main                                 # its points from their retained $meta: name, unit, writable
+ot-gateway gateways status site-1/building-b/main --broker mqtts://broker.example:8883 --username viewer   # one gateway: each device and why it fails, its machine
+ot-gateway gateways points site-1/building-b/main --broker mqtts://broker.example:8883 --username viewer   # its points from their retained $meta: name, unit, writable
 ```
 
 `gateways list` prints one line per gateway:
@@ -104,12 +102,14 @@ Each tool returns the command's `--json`, so the agent reads the same fields you
 
 ## When it says something else
 
-| Code                | What it means                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------- |
-| `no-broker`         | No `--broker`, and no config in this folder to take one from.                         |
-| `subscribe-refused` | The login may not read the health or `$meta` topics: grant read on the two filters.   |
-| `gateway-not-found` | No gateway of that name keeps its health on this broker: `gateways list` shows names. |
-| `gateway-ambiguous` | Several gateways share that id: name it as `site/building/id`.                        |
-| `health-unreadable` | The gateway runs a newer release than the CLI: update the CLI.                        |
+| Code                | What it means                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `no-broker`         | No `--broker`, and no config in this folder to take one from.                                                   |
+| `subscribe-refused` | The login may not read the health or `$meta` topics: grant read on the two filters.                             |
+| `gateway-not-found` | No gateway of that name keeps its health on this broker: `gateways list` shows names.                           |
+| `gateway-ambiguous` | Several gateways share that id: name it as `site/building/id`.                                                  |
+| `gateway-offline`   | `gateways status`: the gateway stopped (`shutdown`) or went away (`connection-lost`).                           |
+| `gateway-unhealthy` | `gateways status`: the gateway runs and a device fails; the report says which and why.                          |
+| `health-unreadable` | Its health is not a message this CLI reads: a newer release, or something else publishes there. Update the CLI. |
 
 `ot-gateway explain <code>` says more about each, and [Troubleshooting](troubleshooting.md#codes) lists them all.
