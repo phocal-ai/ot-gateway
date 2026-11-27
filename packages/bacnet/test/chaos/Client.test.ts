@@ -245,8 +245,20 @@ describe("chaos: client over UDP", () => {
       const silent = yield* peer()
       const client = yield* startClient({ requestTimeout: "1 second", retries: 0 })
       const started = Date.now()
+      // How late the event loop runs timers while the requests time out: a 50 ms sleep, again and again for 2 s,
+      // and how much longer than 50 ms the slowest one took. A CI runner busy with every package's tests stalls
+      // the loop by hundreds of milliseconds at the moment 1024 requests end together.
+      const stalls = Effect.gen(function* () {
+        let worst = 0
+        while (Date.now() - started < 2000) {
+          const before = Date.now()
+          yield* Effect.sleep("50 millis")
+          worst = Math.max(worst, Date.now() - before - 50)
+        }
+        return worst
+      })
       // Four times the 256 invoke IDs, all to a device that never answers.
-      const timed = yield* Effect.forEach(
+      const requests = Effect.forEach(
         Array.from({ length: 1024 }, (_, index) => index),
         () =>
           Effect.gen(function* () {
@@ -261,14 +273,17 @@ describe("chaos: client over UDP", () => {
           }),
         { concurrency: "unbounded" }
       )
+      const [timed, stall] = yield* Effect.all([requests, stalls], { concurrency: 2 })
       const elapsed = Date.now() - started
+      const slowest = Math.max(...timed.map(({ took }) => took))
       const results = timed.map(({ result }) => result)
       // Queued, the last quarter would wait three timeouts first and end after four seconds.
       expect(elapsed).toBeLessThan(3000)
       // Each request, its wait for an invoke ID included, ends near its 1 s deadline: one that gets an ID
-      // freed just before its deadline must not start a fresh 1 s exchange on top (two seconds in all).
-      // The bound sits midway: a CI runner busy with every package's tests delays timers by ~350 ms.
-      expect(Math.max(...timed.map(({ took }) => took))).toBeLessThan(1600)
+      // freed just before its deadline must not start a fresh 1 s exchange on top (two seconds in all, plus the
+      // stall). The bound sits midway, above the stall the loop showed meanwhile, which a fixed bound cannot
+      // know: on a busy runner it reached 700 ms, past the 1600 ms that bound once was.
+      expect(slowest).toBeLessThan(1500 + stall)
       expect(
         results.some(
           (result) =>
