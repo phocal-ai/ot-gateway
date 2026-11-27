@@ -21,7 +21,7 @@ export const parseRelease = (version: string): Release | undefined => {
   return [Number(match[1]), Number(match[2]), Number(match[3])]
 }
 
-const compareReleases = (left: Release, right: Release) =>
+export const compareReleases = (left: Release, right: Release) =>
   left[0] - right[0] || left[1] - right[1] || left[2] - right[2]
 
 /** The release that first served `/api/events` and `/api/messages/window`. */

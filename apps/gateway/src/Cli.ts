@@ -106,6 +106,17 @@ import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
 import { watch } from "./Watch.ts"
+import {
+  DEFAULT_WAIT_SECONDS,
+  fleetBroker,
+  formatGatewayList,
+  formatGatewayPoints,
+  formatGatewayStatus,
+  gatewayPoints,
+  gatewayStatus,
+  listGateways,
+  statusFailure
+} from "./Fleet.ts"
 import { formatWritten, parseTarget, writePoint } from "./Write.ts"
 import { contractJson, contractMessageNames, describeContract, describeContractMessage } from "./ContractReport.ts"
 import {
@@ -1281,6 +1292,102 @@ const watchCommand = Command.make(
   ])
 )
 
+/** The flags every `gateways` command takes: which broker, and how long to wait for its retained messages. */
+const fleetFlags = {
+  broker: Flag.String("broker").pipe(
+    Flag.withDescription(
+      "The broker to ask, mqtt://host:1883 or mqtts://host:8883, instead of the one in ./ot-gateway.json (or --config)"
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined)
+  ),
+  username: Flag.String("username").pipe(
+    Flag.withDescription("The login for --broker; the password is read from OT_GATEWAY_BROKER_PASSWORD"),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined)
+  ),
+  config: Flag.String("config").pipe(
+    Flag.withDescription("The config whose broker to ask when there is no --broker"),
+    Flag.withDefault(DEFAULT_CONFIG)
+  ),
+  wait: Flag.Int("wait").pipe(
+    Flag.withDescription(`Seconds to wait for the broker's retained messages (default ${DEFAULT_WAIT_SECONDS})`),
+    Flag.filter(
+      (seconds) => seconds >= 1 && seconds <= 60,
+      (seconds) => `--wait takes 1 to 60, not ${seconds}`
+    ),
+    Flag.withDefault(DEFAULT_WAIT_SECONDS)
+  ),
+  json: jsonFlag
+}
+
+const gatewayArgument = Argument.String("gateway").pipe(
+  Argument.withDescription("The gateway as site/building/id, or its id alone when no other gateway has it")
+)
+
+const gatewaysList = Command.make("list", fleetFlags, ({ broker, username, config, wait, json }) =>
+  fleetBroker({ broker, username, config }).pipe(
+    Effect.flatMap((settings) => listGateways(settings, Duration.seconds(wait))),
+    jsonFailure(json),
+    Effect.flatMap((report) =>
+      json ? printJsonWithLocalTimes(report) : Console.log(formatGatewayList(report, Date.now()))
+    )
+  )
+).pipe(
+  Command.withAlias("ls"),
+  Command.withDescription("Every gateway whose health the broker keeps: online or offline, and its devices by status")
+)
+
+const gatewaysStatus = Command.make(
+  "status",
+  { gateway: gatewayArgument, ...fleetFlags },
+  ({ gateway, broker, username, config, wait, json }) =>
+    fleetBroker({ broker, username, config }).pipe(
+      Effect.flatMap((settings) => gatewayStatus(settings, gateway, Duration.seconds(wait))),
+      jsonFailure(json, { gateway }),
+      Effect.flatMap(
+        Effect.fnUntraced(function* (report) {
+          const failure = statusFailure(report.gateway)
+          yield* json
+            ? printJsonWithLocalTimes(
+                failure === undefined ? report : { ...report, code: failure.code, hint: failure.hint }
+              )
+            : Console.log(formatGatewayStatus(report.gateway, Date.now()))
+          if (failure !== undefined) return yield* failure
+        })
+      )
+    )
+).pipe(
+  Command.withDescription(
+    "One gateway's health from the broker: each device's status and why it fails, and its machine; exit 1 when it is offline or a device fails"
+  )
+)
+
+const gatewaysPoints = Command.make(
+  "points",
+  { gateway: gatewayArgument, ...fleetFlags },
+  ({ gateway, broker, username, config, wait, json }) =>
+    fleetBroker({ broker, username, config }).pipe(
+      Effect.flatMap((settings) => gatewayPoints(settings, gateway, Duration.seconds(wait))),
+      jsonFailure(json, { gateway }),
+      Effect.flatMap((report) => (json ? printJson(report) : Console.log(formatGatewayPoints(report))))
+    )
+).pipe(
+  Command.withDescription("One gateway's points from their retained $meta on the broker: topic, name, unit, writable")
+)
+
+const gatewaysCommand = Command.make("gateways").pipe(
+  Command.withDescription(
+    "The gateways a broker knows, from the health and $meta they keep there: no config or status page needed (--broker)"
+  ),
+  Command.withSubcommands([gatewaysList, gatewaysStatus, gatewaysPoints]),
+  Command.withExamples([
+    { command: "ot-gateway gateways list --broker mqtt://broker.local:1883", description: "Every gateway on a broker" },
+    { command: "ot-gateway gateways status site-1/building-a/main", description: "One gateway, device by device" },
+    { command: "ot-gateway gateways points main --json", description: "Its points, for scripts and agents" }
+  ])
+)
+
 /**
  * `broker`'s report, as JSON or text, then a failure when its message did not come back, so the exit code is 1.
  * The failure comes after the output and outside `jsonFailure`, so the report is printed once and is the JSON; a
@@ -2399,6 +2506,7 @@ export const rootDescription = [
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
   "    check --json                     every mistake in a config, with its path",
   "    broker --json                    the broker: MQTT version, limits, a round trip",
+  "    gateways list --json             every gateway on the broker (--broker <url>, no config needed); gateways status|points <gateway>",
   "    status --json                    the running gateway, device by device, with what to check; exits 1 when something fails",
   "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
@@ -2428,6 +2536,7 @@ export const cli = Command.make("ot-gateway").pipe(
     profiles,
     contractCommand,
     watchCommand,
+    gatewaysCommand,
     brokerCommand,
     publishCommand,
     writeCommand,
@@ -2462,6 +2571,7 @@ const subcommands = new Set([
   "profiles",
   "contract",
   "watch",
+  "gateways",
   "broker",
   "publish",
   "write",

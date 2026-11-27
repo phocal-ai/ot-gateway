@@ -104,6 +104,8 @@ USER node
 ENV NODE_COMPILE_CACHE=/opt/ot-gateway/compile-cache
 RUN node --max-semi-space-size=4 /opt/ot-gateway/apps/gateway/src/main.mjs --check examples/gateway.json >/dev/null
 ENV NODE_ENV=production
+# The image is upgraded with `ot-gateway upgrade`, not npm: the CLI's daily "Update available" line stays off here.
+ENV OT_GATEWAY_NO_UPDATE_CHECK=1
 # `demo` serves its status page on every interface of the container, so `-p 127.0.0.1:8080:8080` reaches it.
 ENV OT_GATEWAY_DEMO_LISTEN=0.0.0.0
 # The env file of the layout before the folder, read by the CLI when it is there and passed over in silence when
