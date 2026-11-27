@@ -1,7 +1,7 @@
 /**
- * `ot-gateway init`: a few questions, then a config that `check` accepts. A person answers the broker, the site and
- * the building, and adds devices next with `discover`, which runs `discoverInteractively` below: what to look for
- * (BACnet/IP, a Modbus TCP scan, one device by its address, a points list, the simulated device), then the points
+ * `ot-gateway init`: a few questions, then a config that `check` accepts. A person answers the folder, the broker,
+ * the site and the building, and adds devices next with `discover`, which runs `discoverInteractively` below: the
+ * protocol (BACnet/IP, or a Modbus TCP scan; one device by its address when a broadcast finds nothing), then the points
  * to keep, read-only at the default interval. Scripts give init its devices as flags: a points list,
  * the simulated device, or `--devices discover` (drafted read-only).
  *
@@ -22,6 +22,8 @@ import { parseDeviceAddress } from "@ot-gateway/bacnet"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { devicesFromFile } from "./Import.ts"
 import { shellArgument } from "./Output.ts"
+import { CurrentUi, plainUi, spinning, type Ui } from "./Ui.ts"
+import { picker } from "./Picker.ts"
 import {
   foundUnits,
   formatScan,
@@ -196,8 +198,9 @@ const answer = <A extends string>(
   return yes ? Effect.succeed(fallback) : ask
 }
 
+/** A name that is a topic segment: `fallback` with `--yes`; asked without a default, a made-up name being worse than none. */
 const slug = (flag: string, given: string | undefined, yes: boolean, message: string, fallback: string) =>
-  answer(flag, given, yes, fallback, Prompt.String({ message, default: fallback, validate: validSlug }), validSlug)
+  answer(flag, given, yes, fallback, Prompt.String({ message, validate: validSlug }), validSlug)
 
 /** Whether a broker answers on localhost:1883, so the broker question can say so; at most a second. */
 export const localBrokerAnswers = NodeSocket.makeNet({ host: "localhost", port: 1883, openTimeout: "1 second" }).pipe(
@@ -208,11 +211,11 @@ export const localBrokerAnswers = NodeSocket.makeNet({ host: "localhost", port: 
   Effect.timeoutOrElse({ duration: "1 second", orElse: () => Effect.succeed(false) })
 )
 
-/** The broker question: whether something answers on localhost:1883 says if the default is a good one. */
-export const brokerQuestion = (localAnswers: boolean) =>
+/** The note before the broker question: whether something answers on localhost:1883 says if the default is a good one. */
+export const brokerNote = (localAnswers: boolean) =>
   localAnswers
-    ? "MQTT broker URL (one answers on localhost:1883)"
-    : "MQTT broker URL (nothing answers on localhost:1883 yet; mqtts:// for TLS)"
+    ? "an MQTT broker answers on localhost:1883"
+    : "nothing answers on localhost:1883 yet; mqtts:// for a broker with TLS"
 
 const brokerUrl = Effect.fn("brokerUrl")(function* (flags: InitFlags, localBroker: Effect.Effect<boolean>) {
   const asks = flags.broker === undefined && flags.yes !== true
@@ -221,24 +224,31 @@ const brokerUrl = Effect.fn("brokerUrl")(function* (flags: InitFlags, localBroke
     flags.broker,
     flags.yes === true,
     "mqtt://localhost:1883",
-    Prompt.String({
-      message: brokerQuestion(asks && (yield* localBroker)),
-      default: "mqtt://localhost:1883",
-      validate: validBrokerUrl
-    }),
+    Console.error(brokerNote(asks && (yield* localBroker))).pipe(
+      Effect.andThen(
+        Prompt.String({
+          message: "Which MQTT broker should it publish to?",
+          default: "mqtt://localhost:1883",
+          validate: validBrokerUrl
+        })
+      )
+    ),
     validBrokerUrl
   )
 })
 
+/** The username, asked after a yes to whether the broker needs a login; empty for none. */
+const askUsername = Effect.gen(function* () {
+  const needs = yield* Prompt.Confirm({ message: "Does the broker need a username and password?", initial: false })
+  return needs ? yield* Prompt.String({ message: "Broker username?", validate: validUsername }) : ""
+})
+
+const validUsername = (value: string) =>
+  value.trim() === "" ? Effect.fail("the username the broker expects") : Effect.succeed(value)
+
 const login = Effect.fn("login")(function* (flags: InitFlags) {
   const yes = flags.yes === true
-  const username = yield* answer(
-    "username",
-    flags.username,
-    yes || flags.passwordEnv !== undefined,
-    "",
-    Prompt.String({ message: "Broker username (empty for none)", default: "" })
-  )
+  const username = yield* answer("username", flags.username, yes || flags.passwordEnv !== undefined, "", askUsername)
   if (username === "") {
     if (flags.passwordEnv !== undefined) return yield* new InitError({ message: "--password-env needs --username" })
     return undefined
@@ -248,11 +258,15 @@ const login = Effect.fn("login")(function* (flags: InitFlags) {
     flags.passwordEnv,
     yes || flags.username !== undefined,
     "MQTT_PASSWORD",
-    Prompt.String({
-      message: "Env variable that will hold the password (it is never written to the config)",
-      default: "MQTT_PASSWORD",
-      validate: validEnvName
-    }),
+    Console.error("the password stays out of ot-gateway.json: it goes in ot-gateway.env, under this variable").pipe(
+      Effect.andThen(
+        Prompt.String({
+          message: "Which variable holds the password?",
+          default: "MQTT_PASSWORD",
+          validate: validEnvName
+        })
+      )
+    ),
     validEnvName
   )
   return { username, passwordEnv }
@@ -321,18 +335,17 @@ const devicesFromFlag = (path: string) =>
 /** A drafted point's key in the pickers: its device and its id, both slugs, so `/` cannot be in either. */
 const pointKey = (device: { readonly id: string }, point: { readonly id: string }) => `${device.id}/${point.id}`
 
-/** A drafted point as the picker lists it: its name and unit, then where it is (the device when there are several). */
-const pointTitle = (device: { readonly id: string }, point: DraftedPoint, devices: number) => {
-  const unit = unitLabel(point.unit)
-  const where = `${devices > 1 ? `${device.id} · ` : ""}${point.objectType} ${point.instance}`
-  return `${printable(point.name)}${unit === "" ? "" : ` (${unit})`}  ·  ${where}`
-}
+/** A drafted point as the picker lists it: its name, then its unit and where it is (the device when there are several). */
+export const pointRow = (device: { readonly id: string }, point: DraftedPoint, devices: number) => ({
+  title: printable(point.name),
+  details: [unitLabel(point.unit), `${point.objectType} ${point.instance}`, ...(devices > 1 ? [device.id] : [])]
+})
 
 /** Every drafted point, ticked: the operator unticks what the gateway should not read. */
 export const pointChoices = (drafts: ReadonlyArray<DraftedDevice>) =>
   drafts.flatMap((device) =>
     device.points.map((point) => ({
-      title: pointTitle(device, point, drafts.length),
+      ...pointRow(device, point, drafts.length),
       value: pointKey(device, point),
       selected: true
     }))
@@ -365,42 +378,33 @@ const pickPoints = Effect.fn("pickPoints")(function* (drafts: ReadonlyArray<Draf
   }
   const kept = keepPicked(
     drafts,
-    yield* Prompt.MultiSelect({
-      message: "Points to read (space toggles, enter confirms)",
-      choices,
-      maxPerPage: 15
-    })
+    yield* picker(yield* CurrentUi, { message: "Which points should it read?", rows: choices, noun: "points" })
   )
   return kept.length === 0 ? undefined : kept
 })
 
 /** The ways to devices discover offers: what to look for first, and what to try when nothing was found. */
-type Way = "bacnet" | "modbus" | "address" | "list" | "simulated" | "none"
+type Way = "bacnet" | "modbus" | "address" | "none"
 
-const wayChoices: ReadonlyArray<Prompt.SelectChoice<Way>> = [
-  { title: "BACnet/IP", value: "bacnet", description: "ask every device on this network (Who-Is)" },
-  { title: "Modbus TCP", value: "modbus", description: "scan a range of addresses on port 502, read-only" },
-  {
-    title: "One BACnet device by its address",
-    value: "address",
-    description: "ip or ip:port, for a device on another subnet or another port"
-  },
-  {
-    title: "A points list",
-    value: "list",
-    description: "a CSV or JSON of devices and points (Modbus, or BACnet from an EDE file)"
-  },
-  { title: "A simulated device", value: "simulated", description: "to see values flow first; replace it later" }
+/** The protocols discover finds devices on: what it asks first. A points list is `import`'s, not a protocol. */
+const protocolChoices: ReadonlyArray<Prompt.SelectChoice<Way>> = [
+  { title: "BACnet/IP", value: "bacnet", description: "ask every device on this network" },
+  { title: "Modbus TCP", value: "modbus", description: "scan a range of addresses, read-only" }
 ]
 
-const firstWay = Prompt.Select<Way>({ message: "What should discover look for?", choices: wayChoices })
+const firstWay = Prompt.Select<Way>({ message: "Which protocol are the devices on?", choices: protocolChoices })
 
+/**
+ * When nothing was found or picked: the protocols again, one BACnet device by its address (on another subnet or
+ * port, where a broadcast does not reach), or nothing for now.
+ */
 const nextWay = (nothing: string) =>
   Prompt.Select<Way>({
     message: `${nothing} What now?`,
     choices: [
-      ...wayChoices,
-      { title: "Nothing for now", value: "none", description: "discover again once a device is reachable" }
+      ...protocolChoices,
+      { title: "One BACnet device by its address", value: "address", description: "on another subnet or port" },
+      { title: "Nothing for now", value: "none", description: "a points list goes in with import" }
     ]
   })
 
@@ -420,30 +424,32 @@ const validModbusRange = (value: string) => {
  * answered with a register as a device with that one placeholder point, to replace with the datasheet's registers.
  */
 const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (suggested: string) {
+  yield* Console.error("a network (192.168.1.0/24), first-last (192.168.1.10-40) or one address; port 502")
   const range = yield* Prompt.String({
-    message: "Addresses to scan for Modbus TCP (a network, first-last, or one address)",
+    message: "Which addresses should the scan ask?",
     default: suggested,
     validate: validModbusRange
   })
   const targets = parseRange(range)
   if (Result.isFailure(targets)) return []
-  yield* Console.error(`  asking ${targets.success.length} address(es) on port ${MODBUS_PORT}, read-only`)
+  const ui = yield* CurrentUi
+  let asked = 0
+  const total = targets.success.length
   const report = yield* scanModbus(
     { range, targets: targets.success },
-    {
-      onDone: (done, total) =>
-        total >= 20 && (done === total || done % Math.ceil(total / 10) === 0)
-          ? Console.error(`  ${done}/${total} addresses asked`)
-          : Effect.void
-    }
+    { onDone: (done) => Effect.sync(() => (asked = done)) }
+  ).pipe(
+    spinning(
+      ui,
+      () => `Scanning ${asked} of ${total} address${total === 1 ? "" : "es"} on port ${MODBUS_PORT}, read-only`
+    )
   )
-  yield* Console.error(
-    formatScan(report)
-      .split("\n")
-      .filter((line) => !line.startsWith("next:") && !line.startsWith("--points-list"))
-      .map((line) => `  ${line}`.trimEnd())
-      .join("\n")
-  )
+  // A person gets the units, one line each; the scan's advice for scripts (--points-list, next) is left out.
+  const [heading = "", ...rows] = formatScan(report).split("\n")
+  if (foundUnits(report).length > 0) {
+    yield* Console.error(ui.done(heading.replace(/:$/, "")))
+    yield* Console.error(rows.filter((line) => line.startsWith("  ")).join("\n"))
+  }
   const units = foundUnits(report)
   const readable = units.filter((unit) => unit.table !== undefined)
   if (readable.length < units.length) {
@@ -457,7 +463,7 @@ const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (sugg
   )
   if (devices.length > 0) {
     yield* Console.error(
-      `  ${devices.length} device(s) drafted, each with one placeholder point (register 0 as uint16): set their registers from the datasheet on the status page, or in a points list (ot-gateway probe <host> <register> shows how one reads)`
+      `each with one placeholder point (register 0): set the real registers from the datasheet on the status page later`
     )
   }
   return devices
@@ -469,22 +475,20 @@ const validDeviceAddress = (value: string) =>
     : Effect.fail("ip or ip:port, e.g. 192.168.0.171 or 192.168.0.171:47810")
 
 /**
- * Discovery for a person at the terminal: what to look for first (BACnet/IP by default, a Modbus TCP scan, one
- * BACnet device by its address, a points list, the simulated device), then the points to read. When nothing was
- * found or picked, the same ways again, or none for now. `start` skips the first question: `address` asks that
+ * Discovery for a person at the terminal: the protocol first (BACnet/IP by default, or a Modbus TCP scan), then the
+ * points to read. When nothing was found or picked, the protocols again, one BACnet device by its address, or none
+ * for now (a points list goes in with `import`). `start` skips the first question: `address` asks that
  * device straight away, `whoIs` (init's `--devices discover`) asks the network.
  */
 export const discoverInteractively = Effect.fn("discoverInteractively")(function* (
   probe: GatewayConfig,
   modbusRange: () => string,
-  start: { readonly address?: string | undefined; readonly whoIs?: boolean } = {}
+  start: { readonly address?: string | undefined; readonly whoIs?: boolean; readonly wait?: number | undefined } = {}
 ) {
   let address: string | undefined = start.address
   let way: Way = address !== undefined ? "address" : start.whoIs === true ? "bacnet" : yield* firstWay
   while (true) {
     if (way === "none") return []
-    if (way === "simulated") return [simulatedDevice]
-    if (way === "list") return yield* devicesFromList
     let nothing = "Nothing to add."
     if (way === "modbus") {
       const devices = yield* devicesFromModbusScan(modbusRange())
@@ -492,12 +496,15 @@ export const discoverInteractively = Effect.fn("discoverInteractively")(function
       nothing = "No Modbus device to read."
     } else {
       if (way === "address" && address === undefined) {
-        address = yield* Prompt.String({ message: "Device address (ip or ip:port)", validate: validDeviceAddress })
+        address = yield* Prompt.String({
+          message: "What is the device's address? (ip or ip:port)",
+          validate: validDeviceAddress
+        })
       }
       const drafts: ReadonlyArray<DraftedDevice> = yield* discoverDrafts(
         probe,
         undefined,
-        address === undefined ? {} : { address }
+        address === undefined ? { wait: start.wait } : { address, wait: start.wait }
       ).pipe(
         Effect.catchTag("DiscoverError", (error) =>
           Console.error(`  ${error.message}`).pipe(Effect.as<ReadonlyArray<DraftedDevice>>([]))
@@ -583,14 +590,12 @@ export const runInit = Effect.fn("runInit")(function* (
     beforeDevices.broadcastAddress === undefined && !devices.every(located)
       ? yield* network(beforeDevices)
       : beforeDevices
-  const site = yield* slug(
-    "site",
-    flags.site,
-    yes,
-    "Site (the first topic segment)",
-    yes ? "my-site" : siteSuggestion(path)
-  )
-  const building = yield* slug("building", flags.building, yes, "Building (the second)", "main")
+  // The names are the first two segments of every topic: shown before they are asked, and with them after.
+  const asksNames = !yes && (flags.site === undefined || flags.building === undefined)
+  if (asksNames) yield* Console.error(`topics: ${topicPattern("<site>", "<building>")}`)
+  const site = yield* slug("site", flags.site, yes, "What is the site called?", "my-site")
+  const building = yield* slug("building", flags.building, yes, "What is the building called?", "main")
+  if (asksNames) yield* Console.error(`topics: ${topicPattern(site, building)}`)
   const withNetwork = { ...networked, site, building }
   const text = `${JSON.stringify(initConfig(withNetwork, devices, { history: flags.history, statusPort: flags.statusPort }), null, 2)}\n`
   const config = yield* parseConfig(text)
@@ -601,14 +606,8 @@ export const runInit = Effect.fn("runInit")(function* (
   return config
 })
 
-/**
- * The site init suggests: the gateway folder's name when it is a slug other than the default folder's (`init
- * plant-3` suggests `plant-3`), otherwise `my-site`. `--yes` always takes `my-site`.
- */
-export const siteSuggestion = (path: string) => {
-  const folder = basename(resolve(dirname(path)))
-  return Schema.is(Slug)(folder) && folder !== defaultFolder ? folder : "my-site"
-}
+/** Where a point's values go, for the site and building given: `plant-3/hall-a/<device>/<point>`. */
+export const topicPattern = (site: string, building: string) => `${site}/${building}/<device>/<point>`
 
 /** The folder `init` creates when it is given none and asks nothing, as create-next-app's `my-app`. */
 export const defaultFolder = "ot-gateway"
@@ -618,30 +617,22 @@ export const isInteractive = (yes: boolean, stdinIsTTY: boolean | undefined) => 
 
 /**
  * Where init writes, from its argument: a folder (`.` for this one), created when missing; or, as before folders, a
- * path ending in `.json`, which is the config itself. Without one, as create-next-app and create-cloudflare do with
- * an empty folder: this folder when it is empty (`here` says whether it is) and a person answers, otherwise the
- * folder asked for, or `ot-gateway` with `--yes` (scripts rely on where that is).
+ * path ending in `.json`, which is the config itself. Without one, the first question, as create-next-app and
+ * create-turbo ask it: the folder, `.` (this one) by default; with `--yes`, `ot-gateway` (scripts rely on where that
+ * is).
  */
-export const initTarget = Effect.fn("initTarget")(function* (
-  argument: string | undefined,
-  yes: boolean,
-  here: { readonly empty: boolean } = { empty: false }
-) {
+export const initTarget = Effect.fn("initTarget")(function* (argument: string | undefined, yes: boolean) {
   if (argument?.endsWith(".json") === true) return argument
-  if (argument === undefined && here.empty && !yes) {
-    yield* Console.error("  this folder is empty, so the gateway's files go here")
-    return folderConfigName
-  }
   const folder =
     argument ??
     (yes
       ? defaultFolder
-      : yield* Prompt.String({ message: "Folder for this gateway (. for this one)", default: defaultFolder }))
-  return join(folder, folderConfigName)
+      : yield* Prompt.String({ message: "Where should the gateway's files go?", default: ".", validate: validFolder }))
+  return join(folder.trim(), folderConfigName)
 })
 
-/** Whether the working directory has nothing in it but hidden files (`.git`, `.DS_Store`): init then writes there. */
-export const isEmptyFolder = (entries: ReadonlyArray<string>) => entries.every((entry) => entry.startsWith("."))
+const validFolder = (value: string) =>
+  value.trim() === "" ? Effect.fail(". for this folder, or the name of a new one") : Effect.succeed(value)
 
 /**
  * The question init ends with when the gateway can start right away, or undefined when it cannot: no devices to
@@ -882,37 +873,44 @@ export const initSummary = (
   config: GatewayConfig,
   folder: FolderFiles = { written: [], kept: [] },
   context: InitContext = {},
-  env: Readonly<Record<string, string | undefined>> = {}
+  env: Readonly<Record<string, string | undefined>> = {},
+  ui: Ui = plainUi
 ) => {
   const { run, url, compose } = initNext(path, config, folder, context)
   const cli = context.command ?? "ot-gateway"
   const files = folder.written.map((file) => basename(file))
   const passwordEnv = config.mqtt.passwordEnv
   const envFile = [...folder.written, ...folder.kept].find((file) => file.endsWith("ot-gateway.env"))
-  const devices = config.devices.map((device) => `✓ ${deviceLine(device)}`)
-  // The command with the config named as `run` names it: nothing in its folder, the path from elsewhere.
-  const discover = `${cli} discover${run.slice(`${cli} run`.length)}`
+  const devices = config.devices.map((device) => ui.done(deviceLine(device)))
+  // The config named as `run` names it: nothing in its folder, the path from elsewhere.
+  const argument = run.slice(`${cli} run`.length)
   return {
     lines: [
-      `✓ wrote ${files.join(", ")}${folder.written.length > 0 && dirname(path) !== "." ? ` in ${dirname(path)}` : ""}`,
+      ui.done(
+        `Wrote ${files.join(", ")}${folder.written.length > 0 && dirname(path) !== "." ? ` in ${dirname(path)}` : ""}`
+      ),
       ...devices,
       ...(passwordEnv === undefined || (env[passwordEnv] ?? "") !== ""
         ? []
-        : [`· put the broker password after ${passwordEnv}= in ${envFile ?? "the environment"} before you start`])
+        : [
+            ui.todo(`Put the broker password after ${passwordEnv}= in ${envFile ?? "the environment"} before you start`)
+          ])
     ],
     /** Said when the gateway is not started now. */
     later:
       config.devices.length === 0
         ? [
-            `next: ${discover}`,
-            "      finds the BACnet devices on this network, lets you pick their points and saves them here",
-            `      (Modbus TCP: it offers a scan of a range; a points list: ${cli} import points.csv${run.slice(`${cli} run`.length)})`
+            ui.rows([
+              ["Next", `${ui.command(`${cli} discover${argument}`)}  ${ui.dim("find BACnet/IP or Modbus TCP devices")}`]
+            ])
           ]
         : [
-            `start it:     ${run}${compose === undefined ? "" : `   (or in Docker: ${compose})`}`,
-            `read once:    ${cli} read${run.slice(`${cli} run`.length)}`,
-            `status page:  ${url}`,
-            `all commands: ${cli} --help`
+            ui.rows([
+              ["Start it", `${ui.command(run)}${compose === undefined ? "" : ui.dim(`  or in Docker: ${compose}`)}`],
+              ["Read once", ui.command(`${cli} read${argument}`)],
+              ["Status page", ui.command(url)],
+              ["All commands", ui.command(`${cli} --help`)]
+            ])
           ]
   }
 }

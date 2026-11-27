@@ -30,14 +30,13 @@ In a checkout (`pnpm ot-gateway …`) or anywhere the gateway is installed (`ot-
 pnpm ot-gateway init
 ```
 
-With no `ot-gateway.json` in the folder, a bare `ot-gateway` in a terminal starts `init` too. It writes into this folder when the folder is empty and asks for a folder name otherwise; `init .` and `init my-building` say where.
+With no `ot-gateway.json` in the folder, a bare `ot-gateway` in a terminal starts `init` too. It sets up the project and nothing else:
 
-It sets up the project and nothing else, and Enter takes the default every time:
+1. **The folder.** `.` (this one) is the default, as create-next-app and create-turbo ask it; a name makes a new folder. `init .` and `init my-building` answer it up front.
+2. **The broker.** `mqtt://localhost:1883` is suggested, and init says whether something answers there. Then whether the broker needs a username and password (no by default), and if so the username and the variable that holds the password.
+3. **Site and building**, the first two parts of every topic. init shows the topic before it asks (`<site>/<building>/<device>/<point>`) and with your names after; there is no default to accept by accident.
 
-1. **The broker.** `mqtt://localhost:1883` is suggested, and init says whether something answers there. Then a username, if the broker needs one.
-2. **Site and building**, the first two parts of every topic. The folder's name is suggested for the site.
-
-It writes the folder and names the next step. Scripts and agents get the whole account instead, every file and the next commands, and with `--json` as data ([Headless setup](headless.md)).
+It writes the folder and names the one next step, `discover`. Scripts and agents get the whole account instead, every file and the next commands, and with `--json` as data ([Headless setup](headless.md)).
 
 ## 2b. Let `discover` add the devices
 
@@ -47,9 +46,9 @@ In the gateway's folder:
 pnpm ot-gateway discover
 ```
 
-1. **What to look for.** BACnet/IP (the default: a Who-Is on this machine's network when the config sets none), a Modbus TCP scan of a range (the LAN's /24 by default, read-only, as `discover modbus` does), one BACnet device by its address (`ip` or `ip:port`, for a device on another subnet or port), a points list (Modbus, or BACnet from an EDE file; step 3 shows the columns), or a simulated device to see values flow first.
-2. **Which points.** It lists every point it found by name and unit, all ticked: untick what the gateway should not read. With more than 25 points it keeps them all and says so; leave out the ones you don't need later, on the status page or in `ot-gateway.json`. Nothing else is asked: points are read every 5 seconds (or sent by the device on change), and none is writable until you make a setpoint writable on the status page or in the config. Nothing is written to a device during discovery.
-3. **When nothing is found** (or discovery cannot run, say another BACnet program holds UDP 47808), or you untick every point, it offers the same ways again, or none for now.
+1. **The protocol.** BACnet/IP (the default: a Who-Is on this machine's network when the config sets none) or a Modbus TCP scan of a range (the LAN's /24 by default, read-only, as `discover modbus` does). BACnet listens at least 3 seconds and longer while new devices still answer, up to 30 (`--wait` sets the minimum). A points list is not a protocol: it goes in with `ot-gateway import` (step 3).
+2. **Which points.** It lists every point it found by name, unit and object, all ticked: untick what the gateway should not read (space toggles, `a` ticks all or none). With more than 25 points it keeps them all and says so; leave out the ones you don't need later, on the status page or in `ot-gateway.json`. Nothing else is asked: points are read every 5 seconds (or sent by the device on change), and none is writable until you make a setpoint writable on the status page or in the config. Nothing is written to a device during discovery.
+3. **When nothing is found** (or discovery cannot run, say another BACnet program holds UDP 47808), or you untick every point, it offers the protocols again, one BACnet device by its address (`ip` or `ip:port`, for a device on another subnet or port; `--address` asks it straight away), or none for now.
 4. **What changes, then save.** When the config has devices already, it shows what the save changes on the broker, as `ot-gateway diff` does (new topics, and anything that moves). It saves after a yes: new devices after the ones there, new points of a device the config has after its own. Run it again whenever a device is added to the building.
 5. **What next.** Read every point once (as often as you like), start the gateway in this terminal (Ctrl-C stops it), or stop here with the commands for later.
 

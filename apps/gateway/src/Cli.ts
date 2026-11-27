@@ -50,7 +50,14 @@ import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from ".
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
 import { dockerLayer, down, isDockerTag, nextLine, up, upgrade } from "./Deploy.ts"
-import { discover, DiscoverError, discoverToPointsList, discoveryDefaults, type PointsListWritten } from "./Discover.ts"
+import {
+  discover,
+  DiscoverError,
+  discoverToPointsList,
+  discoveryDefaults,
+  LISTEN_SECONDS,
+  type PointsListWritten
+} from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import {
   DEFAULT_RATE,
@@ -77,7 +84,6 @@ import {
   initNext,
   initSummary,
   initTarget,
-  isEmptyFolder,
   lanInterfaces,
   suggestedModbusRange,
   isInteractive,
@@ -145,6 +151,7 @@ import {
   UsageMistake
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+import { inColumn, plainUi, spinning, terminalUi, type Ui } from "./Ui.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
@@ -506,7 +513,12 @@ const discoverModbusCommand = Command.make(
  * broker when the config has devices already, the save (devices it has get the new points), then read once, start
  * or done.
  */
-const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, address: string | undefined) {
+const discoverAndSave = Effect.fn("discoverAndSave")(function* (
+  path: string,
+  address: string | undefined,
+  ui: Ui,
+  wait: number | undefined
+) {
   const fs = yield* FileSystem.FileSystem
   const cli = yield* invocation
   // The file as it is before any question: the save merges into it and refuses when it changed meanwhile.
@@ -518,8 +530,8 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
   const broadcast = unset && address === undefined ? yield* broadcastAddress(lans, {}) : undefined
   const asked =
     broadcast === undefined ? config : { ...config, bacnet: { ...config.bacnet, broadcastAddress: broadcast } }
-  const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), { address })
-  if (picked.length === 0) return yield* Console.log(`nothing to save; ${path} is as it was`)
+  const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), { address, wait })
+  if (picked.length === 0) return yield* Console.log(ui.note(`nothing to save; ${path} is as it was`))
   const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
   const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
   const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
@@ -527,7 +539,7 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
   if (config.devices.length > 0) {
     const diff = diffConfigs(sideOfConfig(merged.before), sideOfConfig(merged.config))
     yield* Console.log(
-      `\n${formatDiff(diff, "What saving changes on the broker:", { command: cli, config: path === DEFAULT_CONFIG ? undefined : path })}\n`
+      `\n${ui.indent(formatDiff(diff, "What saving changes on the broker:", { command: cli, config: path === DEFAULT_CONFIG ? undefined : path }))}\n`
     )
   }
   const points = picked.reduce((total, device) => total + device.points.length, 0)
@@ -535,10 +547,10 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
     message: `Save ${picked.length} device${picked.length === 1 ? "" : "s"} and ${points} point${points === 1 ? "" : "s"} to ${path}?`,
     initial: true
   })
-  if (!save) return yield* Console.log(`nothing saved; ${path} is as it was`)
+  if (!save) return yield* Console.log(ui.note(`nothing saved; ${path} is as it was`))
   yield* writeMerged(path, fileText, merged)
-  yield* Console.log(["", ...savedLines(merged.config, merged.added, merged.extended), ""].join("\n"))
-  return yield* afterSave(merged.config, path, argument)
+  yield* Console.log(["", ...savedLines(merged.config, merged.added, merged.extended, ui), ""].join("\n"))
+  return yield* afterSave(merged.config, path, argument, ui)
 })
 
 /**
@@ -548,7 +560,8 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (path: string, ad
 export const savedLines = (
   saved: GatewayConfig,
   added: ReadonlyArray<string>,
-  extended: ReadonlyArray<string>
+  extended: ReadonlyArray<string>,
+  ui: Ui = plainUi
 ): ReadonlyArray<string> => {
   const describe = (id: string) => {
     const device = saved.devices.find((each) => each.id === id)
@@ -560,13 +573,13 @@ export const savedLines = (
     }
   }
   const lines = [
-    ...added.map((id) => ({ verb: `added ${id}`, ...describe(id) })),
-    ...extended.map((id) => ({ verb: `added points to ${id}`, ...describe(id) }))
+    ...added.map((id) => ({ verb: `Added ${id}`, ...describe(id) })),
+    ...extended.map((id) => ({ verb: `Added points to ${id}`, ...describe(id) }))
   ]
   const hint = lines.every((line) => line.writable === 0)
-    ? ["  a setpoint becomes writable on the status page or in the config, with the limits commands may set"]
+    ? [ui.note("setpoints become writable on the status page or in the config")]
     : []
-  return [...lines.map((line) => `✓ ${line.verb}: ${line.text}`), ...hint]
+  return [...lines.map((line) => ui.done(`${line.verb}: ${line.text}`)), ...hint]
 }
 
 /** What the end of discover offers: read every point once, start the gateway here, or stop. */
@@ -574,25 +587,28 @@ type AfterSave = "read" | "start" | "done"
 
 /** Every point of `saved` read once, the report printed; a read that cannot start says why and returns to the menu. */
 const readEveryPoint = Effect.fn("readEveryPoint")(
-  function* (saved: GatewayConfig) {
+  function* (saved: GatewayConfig, ui: Ui) {
     const devices = yield* selectDevices(saved, [])
     const count = devices.reduce((sum, device) => sum + device.points.length, 0)
-    yield* Console.error(`\nreading ${count} point${count === 1 ? "" : "s"} once …`)
     // The report says what failed and why; the drivers' warnings would only repeat it.
-    const report = yield* readOnce(saved, devices).pipe(Effect.provideService(References.MinimumLogLevel, "Error"))
-    yield* Console.log(`${formatReadReport(report)}\n`)
+    const report = yield* readOnce(saved, devices).pipe(
+      Effect.provideService(References.MinimumLogLevel, "Error"),
+      spinning(ui, `Reading ${count} point${count === 1 ? "" : "s"} once`)
+    )
+    yield* Console.log(`${ui.indent(formatReadReport(report))}\n`)
   },
-  Effect.catchTag("ReadError", (error) =>
-    Console.error(`✗ ${error.message}${error.hint === undefined ? "" : `\n  ${error.hint}`}\n`)
-  )
+  (effect, _saved, ui) =>
+    Effect.catchTag(effect, "ReadError", (error) =>
+      Console.error(`${ui.failed(error.message)}${error.hint === undefined ? "" : `\n${ui.note(error.hint)}`}\n`)
+    )
 )
 
 /** After a save: read once (as often as wanted), start the gateway in this terminal, or the commands for later. */
-const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: string, argument: string) {
+const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: string, argument: string, ui: Ui) {
   const cli = yield* invocation
   const canStart = startNowQuestion(saved, process.env) !== undefined
   const choices: ReadonlyArray<Prompt.SelectChoice<AfterSave>> = [
-    { title: "Read every point once", value: "read", description: "see the values now, without a broker" },
+    { title: "Read every point once", value: "read", description: "see the values now, no broker needed" },
     ...(canStart
       ? [
           {
@@ -602,7 +618,7 @@ const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: 
           }
         ]
       : []),
-    { title: "Done for now", value: "done", description: `start it later with ${cli} run${argument}` }
+    { title: "Done for now", value: "done", description: "how to start it later" }
   ]
   while (true) {
     const next = yield* Prompt.Select<AfterSave>({ message: "What next?", choices })
@@ -610,17 +626,20 @@ const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: 
       return yield* Console.log(
         [
           "",
-          `read once:    ${cli} read${argument}`,
-          `start it:     ${cli} run${argument}   (or in Docker: ${cli} up)`,
-          `all commands: ${cli} --help`
+          ui.rows([
+            ["Start it", `${ui.command(`${cli} run${argument}`)}${ui.dim(`  or in Docker: ${cli} up`)}`],
+            ["Read once", ui.command(`${cli} read${argument}`)],
+            ["All commands", ui.command(`${cli} --help`)]
+          ]),
+          ""
         ].join("\n")
       )
     }
     if (next === "start") {
-      yield* Console.log(`\nstatus page: http://127.0.0.1:${saved.status?.port ?? 8080}   Ctrl-C stops the gateway\n`)
+      yield* Console.log(`\n${statusPageLine(ui, `http://127.0.0.1:${saved.status?.port ?? 8080}`)}\n`)
       return yield* runConfigured(saved, path).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
     }
-    yield* readEveryPoint(saved)
+    yield* readEveryPoint(saved, ui)
   }
 })
 
@@ -644,19 +663,33 @@ const discoverCommand = Command.make(
       ),
       Flag.optional
     ),
+    wait: Flag.Int("wait").pipe(
+      Flag.withDescription(
+        `Listen for BACnet devices at least this many seconds (default ${LISTEN_SECONDS}); longer while new ones still answer, at most 30`
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
     json: jsonFlag
   },
   // The draft is JSON already; --json makes a failure JSON too, and what --points-list wrote.
-  ({ config, pointsList, append, address, json }) =>
+  ({ config, pointsList, append, address, wait, json }) =>
     Effect.gen(function* () {
       if (append && Option.isNone(pointsList)) {
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
+      }
+      if (wait !== undefined && (!Number.isInteger(wait) || wait < 1 || wait > 30)) {
+        return yield* new DiscoverError({ message: `--wait takes 1 to 30 seconds, not ${wait}` })
       }
       // A person at a terminal picks what to keep and saves it into the config; scripts and agents get the draft.
       // Without a config there is nothing to save into: the draft, as before, and init named as the way to one.
       const fs = yield* FileSystem.FileSystem
       if (!json && Option.isNone(pointsList) && process.stdin.isTTY && process.stdout.isTTY) {
-        if (yield* fs.exists(config)) return yield* discoverAndSave(config, Option.getOrUndefined(address))
+        if (yield* fs.exists(config)) {
+          const ui = terminalUi()
+          yield* Console.error(ui.header("ot-gateway discover", yield* readVersion))
+          return yield* discoverAndSave(config, Option.getOrUndefined(address), ui, wait).pipe(inColumn(ui))
+        }
         yield* Console.error(
           `no ${config} here, so the devices found are printed, not saved: ${yield* invocation} init sets up the broker and the site, then discover saves the devices you pick`
         )
@@ -665,6 +698,7 @@ const discoverCommand = Command.make(
       const decoded = found.config
       const options = {
         address: Option.getOrUndefined(address),
+        wait,
         append,
         configPath: found.noConfig ? undefined : config,
         noConfig: found.noConfig,
@@ -735,6 +769,10 @@ const demo = Command.make(
     { command: "ot-gateway demo --public", description: "The same, published to a public test broker" }
   ])
 )
+
+/** The line before a gateway starts in the terminal: where its status page is, and how it stops. */
+const statusPageLine = (ui: Ui, url: string) =>
+  ui.rows([["Status page", `${ui.command(url)}  ${ui.dim("Ctrl-C stops the gateway")}`]])
 
 const optionalFlag = (name: string, description: string) =>
   Flag.String(name).pipe(Flag.withDescription(description), Flag.optional, Flag.map(Option.getOrUndefined))
@@ -852,13 +890,13 @@ const init = Command.make(
         }
       }
       const flags = { ...given, yes: !interactive }
-      const fs = yield* FileSystem.FileSystem
-      const empty = directory === undefined && isEmptyFolder(yield* fs.readDirectory("."))
-      if (interactive)
-        yield* Console.error("ot-gateway init: a few questions, then the gateway's folder. Enter takes the default.\n")
-      const config = yield* initTarget(directory, flags.yes, { empty })
-      const written = yield* runInit(config, flags)
-      if (written === undefined) return yield* Console.log(`kept ${config} as it is`)
+      // A person gets one column: the prompts, notes and results line up (Ui.ts). Scripts get the plain text.
+      const ui = terminalUi()
+      const asked = interactive ? inColumn(ui) : <A, E, R>(effect: Effect.Effect<A, E, R>) => effect
+      if (interactive) yield* Console.error(ui.header("ot-gateway init", yield* readVersion))
+      const config = yield* asked(initTarget(directory, flags.yes))
+      const written = yield* asked(runInit(config, flags))
+      if (written === undefined) return yield* Console.log(ui.done(`Kept ${config} as it is`))
       const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun, timeZone: localTimeZone() })
       const files = { ...folder, written: [config, ...folder.written] }
       const context = {
@@ -897,19 +935,21 @@ const init = Command.make(
       // A person gets a few lines to scan, then the one next step: start it now, as create-cloudflare offers to deploy.
       // The folder's ot-gateway.env may hold the broker password already (a folder init kept it in).
       yield* loadFolderEnv(config)
-      const summary = initSummary(config, written, files, context, process.env)
+      const summary = initSummary(config, written, files, context, process.env, ui)
       yield* Console.log(["", ...summary.lines].join("\n"))
       const question = startNowQuestion(written, process.env)
-      if (question === undefined || !(yield* Prompt.Confirm({ message: question, initial: true }))) {
-        return yield* Console.log(["", ...summary.later].join("\n"))
+      if (question === undefined || !(yield* asked(Prompt.Confirm({ message: question, initial: true })))) {
+        return yield* Console.log(["", ...summary.later, ""].join("\n"))
       }
       const loaded = yield* loadConfig(config)
-      yield* Console.log(`\nstatus page: ${initNext(config, written, files, context).url}   Ctrl-C stops the gateway\n`)
+      yield* Console.log(`\n${statusPageLine(ui, initNext(config, written, files, context).url)}\n`)
       return yield* runConfigured(loaded, config).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>
-        Console.error("init cancelled, nothing written").pipe(Effect.andThen(Effect.sync(() => (process.exitCode = 1))))
+        Console.error(terminalUi().failed("init cancelled, nothing written")).pipe(
+          Effect.andThen(Effect.sync(() => (process.exitCode = 1)))
+        )
       )
     )
 ).pipe(
