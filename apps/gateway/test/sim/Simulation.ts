@@ -49,6 +49,13 @@ import { RUN_FILE } from "../../src/PreviousRun.ts"
 
 export const GATEWAY = "10.0.0.1"
 export const BROKER = "10.0.0.2"
+/**
+ * Where the gateway's wall clock starts. The test clock starts at 0, the Unix
+ * epoch, so a clock step backwards early in a run (up to 2 h, and steps add up)
+ * put the gateway's `ts` before 1970, which no real clock reads and the MQTT
+ * contract rejects. A Pi's clock starts at its last saved time, not at 0.
+ */
+export const WALL_CLOCK_START = Date.UTC(2026, 0, 1)
 const modbusHost = (index: number) => `10.0.1.${index + 1}`
 const bacnetHost = (index: number) => `10.0.2.${index + 1}`
 
@@ -492,7 +499,7 @@ export const simulate = (options: SimulationOptions) =>
     const clock = yield* Clock.clockWith(Effect.succeed)
     const disk = { full: false }
     const runFiles = new Map<string, string>()
-    let wallOffset = 0
+    let wallOffset = WALL_CLOCK_START
     const world = yield* Scope.make()
     yield* Effect.addFinalizer(() => Scope.close(world, Exit.void))
 
