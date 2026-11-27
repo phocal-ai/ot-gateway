@@ -255,32 +255,17 @@ interface CheckRow {
   readonly mark: "✓" | "!" | "✗" | "–"
   readonly label: string
   readonly text: string
-  /** Lines under it, in its text column: a device each, or the protocols. */
+  /** Lines under it, in its text column: a device each. */
   readonly under?: ReadonlyArray<string>
 }
 
 /**
- * The devices in one row: none yet (to do), or how many. In a terminal (`brief`) that is all, however few, with the
- * protocols when there are several; otherwise (--all, a pipe) a line for each device under it.
+ * The devices in one row: none yet (to do), or how many devices and points in total. In a terminal (`brief`) that is
+ * all, however few, without protocols; otherwise (--all, a pipe) a line for each device under it, its protocol first.
  */
 const devicesRow = (devices: ReadonlyArray<Device>, brief: boolean): CheckRow => {
   if (devices.length === 0) return { mark: "!", label: "devices", text: "none yet: ot-gateway discover finds them" }
-  if (brief) {
-    const protocols = [...new Set(devices.map((device) => device.protocol))]
-    const [one] = protocols
-    if (protocols.length === 1 && one !== undefined) {
-      return { mark: "✓", label: "devices", text: `${counted(devices)}, ${one}` }
-    }
-    const width = Math.max(0, ...protocols.map((protocol) => protocol.length))
-    return {
-      mark: "✓",
-      label: "devices",
-      text: counted(devices),
-      under: protocols.map(
-        (protocol) => `${protocol.padEnd(width)}  ${counted(devices.filter((device) => device.protocol === protocol))}`
-      )
-    }
-  }
+  if (brief) return { mark: "✓", label: "devices", text: counted(devices) }
   const width = Math.max(0, ...devices.map((device) => device.id.length))
   return {
     mark: "✓",
@@ -334,7 +319,7 @@ const formatRows = (rows: ReadonlyArray<CheckRow>) => {
 /**
  * What `check` prints, the way `doctor` does: a line for the gateway, its broker, buffer, history, status page and
  * devices, a mark in front (`!` for what start-up would warn about), then the verdict. `brief` (a terminal) counts
- * the devices, by protocol when there are several, however few; otherwise each device has a line. `next` ends it
+ * the devices, however few, in total; otherwise each device has a line. `next` ends it
  * with the command to run.
  */
 export const describeConfig = (

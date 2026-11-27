@@ -146,26 +146,20 @@ const smallConfig = (devices: ReadonlyArray<unknown>) =>
   )
 
 describe("check with many devices", () => {
-  it("sums them up by protocol in a terminal, and lists each otherwise", () => {
+  it("gives totals in a terminal, and lists each device with its protocol otherwise", () => {
     const brief = describeConfig(bigConfig, { brief: true }).split("\n")
-    expect(brief.slice(-5)).toEqual([
-      "✓ devices  21 devices, 21 points, 1 writable",
-      "             simulator   20 devices, 20 points",
-      "             modbus-tcp  1 device, 1 point, 1 writable",
-      "",
-      "Config ok, 1 warning."
-    ])
+    expect(brief.slice(-3)).toEqual(["✓ devices  21 devices, 21 points, 1 writable", "", "Config ok, 1 warning."])
     const all = describeConfig(bigConfig).split("\n")
     expect(all).toContain("             ahu-020  simulator simulated, 1 point, every 5 s")
     expect(all.filter((line) => line.trimStart().startsWith("ahu-"))).toHaveLength(20)
   })
 
-  it("sums up one device too, says when there are none, and names the protocol", () => {
+  it("sums up one device too, and says when there are none", () => {
     const one = smallConfig([
       { protocol: "simulator", id: "room", points: [{ id: "t", name: "T", waveform: "sine", min: 0, max: 1 }] }
     ])
     const brief = describeConfig(one, { brief: true, next: "ot-gateway doctor" }).split("\n")
-    expect(brief).toContain("✓ devices  1 device, 1 point, simulator")
+    expect(brief).toContain("✓ devices  1 device, 1 point")
     expect(brief.some((line) => line.includes("room"))).toBe(false)
     expect(brief.at(-1)).toBe("Config ok, 1 warning. Next: ot-gateway doctor")
     expect(describeConfig(one)).toContain("\n             room  simulator simulated, 1 point, every 5 s")
