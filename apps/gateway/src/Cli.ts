@@ -3124,7 +3124,8 @@ const guideCommand = Command.make(
       Argument.withDefault("setup" as const)
     ),
     mcp: Flag.Boolean("mcp").pipe(
-      Flag.withDescription("Start with how the guide's otg commands map to the tools of ot-gateway mcp")
+      Flag.withDescription("Start with how the guide's otg commands map to the tools of ot-gateway mcp"),
+      Flag.withDefault(false)
     ),
     json: jsonFlag
   },

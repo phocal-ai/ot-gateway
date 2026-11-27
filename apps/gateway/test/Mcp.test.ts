@@ -478,6 +478,22 @@ describe("mcp tool calls through the CLI", () => {
     )
   )
 
+  it.effect("setup_guide: the guide, starting with which tool each command is; guide setup without --mcp too", () =>
+    cli(
+      Effect.gen(function* () {
+        const result = yield* runTool(run, ["guide", "setup", "--mcp"], silent)
+        expect(result.isError).toBe(false)
+        expect(result.structuredContent).toMatchObject({
+          ok: true,
+          name: "setup",
+          text: expect.stringMatching(/^You are talking to the ot-gateway MCP server/)
+        })
+        const plain = yield* runTool(run, ["guide", "setup"], silent)
+        expect(plain.structuredContent).toMatchObject({ ok: true, text: expect.not.stringContaining("MCP server") })
+      })
+    )
+  )
+
   it.effect("check: a config that is not there is an error with its code", () =>
     cli(
       Effect.gen(function* () {
