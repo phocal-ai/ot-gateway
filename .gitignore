@@ -14,6 +14,8 @@ coverage/
 
 # Local MCP config (copy from .mcp.json.example)
 .mcp.json
+# The Claude Code plugin's server, which ships
+!plugins/ot-gateway/.mcp.json
 .claude/settings.local.json
 
 # Next.js (apps/web, apps/site): build output and generated types

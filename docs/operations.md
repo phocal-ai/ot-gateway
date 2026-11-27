@@ -2,7 +2,7 @@
 
 How to install, change, upgrade, back up and watch an OT Gateway on a Raspberry Pi or any Linux host. The README covers what the gateway does; [configuration.md](configuration.md) covers every config key; [troubleshooting.md](troubleshooting.md) covers what goes wrong.
 
-The fastest way to a first config is `/setup` in Claude Code (README, "Set it up with AI"). This page is what to do with the result.
+The fastest way to a first config is to let an AI agent follow the setup guide ([Set it up with any agent](agents.md)). This page is what to do with the result.
 
 ## Install
 

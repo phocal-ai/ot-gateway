@@ -76,17 +76,16 @@ Or in `.vscode/mcp.json`:
 
 ```bash
 codex mcp add ot-gateway -- npx -y ot-gateway mcp
-gemini mcp add ot-gateway npx -y ot-gateway mcp
 ```
 
-Any other client takes the command `npx` with the arguments `-y ot-gateway mcp`, usually under `mcpServers` in its JSON settings. A client that offers MCP prompts shows the guide as `setup`; in one that does not, ask for the `setup_guide` tool.
+Gemini CLI and any other client take the command `npx` with the arguments `-y ot-gateway mcp`, usually under `mcpServers` in their JSON settings (`~/.gemini/settings.json` for Gemini CLI), as in Cursor's above. A client that offers MCP prompts shows the guide as `setup`; in one that does not, ask for the `setup_guide` tool.
 
 ### As a skill
 
-The guide is also an [Agent Skill](https://agentskills.io) (`.claude/skills/setup/SKILL.md`), the open format that Claude, Codex, Cursor and others load from a skills folder. The [skills CLI](https://github.com/vercel-labs/skills) copies it into your agent's:
+The guide is also an [Agent Skill](https://agentskills.io) (`.claude/skills/setup/SKILL.md`), the open format that Claude, Codex, Cursor and others load from a skills folder. The [skills CLI](https://github.com/vercel-labs/skills) copies it, as of the latest release, into your agent's:
 
 ```bash
-npx skills add phocal-ai/ot-gateway --skill setup
+npx skills add https://github.com/phocal-ai/ot-gateway/tree/main/.claude/skills/setup
 ```
 
 A copied skill stays at the version you copied. The MCP server's guide always matches the `ot-gateway` it runs, so prefer the server when your agent has MCP.
@@ -95,7 +94,7 @@ A copied skill stays at the version you copied. The MCP server's guide always ma
 
 The MCP server runs in whatever folder your agent starts it in, and finds `ot-gateway.json` there as the CLI does. The guide it serves tells the agent to give `init` the gateway's folder and every tool after it that folder's config as an absolute path, so it works from any folder.
 
-On a Raspberry Pi or another Linux box without Node.js, the guide uses the Docker wrapper instead of `npx` ([The CLI](../.claude/skills/setup/SKILL.md)). Run the agent on that machine, or over SSH from it, so it reaches the devices on the building network.
+On a Raspberry Pi or another Linux box without Node.js, the guide uses the Docker wrapper instead of `npx` ([The CLI](../.claude/skills/setup/SKILL.md#the-cli)). Run the agent on that machine, or over SSH from it, so it reaches the devices on the building network.
 
 ## For your agent's instructions
 

@@ -122,7 +122,7 @@ Or add each device by hand under `devices` in `ot-gateway.json`:
 
 `id`s become topic segments, so they are lowercase with `-` (`energy-meter`, `active-power`). Units are [QUDT](https://qudt.org) names such as `unit:KiloW`, `unit:DEG_C` or `unit:PERCENT`. [Configuration](configuration.md) has every option: scaling, byte order for meters that swap words, and what to send: every read (the default), the latest per interval, 15-minute aggregates or only real changes.
 
-With a coding agent, `/setup` in Claude Code (or the prompt in [Set it up with AI](../README.md#set-it-up-with-ai)) reads a register list or data sheet and drafts these entries for you.
+With a coding agent, the setup guide ([Set it up with any agent](agents.md)) reads a register list or data sheet and drafts these entries for you.
 
 ## 4. Check it, then run it
 

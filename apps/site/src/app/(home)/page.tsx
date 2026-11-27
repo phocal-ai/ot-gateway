@@ -39,7 +39,7 @@ const debugging: ReadonlyArray<readonly [Icon, string, React.ReactNode]> = [
 ]
 
 /** The README's "Set it up with AI" prompt for an agent without the MCP server: the guide holds the steps. */
-const setupPrompt = `Set up OT Gateway for my site: follow ${site.publicUrl}/docs/setup-guide.md`
+const setupPrompt = `Set up OT Gateway for my site: follow ${site.publicUrl}/docs/setup-guide.md. Never write to a device unless I name the point, and keep secrets out of the config.`
 
 /** A horizontal line of the page's frame, with a small square where it meets each side rail. */
 const Rule = () => (

@@ -5,7 +5,8 @@
 #
 # - main (production, a release) always builds.
 # - dev builds when anything the site reads changed: its own code and build setup, the lockfile,
-#   and the Markdown it turns into docs pages (docs/, README.md, see scripts/content.ts). Its
+#   and the Markdown it turns into docs pages (docs/, README.md, the setup guide in
+#   .claude/skills/setup/SKILL.md; see src/content/docs.ts). Its
 #   deployment is the preview of the next release's docs.
 # - Any other branch (vercel.json's git.deploymentEnabled leaves only site/** deploying) builds a
 #   preview only when the site's code or build setup changed. Most pull requests also touch docs/,
@@ -30,7 +31,7 @@ paths=(
   .nvmrc
 )
 branch="${VERCEL_GIT_COMMIT_REF:-}"
-[ "$branch" = "dev" ] && paths+=(pnpm-lock.yaml docs README.md)
+[ "$branch" = "dev" ] && paths+=(pnpm-lock.yaml docs README.md .claude/skills/setup/SKILL.md)
 
 build() {
   echo "ignore-build: building ($1)"
