@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest"
 import { pickedSummary, pickerLines, visibleRange } from "../src/Picker.ts"
+import { textInputAnswer, textInputLines } from "../src/TextInput.ts"
 import { colorsWanted, makeUi, plain, plainUi, wrap } from "../src/Ui.ts"
 
 describe("one column", () => {
@@ -73,5 +74,26 @@ describe("the point picker", () => {
     expect(visibleRange(1, 0, 2, 15)).toEqual({ start: 0, end: 2 })
     expect(pickedSummary(3, 3, "points")).toBe("all 3 points")
     expect(pickedSummary(2, 3, "points")).toBe("2 of 3 points")
+  })
+})
+
+describe("a question with a placeholder", () => {
+  const state = { value: "", cursor: 0, error: undefined }
+
+  it("shows the default dim in an empty input, the cursor at its start, and Enter takes it", () => {
+    const { lines, column } = textInputLines(plainUi, "Where should the gateway's files go?", ".", state)
+    expect(lines).toEqual(["? Where should the gateway's files go? › ."])
+    expect(column).toBe("? Where should the gateway's files go? › ".length)
+    const colored = makeUi(true)
+    expect(textInputLines(colored, "Site?", "my-site", state).lines[0]).toContain(colored.dim("my-site"))
+    expect(textInputAnswer("", ".")).toBe(".")
+  })
+
+  it("shows what was typed instead, the cursor in it, and the error under it", () => {
+    const typed = { value: "plant", cursor: 3, error: "lowercase letters" }
+    const { lines, column } = textInputLines(plainUi, "Site?", "my-site", typed)
+    expect(lines).toEqual(["? Site? › plant", "  › lowercase letters"])
+    expect(column).toBe("? Site? › ".length + 3)
+    expect(textInputAnswer("plant", "my-site")).toBe("plant")
   })
 })
