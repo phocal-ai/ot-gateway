@@ -910,8 +910,25 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "cli",
     reportedBy: ["mcp"],
     meaning: "A command failed in a way it does not expect, a bug in ot-gateway; the error carries the whole cause.",
-    fix: "Please report it, with the error and the file ot-gateway support writes.",
-    next: "ot-gateway support"
+    fix: "Please report it: ot-gateway report draft writes the issue text without site names or addresses, report send files it once you have read it.",
+    next: "ot-gateway report draft --help"
+  },
+  {
+    code: "report-draft-invalid",
+    area: "cli",
+    reportedBy: ["report draft", "report send"],
+    meaning:
+      "The report has no title or text, is longer than an issue takes here (16,000 characters), could not be written, or the file given to report send is not a draft of report draft.",
+    fix: "Give report draft a title and the lines that show the failure, not the whole log; give report send the file report draft wrote.",
+    next: "ot-gateway report draft --help"
+  },
+  {
+    code: "report-not-filed",
+    area: "cli",
+    reportedBy: ["report send"],
+    meaning: "The GitHub CLI (gh) did not file the report: not signed in any more, no internet, or GitHub refused it.",
+    fix: "Open the issue form in a browser instead: report send with --link prints the link, with the text filled in.",
+    next: "ot-gateway report send <draft> --link"
   },
   {
     code: "unknown-code",

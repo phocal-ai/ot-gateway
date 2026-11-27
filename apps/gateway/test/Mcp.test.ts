@@ -207,6 +207,7 @@ describe("mcp tools", () => {
       "points_allow_commands",
       "config_remove",
       "config_undo",
+      "report_send",
       "init",
       "clear_retained",
       "stop",

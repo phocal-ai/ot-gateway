@@ -589,6 +589,43 @@ A command whose output is cut short by its reader (`ot-gateway watch | head`, `e
 
 The broker password, `OT_GATEWAY_EDIT_TOKEN`, the values in `ot-gateway.env` whose names say they are secret (`*PASSWORD*`, `*TOKEN*`, `*SECRET*`, `*KEY*`), the OTLP headers, credentials in a URL and config keys that hold a secret are replaced by `<redacted>`. Device addresses, ids and names stay, as they are what the report is about: read the file before you attach it.
 
+### Report a bug
+
+When ot-gateway itself does something wrong, `ot-gateway report` turns it into an issue on GitHub. It is made for the agent that set the gateway up: the agent hits the bug, writes it up, shows you the text, and files it only after your yes. Nothing is sent on its own, there is no setting that files without asking, and ot-gateway sends no usage data.
+
+```bash
+ot-gateway report draft --title "read fails on a float64 input register" \
+  --what "$(cat output.txt)" --command "ot-gateway read meter/energy" --code invalid-response \
+  --ruled-out "the same register reads correctly with probe"
+ot-gateway report send ot-gateway-report-20261127-101500.md         # what it would file, and how
+ot-gateway report send ot-gateway-report-20261127-101500.md --yes   # file it
+```
+
+`report draft` writes the issue text to `ot-gateway-report-<date>-<time>.md` and files nothing. Besides `--title` and `--what` (the lines that show the failure) it takes `--expected`, `--steps`, `--ruled-out`, the failing `--command` with its `--code` and `--error`, and for a bug about one device `--device <id>` (its protocol is added) and `--model` (vendor, model, firmware). It adds the versions of ot-gateway and Node and the OS, and tells you three things before you file: whether a newer release is out, what the code means when it is one `explain` covers (most failures on a site are wiring, an address or the config, not a bug), and which issues carry the same fingerprint already.
+
+An issue is public, so the text is stricter than the support bundle's. Replaced by placeholders, in everything the draft holds:
+
+| What                                                                                        | Becomes                                                    |
+| ------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| the config's site, building, gateway id (unless `main`), device ids, point ids and names    | `site-1`, `building-1`, `gateway-1`, `device-1`, `point-1` |
+| IP addresses (not loopback), MAC addresses                                                  | `ip-1`, `mac-1`                                            |
+| host names: the broker's, a device's, the status page's, this machine's, and any URL's host | `host-1`, `this-machine`                                   |
+| the broker's login and client id, e-mail addresses                                          | `broker-login`, `client-id`, `email`                       |
+| the home folder in a path                                                                   | `~`, `/home/user`                                          |
+| secrets, as in the support bundle, and a URL's credentials                                  | `[redacted]`                                               |
+
+What stays is what a bug is about: the protocol, register addresses and types, BACnet object types and instances, the device's vendor and model, versions. A name the config does not hold (a person, a street, a customer in a sentence) cannot be found, which is why you read the text first. A word of yours that happens to be an id in the config is replaced too: a device called `meter` turns "the meter" into "the device-1".
+
+The fingerprint is twelve hex digits made from the code, the command and the error with numbers and placeholders taken out, so the same bug has the same fingerprint on another site. `draft` searches the repository's issues for it (the one request it makes, without a login) and lists what it finds; `report send <draft> --to <number>` then adds your report to that issue as a comment instead of opening a second one.
+
+`report send` runs the same replacements over the draft once more, so a line you added by hand is covered, and then:
+
+- with the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`) it says what it would file, where and under which account, and with `--yes` files it;
+- without it, or with `--link`, it prints a link that opens GitHub's issue form with the text filled in, for you to submit in a browser;
+- without a GitHub account, the file is the report: pass it on to whoever supports the gateway.
+
+The same two steps are the MCP tools `report_draft` and `report_send`, which files only with `confirmed: true`. The setup guide's "Report a bug" tells an agent when to offer a report and to ask first.
+
 ## Health on MQTT
 
 The gateway keeps a retained message on `site/building/$gateway/<id>/health`: `online` with every device's status, last successful read and, for a failing device, `failingSince`, refreshed every `healthIntervalMs` and within a second of a device changing status (at most one such refresh a second), and `offline` (its MQTT last will) when it stops or loses the broker. Alert on that topic from whatever reads the broker.
