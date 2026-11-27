@@ -1,6 +1,6 @@
 /**
- * `ot-gateway run` for a person at a terminal: a short overview once the gateway has settled (the broker, each
- * device, the status page, how to stop), then a line for each change that matters, as `ot-gateway events` words it
+ * `ot-gateway run` for a person at a terminal: a short overview once the gateway has settled (the broker, the
+ * devices, the status page, how to stop), then a line for each change that matters, as `ot-gateway events` words it
  * (a device that fails or answers again, the broker that goes away or comes back, an alarm), and the errors and
  * warnings those lines do not already say. The other log lines stay in the gateway's ring (`ot-gateway logs`, the
  * status page), and `run --verbose`, Docker, a pipe and an agent get them on stderr as before.
@@ -38,18 +38,48 @@ export const settled = (status: Overview) =>
 
 const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
-const deviceLine = (ui: Ui, device: Overview["devices"][number]) => {
-  switch (device.status) {
-    case "ok":
-      return ui.done(`${device.id}: reading ${plural(device.pointCount, "point")}`)
-    case "failing":
-      return ui.failed(`${device.id}: ${device.lastError ?? device.reason ?? "not answering"}`)
-    case "starting":
-      return ui.todo(`${device.id}: no answer yet`)
-  }
+const deviceLine = (ui: Ui, device: Overview["devices"][number]) =>
+  ui.done(`${device.id}: reading ${plural(device.pointCount, "point")}`)
+
+/** How many devices the overview names in a line before it counts the rest. */
+const NAMED = 5
+
+const named = (ids: ReadonlyArray<string>) =>
+  ids.length <= NAMED ? ids.join(", ") : `${ids.slice(0, NAMED).join(", ")} and ${ids.length - NAMED} more`
+
+/**
+ * The devices in a few lines however many there are: what is read, then the ones failing and the ones with no answer
+ * yet by name (one failing device with why). `ot-gateway status` has every device on its own line.
+ */
+export const devicesLines = (ui: Ui, devices: Overview["devices"]): ReadonlyArray<string> => {
+  const ok = devices.filter((device) => device.status === "ok")
+  const failing = devices.filter((device) => device.status === "failing")
+  const starting = devices.filter((device) => device.status === "starting")
+  const points = plural(
+    ok.reduce((sum, device) => sum + device.pointCount, 0),
+    "point"
+  )
+  const reading =
+    ok.length === 0
+      ? []
+      : ok.length === devices.length
+        ? [ui.done(`Reading ${plural(ok.length, "device")} and ${points}`)]
+        : [ui.done(`Reading ${ok.length} of ${plural(devices.length, "device")}, ${points}`)]
+  const [only] = failing
+  const failed =
+    failing.length === 0
+      ? []
+      : failing.length === 1 && only !== undefined
+        ? [ui.failed(`1 failing: ${only.id}, ${only.lastError ?? only.reason ?? "not answering"}`)]
+        : [ui.failed(`${failing.length} failing: ${named(failing.map((device) => device.id))}`)]
+  const waiting =
+    starting.length === 0
+      ? []
+      : [ui.todo(`${starting.length} not answering yet: ${named(starting.map((device) => device.id))}`)]
+  return [...reading, ...failed, ...waiting]
 }
 
-/** The overview: the broker, each device, then where the status page is and how to stop. */
+/** The overview: the broker, the devices in a few lines, then where the status page is and how to stop. */
 export const overviewLines = (
   ui: Ui,
   config: {
@@ -71,7 +101,7 @@ export const overviewLines = (
         status.broker.connected
           ? ui.done(`Broker ${status.broker.url} connected`)
           : ui.failed(`Broker ${status.broker.url}: ${status.broker.lastError ?? "not connected yet"}`),
-        ...status.devices.map((device) => deviceLine(ui, device))
+        ...devicesLines(ui, status.devices)
       ]),
   ...(config.devices.length === 0 ? [ui.todo("No devices yet: ot-gateway discover finds them")] : []),
   "",
