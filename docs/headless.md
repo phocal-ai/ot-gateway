@@ -205,18 +205,18 @@ ot-gateway init site-1 --json \
   --points points.csv
 ```
 
-| Flag                           | What it sets                                                                                           |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `site-1` (the argument)        | the folder, created if missing; `.` for the current one                                                |
-| `--site`, `--building`         | the first two parts of every topic: `site-1/main/energy-meter/active-power`                            |
-| `--broker`                     | the broker's URL                                                                                       |
-| `--username`, `--password-env` | the broker login; the password's variable name, `MQTT_PASSWORD` unless you say otherwise               |
-| `--points`                     | the points list from step 3                                                                            |
-| `--devices`                    | instead of a list: `simulated`, `discover` (find BACnet devices now) or `none`                         |
-| `--status-port`                | the status page's port, when another program has 8080                                                  |
-| `--dry-run`                    | show the config and the files, write nothing                                                           |
-| `--yes`                        | take the default for whatever no flag gives: site `my-site`, a broker on localhost, a simulated device |
-| `--force`                      | replace a config that exists; without it `init` refuses and keeps yours                                |
+| Flag                           | What it sets                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| `site-1` (the argument)        | the folder, created if missing; `.` for the current one                                                                        |
+| `--site`, `--building`         | the first two parts of every topic: `site-1/main/energy-meter/active-power`                                                    |
+| `--broker`                     | the broker's URL                                                                                                               |
+| `--username`, `--password-env` | the broker login; the password's variable name, `MQTT_PASSWORD` unless you say otherwise                                       |
+| `--points`                     | the points list from step 3                                                                                                    |
+| `--devices`                    | instead of a list: `simulated`, `discover` (find BACnet devices now) or `none`                                                 |
+| `--status-port`                | the status page's port, when another program has 8080                                                                          |
+| `--dry-run`                    | show the config and the files, write nothing                                                                                   |
+| `--yes`                        | take the default for whatever no flag gives: site `my-site`, building `my-building`, a broker on localhost, a simulated device |
+| `--force`                      | replace a config that exists; without it `init` refuses and keeps yours                                                        |
 
 The password is the one thing `init` does not take. With a `--username` it writes an empty `MQTT_PASSWORD=` line into `ot-gateway.env`, and the result's `notes` say so. Fill that line in with an editor. A script writes it from wherever it keeps its secrets, so that the password is never typed on a command line:
 
