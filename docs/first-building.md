@@ -34,7 +34,7 @@ With no `ot-gateway.json` in the folder, a bare `ot-gateway` in a terminal start
 
 1. **The folder.** `.` (this one) is the default, as create-next-app and create-turbo ask it; a name makes a new folder. `init .` and `init my-building` answer it up front.
 2. **The broker.** `mqtt://localhost:1883` is suggested, and init says whether something answers there. Then whether the broker needs a username and password (no by default), and if so the username and the variable that holds the password.
-3. **Site and building**, the first two parts of every topic. init shows the topic before it asks (`<site>/<building>/<device>/<point>`) and with your names after. Enter takes `my-site` and `my-building`, so pressing Enter through every question gives a working folder; the names can be changed in `ot-gateway.json` later, before anything subscribes to them.
+3. **Site and building**, the first two parts of every topic. init shows the topic before it asks (`<site>/<building>/<device>/<point>`) and with your names after. Enter takes `my-site` and `my-building` (`--yes` gives `my-site` and `main`, as it always has), so pressing Enter through every question gives a working folder; the names can be changed in `ot-gateway.json` later, before anything subscribes to them.
 
 It writes the folder and names the one next step, `discover`. Scripts and agents get the whole account instead, every file and the next commands, and with `--json` as data ([Headless setup](headless.md)).
 

@@ -198,9 +198,18 @@ const answer = <A extends string>(
   return yes ? Effect.succeed(fallback) : ask
 }
 
-/** A name that is a topic segment: `fallback` with `--yes`, and the question's default, so Enter takes it. */
-const slug = (flag: string, given: string | undefined, yes: boolean, message: string, fallback: string) =>
-  answer(flag, given, yes, fallback, Prompt.String({ message, default: fallback, validate: validSlug }), validSlug)
+/**
+ * A name that is a topic segment: `fallback` with `--yes` (what scripts have always got, so their topics stay), and
+ * `suggested` as the question's default, so a person can press Enter through init.
+ */
+const slug = (
+  flag: string,
+  given: string | undefined,
+  yes: boolean,
+  message: string,
+  fallback: string,
+  suggested = fallback
+) => answer(flag, given, yes, fallback, Prompt.String({ message, default: suggested, validate: validSlug }), validSlug)
 
 /** Whether a broker answers on localhost:1883, so the broker question can say so; at most a second. */
 export const localBrokerAnswers = NodeSocket.makeNet({ host: "localhost", port: 1883, openTimeout: "1 second" }).pipe(
@@ -568,7 +577,7 @@ export const runInit = Effect.fn("runInit")(function* (
   }
   // A wrong --site or --building fails now, before a discovery that would come to nothing.
   yield* slug("site", flags.site, true, "", "my-site")
-  yield* slug("building", flags.building, true, "", "my-building")
+  yield* slug("building", flags.building, true, "", "main")
   // As the work goes: where values go, which devices they come from, then the names their topics take.
   const broker = { brokerUrl: yield* brokerUrl(flags, localBroker), login: yield* login(flags) }
   // Discovery is the first way to devices for a person at the terminal; the others come when nobody answers.
@@ -594,7 +603,7 @@ export const runInit = Effect.fn("runInit")(function* (
   const asksNames = !yes && (flags.site === undefined || flags.building === undefined)
   if (asksNames) yield* Console.error(`topics: ${topicPattern("<site>", "<building>")}`)
   const site = yield* slug("site", flags.site, yes, "What is the site called?", "my-site")
-  const building = yield* slug("building", flags.building, yes, "What is the building called?", "my-building")
+  const building = yield* slug("building", flags.building, yes, "What is the building called?", "main", "my-building")
   if (asksNames) yield* Console.error(`topics: ${topicPattern(site, building)}`)
   const withNetwork = { ...networked, site, building }
   const text = `${JSON.stringify(initConfig(withNetwork, devices, { history: flags.history, statusPort: flags.statusPort }), null, 2)}\n`
