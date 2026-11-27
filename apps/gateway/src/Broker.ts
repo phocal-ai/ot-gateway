@@ -18,7 +18,7 @@ import {
   readBrokerPassword
 } from "@ot-gateway/mqtt"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
-import { Deferred, Effect, Option, Random, Schema } from "effect"
+import { Deferred, Effect, Option, Random, Result, Schema } from "effect"
 
 /** How long the first dial may take, past the client's own connect timeout, before the command gives up. */
 const DIAL_TIMEOUT = "15 seconds"
@@ -317,7 +317,8 @@ export interface ReadingToSend {
 
 /**
  * `ot-gateway read --publish`: each value read once to its point's topic, in the gateway's value message (`value`,
- * `unit`, `ts`), QoS 1 and not retained, as the gateway sends a read. `$meta` is left to the gateway.
+ * `unit`, `ts`), QoS 1 and not retained, as the gateway sends a read. `$meta` is left to the gateway. A topic the
+ * broker refuses does not stop the others: what was not sent is returned with why.
  */
 export const publishReadings = Effect.fn("publishReadings")(function* (
   config: GatewayConfig,
@@ -326,7 +327,7 @@ export const publishReadings = Effect.fn("publishReadings")(function* (
 ) {
   const client = yield* brokerClient(config.mqtt, "read")
   yield* firstDialOf(client, config.mqtt)
-  yield* Effect.forEach(
+  const failed = yield* Effect.forEach(
     readings,
     (reading) =>
       client
@@ -335,10 +336,16 @@ export const publishReadings = Effect.fn("publishReadings")(function* (
           JSON.stringify({ value: reading.value, ...(reading.unit === undefined ? {} : { unit: reading.unit }), ts }),
           { qos: 1, retain: false }
         )
-        .pipe(Effect.mapError((error) => new BrokerCommandError({ message: `${reading.topic}: ${error.message}` }))),
-    { concurrency: 16, discard: true }
+        .pipe(
+          Effect.result,
+          Effect.map((result) =>
+            Result.isSuccess(result) ? [] : [{ topic: reading.topic, message: result.failure.message }]
+          )
+        ),
+    { concurrency: 16 }
   )
-  return { broker: config.mqtt.url, messages: readings.length }
+  const notSent = failed.flat()
+  return { broker: config.mqtt.url, sent: readings.length - notSent.length, failed: notSent }
 }, Effect.scoped)
 
 /** `publish` for a person, one line. */

@@ -114,6 +114,7 @@ import {
   incompleteMessage,
   parseReadSelection,
   readOnce,
+  readingsToSend,
   ReadIncomplete,
   selectDevices
 } from "./ReadOnce.ts"
@@ -1890,49 +1891,75 @@ const readCommand = Command.make(
         Effect.provideService(References.MinimumLogLevel, "Error")
       )
       if (!publish) return { report, sent: undefined }
-      const readings = report.devices.flatMap((device) =>
-        device.points.flatMap((point) =>
-          point.ok && point.value !== undefined
-            ? [{ topic: point.topic, value: point.value, ...(point.unit === undefined ? {} : { unit: point.unit }) }]
-            : []
-        )
-      )
-      // The values are shown either way; a broker that cannot take them is said after them.
+      const { readings, skipped } = readingsToSend(decoded, report)
+      if (readings.length === 0) {
+        return { report, sent: { _tag: "nothing" as const, skipped, broker: decoded.mqtt.url } }
+      }
+      // The values are shown either way; a broker that cannot take them is said after them. Its client's own
+      // warnings would only repeat that, between the values.
       const sent = yield* publishReadings(decoded, readings, report.at).pipe(
-        Effect.map((done) => ({ ok: true as const, ...done })),
-        Effect.catchTag("BrokerCommandError", (error) => Effect.succeed({ ok: false as const, error }))
+        Effect.map((done) => ({ _tag: "done" as const, skipped, ...done })),
+        Effect.catchTag("BrokerCommandError", (error) =>
+          Effect.succeed({ _tag: "unreachable" as const, error, broker: decoded.mqtt.url })
+        ),
+        Effect.provideService(References.MinimumLogLevel, "Error")
       )
       return { report, sent }
     }).pipe(
       jsonFailure(json, { path: "error" in chosen ? null : chosen.config }),
       Effect.flatMap(({ report, sent }) =>
         Effect.gen(function* () {
+          const failure =
+            sent === undefined || sent._tag === "nothing"
+              ? undefined
+              : sent._tag === "unreachable"
+                ? sent.error
+                : sent.failed.length === 0
+                  ? undefined
+                  : new BrokerCommandError({
+                      message: `${sent.failed.length} of ${sent.failed.length + sent.sent} value(s) not sent: ${sent.failed.map((each) => `${each.topic}: ${each.message}`).join("; ")}`,
+                      hint: "ot-gateway broker checks the connection; the broker's access rules (ACL) must allow publishing to these topics"
+                    })
           const published =
             sent === undefined
-              ? {}
+              ? undefined
               : {
-                  published: sent.ok
-                    ? { ok: true, broker: sent.broker, messages: sent.messages }
+                  ok: failure === undefined,
+                  broker: sent.broker,
+                  sent: sent._tag === "done" ? sent.sent : 0,
+                  ...(sent._tag === "unreachable" || sent.skipped === 0 ? {} : { skipped: sent.skipped }),
+                  ...(sent._tag === "done" && sent.failed.length > 0 ? { failed: sent.failed } : {}),
+                  ...(failure === undefined
+                    ? {}
                     : {
-                        ok: false,
-                        message: sent.error.message,
-                        ...(sent.error.code === undefined ? {} : { code: sent.error.code }),
-                        ...(sent.error.hint === undefined ? {} : { hint: sent.error.hint })
-                      }
+                        message: failure.message,
+                        ...(failure.code === undefined ? {} : { code: failure.code }),
+                        ...(failure.hint === undefined ? {} : { hint: failure.hint })
+                      })
                 }
-          if (json) yield* printJsonWithLocalTimes({ ...report, ...published })
-          else {
+          if (json) {
+            yield* printJsonWithLocalTimes({
+              ...report,
+              ok: report.ok && failure === undefined,
+              ...(published === undefined ? {} : { published })
+            })
+          } else {
             yield* printResult(formatReadReport(report))
-            if (sent?.ok === true) {
-              yield* printResult(`sent ${sent.messages} value(s) to ${sent.broker}`)
+            if (published !== undefined && failure === undefined) {
+              const aggregated =
+                published.skipped === undefined ? "" : `; ${published.skipped} aggregated point(s) left to the gateway`
+              yield* printResult(
+                published.sent === 0
+                  ? `nothing sent: no value was read${aggregated}`
+                  : `sent ${published.sent} value(s) to ${published.broker}${aggregated}`
+              )
             }
           }
-          if (sent?.ok === false) {
-            const { message, code, hint } = sent.error
+          if (failure !== undefined) {
             return yield* new BrokerCommandError({
-              message: `values not sent: ${message}`,
-              ...(code === undefined ? {} : { code }),
-              ...(hint === undefined ? {} : { hint })
+              message: sent?._tag === "unreachable" ? `values not sent: ${failure.message}` : failure.message,
+              ...(failure.code === undefined ? {} : { code: failure.code }),
+              ...(failure.hint === undefined ? {} : { hint: failure.hint })
             })
           }
           if (!report.ok) return yield* new ReadIncomplete({ message: incompleteMessage(report) })

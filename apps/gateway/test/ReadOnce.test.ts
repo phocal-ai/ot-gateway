@@ -15,6 +15,7 @@ import {
   incompleteMessage,
   parseReadSelection,
   readOnce,
+  readingsToSend,
   type ReadReport,
   selectDevices
 } from "../src/ReadOnce.ts"
@@ -295,4 +296,43 @@ describe("formatReadReport", () => {
     }
     expect(formatReadReport(fine).split("\n").at(-1)).toBe("2 point(s) of 1 device(s) read in 1.3 s")
   })
+})
+
+describe("read --publish", () => {
+  it.effect("sends each value read with its topic and unit, and leaves aggregated points to the gateway", () =>
+    Effect.gen(function* () {
+      const config = yield* configWith([
+        {
+          protocol: "simulator",
+          id: "meter",
+          points: [
+            { id: "power", name: "Power", unit: "kW", waveform: "constant", min: 3, max: 3 },
+            {
+              id: "energy",
+              name: "Energy",
+              waveform: "constant",
+              min: 7,
+              max: 7,
+              publish: { mode: "aggregate", intervalMs: 60_000 }
+            },
+            { id: "flow", name: "Flow", waveform: "constant", min: 1, max: 1 }
+          ]
+        }
+      ])
+      const report = yield* readOnce(config, yield* selectDevices(config, []))
+      const failedFlow: ReadReport = {
+        ...report,
+        devices: report.devices.map((device) => ({
+          ...device,
+          points: device.points.map((point) =>
+            point.id === "flow" ? { id: point.id, name: point.name, topic: point.topic, ok: false } : point
+          )
+        }))
+      }
+      expect(readingsToSend(config, failedFlow)).toEqual({
+        readings: [{ topic: "home/pi/meter/power", value: 3, unit: "kW" }],
+        skipped: 1
+      })
+    })
+  )
 })

@@ -17,7 +17,8 @@ import {
   type GatewayConfig,
   monotonicMillis,
   type Network,
-  pointTopic
+  pointTopic,
+  publishOf
 } from "@ot-gateway/core"
 import { endpointOf } from "@ot-gateway/modbus"
 import { makeSimulatorDriver } from "@ot-gateway/simulator"
@@ -424,4 +425,30 @@ export const formatReadReport = (report: ReadReport): string => {
 export const incompleteMessage = (report: ReadReport) => {
   const failed = report.devices.filter((device) => !device.ok).map((device) => device.device)
   return `${report.summary.failed} of ${report.summary.points} point(s) not read (${failed.join(", ")})`
+}
+
+/**
+ * What `read --publish` sends: each value read, with its topic and unit. A point the config aggregates is left out
+ * (counted in `skipped`): its topic carries the gateway's window message, not single values.
+ */
+export const readingsToSend = (config: GatewayConfig, report: ReadReport) => {
+  const readings: Array<{ readonly topic: string; readonly value: number | boolean; readonly unit?: string }> = []
+  let skipped = 0
+  for (const device of report.devices) {
+    const configured = config.devices.find((each) => each.id === device.device)
+    for (const point of device.points) {
+      if (!point.ok || point.value === undefined) continue
+      const own = configured?.points.find((each) => each.id === point.id)
+      if (own !== undefined && publishOf(configured?.publish, own).mode === "aggregate") {
+        skipped += 1
+        continue
+      }
+      readings.push({
+        topic: point.topic,
+        value: point.value,
+        ...(point.unit === undefined ? {} : { unit: point.unit })
+      })
+    }
+  }
+  return { readings, skipped }
 }

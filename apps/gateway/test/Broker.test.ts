@@ -193,7 +193,7 @@ describe("ot-gateway read --publish", () => {
         ],
         1_700_000_000_000
       )
-      expect(sent).toEqual({ broker: config.mqtt.url, messages: 2 })
+      expect(sent).toEqual({ broker: config.mqtt.url, sent: 2, failed: [] })
       // Sent side by side: the order on the wire is not the point.
       expect(control.messages.toSorted((a, b) => a.topic.localeCompare(b.topic))).toMatchObject([
         { topic: "s/b/room/heating", payload: '{"value":false,"ts":1700000000000}', qos: 1 },
