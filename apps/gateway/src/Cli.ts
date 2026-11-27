@@ -99,7 +99,8 @@ import {
   undoConfig
 } from "./ConfigEdit.ts"
 import { formatPointCommands, setPointCommands } from "./PointCommands.ts"
-import { formatSecretList, formatSecretSet, listSecrets, setSecret } from "./Secret.ts"
+import { loadEnvFile } from "./EnvFile.ts"
+import { formatSecretList, formatSecretSet, listSecrets, SecretFailed, secretTarget, setSecret } from "./Secret.ts"
 import { defaultConfigPath, describeUnits, importPointsList, pointsListSource } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
@@ -1319,7 +1320,7 @@ const fromEdeCommand = Command.make(
   },
   ({ file, text, json }) =>
     Effect.gen(function* () {
-      const given = yield* pointsListSource(file, text)
+      const given = yield* pointsListSource(file, text, "EDE file")
       const translation = yield* edeToPointsList(given.text)
       if (json) {
         return yield* printJson({
@@ -1636,31 +1637,39 @@ const configCommand = Command.make("config").pipe(
 const SECRET_BYTES = 64 * 1024
 
 /**
- * A secret from stdin, when it is not a terminal: everything piped in, without the line break `echo` adds. Nothing
- * within ten seconds (an agent's shell, whose stdin stays open and silent) is no value, which the command says.
+ * A secret from stdin, when it is not a terminal: everything piped in, without the line break `echo` adds. A stdin
+ * that stays open and silent for a minute (an agent's shell) is no value, which the command says; once a byte
+ * came, a slow source (a secret store that asks for its own passphrase) is read to its end. More than a password
+ * is refused, not cut.
  */
-const secretFromStdin = Effect.gen(function* () {
-  const stdio = yield* Stdio
-  const bytes = yield* stdio.stdin.pipe(
-    Stream.takeUntil((chunk) => chunk.length > SECRET_BYTES),
-    Stream.runFold(
-      () => new Uint8Array(0),
-      (all, chunk) => {
-        if (all.length + chunk.length > SECRET_BYTES) return all
-        const joined = new Uint8Array(all.length + chunk.length)
-        joined.set(all)
-        joined.set(chunk, all.length)
-        return joined
-      }
-    ),
-    Effect.timeoutOption("10 seconds"),
-    Effect.catchTag("PlatformError", () => Effect.succeed(Option.none<Uint8Array>()))
-  )
-  return Option.match(bytes, {
-    onNone: () => "",
-    onSome: (read) => new TextDecoder().decode(read).replace(/\r?\n$/, "")
+const secretFromStdin = (name: string) =>
+  Effect.gen(function* () {
+    const stdio = yield* Stdio
+    let total = 0
+    const read = stdio.stdin.pipe(
+      Stream.takeUntil((chunk) => (total += chunk.length) > SECRET_BYTES),
+      Stream.runCollect,
+      Effect.catchTag("PlatformError", () => Effect.succeed<Array<Uint8Array>>([]))
+    )
+    const silent = Effect.sleep("60 seconds").pipe(
+      Effect.andThen(Effect.suspend(() => (total === 0 ? Effect.succeed<Array<Uint8Array>>([]) : Effect.never)))
+    )
+    const chunks = yield* Effect.raceFirst(read, silent)
+    if (total > SECRET_BYTES) {
+      return yield* new SecretFailed({
+        message: `the value piped in for ${name} is over 64 KiB, more than a password or a token: nothing was written`,
+        code: "secret-not-writable",
+        hint: "pipe in the secret itself, not a file that holds it"
+      })
+    }
+    const bytes = new Uint8Array(total)
+    let at = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, at)
+      at += chunk.length
+    }
+    return new TextDecoder().decode(bytes).replace(/\r?\n$/, "")
   })
-})
 
 const secretSetCommand = Command.make(
   "set",
@@ -1680,11 +1689,13 @@ const secretSetCommand = Command.make(
   ({ name, config, generate, json }) =>
     Effect.gen(function* () {
       const command = yield* invocation
+      // Before anything is asked: a name or a config that cannot take the secret is said first.
+      yield* secretTarget(config, name, command)
       const value = generate
         ? ({ generate: true } as const)
         : process.stdin.isTTY
           ? { value: Redacted.value(yield* Prompt.Password({ message: `${name}, not shown:` })) }
-          : { value: yield* secretFromStdin }
+          : { value: yield* secretFromStdin(name) }
       const report = yield* setSecret(config, name, value, { command })
       yield* json ? printJson(report) : Console.log(formatSecretSet(report))
     }).pipe(jsonFailure(json, { path: config, secret: name }))
@@ -2955,7 +2966,12 @@ const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeSe
     yield* serveMcp({
       tools: mcpTools,
       version,
-      run: (argv): Effect.Effect<unknown, unknown, NodeServices> => runCli(argv),
+      // The server outlives a `secret set` the user runs beside it: each call reads the folder's env file again.
+      run: (argv): Effect.Effect<unknown, unknown, NodeServices> =>
+        Effect.andThen(
+          Effect.sync(() => loadEnvFile()),
+          runCli(argv)
+        ),
       log
     })
   }).pipe(Effect.updateService(Console.Console, stderrConsole))

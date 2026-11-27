@@ -107,6 +107,31 @@ describe("the env file", () => {
       expect(env).toEqual({ MQTT_PASSWORD: "secret" })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+
+  it.effect(
+    "read again, takes the file's new value for what it set, and leaves what the shell or another file set",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const folder = yield* fs.makeTempDirectoryScoped()
+        const file = join(folder, "ot-gateway.env")
+        const other = join(folder, "other.env")
+        yield* fs.writeFileString(file, "MQTT_PASSWORD=\nFROM_SHELL=file\n")
+        const env: Record<string, string | undefined> = { FROM_SHELL: "shell" }
+        loadEnvFile(file, env)
+        expect(env).toEqual({ FROM_SHELL: "shell" })
+        // What `secret set` does while a long-running server holds the environment.
+        yield* fs.writeFileString(file, "MQTT_PASSWORD=first\nFROM_SHELL=file\n")
+        loadEnvFile(file, env)
+        expect(env).toEqual({ FROM_SHELL: "shell", MQTT_PASSWORD: "first" })
+        yield* fs.writeFileString(file, "MQTT_PASSWORD=second\nFROM_SHELL=file\n")
+        loadEnvFile(file, env)
+        expect(env).toEqual({ FROM_SHELL: "shell", MQTT_PASSWORD: "second" })
+        yield* fs.writeFileString(other, "MQTT_PASSWORD=other\n")
+        loadEnvFile(other, env)
+        expect(env["MQTT_PASSWORD"]).toBe("second")
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
 })
 
 describe("envFileText", () => {

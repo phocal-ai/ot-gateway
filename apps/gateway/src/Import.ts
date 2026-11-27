@@ -84,32 +84,36 @@ const GIVEN_BYTES = 32 * 1024 * 1024
  * The points list's text and what to call it: the file at `path`, or `given` when the list came as text, which
  * `path` must then say with `-` so a file named by mistake is not passed over.
  */
-export const pointsListSource = Effect.fn("pointsListSource")(function* (path: string, given: string | undefined) {
+export const pointsListSource = Effect.fn("pointsListSource")(function* (
+  path: string,
+  given: string | undefined,
+  what = "points list"
+) {
   if (given === undefined) {
     if (path === givenAsText) {
-      return yield* new PointsListError({ message: "- stands for a list given with --text, and there is none" })
+      return yield* new PointsListError({ message: `- stands for a ${what} given with --text, and there is none` })
     }
     const fs = yield* FileSystem.FileSystem
     const text = yield* fs
       .readFileString(path)
       .pipe(
         Effect.catchReason("PlatformError", "NotFound", () =>
-          Effect.fail(new PointsListError({ message: `no points list at ${path}` }))
+          Effect.fail(new PointsListError({ message: `no ${what} at ${path}` }))
         )
       )
     return { text, source: path }
   }
   if (path !== givenAsText) {
     return yield* new PointsListError({
-      message: `${path} and --text both name a points list: write - in place of the file to take the text`
+      message: `${path} and --text both name a ${what}: write - in place of the file to take the text`
     })
   }
   if (given.length > GIVEN_BYTES) {
     return yield* new PointsListError({
-      message: "the list given as text is over 32 MB: save it as a file and name that"
+      message: `the ${what} given as text is over 32 MB: save it as a file and name that`
     })
   }
-  return { text: given, source: "the list given" }
+  return { text: given, source: `the ${what} given` }
 })
 
 /**

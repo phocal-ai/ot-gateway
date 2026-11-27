@@ -75,6 +75,13 @@ describe("secret names", () => {
       expect(secretVariable("edit-token", withLogin)).toBe("OT_GATEWAY_EDIT_TOKEN")
       expect(secretVariable("OTEL_EXPORTER_OTLP_HEADERS", withLogin)).toBe("OTEL_EXPORTER_OTLP_HEADERS")
       expect(secretVariable("not a name", withLogin)).toMatchObject({ code: "usage" })
+      // A name the config takes and no env file can hold is said, not written or made a pattern of.
+      for (const name of ["MQTT(PASSWORD", "MQTT PASSWORD", "MQTT.PASSWORD"]) {
+        const odd = yield* parseConfig(
+          JSON.stringify(config({ mqtt: { url: "mqtt://localhost:1883", username: "gw", passwordEnv: name } }))
+        )
+        expect(secretVariable("broker-password", odd)).toMatchObject({ code: "no-password-variable" })
+      }
       const open = yield* parseConfig(JSON.stringify(config({ mqtt: { url: "mqtt://localhost:1883" } })))
       expect(secretVariable("broker-password", open, "otg")).toMatchObject({
         code: "no-password-variable",

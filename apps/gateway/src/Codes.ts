@@ -171,7 +171,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "broker",
     reportedBy: ["secret set"],
     meaning:
-      "No value arrived for the secret: nothing was typed, or nothing was piped in within ten seconds. Nothing was written.",
+      "No value arrived for the secret: nothing was typed, or nothing was piped in within a minute. Nothing was written.",
     fix: "The person who has the secret runs the command in a terminal and types it there; an agent does not ask for it. A script pipes it in.",
     next: "ot-gateway secret set broker-password"
   },

@@ -66,7 +66,10 @@ export const defineTool = <
   readonly description: string
   readonly input: Fields
   readonly annotations: ToolAnnotations
-  readonly argv: (input: Schema.Struct<Fields>["Type"]) => ReadonlyArray<string | undefined | false>
+  /** The command's arguments, or why this input names none. */
+  readonly argv: (
+    input: Schema.Struct<Fields>["Type"]
+  ) => ReadonlyArray<string | undefined | false> | InvalidToolArguments
 }): McpTool => {
   const schema = Schema.Struct(spec.input)
   const decode = Schema.decodeUnknownEffect(schema)
@@ -78,8 +81,13 @@ export const defineTool = <
     annotations: spec.annotations,
     argv: (input) =>
       decode(input ?? {}, { onExcessProperty: "error", errors: "all" }).pipe(
-        Effect.map((decoded) => spec.argv(decoded).filter((arg): arg is string => typeof arg === "string")),
-        Effect.mapError((error) => new InvalidToolArguments({ message: error.message }))
+        Effect.mapError((error) => new InvalidToolArguments({ message: error.message })),
+        Effect.flatMap((decoded) => {
+          const argv = spec.argv(decoded)
+          return argv instanceof InvalidToolArguments
+            ? Effect.fail(argv)
+            : Effect.succeed(argv.filter((arg): arg is string => typeof arg === "string"))
+        })
       )
   }
 }
@@ -94,6 +102,17 @@ const objectSchema = (generated: JsonSchema.JsonSchema) => ({
   ...(generated["type"] === "object" ? generated : {}),
   additionalProperties: false
 })
+
+/** Why `given` does not name one source: exactly one of its keys is to be there. */
+const oneOf = (given: Readonly<Record<string, unknown>>): InvalidToolArguments | undefined => {
+  const named = Object.keys(given).filter((key) => given[key] !== undefined)
+  const keys = Object.keys(given).join(", ")
+  return named.length === 1
+    ? undefined
+    : new InvalidToolArguments({
+        message: named.length === 0 ? `give one of ${keys}` : `give one of ${keys}, not ${named.join(" and ")} together`
+      })
+}
 
 /** `--name=value`, or nothing when the value is left out (or a boolean flag is false). */
 export const flag = (name: string, value: string | number | boolean | undefined): string | undefined =>
@@ -451,6 +470,8 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     argv: ({ pointsList, text: given, rows, config, dryRun }) => {
+      const mistake = oneOf({ pointsList, text: given, rows })
+      if (mistake !== undefined) return mistake
       const inline = rows === undefined ? given : JSON.stringify(rows)
       return [
         "import",
@@ -484,7 +505,13 @@ export const mcpTools: ReadonlyArray<McpTool> = [
       text: Schema.optionalKey(Schema.String.annotate({ description: "The EDE file's text instead of a path" }))
     },
     annotations: local,
-    argv: ({ edeFile, text: given }) => ["points", "from-ede", given === undefined ? edeFile : "-", flag("text", given)]
+    argv: ({ edeFile, text: given }) =>
+      oneOf({ edeFile, text: given }) ?? [
+        "points",
+        "from-ede",
+        given === undefined ? edeFile : "-",
+        flag("text", given)
+      ]
   }),
   defineTool({
     name: "points_schema",
@@ -702,7 +729,7 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     name: "init",
     title: "Write a gateway's folder",
     description:
-      "Write a gateway's folder without asking anything: ot-gateway.json, compose.yaml and ot-gateway.env (the broker password's line empty: the user fills it with ot-gateway secret set broker-password). Give site and broker, and devices or points; without them it fails with missing, or pass yes for the defaults (a simulated device, a broker on localhost). dryRun defaults to true: work it out and return it, write nothing. Returns the config, the files and next",
+      "Write a gateway's folder without asking anything: ot-gateway.json, compose.yaml and ot-gateway.env (the broker password's line empty: the user fills it with ot-gateway secret set broker-password). Give site and broker, and devices or points; without them a run that writes (dryRun false) fails with missing, or pass yes for the defaults (a simulated device, a broker on localhost). dryRun defaults to true: work it out and return it, write nothing; a dry run fills what is not given with those defaults, so what it returns is not yet what the user chose. Returns the config, the files and next",
     input: {
       directory: optionalText("The gateway's folder, created if missing (default .)"),
       site: optionalText("The site, the first topic segment (a slug: site-1)"),

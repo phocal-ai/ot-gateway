@@ -33,15 +33,23 @@ const VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/
  */
 export const secretVariable = (name: string, config: GatewayConfig, cli = "ot-gateway"): string | SecretFailed => {
   if (name === "broker-password") {
-    return (
-      config.mqtt.passwordEnv ??
-      new SecretFailed({
+    const variable = config.mqtt.passwordEnv
+    if (variable === undefined) {
+      return new SecretFailed({
         message:
           "the config names no variable for the broker password (mqtt.passwordEnv), so the gateway would not read one",
         code: "no-password-variable",
         hint: `${cli} config set mqtt.username <username>, then ${cli} config set mqtt.passwordEnv MQTT_PASSWORD, then this again`
       })
-    )
+    }
+    // The config takes any text there; an env file takes a variable's name.
+    return VARIABLE.test(variable)
+      ? variable
+      : new SecretFailed({
+          message: `mqtt.passwordEnv is ${JSON.stringify(variable)}, which no env file can hold: a variable's name is letters, digits and _`,
+          code: "no-password-variable",
+          hint: `${cli} config set mqtt.passwordEnv MQTT_PASSWORD, then this again`
+        })
   }
   if (name === "edit-token") return EDIT_TOKEN_VARIABLE
   return VARIABLE.test(name)
@@ -114,6 +122,14 @@ export interface SecretSetReport {
   readonly next: ReadonlyArray<{ readonly command: string; readonly description: string }>
 }
 
+/** The config at `configPath` and the variable the secret `name` goes into there, or why it has none. */
+export const secretTarget = Effect.fn("secretTarget")(function* (configPath: string, name: string, cli?: string) {
+  const config = yield* loadConfig(configPath)
+  const variable = secretVariable(name, config, cli)
+  if (variable instanceof SecretFailed) return yield* variable
+  return { config, variable }
+})
+
 /**
  * Sets the secret `name` of the config at `configPath` to `value` in the folder's env file. The value is in no
  * result and no message.
@@ -126,9 +142,7 @@ export const setSecret = Effect.fn("setSecret")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem
   const cli = options.command ?? "ot-gateway"
-  const config = yield* loadConfig(configPath)
-  const variable = secretVariable(name, config, cli)
-  if (variable instanceof SecretFailed) return yield* variable
+  const { config, variable } = yield* secretTarget(configPath, name, cli)
   const secret = "generate" in value ? randomBytes(32).toString("hex") : value.value
   if (secret === "") {
     return yield* new SecretFailed({

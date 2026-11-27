@@ -133,6 +133,14 @@ describe("mcp tools", () => {
     )
   })
 
+  it("import and points_from_ede take one source: none, or a file and a text together, is refused before the command", () => {
+    expect(Exit.isFailure(argvOf("import", { config: "site/ot-gateway.json", dryRun: false }))).toBe(true)
+    expect(Exit.isFailure(argvOf("import", { pointsList: "a.csv", text: "device,point\n" }))).toBe(true)
+    expect(Exit.isFailure(argvOf("import", { text: "device,point\n", rows: [] }))).toBe(true)
+    expect(Exit.isFailure(argvOf("points_from_ede", {}))).toBe(true)
+    expect(Exit.isFailure(argvOf("points_from_ede", { edeFile: "a.csv", text: "#EDE\n" }))).toBe(true)
+  })
+
   it("points_template and points_from_ede return the list as text and write no file", () => {
     expect(argvOf("points_template", {})).toEqual(Exit.succeed(["points", "template"]))
     expect(argvOf("points_template", { protocol: "bacnet" })).toEqual(

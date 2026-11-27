@@ -444,7 +444,7 @@ describe("importPointsList", () => {
       const both = yield* importPointsList(examplePoints, configPath, { dryRun: true, text: list }).pipe(Effect.flip)
       expect(both.message).toContain("both name a points list")
       const neither = yield* importPointsList("-", configPath, { dryRun: true }).pipe(Effect.flip)
-      expect(neither.message).toBe("- stands for a list given with --text, and there is none")
+      expect(neither.message).toBe("- stands for a points list given with --text, and there is none")
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
