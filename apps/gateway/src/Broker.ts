@@ -308,6 +308,39 @@ export const publishOnce = Effect.fn("publishOnce")(function* (
   }
 }, Effect.scoped)
 
+/** A point read once, as `read --publish` sends it: the topic and the value with its unit. */
+export interface ReadingToSend {
+  readonly topic: string
+  readonly value: number | boolean
+  readonly unit?: string
+}
+
+/**
+ * `ot-gateway read --publish`: each value read once to its point's topic, in the gateway's value message (`value`,
+ * `unit`, `ts`), QoS 1 and not retained, as the gateway sends a read. `$meta` is left to the gateway.
+ */
+export const publishReadings = Effect.fn("publishReadings")(function* (
+  config: GatewayConfig,
+  readings: ReadonlyArray<ReadingToSend>,
+  ts: number
+) {
+  const client = yield* brokerClient(config.mqtt, "read")
+  yield* firstDialOf(client, config.mqtt)
+  yield* Effect.forEach(
+    readings,
+    (reading) =>
+      client
+        .publish(
+          reading.topic,
+          JSON.stringify({ value: reading.value, ...(reading.unit === undefined ? {} : { unit: reading.unit }), ts }),
+          { qos: 1, retain: false }
+        )
+        .pipe(Effect.mapError((error) => new BrokerCommandError({ message: `${reading.topic}: ${error.message}` }))),
+    { concurrency: 16, discard: true }
+  )
+  return { broker: config.mqtt.url, messages: readings.length }
+}, Effect.scoped)
+
 /** `publish` for a person, one line. */
 export const formatPublished = (result: Effect.Success<ReturnType<typeof publishOnce>>) =>
   result.cleared

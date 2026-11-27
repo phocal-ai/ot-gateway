@@ -126,6 +126,7 @@ import {
   formatBrokerReport,
   formatPublished,
   publishOnce,
+  publishReadings,
   roundTripFailure
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
@@ -151,7 +152,7 @@ import {
   UsageMistake
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
-import { inColumn, plainUi, spinning, terminalUi, type Ui } from "./Ui.ts"
+import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
@@ -510,8 +511,8 @@ const discoverModbusCommand = Command.make(
 /**
  * `discover` for a person at a terminal: what to look for (BACnet/IP on this network, the one picked when there are
  * several, a Modbus scan, one device by address, a points list), the points to read, what the save changes on the
- * broker when the config has devices already, the save (devices it has get the new points), then read once, start
- * or done.
+ * broker when the config has devices already, the save (devices it has get the new points), then the commands for
+ * reading once and starting the gateway. It stops there: reading and running are their own commands.
  */
 const discoverAndSave = Effect.fn("discoverAndSave")(function* (
   path: string,
@@ -533,7 +534,7 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
   const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), { address, wait })
   if (picked.length === 0) {
     yield* Console.log(ui.note(`nothing to save; ${path} is as it was`))
-    return undefined
+    return
   }
   const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
   const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
@@ -552,11 +553,11 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
   })
   if (!save) {
     yield* Console.log(ui.note(`nothing saved; ${path} is as it was`))
-    return undefined
+    return
   }
   yield* writeMerged(path, fileText, merged)
   yield* Console.log(["", ...savedLines(merged.config, merged.added, merged.extended, ui), ""].join("\n"))
-  return yield* afterSave(merged.config, path, argument, ui)
+  yield* savedNext(argument, ui)
 })
 
 /**
@@ -588,67 +589,19 @@ export const savedLines = (
   return [...lines.map((line) => ui.done(`${line.verb}: ${line.text}`)), ...hint]
 }
 
-/** What the end of discover offers: read every point once, start the gateway here, or stop. */
-type AfterSave = "read" | "start" | "done"
-
-/** Every point of `saved` read once, the report printed; a read that cannot start says why and returns to the menu. */
-const readEveryPoint = Effect.fn("readEveryPoint")(
-  function* (saved: GatewayConfig, ui: Ui) {
-    const devices = yield* selectDevices(saved, [])
-    const count = devices.reduce((sum, device) => sum + device.points.length, 0)
-    // The report says what failed and why; the drivers' warnings would only repeat it.
-    const report = yield* readOnce(saved, devices).pipe(
-      Effect.provideService(References.MinimumLogLevel, "Error"),
-      spinning(ui, `Reading ${count} point${count === 1 ? "" : "s"} once`)
-    )
-    yield* Console.log(`${ui.indent(formatReadReport(report))}\n`)
-  },
-  (effect, _saved, ui) =>
-    Effect.catchTag(effect, "ReadError", (error) =>
-      Console.error(`${ui.failed(error.message)}${error.hint === undefined ? "" : `\n${ui.note(error.hint)}`}\n`)
-    )
-)
-
-/** After a save: read once (as often as wanted), start the gateway in this terminal, or the commands for later. */
-const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: string, argument: string, ui: Ui) {
+/** After a save, the commands for what comes next: discover stops here, in init's style. */
+const savedNext = Effect.fn("savedNext")(function* (argument: string, ui: Ui) {
   const cli = yield* invocation
-  const canStart = startNowQuestion(saved, process.env) !== undefined
-  const choices: ReadonlyArray<Prompt.SelectChoice<AfterSave>> = [
-    { title: "Read every point once", value: "read", description: "see the values now, no broker needed" },
-    ...(canStart
-      ? [
-          {
-            title: "Start the gateway here",
-            value: "start" as const,
-            description: "publish to the broker until Ctrl-C, status page included"
-          }
-        ]
-      : []),
-    { title: "Done for now", value: "done", description: "how to start it later" }
-  ]
-  while (true) {
-    const next = yield* Prompt.Select<AfterSave>({ message: "What next?", choices })
-    if (next === "done") {
-      yield* Console.log(
-        [
-          "",
-          ui.rows([
-            ["Start it", `${ui.command(`${cli} run${argument}`)}${ui.dim(`  or in Docker: ${cli} up`)}`],
-            ["Read once", ui.command(`${cli} read${argument}`)],
-            ["All commands", ui.command(`${cli} --help`)]
-          ]),
-          ""
-        ].join("\n")
-      )
-      return undefined
-    }
-    if (next === "start") {
-      yield* Console.log(`\n${statusPageLine(ui, `http://127.0.0.1:${saved.status?.port ?? 8080}`)}\n`)
-      // Started by the caller, outside the column: the gateway's log lines are its own, not notes.
-      return { start: saved, path }
-    }
-    yield* readEveryPoint(saved, ui)
-  }
+  yield* Console.log(
+    [
+      ui.rows([
+        ["Read once", ui.command(`${cli} read${argument}`), "add --publish to send the values to the broker too"],
+        ["Start it", ui.command(`${cli} run${argument}`), `or in Docker: ${cli} up`],
+        ["All commands", ui.command(`${cli} --help`)]
+      ]),
+      ""
+    ].join("\n")
+  )
 })
 
 const discoverCommand = Command.make(
@@ -696,11 +649,7 @@ const discoverCommand = Command.make(
         if (yield* fs.exists(config)) {
           const ui = terminalUi()
           yield* Console.error(ui.header("ot-gateway discover", yield* readVersion))
-          const outcome = yield* discoverAndSave(config, Option.getOrUndefined(address), ui, wait).pipe(inColumn(ui))
-          if (outcome === undefined) return
-          return yield* runConfigured(outcome.start, outcome.path).pipe(
-            Effect.provideService(References.MinimumLogLevel, "Info")
-          )
+          return yield* discoverAndSave(config, Option.getOrUndefined(address), ui, wait).pipe(inColumn(ui))
         }
         yield* Console.error(
           `no ${config} here, so the devices found are printed, not saved: ${yield* invocation} init sets up the broker and the site, then discover saves the devices you pick`
@@ -783,8 +732,7 @@ const demo = Command.make(
 )
 
 /** The line before a gateway starts in the terminal: where its status page is, and how it stops. */
-const statusPageLine = (ui: Ui, url: string) =>
-  ui.rows([["Status page", `${ui.command(url)}  ${ui.dim("Ctrl-C stops the gateway")}`]])
+const statusPageLine = (ui: Ui, url: string) => ui.rows([["Status page", ui.command(url), "Ctrl-C stops the gateway"]])
 
 const optionalFlag = (name: string, description: string) =>
   Flag.String(name).pipe(Flag.withDescription(description), Flag.optional, Flag.map(Option.getOrUndefined))
@@ -1903,9 +1851,15 @@ const readCommand = Command.make(
       ),
       Flag.withDefault(DEFAULT_READ_SECONDS)
     ),
+    publish: Flag.Boolean("publish").pipe(
+      Flag.withDescription(
+        "Also send the values read to the config's broker once, as the gateway would (not retained); without it nothing is sent"
+      ),
+      Flag.withDefault(false)
+    ),
     json: jsonFlag
   },
-  ({ points: first, positionalConfig, config: configFlag, timeout, json }) => {
+  ({ points: first, positionalConfig, config: configFlag, timeout, publish, json }) => {
     const chosen = readArguments(first, positionalConfig, configFlag)
     return Effect.gen(function* () {
       if ("error" in chosen) {
@@ -1932,14 +1886,55 @@ const readCommand = Command.make(
         yield* Console.error(`reading ${count} point(s) of ${devices.length} device(s) once …`)
       }
       // The report says what failed and why; the drivers' warnings about it would only repeat it, unformatted.
-      return yield* readOnce(decoded, devices, { timeout: Duration.seconds(timeout) }).pipe(
+      const report = yield* readOnce(decoded, devices, { timeout: Duration.seconds(timeout) }).pipe(
         Effect.provideService(References.MinimumLogLevel, "Error")
       )
+      if (!publish) return { report, sent: undefined }
+      const readings = report.devices.flatMap((device) =>
+        device.points.flatMap((point) =>
+          point.ok && point.value !== undefined
+            ? [{ topic: point.topic, value: point.value, ...(point.unit === undefined ? {} : { unit: point.unit }) }]
+            : []
+        )
+      )
+      // The values are shown either way; a broker that cannot take them is said after them.
+      const sent = yield* publishReadings(decoded, readings, report.at).pipe(
+        Effect.map((done) => ({ ok: true as const, ...done })),
+        Effect.catchTag("BrokerCommandError", (error) => Effect.succeed({ ok: false as const, error }))
+      )
+      return { report, sent }
     }).pipe(
       jsonFailure(json, { path: "error" in chosen ? null : chosen.config }),
-      Effect.flatMap((report) =>
+      Effect.flatMap(({ report, sent }) =>
         Effect.gen(function* () {
-          yield* json ? printJsonWithLocalTimes(report) : printResult(formatReadReport(report))
+          const published =
+            sent === undefined
+              ? {}
+              : {
+                  published: sent.ok
+                    ? { ok: true, broker: sent.broker, messages: sent.messages }
+                    : {
+                        ok: false,
+                        message: sent.error.message,
+                        ...(sent.error.code === undefined ? {} : { code: sent.error.code }),
+                        ...(sent.error.hint === undefined ? {} : { hint: sent.error.hint })
+                      }
+                }
+          if (json) yield* printJsonWithLocalTimes({ ...report, ...published })
+          else {
+            yield* printResult(formatReadReport(report))
+            if (sent?.ok === true) {
+              yield* printResult(`sent ${sent.messages} value(s) to ${sent.broker}`)
+            }
+          }
+          if (sent?.ok === false) {
+            const { message, code, hint } = sent.error
+            return yield* new BrokerCommandError({
+              message: `values not sent: ${message}`,
+              ...(code === undefined ? {} : { code }),
+              ...(hint === undefined ? {} : { hint })
+            })
+          }
           if (!report.ok) return yield* new ReadIncomplete({ message: incompleteMessage(report) })
         })
       )
@@ -1947,7 +1942,7 @@ const readCommand = Command.make(
   }
 ).pipe(
   Command.withDescription(
-    "Read every configured point (or the ones named) once through the gateway's drivers and exit, without a running gateway or a broker; exits with 1 when a point was not read. Read-only: it never writes"
+    "Read every configured point (or the ones named) once through the gateway's drivers and exit, without a running gateway or a broker (--publish also sends the values to the broker once); exits with 1 when a point was not read. Read-only: it never writes to a device"
   ),
   Command.withExamples([
     { command: "ot-gateway read", description: "Every point of ot-gateway.json in this folder" },
@@ -1956,6 +1951,7 @@ const readCommand = Command.make(
       command: "ot-gateway read demo-room/setpoint,meter",
       description: "One point, and every point of another device"
     },
+    { command: "ot-gateway read --publish", description: "Every point, and the values sent to the broker once" },
     { command: "ot-gateway read site-1/ot-gateway.json --json", description: "Another config, as JSON" }
   ])
 )

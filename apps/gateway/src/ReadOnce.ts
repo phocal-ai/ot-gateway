@@ -303,11 +303,7 @@ const readDevice = (
       })
     )
     const finished = yield* monotonicMillis
-    // The Mac's own refusal first: another note (a Modbus device's clients) would send the reader the wrong way.
-    const note =
-      (outcome.read._tag === "unreachable" && network === undefined
-        ? macLocalNetworkNote(process.platform, outcome.read.error.message)
-        : undefined) ?? outcome.note
+    const note = outcome.note
     const points =
       outcome.read._tag === "read" ? outcome.read.points.map((test) => pointRead(config, device, test)) : []
     const result: DeviceRead = {
@@ -322,17 +318,6 @@ const readDevice = (
     }
     return result
   })
-
-/**
- * Why a LAN device can be "unreachable" from a Mac while it answers everything else: macOS's Local Network privacy
- * refuses unicast to the LAN with EHOSTUNREACH at once for a process it does not count as an allowed app. A shell in
- * tmux (or screen, or anything started by launchd) is one: the server outlives the terminal that started it. ping is
- * exempt, so the network looks fine.
- */
-export const macLocalNetworkNote = (platform: string, message: string | undefined) =>
-  platform === "darwin" && message !== undefined && /\bunreachable\b/i.test(message)
-    ? "On macOS this is often Local Network privacy, not the device: allow your terminal app under System Settings > Privacy & Security > Local Network. Inside tmux or screen, restart its server from that app (tmux kill-server), or run the command outside it."
-    : undefined
 
 /**
  * Reads `devices` (from `selectDevices`) once: BACnet devices a few at a time over one socket, Modbus endpoints a few

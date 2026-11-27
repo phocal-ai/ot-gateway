@@ -13,7 +13,6 @@ import { readArguments } from "../src/Cli.ts"
 import {
   formatReadReport,
   incompleteMessage,
-  macLocalNetworkNote,
   parseReadSelection,
   readOnce,
   type ReadReport,
@@ -295,15 +294,5 @@ describe("formatReadReport", () => {
       devices: report.devices.slice(0, 1).map((device) => ({ ...device, ok: true, points: device.points.slice(0, 2) }))
     }
     expect(formatReadReport(fine).split("\n").at(-1)).toBe("2 point(s) of 1 device(s) read in 1.3 s")
-  })
-})
-
-describe("an unreachable LAN device on a Mac", () => {
-  it("points at Local Network privacy on macOS only, for unreachable and not for a timeout", () => {
-    expect(macLocalNetworkNote("darwin", "UDP write failed: host 192.168.0.171 unreachable")).toContain("Local Network")
-    expect(macLocalNetworkNote("darwin", "could not connect: host 192.168.1.50 unreachable")).toContain("tmux")
-    expect(macLocalNetworkNote("darwin", "no route to 10.0.0.5")).toBeUndefined()
-    expect(macLocalNetworkNote("linux", "UDP write failed: host 192.168.0.171 unreachable")).toBeUndefined()
-    expect(macLocalNetworkNote("darwin", "no answer within 3s")).toBeUndefined()
   })
 })
