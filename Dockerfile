@@ -86,6 +86,8 @@ COPY --from=web /opt/ot-gateway/apps/web/out apps/web/out
 COPY examples examples
 # The device profiles a points list names (`ot-gateway profiles list`).
 COPY profiles profiles
+# The setup guide (`ot-gateway guide setup`, the MCP server's setup prompt).
+COPY .claude/skills/setup/SKILL.md guides/setup.md
 # What `ot-gateway init` writes next to ot-gateway.json when it runs in the container.
 COPY packaging/compose.yaml packaging/compose.yaml
 COPY scripts/soak.sh scripts/soak.sh

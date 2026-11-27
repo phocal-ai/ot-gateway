@@ -4,7 +4,11 @@
 **/*.test.ts
 .git
 .github
-.claude
+# .claude but the setup guide, which the image carries as guides/setup.md
+.claude/*
+!.claude/skills
+.claude/skills/*
+!.claude/skills/setup
 .turbo
 repos
 docs

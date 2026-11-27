@@ -74,6 +74,7 @@ const decodeLine = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown
 const decodeMessage = Schema.decodeUnknownExit(Message)
 const decodeInitialize = Schema.decodeUnknownOption(InitializeParams)
 const decodeCall = Schema.decodeUnknownOption(CallParams)
+const decodePromptGet = Schema.decodeUnknownOption(Schema.Struct({ name: Schema.String }))
 const decodeCancelled = Schema.decodeUnknownOption(CancelledParams)
 
 /** A JSON-RPC response, as one line on stdout. */
@@ -216,9 +217,19 @@ const silentFailure = (cause: Cause.Cause<unknown>) => {
   }
 }
 
+/** A prompt the server offers (`prompts/list`): a text the client puts before the user's request. */
+export interface McpPrompt {
+  readonly name: string
+  readonly title: string
+  readonly description: string
+  readonly text: string
+}
+
 /** What the server knows about itself and the tools it offers. */
 export interface McpServer<R> {
   readonly tools: ReadonlyArray<McpTool>
+  /** The prompts it offers: the setup guide, when this installation has it. */
+  readonly prompts?: ReadonlyArray<McpPrompt>
   readonly version: string
   readonly run: RunCommand<R>
   /** Where commands' progress, warnings and logs go: stderr. */
@@ -235,7 +246,8 @@ const instructions = [
   "config_set, config_remove and config_undo change the config file (a dry run unless told otherwise), checked before it is written; restart makes the running gateway read it.",
   "init writes a new gateway's folder (a dry run unless told otherwise); import takes a points list as a file, text or rows.",
   "No tool takes a secret: secret_list says which are missing, and the user runs ot-gateway secret set <name> and types it there. Never ask for a password.",
-  "up, restart, down and upgrade run the gateway under Docker Compose on this machine, and wait until values flow."
+  "up, restart, down and upgrade run the gateway under Docker Compose on this machine, and wait until values flow; on macOS start and stop run it in the background instead.",
+  "To set up a gateway from nothing, read setup_guide (or the setup prompt) first and follow it."
 ].join(" ")
 
 /** The tool as `tools/list` has it. */
@@ -263,7 +275,10 @@ export const answer = <R>(server: McpServer<R>, message: Message & { readonly id
       })
       return result(message.id, {
         protocolVersion,
-        capabilities: { tools: { listChanged: false } },
+        capabilities: {
+          tools: { listChanged: false },
+          ...((server.prompts ?? []).length > 0 ? { prompts: { listChanged: false } } : {})
+        },
         serverInfo: { name: "ot-gateway", title: "OT Gateway", version: server.version },
         instructions
       })
@@ -272,6 +287,28 @@ export const answer = <R>(server: McpServer<R>, message: Message & { readonly id
       return result(message.id, {})
     case "tools/list":
       return result(message.id, { tools: server.tools.map(listed) })
+    case "prompts/list":
+      return result(message.id, {
+        prompts: (server.prompts ?? []).map(({ name, title, description }) => ({ name, title, description }))
+      })
+    case "prompts/get": {
+      const name = Option.map(decodePromptGet(message.params ?? {}), (params) => params.name)
+      const prompt = Option.flatMap(name, (wanted) =>
+        Option.fromUndefinedOr((server.prompts ?? []).find((each) => each.name === wanted))
+      )
+      if (Option.isNone(prompt)) {
+        const known = (server.prompts ?? []).map((each) => each.name).join(", ") || "none"
+        return failure(
+          message.id,
+          RpcError.invalidParams,
+          `no prompt ${Option.getOrElse(name, () => "named")}; the prompts: ${known}`
+        )
+      }
+      return result(message.id, {
+        description: prompt.value.description,
+        messages: [{ role: "user", content: { type: "text", text: prompt.value.text } }]
+      })
+    }
     default:
       return failure(message.id, RpcError.methodNotFound, `no method ${message.method}`)
   }

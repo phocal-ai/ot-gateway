@@ -22,10 +22,12 @@ import {
   doctorProblems,
   type Finding,
   formatDoctor,
+  otGatewayCommand,
   report,
   runDoctor
 } from "../src/Doctor.ts"
 import { LOW_DISK_BYTES } from "../src/Host.ts"
+import { pidsIn } from "../src/PortHolders.ts"
 
 const configJson = (extra: { readonly modbusHost?: string; readonly bacnetInstance?: number } = {}) => ({
   site: "s",
@@ -196,6 +198,91 @@ describe("doctor on a network", () => {
       expect(doctor.ok).toBe(true)
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
+
+  it.live(
+    "names what holds the BACnet/IP port: a read at work or this config's gateway warn, the demo or another program fail",
+    () =>
+      Effect.gen(function* () {
+        const network = makeMemoryNetwork()
+        yield* building(network)
+        yield* Effect.flatMap(
+          network.host("10.0.0.1").udp({ address: "0.0.0.0", port: 47_808 }),
+          (socket) => socket.reader
+        )
+        const asked: Array<number> = []
+        const holder = (line: string) => (port: number) =>
+          Effect.sync(() => {
+            asked.push(port)
+            return [{ pid: 4711, command: line }]
+          })
+        const path = yield* writeConfig(configJson())
+        const reading = yield* runDoctor(path, {
+          network: network.host("10.0.0.1"),
+          portHolders: holder("node /usr/local/lib/node_modules/ot-gateway/apps/gateway/src/main.mjs read --json")
+        })
+        expect(asked).toEqual([47_808])
+        expect(byLabel(reading.findings)["bacnet-port"]).toMatchObject({
+          status: "warn",
+          code: "bacnet-port-in-use",
+          message: "UDP 0.0.0.0:47808 is held by ot-gateway read (pid 4711) while it is at work",
+          hint: expect.stringContaining("run doctor again")
+        })
+        expect(byLabel(reading.findings)["ahu"]?.status).toBe("ok")
+        // This config's gateway: its status is the next command.
+        const running = yield* runDoctor(path, {
+          network: network.host("10.0.0.1"),
+          cli: "otg",
+          portHolders: holder(`node /x/apps/gateway/src/main.ts run ${path} --verbose`)
+        })
+        expect(byLabel(running.findings)["bacnet-port"]).toMatchObject({
+          status: "warn",
+          message: expect.stringContaining("held by a gateway on this machine (pid 4711)"),
+          next: expect.stringMatching(/^otg status/)
+        })
+        // The demo holds it until stopped: a problem, named.
+        const demo = yield* runDoctor(path, {
+          network: network.host("10.0.0.1"),
+          portHolders: holder("/usr/local/bin/ot-gateway demo")
+        })
+        expect(byLabel(demo.findings)["bacnet-port"]).toMatchObject({
+          status: "fail",
+          message: "UDP 0.0.0.0:47808 cannot be opened: held by ot-gateway demo (pid 4711)"
+        })
+        // A foreign program too, by its program only: its arguments can hold a password.
+        const foreign = yield* runDoctor(path, {
+          network: network.host("10.0.0.1"),
+          portHolders: holder("/usr/bin/bridge --mqtt mqtt://admin:secret@10.0.0.5")
+        })
+        const port = byLabel(foreign.findings)["bacnet-port"]
+        expect(port).toMatchObject({
+          status: "fail",
+          code: "bacnet-port-in-use",
+          message: "UDP 0.0.0.0:47808 cannot be opened: held by bridge (pid 4711)"
+        })
+        expect(JSON.stringify(port)).not.toContain("secret")
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it("knows an ot-gateway command line and what it runs, and the pids lsof and ss print", () => {
+    expect(otGatewayCommand("node /opt/homebrew/lib/node_modules/ot-gateway/apps/gateway/src/main.mjs read")).toEqual({
+      command: "read"
+    })
+    expect(otGatewayCommand("node --no-warnings /home/me/ot-gateway/apps/gateway/src/main.ts discover")).toEqual({
+      command: "discover"
+    })
+    expect(otGatewayCommand("/usr/local/bin/ot-gateway --log-level debug read")).toEqual({ command: "read" })
+    // The image's entrypoint names only the config: a gateway that runs.
+    expect(
+      otGatewayCommand(
+        "node --enable-source-maps /opt/ot-gateway/apps/gateway/src/main.mjs /etc/ot-gateway/gateway.json"
+      )
+    ).toEqual({ command: "run" })
+    expect(otGatewayCommand("/usr/bin/bacnet-tool --workdir /opt/ot-gateway --listen")).toBeUndefined()
+    expect(otGatewayCommand("vim /home/me/ot-gateway.json")).toBeUndefined()
+    expect(pidsIn("123\n456\n")).toEqual([123, 456])
+    expect(pidsIn('UNCONN 0 0 0.0.0.0:47808 0.0.0.0:* users:(("node",pid=812,fd=21))')).toEqual([812])
+    expect(pidsIn("")).toEqual([])
+  })
 
   it.live("without a config says how to get one, and still checks the disk and the clock", () =>
     Effect.gen(function* () {

@@ -54,6 +54,7 @@ import {
   Stream
 } from "effect"
 import { Stdio } from "effect/Stdio"
+import type { ChildProcessSpawner } from "effect/process"
 import { Argument, CliOutput, Command, CommandSpec, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
@@ -63,6 +64,8 @@ import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from ".
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
 import { processesLayer, startBackground, stopBackground } from "./Background.ts"
+import { mcpPreface, readSetupGuide } from "./SetupGuide.ts"
+import { udpPortHolders } from "./PortHolders.ts"
 import { dockerLayer, down, isDockerTag, nextLine, up, upgrade } from "./Deploy.ts"
 import {
   discover,
@@ -3003,7 +3006,11 @@ const doctorCommand = Command.make(
   ({ config, all, json }) =>
     Effect.gen(function* () {
       const cli = yield* invocation
-      const report = yield* runDoctor(config, { cli })
+      const services = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>()
+      const report = yield* runDoctor(config, {
+        cli,
+        portHolders: (port) => udpPortHolders(port).pipe(Effect.provide(services))
+      })
       // A terminal gets one line per check, the devices summed up, and the one command to run; a pipe or a log every
       // device and the hint for each problem too.
       yield* json ? printJson(report) : Console.log(formatDoctor(report, { brief: process.stdout.isTTY, all, cli }))
@@ -3108,6 +3115,33 @@ const supportCommand = Command.make(
   ])
 )
 
+/** `guide setup`: the setup guide (SetupGuide.ts); `--mcp` starts it with how its commands map to the MCP tools. */
+const guideCommand = Command.make(
+  "guide",
+  {
+    name: Argument.Literals("name", ["setup"]).pipe(
+      Argument.withDescription("The guide: setup, from nothing to a running gateway"),
+      Argument.withDefault("setup" as const)
+    ),
+    mcp: Flag.Boolean("mcp").pipe(
+      Flag.withDescription("Start with how the guide's otg commands map to the tools of ot-gateway mcp"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ json, mcp }) =>
+    Effect.gen(function* () {
+      const guide = yield* readSetupGuide
+      const text = mcp ? `${mcpPreface}\n${guide}` : guide
+      yield* json ? printJson({ ok: true, name: "setup", text }) : printResult(text)
+    }).pipe(jsonFailure(json))
+).pipe(
+  Command.withDescription(
+    "Print the setup guide an agent follows to take a user from nothing to a running gateway (the /setup skill; ot-gateway mcp serves it as the setup prompt and the setup_guide tool)"
+  ),
+  Command.withExamples([{ command: "ot-gateway guide setup", description: "The setup guide, as Markdown" }])
+)
+
 /**
  * `mcp`: the commands as MCP tools on stdin and stdout. Its type is written out because a tool call runs `runCli`,
  * whose type is the CLI's, this command included.
@@ -3117,8 +3151,30 @@ const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeSe
     const version = yield* readVersion
     // stdout is the protocol's: what is printed besides goes to stderr.
     const log = yield* Console.Console
+    // Without the guide the tools still work: the server offers no prompt and says why on stderr.
+    const guide = yield* readSetupGuide.pipe(
+      Effect.map(Option.some),
+      Effect.catch((error) =>
+        Effect.as(
+          Effect.sync(() => log.error(`ot-gateway mcp: no setup prompt: ${error.message}`)),
+          Option.none<string>()
+        )
+      )
+    )
     yield* serveMcp({
       tools: mcpTools,
+      prompts: Option.match(guide, {
+        onNone: () => [],
+        onSome: (text) => [
+          {
+            name: "setup",
+            title: "Set up an OT Gateway",
+            description:
+              "Take the user from nothing to a gateway publishing their devices' values: the steps, the questions to ask and the rules (never write to a device, no secrets in the config)",
+            text: `${mcpPreface}\n${text}`
+          }
+        ]
+      }),
       version,
       // The server outlives a `secret set` the user runs beside it: each call reads the folder's env file again.
       run: (argv): Effect.Effect<unknown, unknown, NodeServices> =>
@@ -3378,6 +3434,7 @@ export const cli = Command.make("ot-gateway").pipe(
     explainCommand,
     supportCommand,
     simulate,
+    guideCommand,
     mcpCommand
   ])
 )
@@ -3417,6 +3474,7 @@ const subcommands = new Set([
   "explain",
   "support",
   "simulate",
+  "guide",
   "mcp"
 ])
 
