@@ -552,12 +552,12 @@ The `online` message also carries `host`, the machine's last sample (below): `me
 
 ### Every gateway on a broker
 
-`ot-gateway gateways` reads those retained messages back, from any machine that reaches the broker, with no config, status page or database: the topics are the source of truth.
+`ot-gateway gateways` reads those retained messages back, from any machine that reaches the broker, with no config, status page or database: the topics are the source of truth. [See your whole fleet](fleet.md) shows it with example output and an AI agent.
 
 ```bash
 ot-gateway gateways list --broker mqtts://broker.example:8883 --username viewer   # every gateway: online or offline, its devices by status
-ot-gateway gateways status site-1/building-a/main                                  # one gateway: each device and why it fails, its machine
-ot-gateway gateways points main --json                                             # its points from their retained $meta: topic, name, unit, writable
+ot-gateway gateways status site-1/building-a/main --broker mqtts://broker.example:8883 --username viewer   # one gateway: each device and why it fails, its machine
+ot-gateway gateways points main --broker mqtts://broker.example:8883 --username viewer --json             # its points from their retained $meta: topic, name, unit, writable
 ```
 
 `list` reads every `+/+/$gateway/+/health` (one line per gateway: `online` with its devices, since when it runs and its last heartbeat, or `offline` with `shutdown` or `connection-lost`). `status` reads one gateway's health and exits with 1 when it is offline (`gateway-offline`), a device fails (`gateway-unhealthy`) or its health is not a message this CLI reads (`health-unreadable`: likely a newer release). `points` reads the retained `$meta` under the gateway's site and building that names it (or, from releases before `$meta` named its gateway, that belongs to one of its devices). A gateway is `site/building/id`, or its id alone when no other gateway on the broker has it (`gateway-ambiguous` names the ones that do). The broker is `--broker`, or the one in `./ot-gateway.json` (`--config` for another); with `--username` the password is read from `OT_GATEWAY_BROKER_PASSWORD`, from `ot-gateway.env` too, never from a flag. They only subscribe, so a broker user that may read `+/+/$gateway/+/health` and `+/+/+/+/$meta` is enough; a broker that refuses those subscriptions is `subscribe-refused`, not an empty list. Each waits `--wait` seconds (2 by default) for the retained messages after subscribing; `--json` gives `gateways[]` (`name`, `site`, `building`, `id`, `status`, `reason`, `contract`, `since`, `ts`, `devices[]`, `host`), `gateway` for `status`, and `points[]` (`topic`, `device`, `point`, `name`, `unit`, `writable`).
