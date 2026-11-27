@@ -38,6 +38,7 @@ pnpm ot-gateway probe 127.0.0.1:5020 100   # read Modbus registers once (read-on
 pnpm ot-gateway simulate bacnet            # a simulated BACnet/IP device on the LAN (a room: temperature, writable setpoint, heating) to try from another machine (docs/try-bacnet.md)
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)
 pnpm ot-gateway write <device/point> <value>   # a guarded command on the point's $set topic and its result (exit 1 with code and hint when not written)
+pnpm ot-gateway gateways list --broker mqtt://host:1883   # every gateway the broker keeps health of, from any machine (gateways status|points <site/building/id>; no config needed)
 pnpm ot-gateway status                     # the running gateway of ./ot-gateway.json (or a config named): its devices, one line each, what to check (exit 1 when one fails)
 pnpm ot-gateway events --since 1h          # what broke, since when and why, and when it came back (/api/events; --follow for what comes)
 pnpm ot-gateway history meter/power        # a point's last 10 minutes from the gateway's history: min, max, average per minute, gaps (on/off and switch times for a bool)

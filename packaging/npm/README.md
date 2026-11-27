@@ -10,8 +10,9 @@ npx ot-gateway discover ot-gateway.json  # find BACnet devices on the network
 npx ot-gateway check ot-gateway.json   # validate a config without connecting
 npx ot-gateway watch ot-gateway.json   # print what arrives at the broker
 npx ot-gateway status                  # the running gateway's devices, one line each
+npx ot-gateway gateways list --broker mqtt://broker.local:1883   # every gateway on a broker, from its retained health
 ```
 
-Needs Node.js 22.18 or newer. To run a gateway unattended, use the container image with Docker Compose: see [Running a gateway](https://github.com/phocal-ai/ot-gateway/blob/main/docs/operations.md).
+Needs Node.js 22.18 or newer. Installed with `npm i -g ot-gateway`, it says once a day when a newer release is out (`OT_GATEWAY_NO_UPDATE_CHECK=1` turns that off). To run a gateway unattended, use the container image with Docker Compose: see [Running a gateway](https://github.com/phocal-ai/ot-gateway/blob/main/docs/operations.md).
 
 Documentation, source and issues: https://github.com/phocal-ai/ot-gateway (MIT).
