@@ -769,14 +769,14 @@ export const devicesFinding = (devices: ReadonlyArray<Finding>): Finding => {
 /**
  * The lines of the findings. A terminal (`brief`) sums the devices up in one line, then names the failing ones and
  * those with a warning, the first few, so a site of 300 devices fits a screen: `all` (`--all`), a pipe and --json
- * have every device. One device keeps its own line, which says more than a sum.
+ * have every device.
  */
 const shownFindings = (
   findings: ReadonlyArray<Finding>,
   options: { readonly brief: boolean; readonly all: boolean }
 ) => {
   const devices = findings.filter((finding) => finding.check === "device")
-  if (!options.brief || options.all || devices.length <= 1) return { rows: findings, more: 0 }
+  if (!options.brief || options.all || devices.length === 0) return { rows: findings, more: 0 }
   const attention = devices.filter((device) => device.status === "fail" || device.status === "warn")
   const { shown, more } = firstOf([
     ...attention.filter((device) => device.status === "fail"),

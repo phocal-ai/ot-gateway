@@ -58,18 +58,23 @@ export const resolveConfigPaths = (config: GatewayConfig, base: string): Gateway
 /** How many kinds of mistake the message names when there are many; check --json has every one. */
 const KINDS = 5
 
-/**
- * Many mistakes in a few lines: a mistake repeated on every device (a column missing from a points list) is one
- * line with the first paths and how many more, rather than a line pair for each of 3,000 points.
- */
-export const mistakesText = (issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>) => {
+/** Mistakes grouped by what is wrong, in the order first seen, each with the paths it is at. */
+export const mistakeKinds = (issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>) => {
   const byMessage = new Map<string, Array<string>>()
   for (const issue of issues) {
     const paths = byMessage.get(issue.message) ?? []
     if (issue.path !== undefined) paths.push(issue.path)
     byMessage.set(issue.message, paths)
   }
-  const kinds = [...byMessage]
+  return [...byMessage]
+}
+
+/**
+ * Many mistakes in a few lines: a mistake repeated on every device (a column missing from a points list) is one
+ * line with the first paths and how many more, rather than a line pair for each of 3,000 points.
+ */
+export const mistakesText = (issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>) => {
+  const kinds = mistakeKinds(issues)
   return [
     `${plural(issues.length, "mistake")}${kinds.length > 1 ? `, ${plural(kinds.length, "kind")}` : ""}`,
     ...kinds

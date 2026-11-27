@@ -103,7 +103,7 @@ jobs:
           # A preview build names itself (the status page, health and telemetry read the same VERSION file).
           if [ -n "$VERSION" ]; then docker run --rm ot-gateway:smoke --version | grep -qF "$VERSION"; fi
           # The installed command (packaging/ot-gateway): this image, the folder mounted, no terminal.
-          (cd "$work" && OT_GATEWAY_IMAGE=ot-gateway OT_GATEWAY_TAG=smoke "$GITHUB_WORKSPACE/packaging/ot-gateway" check gateway.json | grep -q "config ok")
+          (cd "$work" && OT_GATEWAY_IMAGE=ot-gateway OT_GATEWAY_TAG=smoke "$GITHUB_WORKSPACE/packaging/ot-gateway" check gateway.json | grep -q "Config ok")
           # The bench (broker and simulated devices) from the image, the gateway in a second container.
           # The file, not its mktemp directory (mode 0700, another user's): the image runs as `node`.
           docker run -d --name bench --network host --entrypoint node \

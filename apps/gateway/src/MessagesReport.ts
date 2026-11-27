@@ -102,11 +102,8 @@ export const failingDeviceLines = (
   )
 }
 
-/** Up to this many topics, a terminal lists each; beyond, the totals and the topics that need a look. */
-const TOPICS_LISTED = 20
-
 /**
- * The topics a terminal names when there are many: the ones whose messages did not all reach the broker, then the
+ * The topics a terminal names: the ones whose messages did not all reach the broker, then the
  * busiest, the first few of each; `messages <device>` or `--all` list every topic, --json too.
  */
 export const briefMessages = (messages: ReadonlyArray<MessageStatus>) => {
@@ -263,7 +260,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const messages = selectMessages(answer.messages, prefix, selections)
   const totals = messageTotals(messages)
   const gateway = { site: status.site, building: status.building, id: status.id }
-  const brief = (options.brief ?? false) && selections.length === 0 && messages.length > TOPICS_LISTED
+  const brief = (options.brief ?? false) && selections.length === 0
   if (options.json === true) {
     return yield* printJsonWithLocalTimes(messagesJson(gateway, status, { ...answer, messages }, modes))
   }

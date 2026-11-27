@@ -325,9 +325,6 @@ export const clearCommands = (diff: ConfigDiff, context: ClearContext): Readonly
   return diff.stale.map((topic) => clearCommand(context.command, topic, config))
 }
 
-/** Up to this many topic lines, the diff lists each; beyond, a terminal sums them up per device. */
-const TOPICS_LISTED = 20
-
 /** The device's part of a topic: `site/building/device` of `site/building/device/point`. */
 const deviceOf = (topic: string) => topic.slice(0, Math.max(0, topic.lastIndexOf("/")))
 
@@ -382,8 +379,7 @@ export const formatDiff = (
   const lines = [title]
   if (!diff.changed)
     return [...lines, "✓ nothing changes on the broker: the same topics, writable points and settings"].join("\n")
-  const topicLines = diff.added.length + diff.removed.length + diff.moved.length + diff.meta.length + diff.values.length
-  const grouped = (options.brief ?? false) && topicLines > TOPICS_LISTED
+  const grouped = options.brief ?? false
   lines.push(
     ...changeLines(
       diff.added,

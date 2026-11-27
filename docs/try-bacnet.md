@@ -81,7 +81,15 @@ npx ot-gateway check
 npx ot-gateway read
 ```
 
-`read` asks the device once for each point and exits, without the broker:
+`read` asks the device once for each point and exits, without the broker. In a terminal it says how many were read and names any that failed:
+
+```
+3 points of 1 device read in 42 ms
+
+--all shows every value, read <device> one device's
+```
+
+`read demo-room` shows the device's values:
 
 ```
 demo-room/room-temperature      20.5 °C

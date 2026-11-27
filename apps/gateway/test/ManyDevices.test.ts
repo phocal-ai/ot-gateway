@@ -6,7 +6,7 @@ import { describe, expect, it } from "@effect/vitest"
 import type { DeviceStatus, GatewayStatus, MessageStatus } from "@ot-gateway/api"
 import { parseConfig } from "@ot-gateway/core"
 import { Effect } from "effect"
-import { describeConfig } from "../src/Cli.ts"
+import { describeConfig, describeMistakes } from "../src/Cli.ts"
 import { diffConfigs, formatDiff, sideOfConfig } from "../src/Diff.ts"
 import { devicesFinding, type Finding, formatDoctor, report } from "../src/Doctor.ts"
 import { type FleetGateway, formatGatewayPoints, formatGatewayStatus } from "../src/Fleet.ts"
@@ -87,11 +87,14 @@ describe("doctor with many devices", () => {
     expect(piped).toContain("    next: ot-gateway probe meter-012")
   })
 
-  it("keeps one device on its own line, which says more than a sum", () => {
+  it("sums up one device too, and lists it with --all", () => {
     const one = report("ot-gateway.json", [
       { check: "device", status: "ok", subject: "demo-room", message: "bacnet-ip device 1001: answered" }
     ])
-    expect(formatDoctor(one, { brief: true })).toBe("✓ demo-room  bacnet-ip device 1001: answered\n\nNo problems.")
+    expect(formatDoctor(one, { brief: true })).toBe("✓ devices  1 device, all ok\n\nNo problems.")
+    expect(formatDoctor(one, { brief: true, all: true })).toBe(
+      "✓ demo-room  bacnet-ip device 1001: answered\n\nNo problems."
+    )
   })
 
   it("says all ok, or what was not checked", () => {
@@ -137,18 +140,61 @@ const bigConfig = Effect.runSync(
   )
 )
 
+const smallConfig = (devices: ReadonlyArray<unknown>) =>
+  Effect.runSync(
+    parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://127.0.0.1:1883" }, devices }))
+  )
+
 describe("check with many devices", () => {
   it("sums them up by protocol in a terminal, and lists each otherwise", () => {
     const brief = describeConfig(bigConfig, { brief: true }).split("\n")
-    expect(brief.slice(-4)).toEqual([
-      "  21 devices, 21 points, 1 writable",
-      "    simulator   20 devices, 20 points",
-      "    modbus-tcp  1 device, 1 point, 1 writable",
-      "  --all lists every device"
+    expect(brief.slice(-5)).toEqual([
+      "✓ devices  21 devices, 21 points, 1 writable",
+      "             simulator   20 devices, 20 points",
+      "             modbus-tcp  1 device, 1 point, 1 writable",
+      "",
+      "Config ok, 1 warning."
     ])
     const all = describeConfig(bigConfig).split("\n")
-    expect(all).toContain("  ahu-020: simulator simulated, 1 point, every 5000 ms")
-    expect(all.filter((line) => line.startsWith("  ahu-"))).toHaveLength(20)
+    expect(all).toContain("             ahu-020  simulator simulated, 1 point, every 5 s")
+    expect(all.filter((line) => line.trimStart().startsWith("ahu-"))).toHaveLength(20)
+  })
+
+  it("sums up one device too, says when there are none, and names the protocol", () => {
+    const one = smallConfig([
+      { protocol: "simulator", id: "room", points: [{ id: "t", name: "T", waveform: "sine", min: 0, max: 1 }] }
+    ])
+    const brief = describeConfig(one, { brief: true, next: "ot-gateway doctor" }).split("\n")
+    expect(brief).toContain("✓ devices  1 device, 1 point, simulator")
+    expect(brief.some((line) => line.includes("room"))).toBe(false)
+    expect(brief.at(-1)).toBe("Config ok, 1 warning. Next: ot-gateway doctor")
+    expect(describeConfig(one)).toContain("\n             room  simulator simulated, 1 point, every 5 s")
+    const none = describeConfig(smallConfig([]), { brief: true }).split("\n")
+    expect(none).toContain("! devices  none yet: ot-gateway discover finds them")
+    expect(none.at(-1)).toBe("Config ok, 2 warnings.")
+  })
+
+  it("lists a few mistakes each with its path, and groups many by what is wrong", () => {
+    expect(
+      describeMistakes("bad.json", [
+        { path: "site", message: "Expected a slug" },
+        { path: "devices.0.host", message: "Missing key" }
+      ]).split("\n")
+    ).toEqual([
+      "✗ config  bad.json is not valid: 2 mistakes",
+      "          site            Expected a slug",
+      "          devices.0.host  Missing key"
+    ])
+    const many = Array.from({ length: 40 }, (_, index) => ({
+      path: `devices.${index}.points.0.name`,
+      message: "Missing key"
+    }))
+    expect(describeMistakes("bad.json", [...many, { path: "site", message: "Expected a slug" }]).split("\n")).toEqual([
+      "✗ config  bad.json is not valid: 41 mistakes",
+      "          Missing key: devices.0.points.0.name, devices.1.points.0.name, devices.2.points.0.name and 37 more",
+      "          Expected a slug: site",
+      "          check --json lists every mistake with its path"
+    ])
   })
 
   it("puts a mistake repeated on every point in one line, with its first paths", () => {
@@ -217,7 +263,7 @@ describe("read with many points", () => {
       "  ahu-099/t  exception 2",
       "  ahu-099/h  exception 2",
       "",
-      "The values: add --all for every one, or a device's id for its own"
+      "--all shows every value, read <device> one device's"
     ])
   })
 

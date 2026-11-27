@@ -39,7 +39,7 @@ ot-gateway gateways points site-1/building-b/main --broker mqtts://broker.exampl
   site-2/plant/main       offline     connection-lost
 ```
 
-`gateways status` gives one of them device by device, with its machine, and exits with 1 when it is offline or a device fails:
+`gateways status` gives one of them with its machine, and exits with 1 when it is offline or a device fails. With `--all` it goes device by device:
 
 ```text
 site-1/building-b/main  online      2 devices: 1 ok, 1 failing, up since 08:12:44, heartbeat 9 s ago
@@ -49,7 +49,7 @@ site-1/building-b/main  online      2 devices: 1 ok, 1 failing, up since 08:12:4
   heat-pump     failing since 10:41:07 (timeout), last read 12 min ago
 ```
 
-`gateways points` lists what it publishes:
+`gateways points --all` lists what it publishes:
 
 ```text
 site-1/building-b/main: 3 points on 2 devices
@@ -58,7 +58,7 @@ site-1/building-b/main: 3 points on 2 devices
   heat-pump/setpoint         Room setpoint  [unit:DEG_C]  writable
 ```
 
-With more than 10 devices or 20 points, a terminal lists only the failing devices and the writable points, the first few, and `--all` lists every one; a pipe and `--json` always do.
+A terminal lists only the failing devices and the writable points, the first few, and `--all` lists every one; a pipe and `--json` always do.
 
 `offline` comes with its reason: `shutdown` after a clean stop, or `connection-lost` when the broker sent the gateway's last will because the gateway, its machine or its network went away. Add `--json` to any of them for the same in JSON ([what each field is](operations.md#every-gateway-on-a-broker)).
 
