@@ -24,7 +24,11 @@ import { Effect, Fiber, FileSystem, Result } from "effect"
 import { TestClock, TestConsole } from "effect/testing"
 import {
   discover,
+  discoveredJson,
   type DiscoverOptions,
+  foundOverview,
+  overviewLines,
+  selectDrafts,
   discoverToPointsList,
   discoveryDefaults,
   draftDevices,
@@ -218,9 +222,13 @@ const run = Effect.fnUntraced(
     yield* Fiber.join(running)
     const [draft] = yield* TestConsole.logLines
     const errors = yield* TestConsole.errorLines
-    const parsed: unknown = JSON.parse(String(draft))
+    const parsed: { readonly devices: unknown; readonly found: unknown; readonly next: unknown } = JSON.parse(
+      String(draft)
+    )
     return {
-      draft: parsed,
+      draft: { devices: parsed.devices },
+      found: parsed.found,
+      next: parsed.next,
       errors: errors.map(String),
       warnings: errors.map(String).filter((line) => line.includes("WARNING"))
     }
@@ -612,5 +620,86 @@ describe("discover without a config", () => {
     expect(pointsListNext("points.csv", { configPath: "ot-gateway.json" })).toBe(
       "ot-gateway import points.csv ot-gateway.json"
     )
+  })
+})
+
+describe("discover's overview and --save", () => {
+  const flow = { id: "flow", name: "Flow", objectType: "analog-input" as const, instance: 1 }
+  const boiler = {
+    protocol: "bacnet-ip" as const,
+    id: "boiler",
+    deviceInstance: 1001,
+    address: "10.0.2.1",
+    points: [
+      flow,
+      { id: "return", name: "Return", objectType: "analog-input" as const, instance: 2 },
+      { id: "pump", name: "Pump", objectType: "binary-output" as const, instance: 3 }
+    ]
+  }
+  const roof = { ...boiler, id: "ahu-1", deviceInstance: 1002, address: "10.0.2.2", points: [flow] }
+  const shared = { protocol: "bacnet-ip" as const, id: "device-1003", deviceInstance: 1003, points: [] }
+  const drafts = [boiler, roof, shared]
+  const names = new Map([
+    [1001, "Boiler"],
+    [1002, "AHU 1 (roof)"]
+  ])
+
+  it("lists each device with its name, address, points and their object types", () => {
+    const overview = foundOverview(drafts, names)
+    expect(overview[0]).toEqual({
+      id: "boiler",
+      name: "Boiler",
+      deviceInstance: 1001,
+      address: "10.0.2.1",
+      points: 3,
+      objectTypes: { "analog-input": 2, "binary-output": 1 },
+      inConfig: false
+    })
+    expect(overview[2]?.address).toBeNull()
+    expect(overview[2]?.note).toContain("no points to read")
+    expect(overviewLines(overview)).toEqual([
+      "boiler (instance 1001 at 10.0.2.1): 3 points (2 analog-input, 1 binary-output)",
+      'ahu-1 "AHU 1 (roof)" (instance 1002 at 10.0.2.2): 1 point (1 analog-input)',
+      "device-1003 (instance 1003): 0 points; no points to read: it lists none, or more than one address answered"
+    ])
+  })
+
+  it("selects all with points, or by id and instance, and refuses a name that matches nothing", () => {
+    const ids = (selection: string, configured?: ReadonlySet<string>) =>
+      Result.getOrThrow(selectDrafts(drafts, selection, configured)).picked.map((draft) => draft.id)
+    expect(ids("all")).toEqual(["boiler", "ahu-1"])
+    expect(ids("1002, boiler,1002")).toEqual(["ahu-1", "boiler"])
+    // Saved before, with every point: unchanged, not a mistake, so the same save twice works.
+    const again = Result.getOrThrow(selectDrafts(drafts, "device-1003,boiler", new Set(["device-1003"])))
+    expect(again.picked.map((draft) => draft.id)).toEqual(["boiler"])
+    expect(again.unchanged).toEqual(["device-1003"])
+    expect(Result.getOrThrow(selectDrafts(drafts, "all", new Set(["device-1003"]))).unchanged).toEqual(["device-1003"])
+    const unknown = selectDrafts(drafts, "boiler,chiller")
+    expect(Result.isFailure(unknown) && unknown.failure).toBe(
+      "no device found as chiller; found: boiler (1001), ahu-1 (1002)"
+    )
+    const empty = selectDrafts(drafts, "1003")
+    expect(Result.isFailure(empty) && empty.failure).toContain("device-1003 has no points to read")
+    expect(Result.isFailure(selectDrafts(drafts, " , "))).toBe(true)
+  })
+
+  it("prints the drafts with the overview and the commands that save them", () => {
+    const printed = discoveredJson(drafts, names, new Set(), {
+      configPath: "site/ot-gateway.json",
+      command: "ot-gateway"
+    })
+    expect(printed.devices).toBe(drafts)
+    expect(printed.found).toHaveLength(3)
+    expect(printed.next).toEqual([
+      "ot-gateway discover site/ot-gateway.json --save all",
+      "ot-gateway discover site/ot-gateway.json --save boiler,ahu-1"
+    ])
+    expect(discoveredJson(drafts, names, new Set(), { noConfig: true }).next[0]).toContain("init . --site <site>")
+    expect(discoveredJson([shared], names, new Set()).next).toEqual([])
+    // A device the config has with every point is said to be there, not to have none.
+    expect(discoveredJson([shared], names, new Set(["device-1003"])).found[0]).toMatchObject({
+      inConfig: true,
+      note: "in the config already, with every point it lists"
+    })
   })
 })

@@ -150,7 +150,7 @@ export const makeConfigEditor = Effect.fn("makeConfigEditor")(function* (deps: {
     return yield* new ConfigApplyFailed({
       message: Result.isSuccess(restored)
         ? `${failed.message} Nothing changed: ${store.path} holds the previous config again.`
-        : `${failed.message} Putting the previous config back into ${store.path} failed too (${restored.failure.message}); ${store.path}.bak has it.`
+        : `${failed.message} Putting the previous config back into ${store.path} failed too (${restored.failure.message})${saved.backedUp ? `; ${store.path}.bak has it` : ""}.`
     })
   }, Semaphore.withPermit(saving))
 

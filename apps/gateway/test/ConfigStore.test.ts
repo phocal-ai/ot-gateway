@@ -12,6 +12,25 @@ import { checkEditability, etagOf, makeConfigStore } from "../src/ConfigStore.ts
 const valid = (site: string) =>
   `${JSON.stringify({ site, building: "b", mqtt: { url: "mqtt://localhost:1883" }, devices: [] }, null, 2)}\n`
 
+/** A valid config with one simulated device: one that a save backs up. */
+const withDevice = (site: string) =>
+  `${JSON.stringify(
+    {
+      site,
+      building: "b",
+      mqtt: { url: "mqtt://localhost:1883" },
+      devices: [
+        {
+          id: "sim",
+          protocol: "simulator",
+          points: [{ id: "p", name: "P", waveform: "sine", min: 0, max: 1, periodSeconds: 60 }]
+        }
+      ]
+    },
+    null,
+    2
+  )}\n`
+
 /** A folder of its own with `ot-gateway.json` in it, and the store for that file. */
 const folderWithConfig = (text: string, mode = 0o644) =>
   Effect.gen(function* () {
@@ -35,21 +54,39 @@ describe("ConfigStore", () => {
 
   it.effect("saves a valid config atomically and keeps the previous one as .bak, with the file's permissions", () =>
     Effect.gen(function* () {
-      const { fs, folder, path, store } = yield* folderWithConfig(valid("before"), 0o600)
+      const { fs, folder, path, store } = yield* folderWithConfig(withDevice("before"), 0o600)
       const { etag } = yield* store.read
-      const saved = yield* store.save(valid("after"), etag)
-      expect(saved.etag).toBe(etagOf(valid("after")))
-      expect(saved.previous).toBe(valid("before"))
+      const saved = yield* store.save(withDevice("after"), etag)
+      expect(saved.etag).toBe(etagOf(withDevice("after")))
+      expect(saved.previous).toBe(withDevice("before"))
       expect(saved.config.site).toBe("after")
-      expect(yield* fs.readFileString(path)).toBe(valid("after"))
-      expect(yield* fs.readFileString(`${path}.bak`)).toBe(valid("before"))
+      expect(saved.backedUp).toBe(true)
+      expect(yield* fs.readFileString(path)).toBe(withDevice("after"))
+      expect(yield* fs.readFileString(`${path}.bak`)).toBe(withDevice("before"))
       expect(statSync(path).mode & 0o777).toBe(0o600)
       expect(statSync(`${path}.bak`).mode & 0o777).toBe(0o600)
       // Nothing left behind but the config and its backup.
       expect((yield* fs.readDirectory(folder)).toSorted()).toEqual(["ot-gateway.json", "ot-gateway.json.bak"])
       // Put back after a failed apply.
       yield* store.restore(saved.previous)
-      expect(yield* fs.readFileString(path)).toBe(valid("before"))
+      expect(yield* fs.readFileString(path)).toBe(withDevice("before"))
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("keeps no .bak of the empty config init wrote, the first time; every later save keeps one", () =>
+    Effect.gen(function* () {
+      const { fs, folder, path, store } = yield* folderWithConfig(valid("fresh"))
+      const first = yield* store.save(withDevice("fresh"), (yield* store.read).etag)
+      expect(first.backedUp).toBe(false)
+      expect(yield* fs.readDirectory(folder)).toEqual(["ot-gateway.json"])
+      const second = yield* store.save(withDevice("second"), (yield* store.read).etag)
+      expect(second.backedUp).toBe(true)
+      expect(yield* fs.readFileString(`${path}.bak`)).toBe(withDevice("fresh"))
+      // With a .bak there, even an empty config is backed up: undo must not jump past it.
+      yield* store.save(valid("empty"), (yield* store.read).etag)
+      const fourth = yield* store.save(withDevice("again"), (yield* store.read).etag)
+      expect(fourth.backedUp).toBe(true)
+      expect(yield* fs.readFileString(`${path}.bak`)).toBe(valid("empty"))
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 

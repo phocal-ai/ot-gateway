@@ -58,6 +58,18 @@ const request = (id: number, method: string, params?: unknown) => ({
 const echo: RunCommand<never> = (argv) => printJson({ ok: true, argv })
 
 describe("mcp tools", () => {
+  it("discover_save only says what it would save unless told otherwise, and discover stays read-only", () => {
+    expect(argvOf("discover_save", { save: "boiler,1002" })).toEqual(
+      Exit.succeed(["discover", "--save=boiler,1002", "--dry-run"])
+    )
+    expect(argvOf("discover_save", { save: "all", dryRun: false })).toEqual(Exit.succeed(["discover", "--save=all"]))
+    expect(Exit.isFailure(argvOf("discover_save", { save: "--points-list=x.csv" }))).toBe(true)
+    expect(toolNamed("discover").annotations.readOnlyHint).toBe(true)
+    expect(toolNamed("discover_save").annotations.readOnlyHint).toBe(false)
+    expect(argvOf("start", { timeout: 60 })).toEqual(Exit.succeed(["start", "--timeout=60"]))
+    expect(argvOf("stop", {})).toEqual(Exit.succeed(["stop"]))
+  })
+
   it("discover_modbus makes the discover modbus command line, read-only and without a file to write", () => {
     expect(argvOf("discover_modbus", { range: "192.168.1.0/24", unitIds: "1-247", rate: 5 })).toEqual(
       Exit.succeed(["discover", "modbus", "192.168.1.0/24", "--unit-ids=1-247", "--rate=5"])
@@ -188,6 +200,7 @@ describe("mcp tools", () => {
       "config_undo",
       "init",
       "clear_retained",
+      "stop",
       "restart",
       "down",
       "upgrade"

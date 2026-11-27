@@ -17,13 +17,14 @@ pnpm typecheck
 pnpm test
 pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
 pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
-pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, compose.yaml and ot-gateway.env out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, ot-gateway.env and, on Linux, compose.yaml out (the CLI: apps/gateway/src/Cli.ts)
 pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
 pnpm ot-gateway doctor ot-gateway.json     # every check in order (config, broker, gateway, devices, BACnet port, disk, clock), one line each and the next command (--json: findings with code, hint, next; exit 1 when one fails)
 pnpm ot-gateway up                         # the folder's gateway under Docker Compose (compose.yaml written when missing), until every point has a value (down, restart; exit 1 with code, hint, next)
 pnpm ot-gateway upgrade --check            # is a newer release out (upgrade: pull, check the config with it, switch compose.yaml's tag, wait for values, roll back when they do not come)
-pnpm ot-gateway discover ot-gateway.json   # find devices; in a terminal choose BACnet/IP or a Modbus scan, pick points, see the diff, save into the config, then the commands to read once or start, otherwise (--json, a pipe, no config yet) print a draft (--points-list points.csv writes a list to trim, --append adds to one)
+pnpm ot-gateway start                      # the folder's gateway in the background on this machine (macOS: Docker Desktop reaches no LAN device), until every point has a value; stop stops it (.ot-gateway.pid; apps/gateway/src/Background.ts)
+pnpm ot-gateway discover ot-gateway.json   # find devices; in a terminal choose BACnet/IP or a Modbus scan, pick points, see the diff, save into the config, then the commands to read once or start, otherwise (--json, a pipe, no config yet) print an overview (found) and a draft; --save all|<ids> saves without asking (--points-list points.csv writes a list to trim, --append adds to one)
 pnpm ot-gateway discover modbus 192.168.1.0/24   # find Modbus TCP devices and unit ids on a range, read-only and rate-limited (--unit-ids 1-247 behind a gateway, --points-list writes draft rows)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in (--protocol modbus|bacnet: only that protocol's columns)

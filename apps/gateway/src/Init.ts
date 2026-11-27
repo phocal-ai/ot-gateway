@@ -723,6 +723,8 @@ export interface InitNext {
   readonly run: string
   /** The command that starts it in Docker, when compose.yaml is the way here. */
   readonly compose?: string | undefined
+  /** The command that starts it in the background, on macOS, where Docker Desktop reaches no device on the LAN. */
+  readonly background?: string | undefined
 }
 
 /** Where `init` runs, for its next steps: over SSH or not, the operating system, the working directory. */
@@ -820,9 +822,18 @@ export const initNext = (
         ? "docker compose up -d"
         : `docker compose -f ${inFolder("compose.yaml")} up -d`
       : undefined
+  // On macOS the gateway runs on the machine itself: in the background, so an agent's command returns.
+  const background = platform === "darwin" ? `${cli} start${argument}` : undefined
   const start =
     composeUp === undefined
-      ? [step(run, "start the gateway")]
+      ? [
+          background === undefined
+            ? step(run, "start the gateway")
+            : step(
+                background,
+                `start it in the background and wait for values (${cli} stop stops it; ${run}: in this terminal)`
+              )
+        ]
       : [
           step(composeUp, "start it in Docker, restarted after a crash or a reboot"),
           step(`${cli} status${argument}`, "one line per device")
@@ -862,7 +873,8 @@ export const initNext = (
     page: ssh === undefined ? page : `${page}; ${url} is this machine, so from your laptop use the tunnel below`,
     startedBy: before.length,
     run,
-    compose: composeUp
+    compose: composeUp,
+    background
   }
 }
 
@@ -887,7 +899,7 @@ export const initSummary = (
   env: Readonly<Record<string, string | undefined>> = {},
   ui: Ui = plainUi
 ) => {
-  const { run, url, compose } = initNext(path, config, folder, context)
+  const { run, url, compose, background } = initNext(path, config, folder, context)
   const cli = context.command ?? "ot-gateway"
   const files = folder.written.map((file) => basename(file))
   const passwordEnv = config.mqtt.passwordEnv
@@ -913,7 +925,15 @@ export const initSummary = (
         ? [ui.rows([["Next", ui.command(`${cli} discover${argument}`), "find BACnet/IP or Modbus TCP devices"]])]
         : [
             ui.rows([
-              ["Start it", ui.command(run), compose === undefined ? "" : `or in Docker: ${compose}`],
+              [
+                "Start it",
+                ui.command(run),
+                compose !== undefined
+                  ? `or in Docker: ${compose}`
+                  : background !== undefined
+                    ? `or in the background: ${background}`
+                    : ""
+              ],
               ["Read once", ui.command(`${cli} read${argument}`)],
               ["Status page", ui.command(url)],
               ["All commands", ui.command(`${cli} --help`)]

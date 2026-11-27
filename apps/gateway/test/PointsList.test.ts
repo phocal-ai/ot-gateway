@@ -8,7 +8,7 @@ import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem, Result } from "effect"
 import { exampleConfigPath } from "../src/Demo.ts"
 import { describeUnits, importPointsList } from "../src/Import.ts"
-import { initConfig } from "../src/Init.ts"
+import { initConfig, simulatedDevice } from "../src/Init.ts"
 import {
   devicesFromPointsList,
   parseDelimited,
@@ -453,7 +453,8 @@ describe("importPointsList", () => {
       const fs = yield* FileSystem.FileSystem
       const directory = yield* fs.makeTempDirectoryScoped()
       const configPath = `${directory}/gateway.json`
-      const original = JSON.stringify(initConfig(answers, []))
+      // A config with a device: init's empty one, the first time, is not backed up (ConfigStore's keepsBackup).
+      const original = JSON.stringify(initConfig(answers, [simulatedDevice]))
       yield* fs.writeFileString(configPath, original, { mode: 0o600 })
       yield* fs.chmod(configPath, 0o600)
 
