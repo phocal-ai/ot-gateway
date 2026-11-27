@@ -120,9 +120,53 @@ describe("mcp tools", () => {
     )
   })
 
-  it("mark write, making a point writable, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
+  it("mark write, making a point writable, removing a device, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
-    expect(changing).toEqual(["write", "points_allow_commands", "restart", "down", "upgrade"])
+    expect(changing).toEqual([
+      "write",
+      "points_allow_commands",
+      "config_remove",
+      "config_undo",
+      "restart",
+      "down",
+      "upgrade"
+    ])
+  })
+
+  it("config_set only checks unless told otherwise, and passes the value as JSON in a flag", () => {
+    expect(argvOf("config_set", { key: "devices.meter.pollIntervalMs", value: 10_000 })).toEqual(
+      Exit.succeed(["config", "set", "devices.meter.pollIntervalMs", "--value=10000", "--dry-run"])
+    )
+    // A text stays a text, digits and a leading - too.
+    expect(argvOf("config_set", { key: "mqtt.clientId", value: "5000", dryRun: false })).toEqual(
+      Exit.succeed(["config", "set", "mqtt.clientId", '--value="5000"'])
+    )
+    expect(
+      argvOf("config_set", {
+        key: "devices.meter.points.t.scaling",
+        value: { offset: -40 },
+        config: "a/ot-gateway.json"
+      })
+    ).toEqual(
+      Exit.succeed([
+        "config",
+        "set",
+        "devices.meter.points.t.scaling",
+        '--value={"offset":-40}',
+        "--config=a/ot-gateway.json",
+        "--dry-run"
+      ])
+    )
+    expect(argvOf("config_set", { key: "devices.meter.pollIntervalMs", unset: true })).toEqual(
+      Exit.succeed(["config", "unset", "devices.meter.pollIntervalMs", "--dry-run"])
+    )
+    expect(Exit.isFailure(argvOf("config_set", { key: "--config=/etc/passwd", value: 1 }))).toBe(true)
+    expect(argvOf("config_remove", { target: "meter/power" })).toEqual(
+      Exit.succeed(["config", "remove", "meter/power", "--dry-run"])
+    )
+    expect(argvOf("config_get", {})).toEqual(Exit.succeed(["config", "get"]))
+    expect(argvOf("config_undo", {})).toEqual(Exit.succeed(["config", "undo", "--dry-run"]))
+    expect(argvOf("config_undo", { dryRun: false })).toEqual(Exit.succeed(["config", "undo"]))
   })
 
   it("points_allow_commands only checks unless told otherwise, and passes limits as flags, negative ones too", () => {

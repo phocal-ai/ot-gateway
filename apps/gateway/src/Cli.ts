@@ -76,6 +76,15 @@ import {
 } from "./ModbusDiscover.ts"
 import { clearCommands, diffConfigs, diffReport, diffTitle, formatDiff, sideOfConfig } from "./Diff.ts"
 import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
+import {
+  formatConfigChange,
+  formatConfigGet,
+  formatConfigUndo,
+  getConfigValue,
+  removeFromConfig,
+  setConfigValue,
+  undoConfig
+} from "./ConfigEdit.ts"
 import { formatPointCommands, setPointCommands } from "./PointCommands.ts"
 import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
@@ -1414,6 +1423,162 @@ const readOnlyCommand = Command.make(
   ),
   Command.withExamples([
     { command: "ot-gateway points read-only heat-pump/setpoint", description: "No more commands on the setpoint" }
+  ])
+)
+
+const configFileFlag = Flag.String("config").pipe(
+  Flag.withDescription(`Path of the gateway's JSON config (default ${defaultConfigPath})`),
+  Flag.withDefault(defaultConfigPath)
+)
+
+const configKey = Argument.String("key").pipe(
+  Argument.withDescription(
+    "A key by its path, dots between; devices and points by id: mqtt.url, devices.heat-pump.pollIntervalMs, devices.heat-pump.points.setpoint.unit"
+  )
+)
+
+const configDryRun = dryRunFlag("Check the change and print what it would do, without writing the config")
+
+const configGetCommand = Command.make(
+  "get",
+  {
+    key: configKey.pipe(Argument.withDefault("")),
+    config: configFileFlag,
+    json: jsonFlag
+  },
+  ({ key, config, json }) =>
+    Effect.gen(function* () {
+      const report = yield* getConfigValue(config, key, { command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigGet(report))
+    }).pipe(jsonFailure(json, { path: config, key }))
+).pipe(
+  Command.withDescription(
+    "A key's value in the config, or the whole config without a key. --json: value (as the file has it), set (whether it has it) and effective (what the gateway runs with, defaults filled in)"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway config get mqtt.url", description: "The broker" },
+    {
+      command: "ot-gateway config get devices.heat-pump.pollIntervalMs --json",
+      description: "How often a device is read, its default when the file does not say"
+    }
+  ])
+)
+
+const configSetCommand = Command.make(
+  "set",
+  {
+    key: configKey,
+    value: Argument.String("value").pipe(
+      Argument.withDescription(
+        "The value: JSON when it reads as JSON (5000, true, '{\"factor\": 0.1}'), text otherwise (mqtts://broker:8883)"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    valueFlag: Flag.String("value").pipe(
+      Flag.withDescription("The value as a flag, for one that starts with -: --value=-40"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    config: configFileFlag,
+    dryRun: configDryRun,
+    json: jsonFlag
+  },
+  ({ key, value, valueFlag, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const set = valueFlag ?? value
+      if (set === undefined || (value !== undefined && valueFlag !== undefined)) {
+        return yield* new UsageMistake({
+          message: "config set takes one value, after the key or as --value",
+          code: "usage",
+          missing: ["value"],
+          hint: "ot-gateway config set <key> <value>, or --value=<value> for one that starts with -"
+        })
+      }
+      const report = yield* setConfigValue(config, key, { set }, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigChange(report))
+    }).pipe(jsonFailure(json, { path: config, key }))
+).pipe(
+  Command.withDescription(
+    "Set one key of the config, checked with the gateway's schema before the file is written (the previous one is kept as .bak). It never makes a point writable: that is points allow-commands. --json: before, after, effective, changed, changes, next"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway config set mqtt.url mqtts://broker.example:8883", description: "Another broker" },
+    {
+      command: "ot-gateway config set devices.heat-pump.pollIntervalMs 10000",
+      description: "Read a device every 10 s"
+    },
+    {
+      command: "ot-gateway config set devices.heat-pump.points.setpoint.unit unit:DEG_C --dry-run --json",
+      description: "Only check a point's unit, for agents"
+    }
+  ])
+)
+
+const configUnsetCommand = Command.make(
+  "unset",
+  { key: configKey, config: configFileFlag, dryRun: configDryRun, json: jsonFlag },
+  ({ key, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* setConfigValue(config, key, { unset: true }, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigChange(report))
+    }).pipe(jsonFailure(json, { path: config, key }))
+).pipe(
+  Command.withDescription("Take one key out of the config, so its default applies again"),
+  Command.withExamples([
+    { command: "ot-gateway config unset devices.heat-pump.pollIntervalMs", description: "Back to every 5 s" }
+  ])
+)
+
+const configRemoveCommand = Command.make(
+  "remove",
+  {
+    target: Argument.String("target").pipe(
+      Argument.withDescription("A device, or one of its points as device/point: heat-pump, heat-pump/setpoint")
+    ),
+    config: configFileFlag,
+    dryRun: configDryRun,
+    json: jsonFlag
+  },
+  ({ target, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* removeFromConfig(config, target, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigChange(report))
+    }).pipe(jsonFailure(json, { path: config, target }))
+).pipe(
+  Command.withDescription(
+    "Take a device, or one point of a device, out of the config (the previous file is kept as .bak). Its topics go silent after the restart; diff names the retained messages left on the broker"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway config remove heat-pump/return-temp", description: "One point" },
+    { command: "ot-gateway config remove heat-pump --dry-run", description: "A device, only checked" }
+  ])
+)
+
+const configUndoCommand = Command.make(
+  "undo",
+  { config: configFileFlag, dryRun: configDryRun, json: jsonFlag },
+  ({ config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* undoConfig(config, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigUndo(report))
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "Put the previous config back: the file and its .bak (what the last save from this CLI, import or the status page replaced) change places, so undo again brings the change back"
+  )
+)
+
+const configCommand = Command.make("config").pipe(
+  Command.withDescription(
+    "Read and change the config key by key, checked before it is written: get, set, unset, remove a device or point, undo"
+  ),
+  Command.withSubcommands([
+    configGetCommand,
+    configSetCommand,
+    configUnsetCommand,
+    configRemoveCommand,
+    configUndoCommand
   ])
 )
 
@@ -2809,6 +2974,7 @@ export const rootDescription = [
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
+  "    config set <key> <value> --json  one key of the config, checked before it is written (get, unset, remove <device[/point]>, undo; --dry-run)",
   "    points allow-commands <device/point> --min=15 --max=25 --json   one point takes commands (read-only undoes it): only when the user names it",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
@@ -2841,6 +3007,7 @@ export const cli = Command.make("ot-gateway").pipe(
     upgradeCommand,
     discoverCommand,
     importCommand,
+    configCommand,
     diffCommand,
     points,
     profiles,
@@ -2876,6 +3043,7 @@ const subcommands = new Set([
   "upgrade",
   "discover",
   "import",
+  "config",
   "diff",
   "points",
   "profiles",

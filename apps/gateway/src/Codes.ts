@@ -56,6 +56,8 @@ const areas: ReadonlyArray<CodeArea> = [
 /** Commands that read the config file before anything else. */
 /** Commands that change whether a point takes commands. */
 const pointCommands = ["points allow-commands", "points read-only"]
+/** Commands that change the config key by key. */
+const configEditCommands = ["config set", "config unset", "config remove", "config undo"]
 const configCommands = [
   "check",
   "run",
@@ -67,7 +69,9 @@ const configCommands = [
   "publish",
   "discover",
   "import",
-  ...pointCommands
+  ...pointCommands,
+  "config get",
+  ...configEditCommands
 ]
 /** Commands that ask the running gateway at its status page. */
 const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
@@ -100,6 +104,32 @@ export const codes: ReadonlyArray<CodeEntry> = [
       "The config file is not valid JSON, or breaks a rule of the config schema; with --json, issues lists each mistake with its path.",
     fix: "Fix each key the message names (docs/configuration.md has every key and its rule), then check again before restarting.",
     next: "ot-gateway check --json"
+  },
+  {
+    code: "unknown-key",
+    area: "config",
+    reportedBy: ["config get", "config set", "config unset", "config remove"],
+    meaning:
+      "The key, device or point named is not in the config: a key is its path with dots between, a device or point its id.",
+    fix: "Use a name the hint lists; config get prints the whole config, and docs/configuration.md has every key.",
+    next: "ot-gateway config get"
+  },
+  {
+    code: "writes-not-here",
+    area: "config",
+    reportedBy: ["config set", "config unset"],
+    meaning:
+      "The change would make a point writable, set the limits of what a command may write, or move a point that takes commands (another id, register, object, scaling or device address), which config set never does.",
+    fix: "Allow commands on one named point with points allow-commands, on purpose; to rename or move a device or point that takes commands, make it read-only first, change it, and allow commands again.",
+    next: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25"
+  },
+  {
+    code: "no-backup",
+    area: "config",
+    reportedBy: ["config undo"],
+    meaning: "There is no .bak next to the config, so there is no previous config to go back to.",
+    fix: "A save from the CLI or the status page keeps the previous config as .bak; without one, edit the config or restore it from your own backup.",
+    next: "ot-gateway check"
   },
   {
     code: "no-status-page",
@@ -641,7 +671,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
   {
     code: "config-not-saved",
     area: "command",
-    reportedBy: pointCommands,
+    reportedBy: [...pointCommands, ...configEditCommands],
     meaning:
       "The config file could not be written, or changed while the command ran, so it is as it was and no point changed.",
     fix: "Run the command again; when it names a file it may not write, run it as a user who may write the config and its folder.",
