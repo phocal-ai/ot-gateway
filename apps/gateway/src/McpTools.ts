@@ -10,6 +10,9 @@
  *
  * Commands that ask questions (`init`), run until stopped (`run`, `demo`, `simulate`), or write to stdout
  * directly (`points template`, `points from-ede`) are not offered.
+ *
+ * `points_allow_commands` is the one tool that makes a point writable: one point, named, a dry run unless told
+ * otherwise, and marked destructive so a client asks its user first.
  */
 import { Effect, type JsonSchema, Schema } from "effect"
 import { contractMessageNames } from "./ContractReport.ts"
@@ -462,6 +465,49 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     },
     annotations: local,
     argv: ({ config, format }) => ["points", "export", config, flag("format", format)]
+  }),
+  defineTool({
+    name: "points_allow_commands",
+    title: "Let a point take commands",
+    description:
+      "Make one point writable in the config: it then takes commands on its $set topic, a number only within min and max. Use it only when the user asked for this point by name, and with the limits the user gave: never guess limits, ask. Nothing is sent to the device; the running gateway takes it with restart. dryRun defaults to true: only check and return what would change (point, source, setTopic, limits, changed, next)",
+    input: {
+      point: text("One point as device/point, as in the config: heat-pump/setpoint"),
+      min: Schema.optionalKey(
+        Schema.Finite.annotate({
+          description:
+            "The lowest value a command may set, in the point's unit; with max for a number, neither for a switch"
+        })
+      ),
+      max: Schema.optionalKey(Schema.Finite.annotate({ description: "The highest value a command may set" })),
+      config: configArgument,
+      dryRun: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Only check and return what would change (default true)" })
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    argv: ({ point, min, max, config, dryRun }) => [
+      "points",
+      "allow-commands",
+      point,
+      config,
+      flag("min", min),
+      flag("max", max),
+      flag("dry-run", dryRun ?? true)
+    ]
+  }),
+  defineTool({
+    name: "points_read_only",
+    title: "Make a point read-only",
+    description:
+      "Make one point read-only again in the config (writable and its limits taken out): the gateway refuses commands on it after restart. Returns point, source, changed and next",
+    input: {
+      point: text("One point as device/point, as in the config: heat-pump/setpoint"),
+      config: configArgument,
+      dryRun: Schema.optionalKey(Schema.Boolean.annotate({ description: "Only check and return what would change" }))
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    argv: ({ point, config, dryRun }) => ["points", "read-only", point, config, flag("dry-run", dryRun)]
   }),
   defineTool({
     name: "diff",

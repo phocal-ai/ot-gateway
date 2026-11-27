@@ -231,6 +231,7 @@ const instructions = [
   "Start with doctor when something is wrong, status for a running gateway, read to read points once without one.",
   "Paths are relative to the folder the server was started in; config defaults to ./ot-gateway.json.",
   "write changes a device: only writable points, within their limits, through the running gateway.",
+  "points_allow_commands makes one point writable: only when the user asked for that point by name, with the limits they gave, never guessed.",
   "up, restart, down and upgrade run the gateway under Docker Compose on this machine, and wait until values flow."
 ].join(" ")
 

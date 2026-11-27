@@ -146,7 +146,7 @@ describe("savedLines", () => {
       expect(savedLines(merged.config, merged.added, merged.extended)).toEqual([
         "✔ Added sim-1: read every 2 s, none writable",
         "✔ Added points to demo-room: read every 5 s, none writable",
-        "  setpoints become writable on the status page or in the config"
+        "  a setpoint takes commands after ot-gateway points allow-commands <device/point>"
       ])
       const setpoint = { ...newPoint.points[0], writable: true, limits: { min: 15, max: 30 } }
       const saved = yield* parseConfig(JSON.stringify({ ...base, devices: [{ ...newPoint, points: [setpoint] }] }))
