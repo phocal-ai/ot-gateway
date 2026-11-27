@@ -791,12 +791,12 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
  * The command that starts the gateway of a config for good on this platform: Docker Compose on Linux, a background
  * process on macOS (Docker Desktop reaches no device on the LAN), and a terminal of its own on Windows.
  */
-export const startCommand = (cli: string, argument: string, platform: string) =>
-  platform === "darwin"
-    ? `${cli} start${argument}`
-    : platform === "win32"
-      ? `${cli} run${argument}`
-      : `${cli} up${argument}`
+export const startCommand = (cli: string, argument: string, platform: string) => {
+  if (platform === "darwin") return `${cli} start${argument}`
+  // compose.yaml runs ./ot-gateway.json: a config named otherwise runs in a terminal.
+  const composed = argument === "" || /ot-gateway\.json'?$/.test(argument)
+  return platform === "win32" || !composed ? `${cli} run${argument}` : `${cli} up${argument}`
+}
 
 /**
  * `config` asking on this machine's only network when it names no broadcast of its own: the limited broadcast
@@ -843,31 +843,37 @@ const discoverSaveSelected = Effect.fn("discoverSaveSelected")(function* (
     wait: options.wait,
     configPath: path
   })
-  const picked = selectDrafts(drafts, selection)
-  if (Result.isFailure(picked)) {
-    return yield* new DiscoverError({ message: `${picked.failure}; ${path} is as it was` })
+  const configured = new Set(config.devices.map((device) => device.id))
+  const selected = selectDrafts(drafts, selection, configured)
+  if (Result.isFailure(selected)) {
+    return yield* new DiscoverError({ message: `${selected.failure}; ${path} is as it was` })
   }
-  if (picked.success.length === 0) {
+  const { picked, unchanged } = selected.success
+  if (picked.length === 0 && unchanged.length === 0) {
     return yield* new DiscoverError({ message: `no device with points to read answered; ${path} is as it was` })
   }
-  const located = picked.success.every((device) => device.address !== undefined)
-  const merged = yield* mergeDiscovered(path, fileText, picked.success, located ? undefined : broadcast)
-  if (!options.dryRun) yield* writeMerged(path, fileText, merged)
+  const located = picked.every((device) => device.address !== undefined)
+  const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
+  // Nothing new (every device named is saved already): the file stays as it is, and that is a success.
+  const writes = !options.dryRun && picked.length > 0
+  if (writes) yield* writeMerged(path, fileText, merged)
   const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
-  const points = picked.success.reduce((total, device) => total + device.points.length, 0)
+  const points = picked.reduce((total, device) => total + device.points.length, 0)
   const next = [`${cli} read${argument}`, startCommand(cli, argument, process.platform)]
-  const chosen = new Set(picked.success.map((device) => device.id))
+  const chosen = new Set(picked.map((device) => device.id))
   const report = {
     ok: true,
     dryRun: options.dryRun,
     path,
-    saved: !options.dryRun,
-    added: merged.added,
-    extended: merged.extended,
+    saved: writes,
+    added: picked.length > 0 ? merged.added : [],
+    extended: picked.length > 0 ? merged.extended : [],
+    unchanged,
     points,
     devices: foundOverview(
       drafts.filter((draft) => chosen.has(draft.id)),
-      names
+      names,
+      configured
     ),
     next: options.dryRun
       ? [
@@ -881,7 +887,10 @@ const discoverSaveSelected = Effect.fn("discoverSaveSelected")(function* (
     [
       ...(options.dryRun
         ? [`dry run, ${path} is as it was. It would add:`, ...overviewLines(report.devices).map((line) => `  ${line}`)]
-        : savedLines(merged.config, merged.added, merged.extended, ui)),
+        : writes
+          ? savedLines(merged.config, merged.added, merged.extended, ui)
+          : []),
+      ...(unchanged.length === 0 ? [] : [`in ${path} already, with every point: ${unchanged.join(", ")}`]),
       ...report.next.map((command) => `next: ${command}`)
     ].join("\n")
   )

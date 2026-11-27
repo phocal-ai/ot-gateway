@@ -15,6 +15,7 @@ import {
   type BackgroundOptions,
   isGatewayOf,
   PID_FILE,
+  pidFileOf,
   Processes,
   startBackground,
   stopBackground
@@ -79,7 +80,9 @@ const status =
       : Effect.succeed(answer)
 
 /** Processes that record what happens: `running` holds the live pids and their command lines. */
-const scripted = (options: { readonly exitsWith?: number; readonly running?: Map<number, string> } = {}) =>
+const scripted = (
+  options: { readonly exitsWith?: number; readonly running?: Map<number, string>; readonly ps?: false } = {}
+) =>
   Effect.gen(function* () {
     const running = options.running ?? new Map<number, string>()
     const signals: Array<string> = []
@@ -95,7 +98,8 @@ const scripted = (options: { readonly exitsWith?: number; readonly running?: Map
             return { pid: 4242, exited: Deferred.await(exit) }
           }),
         alive: (pid) => Effect.sync(() => running.has(pid)),
-        commandLine: (pid) => Effect.sync(() => Option.fromUndefinedOr(running.get(pid))),
+        commandLine: (pid) =>
+          Effect.sync(() => (options.ps === false ? Option.none() : Option.fromUndefinedOr(running.get(pid)))),
         signal: (pid, name) =>
           Effect.sync(() => {
             signals.push(`${name} ${pid}`)
@@ -226,6 +230,44 @@ describe("stop", () => {
       expect(processes.signals).toEqual([])
       expect(running.has(4242)).toBe(true)
       expect(existsSync(join(directory, PID_FILE))).toBe(false)
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("keeps one pid file per config: stopping another config of the folder leaves this gateway alone", () =>
+    Effect.gen(function* () {
+      const directory = folder()
+      writeFileSync(join(directory, "other.json"), JSON.stringify({ ...config, id: "other" }))
+      const processes = yield* scripted()
+      yield* startBackground(directory, options(status(snapshot()))).pipe(Effect.provide(processes.layer))
+      const other = yield* stopBackground(join(directory, "other.json"), { cli: "ot-gateway", cwd: directory }).pipe(
+        Effect.provide(processes.layer)
+      )
+      expect(other.stopped).toBe(false)
+      expect(processes.signals).toEqual([])
+      expect(existsSync(join(directory, PID_FILE))).toBe(true)
+      expect(pidFileOf(join(directory, "other.json"))).toBe(join(directory, ".other.json.pid"))
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("signals nothing when it cannot read what the pid runs", () =>
+    Effect.gen(function* () {
+      const directory = folder()
+      const processes = yield* scripted({ running: new Map([[4242, "?"]]), ps: false })
+      writeFileSync(
+        join(directory, PID_FILE),
+        JSON.stringify({ pid: 4242, config: join(directory, "ot-gateway.json"), started: 0 })
+      )
+      const failure = yield* deployFailure(
+        stopBackground(directory, { cli: "ot-gateway", cwd: directory }).pipe(Effect.provide(processes.layer))
+      )
+      expect(failure.code).toBe("pid-unconfirmed")
+      expect(failure.next).toBe("ps -o command= -p 4242")
+      expect(processes.signals).toEqual([])
+      // And start does not start a second one beside it.
+      const start = yield* deployFailure(
+        startBackground(directory, options(status(snapshot()))).pipe(Effect.provide(processes.layer))
+      )
+      expect(start.code).toBe("already-running")
     }).pipe(Effect.provide(NodeServices.layer))
   )
 

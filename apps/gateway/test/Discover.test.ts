@@ -652,7 +652,8 @@ describe("discover's overview and --save", () => {
       deviceInstance: 1001,
       address: "10.0.2.1",
       points: 3,
-      objectTypes: { "analog-input": 2, "binary-output": 1 }
+      objectTypes: { "analog-input": 2, "binary-output": 1 },
+      inConfig: false
     })
     expect(overview[2]?.address).toBeNull()
     expect(overview[2]?.note).toContain("no points to read")
@@ -664,11 +665,15 @@ describe("discover's overview and --save", () => {
   })
 
   it("selects all with points, or by id and instance, and refuses a name that matches nothing", () => {
-    expect(Result.getOrThrow(selectDrafts(drafts, "all")).map((draft) => draft.id)).toEqual(["boiler", "ahu-1"])
-    expect(Result.getOrThrow(selectDrafts(drafts, "1002, boiler,1002")).map((draft) => draft.id)).toEqual([
-      "ahu-1",
-      "boiler"
-    ])
+    const ids = (selection: string, configured?: ReadonlySet<string>) =>
+      Result.getOrThrow(selectDrafts(drafts, selection, configured)).picked.map((draft) => draft.id)
+    expect(ids("all")).toEqual(["boiler", "ahu-1"])
+    expect(ids("1002, boiler,1002")).toEqual(["ahu-1", "boiler"])
+    // Saved before, with every point: unchanged, not a mistake, so the same save twice works.
+    const again = Result.getOrThrow(selectDrafts(drafts, "device-1003,boiler", new Set(["device-1003"])))
+    expect(again.picked.map((draft) => draft.id)).toEqual(["boiler"])
+    expect(again.unchanged).toEqual(["device-1003"])
+    expect(Result.getOrThrow(selectDrafts(drafts, "all", new Set(["device-1003"]))).unchanged).toEqual(["device-1003"])
     const unknown = selectDrafts(drafts, "boiler,chiller")
     expect(Result.isFailure(unknown) && unknown.failure).toBe(
       "no device found as chiller; found: boiler (1001), ahu-1 (1002)"
@@ -679,14 +684,22 @@ describe("discover's overview and --save", () => {
   })
 
   it("prints the drafts with the overview and the commands that save them", () => {
-    const printed = discoveredJson(drafts, names, { configPath: "site/ot-gateway.json", command: "ot-gateway" })
+    const printed = discoveredJson(drafts, names, new Set(), {
+      configPath: "site/ot-gateway.json",
+      command: "ot-gateway"
+    })
     expect(printed.devices).toBe(drafts)
     expect(printed.found).toHaveLength(3)
     expect(printed.next).toEqual([
       "ot-gateway discover site/ot-gateway.json --save all",
       "ot-gateway discover site/ot-gateway.json --save boiler,ahu-1"
     ])
-    expect(discoveredJson(drafts, names, { noConfig: true }).next[0]).toContain("init . --site <site>")
-    expect(discoveredJson([shared], names).next).toEqual([])
+    expect(discoveredJson(drafts, names, new Set(), { noConfig: true }).next[0]).toContain("init . --site <site>")
+    expect(discoveredJson([shared], names, new Set()).next).toEqual([])
+    // A device the config has with every point is said to be there, not to have none.
+    expect(discoveredJson([shared], names, new Set(["device-1003"])).found[0]).toMatchObject({
+      inConfig: true,
+      note: "in the config already, with every point it lists"
+    })
   })
 })

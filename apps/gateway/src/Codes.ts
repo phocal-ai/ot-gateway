@@ -128,7 +128,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "config",
     reportedBy: ["config undo"],
     meaning: "There is no .bak next to the config, so there is no previous config to go back to.",
-    fix: "A save from the CLI or the status page keeps the previous config as .bak; without one, edit the config or restore it from your own backup.",
+    fix: "A save from the CLI or the status page keeps the previous config as .bak (not the empty config init writes, the first time); without one, edit the config or restore it from your own backup.",
     next: "ot-gateway check"
   },
   {
@@ -407,6 +407,14 @@ export const codes: ReadonlyArray<CodeEntry> = [
     meaning: "The gateway started in the background and exited before every point had a value.",
     fix: "Run it in the foreground once: it prints why it stopped (a status port in use, a config the broker refuses).",
     next: "ot-gateway run"
+  },
+  {
+    code: "pid-unconfirmed",
+    area: "deploy",
+    reportedBy: ["stop"],
+    meaning:
+      "The pid the background gateway was started with is alive, but ps could not say what it runs, so stop left it alone.",
+    fix: "Check what the pid runs (ps), and stop it yourself if it is the gateway."
   },
   {
     code: "compose-config-name",

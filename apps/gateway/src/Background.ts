@@ -3,10 +3,11 @@
  * for where Docker Compose is not the way (macOS and Windows, whose Docker Desktop reaches no device on the LAN).
  *
  *   start          checks the config, starts `ot-gateway run <config>` in a process of its own that outlives the
- *                  command, writes its pid to `.ot-gateway.pid` next to the config, then waits until every point
+ *                  command, writes its pid next to the config (`.ot-gateway.pid` for ot-gateway.json, `.<name>.pid`
+ *                  for another), then waits until every point
  *                  has a value, as `up` does
- *   stop           stops the process `.ot-gateway.pid` names, after checking that it is still this gateway (a pid
- *                  can be reused after a reboot), and removes the file
+ *   stop           stops the process the pid file names, after checking that it is still this gateway (a pid can
+ *                  be reused after a reboot; one `ps` cannot confirm is left alone), and removes the file
  *
  * It is not a service: it does not come back after a crash or a reboot. That is what `up` (Docker Compose) and the
  * systemd unit are for on Linux; the report says so. The log is in the gateway's memory (`ot-gateway logs`), since
@@ -18,15 +19,21 @@
 import { type GatewayConfig, monotonicMillis } from "@ot-gateway/core"
 import { Console, Context, Duration, Effect, FileSystem, Layer, Option, Schema, type Scope, Stream } from "effect"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
-import { join, resolve } from "node:path"
+import { basename, dirname, join, resolve } from "node:path"
 import { DeployFailed, deployPaths, type FetchSnapshot, liveSnapshot, waitForValues } from "./Deploy.ts"
 import { gatewayName, statusUrlOf } from "./GatewayTarget.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import { shellArgument } from "./Output.ts"
 import { plural } from "./Words.ts"
 
-/** The file next to the config that names the background gateway's process. */
+/** The file next to the folder's ot-gateway.json that names its background gateway's process. */
 export const PID_FILE = ".ot-gateway.pid"
+
+/** The pid file of the config at `config`: one per config, so two configs in a folder never share one. */
+export const pidFileOf = (config: string) => {
+  const name = basename(config)
+  return join(dirname(resolve(config)), name === "ot-gateway.json" ? PID_FILE : `.${name}.pid`)
+}
 
 /** What `.ot-gateway.pid` holds: the process, the config it runs, and when it started (wall time, for people). */
 export const PidRecord = Schema.Struct({
@@ -147,27 +154,42 @@ export const processesLayer = Layer.effect(
   })
 )
 
-/** Where the pid file of the config at `config` is. */
-const pidPath = (folder: string) => join(folder, PID_FILE)
-
-/** The pid file's record, when there is a readable one. */
-const readPid = Effect.fn("readPid")(function* (folder: string) {
+/** The pid file's record for `config`, when there is a readable one written for that config. */
+const readPid = Effect.fn("readPid")(function* (config: string) {
   const fs = yield* FileSystem.FileSystem
-  const text = yield* fs.readFileString(pidPath(folder)).pipe(Effect.option)
+  const text = yield* fs.readFileString(pidFileOf(config)).pipe(Effect.option)
   if (Option.isNone(text)) return Option.none<PidRecord>()
-  return yield* Schema.decodeUnknownEffect(PidRecordJson)(text.value).pipe(Effect.option)
+  const record = yield* Schema.decodeUnknownEffect(PidRecordJson)(text.value).pipe(Effect.option)
+  return Option.filter(record, (each) => each.config === resolve(config))
 })
 
 /** Whether `line` is `ot-gateway run` of `config`: the pid still names the gateway it was written for. */
 export const isGatewayOf = (line: string, config: string) => / run /.test(` ${line} `) && line.includes(config)
 
-/** The record's process, when it still runs the gateway of `config`. */
-const runningGateway = Effect.fn("runningGateway")(function* (record: PidRecord) {
+/**
+ * What the record's pid is now: `gone`, still the gateway of its config (`gateway`), another program (`other`: a
+ * reboot reuses pids), or alive but not known (`unknown`: `ps` did not answer), which is never signalled.
+ */
+const pidState = Effect.fn("pidState")(function* (record: PidRecord) {
   const processes = yield* Processes
-  if (!(yield* processes.alive(record.pid))) return false
+  if (!(yield* processes.alive(record.pid))) return "gone" as const
   const line = yield* processes.commandLine(record.pid)
-  // Without ps, the pid alone: alive and written by start.
-  return Option.isNone(line) || isGatewayOf(line.value, record.config)
+  if (Option.isNone(line)) return "unknown" as const
+  return isGatewayOf(line.value, record.config) ? ("gateway" as const) : ("other" as const)
+})
+
+/** How long stop waits for the gateway to close its connections (the broker's offline message) before SIGKILL. */
+const STOP_GRACE = 10_000
+
+/** SIGTERM to `pid`, and SIGKILL when it has not exited after `STOP_GRACE`. */
+const terminate = Effect.fn("terminate")(function* (pid: number) {
+  const processes = yield* Processes
+  yield* processes.signal(pid, "SIGTERM")
+  const started = yield* monotonicMillis
+  while ((yield* processes.alive(pid)) && (yield* monotonicMillis) - started < STOP_GRACE) {
+    yield* Effect.sleep("200 millis")
+  }
+  if (yield* processes.alive(pid)) yield* processes.signal(pid, "SIGKILL")
 })
 
 export interface BackgroundOptions {
@@ -218,8 +240,10 @@ export const startBackground = Effect.fn("startBackground")(function* (target: s
   const config: GatewayConfig = yield* loadConfig(paths.config)
   const fs = yield* FileSystem.FileSystem
   const processes = yield* Processes
-  const before = yield* readPid(paths.folder)
-  if (Option.isSome(before) && (yield* runningGateway(before.value))) {
+  const before = yield* readPid(paths.config)
+  // One that cannot be told apart from another program counts as running: starting a second is worse.
+  const state = Option.isNone(before) ? "gone" : yield* pidState(before.value)
+  if (Option.isSome(before) && (state === "gateway" || state === "unknown")) {
     return yield* new DeployFailed({
       code: "already-running",
       message: `the gateway of ${paths.config} runs in the background already (pid ${before.value.pid})`,
@@ -232,7 +256,7 @@ export const startBackground = Effect.fn("startBackground")(function* (target: s
     Effect.gen(function* () {
       const launched = yield* processes.launch(absolute, paths.folder)
       const record: PidRecord = { pid: launched.pid, config: absolute, started: Date.now() }
-      yield* fs.writeFileString(pidPath(paths.folder), `${JSON.stringify(record)}\n`)
+      yield* fs.writeFileString(pidFileOf(paths.config), `${JSON.stringify(record)}\n`)
       yield* Console.log(`✓ started ${gatewayName(config)} in the background (pid ${launched.pid})`)
       const url = config.status === undefined ? null : statusUrlOf(config.status)
       const warnings = [
@@ -246,7 +270,7 @@ export const startBackground = Effect.fn("startBackground")(function* (target: s
         action: "start",
         config: paths.config,
         pid: launched.pid,
-        pidFile: pidPath(paths.folder),
+        pidFile: pidFileOf(paths.config),
         gateway: gatewayName(config),
         url,
         values,
@@ -284,8 +308,8 @@ export const startBackground = Effect.fn("startBackground")(function* (target: s
           Effect.gen(function* () {
             // Without its status page this gateway cannot be watched or told apart: stop it, and say why.
             if (failure.code !== "wrong-gateway" && failure.code !== "gateway-not-answering") return yield* failure
-            yield* processes.signal(launched.pid, "SIGTERM")
-            yield* fs.remove(pidPath(paths.folder)).pipe(Effect.ignore)
+            yield* terminate(launched.pid)
+            yield* fs.remove(pidFileOf(paths.config)).pipe(Effect.ignore)
             return yield* new DeployFailed({
               code: failure.code,
               message: `${failure.message}; stopped it again`,
@@ -303,7 +327,7 @@ export const startBackground = Effect.fn("startBackground")(function* (target: s
         // A gateway that exited leaves no pid file behind; one that runs without values keeps it, for stop.
         Effect.onError(() =>
           Effect.flatMap(processes.alive(launched.pid), (alive) =>
-            alive ? Effect.void : fs.remove(pidPath(paths.folder)).pipe(Effect.ignore)
+            alive ? Effect.void : fs.remove(pidFileOf(paths.config)).pipe(Effect.ignore)
           )
         )
       )
@@ -325,9 +349,6 @@ export interface StopReport {
   readonly next: string
 }
 
-/** How long stop waits for the gateway to close its connections (the broker's offline message) before SIGKILL. */
-const STOP_GRACE = 10_000
-
 /** `stop`: the background gateway of `target` stops; nothing to do when none runs. */
 export const stopBackground = Effect.fn("stopBackground")(function* (
   target: string,
@@ -337,7 +358,7 @@ export const stopBackground = Effect.fn("stopBackground")(function* (
   const argument = configArgument(paths.config, options.cwd)
   const fs = yield* FileSystem.FileSystem
   const processes = yield* Processes
-  const record = yield* readPid(paths.folder)
+  const record = yield* readPid(paths.config)
   const report = (stopped: boolean, pid: number | null): StopReport => ({
     ok: true,
     action: "stop",
@@ -347,23 +368,27 @@ export const stopBackground = Effect.fn("stopBackground")(function* (
     next: `${options.cli} start${argument}`
   })
   if (Option.isNone(record) || !(yield* processes.alive(record.value.pid))) {
-    yield* fs.remove(pidPath(paths.folder)).pipe(Effect.ignore)
+    yield* fs.remove(pidFileOf(paths.config)).pipe(Effect.ignore)
     yield* Console.log(`no gateway of ${paths.config} runs in the background (ot-gateway start starts one)`)
     return report(false, null)
   }
   const { pid } = record.value
-  if (!(yield* runningGateway(record.value))) {
-    yield* fs.remove(pidPath(paths.folder)).pipe(Effect.ignore)
+  const state = yield* pidState(record.value)
+  if (state === "unknown") {
+    return yield* new DeployFailed({
+      code: "pid-unconfirmed",
+      message: `pid ${pid} is alive, but whether it is still the gateway of ${paths.config} could not be read (ps did not answer), so it was left alone`,
+      hint: "Check what the pid runs, and stop it yourself if it is the gateway",
+      next: `ps -o command= -p ${pid}`
+    })
+  }
+  if (state !== "gateway") {
+    yield* fs.remove(pidFileOf(paths.config)).pipe(Effect.ignore)
     yield* Console.log(`pid ${pid} is no longer the gateway of ${paths.config} (a reboot reuses pids); left it alone`)
     return report(false, null)
   }
-  yield* processes.signal(pid, "SIGTERM")
-  const started = yield* monotonicMillis
-  while ((yield* processes.alive(pid)) && (yield* monotonicMillis) - started < STOP_GRACE) {
-    yield* Effect.sleep("200 millis")
-  }
-  if (yield* processes.alive(pid)) yield* processes.signal(pid, "SIGKILL")
-  yield* fs.remove(pidPath(paths.folder)).pipe(Effect.ignore)
+  yield* terminate(pid)
+  yield* fs.remove(pidFileOf(paths.config)).pipe(Effect.ignore)
   yield* Console.log(`✓ stopped the gateway of ${paths.config} (pid ${pid})`)
   return report(true, pid)
 })

@@ -411,17 +411,21 @@ export interface FoundOverview {
   readonly deviceInstance: number
   /** Where it answered; null when it is behind a router or more than one address answered for its instance. */
   readonly address: string | null
+  /** The points it has that the config does not have yet: all of them for a device new to the config. */
   readonly points: number
-  /** Its points by BACnet object type: `{ "analog-input": 4, "binary-value": 2 }`. */
+  /** Those points by BACnet object type: `{ "analog-input": 4, "binary-value": 2 }`. */
   readonly objectTypes: Readonly<Record<string, number>>
-  /** Why it cannot be saved as it is: no points to read (none listed, or several addresses answered). */
+  /** Whether the config has this device already (under this id): saving it adds only `points`. */
+  readonly inConfig: boolean
+  /** Why saving it adds nothing: every point is in the config, or there are none to read. */
   readonly note?: string
 }
 
 /** The overview of `drafts`: one entry per device, for an agent to show and ask which to keep. */
 export const foundOverview = (
   drafts: ReadonlyArray<Draft>,
-  names: ReadonlyMap<number, string>
+  names: ReadonlyMap<number, string>,
+  configured: ReadonlySet<string> = new Set()
 ): ReadonlyArray<FoundOverview> =>
   drafts.map((draft) => {
     const objectTypes: Record<string, number> = {}
@@ -433,9 +437,12 @@ export const foundOverview = (
       address: draft.address ?? null,
       points: draft.points.length,
       objectTypes,
-      ...(draft.points.length === 0
-        ? { note: "no points to read: it lists none, or more than one address answered" }
-        : {})
+      inConfig: configured.has(draft.id),
+      ...(draft.points.length > 0
+        ? {}
+        : configured.has(draft.id)
+          ? { note: "in the config already, with every point it lists" }
+          : { note: "no points to read: it lists none, or more than one address answered" })
     }
   })
 
@@ -452,9 +459,16 @@ export const overviewLines = (found: ReadonlyArray<FoundOverview>) =>
 
 /**
  * The drafts `selection` names: `all` (every one with points), or ids and device instances separated by commas.
- * Fails naming what matched nothing, with the ids there are, so a mistyped id never saves less than was meant.
+ * A device the config has with every point already (`configured`) is `unchanged`, not a mistake, so saving the same
+ * selection twice works. Fails naming what matched nothing, with the ids there are, so a mistyped id never saves
+ * less than was meant.
  */
-export const selectDrafts = (drafts: ReadonlyArray<Draft>, selection: string) => {
+export const selectDrafts = (
+  drafts: ReadonlyArray<Draft>,
+  selection: string,
+  configured: ReadonlySet<string> = new Set()
+): Result.Result<{ readonly picked: ReadonlyArray<Draft>; readonly unchanged: ReadonlyArray<string> }, string> => {
+  const saved = (draft: Draft) => draft.points.length === 0 && configured.has(draft.id)
   const usable = drafts.filter((draft) => draft.points.length > 0)
   const wanted = selection
     .split(",")
@@ -463,14 +477,19 @@ export const selectDrafts = (drafts: ReadonlyArray<Draft>, selection: string) =>
   if (wanted.length === 0) {
     return Result.fail("--save takes all, or device ids or instances separated by commas")
   }
-  if (wanted.length === 1 && wanted[0] === "all") return Result.succeed(usable)
+  if (wanted.length === 1 && wanted[0] === "all") {
+    return Result.succeed({ picked: usable, unchanged: drafts.filter(saved).map((draft) => draft.id) })
+  }
   const picked: Array<Draft> = []
+  const unchanged: Array<string> = []
   const unknown: Array<string> = []
   const empty: Array<string> = []
   for (const each of wanted) {
     const draft = drafts.find((one) => one.id === each || String(one.deviceInstance) === each)
     if (draft === undefined) unknown.push(each)
-    else if (draft.points.length === 0) empty.push(draft.id)
+    else if (saved(draft)) {
+      if (!unchanged.includes(draft.id)) unchanged.push(draft.id)
+    } else if (draft.points.length === 0) empty.push(draft.id)
     else if (!picked.includes(draft)) picked.push(draft)
   }
   const available = usable.map((draft) => `${draft.id} (${draft.deviceInstance})`).join(", ") || "none"
@@ -482,7 +501,7 @@ export const selectDrafts = (drafts: ReadonlyArray<Draft>, selection: string) =>
       `${empty.join(", ")} has no points to read, so it cannot be saved; found with points: ${available}`
     )
   }
-  return Result.succeed(picked)
+  return Result.succeed({ picked, unchanged })
 }
 
 /**
@@ -492,6 +511,7 @@ export const selectDrafts = (drafts: ReadonlyArray<Draft>, selection: string) =>
 export const discoveredJson = (
   drafts: ReadonlyArray<Draft>,
   names: ReadonlyMap<number, string>,
+  configured: ReadonlySet<string>,
   options: Pick<DiscoverOptions, "configPath" | "noConfig" | "address"> & { readonly command?: string | undefined } = {}
 ) => {
   const cli = options.command ?? "ot-gateway"
@@ -511,7 +531,7 @@ export const discoveredJson = (
             `${cli} discover${config} --save all`,
             `${cli} discover${config} --save ${usable.map((draft) => draft.id).join(",")}`
           ]
-  return { devices: drafts, found: foundOverview(drafts, names), next }
+  return { devices: drafts, found: foundOverview(drafts, names, configured), next }
 }
 
 /** `ot-gateway discover`: the drafts on stdout, with the overview and the commands that save them. */
@@ -521,7 +541,7 @@ export const discover = (
   options: DiscoverOptions & { readonly command?: string | undefined } = {}
 ) =>
   Effect.flatMap(discoverFound(config, network, options), ({ drafts, names }) =>
-    printJson(discoveredJson(drafts, names, options))
+    printJson(discoveredJson(drafts, names, new Set(config.devices.map((device) => device.id)), options))
   )
 
 /** `text` with its first letter upper-cased ("flow temperature" → "Flow temperature"). */

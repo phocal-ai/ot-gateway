@@ -73,7 +73,8 @@ export const DeployCode = Schema.Literals([
   "background-unsupported",
   "background-failed",
   "already-running",
-  "gateway-exited"
+  "gateway-exited",
+  "pid-unconfirmed"
 ])
 export type DeployCode = typeof DeployCode.Type
 
