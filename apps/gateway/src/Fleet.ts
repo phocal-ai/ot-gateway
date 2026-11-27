@@ -443,7 +443,7 @@ export const statusFailure = (gateway: FleetGateway) => {
     return new FleetError({
       code: "health-unreadable",
       message: `${gateway.name}: its health is not a message this CLI reads, so it may well be online`,
-      hint: "the gateway likely runs a newer release than this CLI (npm i -g ot-gateway@latest, or pnpm add -g ot-gateway@latest), or something else publishes on its health topic: ot-gateway watch --topic '<site>/<building>/$gateway/#' shows it"
+      hint: "the gateway likely runs a newer release than this CLI (npm i -g ot-gateway@latest, or pnpm add -g ot-gateway@VERSION with the VERSION npm view ot-gateway version prints), or something else publishes on its health topic: ot-gateway watch --topic '<site>/<building>/$gateway/#' shows it"
     })
   }
   if (gateway.status !== "online") {

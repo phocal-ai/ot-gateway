@@ -41,7 +41,7 @@ const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ?
 const deviceLine = (ui: Ui, device: Overview["devices"][number]) => {
   switch (device.status) {
     case "ok":
-      return ui.done(`${device.id}: ${plural(device.pointCount, "point")} read`)
+      return ui.done(`${device.id}: reading ${plural(device.pointCount, "point")}`)
     case "failing":
       return ui.failed(`${device.id}: ${device.lastError ?? device.reason ?? "not answering"}`)
     case "starting":
