@@ -735,6 +735,74 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ config, url }) => ["support", flag("config", config), flag("url", url), "--output=-"]
   }),
   defineTool({
+    name: "report_draft",
+    title: "Draft a bug report",
+    description:
+      "Write up a bug in ot-gateway itself (not a wiring, address or config problem of the site) as a public issue text, in a file. Files nothing. Site, device and point names, addresses and secrets are replaced by placeholders and the versions are added. Returns the text, existing issues with the same fingerprint (existing) and what to settle first (warnings: a newer release is out, the code is one explain covers). Show the user the text and ask before report_send",
+    input: {
+      title: Schema.String.annotate({ description: "The bug in one line, as the issue's title" }),
+      what: Schema.String.annotate({
+        description: "What happened: the lines of output that show the failure, not the whole log"
+      }),
+      expected: flagText("What should have happened instead"),
+      steps: flagText("The commands that lead to it, in order, so that someone else can see it too"),
+      ruledOut: flagText("What was checked and is not the cause: wiring, addresses, the config, an older release"),
+      command: flagText("The command or tool that failed, as it was run"),
+      code: flagText("The code it returned, when it returned one"),
+      error: flagText("The error's message, one line"),
+      model: flagText("The device's vendor, model and firmware, when the bug is about a device"),
+      device: flagText("The config's device the bug is about, by its id: its protocol is added"),
+      config: configArgument
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    argv: ({ title, what, expected, steps, ruledOut, command, code, error, model, device, config }) => [
+      "report",
+      "draft",
+      flag("config", config),
+      flag("title", title),
+      flag("what", what),
+      flag("expected", expected),
+      flag("steps", steps),
+      flag("ruled-out", ruledOut),
+      flag("command", command),
+      flag("code", code),
+      flag("error", error),
+      flag("model", model),
+      flag("device", device)
+    ]
+  }),
+  defineTool({
+    name: "report_send",
+    title: "File a bug report",
+    description:
+      "File a draft of report_draft as a public issue on GitHub. Only with confirmed true does anything leave the machine, and only after the user has read the draft's text and said yes to filing it: with the GitHub CLI (gh) signed in it is filed under the user's account, otherwise the result is a link (url) for the user to open, with the text filled in. Without confirmed it returns what it would file and where. to: the number of an issue that reports the same bug (report_draft's existing), to add a comment there instead",
+    input: {
+      draft: text("The draft's path, as report_draft returned it (path)"),
+      config: flagText("Path of the gateway's JSON config (default ./ot-gateway.json)"),
+      to: Schema.optionalKey(count("An issue that reports the same bug: add a comment there", 1, 10_000_000)),
+      confirmed: Schema.optionalKey(
+        Schema.Boolean.annotate({
+          description: "The user has read the text and agreed to file it publicly (default false: file nothing)"
+        })
+      ),
+      link: Schema.optionalKey(
+        Schema.Boolean.annotate({
+          description: "Return the link to the filled-in issue form instead of filing with gh"
+        })
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    argv: ({ draft, config, to, confirmed, link }) => [
+      "report",
+      "send",
+      draft,
+      flag("config", config),
+      flag("to", to),
+      flag("yes", confirmed),
+      flag("link", link)
+    ]
+  }),
+  defineTool({
     name: "profiles_list",
     title: "Device profiles",
     description: "The device profiles a points list can name in its profile column",
