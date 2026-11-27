@@ -101,29 +101,29 @@ export const editConfigFile = Effect.fn("editConfigFile")(function* <A>(
   if (report instanceof ConfigEditFailed) return yield* report
   const changed = text !== configText(raw)
   const saved = changed && !options.dryRun
-  if (saved) {
-    const store = yield* makeConfigStore(path)
-    yield* store.save(text, etagOf(fileText)).pipe(
-      Effect.catchTags({
-        ConfigConflict: () => Effect.fail(changedMeanwhile),
-        ConfigInvalid: (error) => Effect.fail(invalid(error.issues)),
-        ConfigUnreadable: (error) =>
-          Effect.fail(new ConfigEditFailed({ message: error.message, code: "config-not-saved" })),
-        ConfigWriteFailed: (error) =>
-          Effect.fail(
-            new ConfigEditFailed({
-              message: `${error.message}; ${path} is as it was`,
-              code: "config-not-saved",
-              hint: `the user running this must be able to write ${path} and its folder`
-            })
-          )
-      })
-    )
-  }
+  const backedUp = !saved
+    ? false
+    : yield* Effect.flatMap(makeConfigStore(path), (store) => store.save(text, etagOf(fileText))).pipe(
+        Effect.catchTags({
+          ConfigConflict: () => Effect.fail(changedMeanwhile),
+          ConfigInvalid: (error) => Effect.fail(invalid(error.issues)),
+          ConfigUnreadable: (error) =>
+            Effect.fail(new ConfigEditFailed({ message: error.message, code: "config-not-saved" })),
+          ConfigWriteFailed: (error) =>
+            Effect.fail(
+              new ConfigEditFailed({
+                message: `${error.message}; ${path} is as it was`,
+                code: "config-not-saved",
+                hint: `the user running this must be able to write ${path} and its folder`
+              })
+            )
+        }),
+        Effect.map((done) => done.backedUp)
+      )
   return {
     report,
     changed,
-    ...(saved ? { backup: `${path}.bak` } : {}),
+    ...(backedUp ? { backup: `${path}.bak` } : {}),
     config,
     changes: describeConfigChange(current, config).changes
   } satisfies ConfigEdited<A>

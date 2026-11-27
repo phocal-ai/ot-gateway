@@ -7,9 +7,18 @@ import { describe, expect, it } from "@effect/vitest"
 import { Console, Effect, Exit, Predicate, Sink, Stream } from "effect"
 import * as Stdio from "effect/Stdio"
 import { runCli } from "../src/Cli.ts"
-import { boundedLines, lineConsole, PROTOCOL_VERSIONS, runTool, serveMcp, type RunCommand } from "../src/Mcp.ts"
+import {
+  boundedLines,
+  lineConsole,
+  type McpPrompt,
+  PROTOCOL_VERSIONS,
+  runTool,
+  serveMcp,
+  type RunCommand
+} from "../src/Mcp.ts"
 import { mcpTools, toolNamesUnique } from "../src/McpTools.ts"
 import { printJson } from "../src/Output.ts"
+import { mcpPreface, readSetupGuide, withoutFrontmatter } from "../src/SetupGuide.ts"
 
 const silent = lineConsole(() => {})
 
@@ -22,7 +31,7 @@ const toolNamed = (name: string) => {
 const argvOf = (name: string, input: unknown) => Effect.runSync(Effect.exit(toolNamed(name).argv(input)))
 
 /** Serves the lines as stdin until they end, and returns each line the server wrote, parsed. */
-const serve = (lines: ReadonlyArray<unknown>, run: RunCommand<never>) =>
+const serve = (lines: ReadonlyArray<unknown>, run: RunCommand<never>, prompts: ReadonlyArray<McpPrompt> = []) =>
   Effect.gen(function* () {
     const written: Array<string> = []
     const stdio = Stdio.layerTest({
@@ -36,7 +45,7 @@ const serve = (lines: ReadonlyArray<unknown>, run: RunCommand<never>) =>
           })
         )
     })
-    yield* serveMcp({ tools: mcpTools, version: "1.2.3", run, log: silent }).pipe(Effect.provide(stdio))
+    yield* serveMcp({ tools: mcpTools, version: "1.2.3", run, log: silent, prompts }).pipe(Effect.provide(stdio))
     return written
       .join("")
       .split("\n")
@@ -58,6 +67,18 @@ const request = (id: number, method: string, params?: unknown) => ({
 const echo: RunCommand<never> = (argv) => printJson({ ok: true, argv })
 
 describe("mcp tools", () => {
+  it("discover_save only says what it would save unless told otherwise, and discover stays read-only", () => {
+    expect(argvOf("discover_save", { save: "boiler,1002" })).toEqual(
+      Exit.succeed(["discover", "--save=boiler,1002", "--dry-run"])
+    )
+    expect(argvOf("discover_save", { save: "all", dryRun: false })).toEqual(Exit.succeed(["discover", "--save=all"]))
+    expect(Exit.isFailure(argvOf("discover_save", { save: "--points-list=x.csv" }))).toBe(true)
+    expect(toolNamed("discover").annotations.readOnlyHint).toBe(true)
+    expect(toolNamed("discover_save").annotations.readOnlyHint).toBe(false)
+    expect(argvOf("start", { timeout: 60 })).toEqual(Exit.succeed(["start", "--timeout=60"]))
+    expect(argvOf("stop", {})).toEqual(Exit.succeed(["stop"]))
+  })
+
   it("discover_modbus makes the discover modbus command line, read-only and without a file to write", () => {
     expect(argvOf("discover_modbus", { range: "192.168.1.0/24", unitIds: "1-247", rate: 5 })).toEqual(
       Exit.succeed(["discover", "modbus", "192.168.1.0/24", "--unit-ids=1-247", "--rate=5"])
@@ -188,6 +209,7 @@ describe("mcp tools", () => {
       "config_undo",
       "init",
       "clear_retained",
+      "stop",
       "restart",
       "down",
       "upgrade"
@@ -278,6 +300,43 @@ describe("mcp server", () => {
       // The notification has no answer.
       expect(messages).toHaveLength(3)
     })
+  )
+
+  it.effect("serves the setup guide as a prompt, and offers prompts only when it has one", () =>
+    Effect.gen(function* () {
+      const setup: McpPrompt = { name: "setup", title: "Set up", description: "From nothing", text: "Run otg init." }
+      const messages = yield* serve(
+        [
+          request(1, "initialize", { protocolVersion: "2025-06-18" }),
+          request(2, "prompts/list"),
+          request(3, "prompts/get", { name: "setup" }),
+          request(4, "prompts/get", { name: "other" })
+        ],
+        echo,
+        [setup]
+      )
+      expect(byId(messages, 1)).toMatchObject({ result: { capabilities: { tools: {}, prompts: {} } } })
+      expect(byId(messages, 2)).toMatchObject({
+        result: { prompts: [{ name: "setup", title: "Set up", description: "From nothing" }] }
+      })
+      expect(byId(messages, 3)).toMatchObject({
+        result: { messages: [{ role: "user", content: { type: "text", text: "Run otg init." } }] }
+      })
+      expect(byId(messages, 4)).toMatchObject({ error: { code: -32602 } })
+      const without = yield* serve([request(1, "initialize", { protocolVersion: "2025-06-18" })], echo)
+      expect(byId(without, 1)).not.toMatchObject({ result: { capabilities: { prompts: {} } } })
+    })
+  )
+
+  it.effect("reads the setup guide of this checkout without its frontmatter, and names the tools for MCP", () =>
+    Effect.gen(function* () {
+      const text = yield* readSetupGuide
+      expect(text.startsWith("---")).toBe(false)
+      expect(text).toContain("otg init")
+      expect(withoutFrontmatter("---\nname: x\n---\n\nBody")).toBe("Body")
+      expect(mcpPreface).toContain("discover_save")
+      expect(argvOf("setup_guide", {})).toEqual(Exit.succeed(["guide", "setup", "--mcp"]))
+    }).pipe(Effect.provide(NodeServices.layer))
   )
 
   it.effect("lists the tools with their schemas and annotations", () =>
@@ -415,6 +474,22 @@ describe("mcp tool calls through the CLI", () => {
         const result = yield* runTool(run, ["contract", "health"], silent)
         expect(result.isError).toBe(false)
         expect(result.structuredContent).toMatchObject({ $id: expect.stringContaining("health.schema.json") })
+      })
+    )
+  )
+
+  it.effect("setup_guide: the guide, starting with which tool each command is; guide setup without --mcp too", () =>
+    cli(
+      Effect.gen(function* () {
+        const result = yield* runTool(run, ["guide", "setup", "--mcp"], silent)
+        expect(result.isError).toBe(false)
+        expect(result.structuredContent).toMatchObject({
+          ok: true,
+          name: "setup",
+          text: expect.stringMatching(/^You are talking to the ot-gateway MCP server/)
+        })
+        const plain = yield* runTool(run, ["guide", "setup"], silent)
+        expect(plain.structuredContent).toMatchObject({ ok: true, text: expect.not.stringContaining("MCP server") })
       })
     )
   )

@@ -258,13 +258,16 @@ describe("initNext", () => {
     })
   )
 
-  it.effect("on macOS and Windows, says why not Compose and starts the gateway with run instead", () =>
+  it.effect("on macOS and Windows, says why not Compose and starts the gateway with start or run instead", () =>
     Effect.gen(function* () {
       const config = yield* decode(initConfig(answers, [simulatedDevice]))
-      for (const platform of ["darwin", "win32"]) {
+      for (const [platform, start] of [
+        ["darwin", "ot-gateway start"],
+        ["win32", "ot-gateway run"]
+      ] as const) {
         const { notes, next } = initNext("ot-gateway.json", config, compose, { platform })
         expect(notes).toContain(dockerDesktopNote)
-        expect(next.map((step) => step.command)).toContain("ot-gateway run")
+        expect(next.map((step) => step.command)).toContain(start)
         expect(next.map((step) => step.command)).not.toContain("docker compose up -d")
       }
       const linux = initNext("ot-gateway.json", config, compose, { platform: "linux" })
@@ -273,6 +276,8 @@ describe("initNext", () => {
       // Without a compose.yaml there is nothing to warn about.
       const bare = initNext("ot-gateway.json", config, { written: [], kept: [] }, { platform: "darwin" })
       expect(bare.notes).not.toContain(dockerDesktopNote)
+      expect(bare.next.map((step) => step.command)).toContain("ot-gateway start")
+      expect(bare.background).toBe("ot-gateway start")
     })
   )
 
@@ -596,7 +601,9 @@ describe("init for a person at the terminal", () => {
         }
       )
       expect(mac.lines[0]).toBe("✔ Wrote ot-gateway.json in site-1")
-      expect(mac.later[0]?.split("\n")[0]).toBe("  Start it      ot-gateway run site-1/ot-gateway.json")
+      expect(mac.later[0]?.split("\n")[0]).toBe(
+        "  Start it      ot-gateway run site-1/ot-gateway.json  or in the background: ot-gateway start site-1/ot-gateway.json"
+      )
     })
   )
 

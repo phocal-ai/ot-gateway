@@ -8,7 +8,7 @@ import { parseConfig } from "@ot-gateway/core"
 import { Effect, FileSystem } from "effect"
 import { join } from "node:path"
 import { loadEnvFile, missingFromEnv } from "../src/EnvFile.ts"
-import { composeTemplatePath, envFileText, writeFolderFiles } from "../src/Folder.ts"
+import { composeTemplatePath, dockerDesktopReason, envFileText, writeFolderFiles } from "../src/Folder.ts"
 import { initConfig, nextSteps } from "../src/Init.ts"
 
 const answers = { site: "site-1", building: "building-a", brokerUrl: "mqtt://broker.lan:1883" }
@@ -25,6 +25,18 @@ describe("writeFolderFiles", () => {
       expect(yield* fs.readFileString(join(folder, "compose.yaml"))).toBe(yield* fs.readFileString(composeTemplatePath))
       expect(yield* fs.readFileString(join(folder, "ot-gateway.env"))).toBe(envFileText("MQTT_PASSWORD"))
       expect((yield* fs.stat(join(folder, "ot-gateway.env"))).mode & 0o777).toBe(0o600)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
+  it.effect("writes no compose.yaml on macOS and Windows, whose Docker Desktop reaches no device, and says why", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      for (const platform of ["darwin", "win32"]) {
+        const folder = yield* fs.makeTempDirectoryScoped()
+        const files = yield* writeFolderFiles(join(folder, "ot-gateway.json"), yield* config(withLogin), { platform })
+        expect(files).toEqual({ written: [join(folder, "ot-gateway.env")], kept: [], noCompose: dockerDesktopReason })
+        expect(yield* fs.readDirectory(folder)).toEqual(["ot-gateway.env"])
+      }
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 

@@ -321,10 +321,10 @@ const openEndpoint = (
   )
 
 /**
- * The draft `devices` entries for the BACnet devices that answer, with progress and warnings on stderr; through
- * `network` instead of Node's in a simulation.
+ * The BACnet devices that answer: their draft `devices` entries and the name each gave, by instance, with progress
+ * and warnings on stderr; through `network` instead of Node's in a simulation.
  */
-export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
+export const discoverFound = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
   Effect.gen(function* () {
     const target = options.address === undefined ? undefined : parseDeviceAddress(options.address)
     if (target !== undefined && Result.isFailure(target)) {
@@ -386,14 +386,163 @@ export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "u
       concurrency: 4
     })
     const existing = config.devices.map((device) => device.id)
-    return draftDevices(described.flat(), existing)
+    const inputs = described.flat()
+    const drafts = draftDevices(inputs, existing)
+    // The name each device gave, by instance, for the overview: the draft keeps only its slug as the id.
+    const names = new Map(inputs.map(({ device, described: about }) => [device.instance, printable(about.name)]))
+    return { drafts, names }
   }).pipe(Effect.scoped)
 
-/** `ot-gateway discover`: the drafts as `{ "devices": [...] }` on stdout, ready to paste into the config. */
-export const discover = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
-  Effect.flatMap(discoverDrafts(config, network, options), (devices) => printJson({ devices }))
+/**
+ * The draft `devices` entries for the BACnet devices that answer, with progress and warnings on stderr; through
+ * `network` instead of Node's in a simulation.
+ */
+export const discoverDrafts = (config: GatewayConfig, network?: Pick<Network, "udp">, options: DiscoverOptions = {}) =>
+  Effect.map(discoverFound(config, network, options), (found) => found.drafts)
 
 type Draft = ReturnType<typeof draftDevices>[number]
+
+/** One device discovery found, in a line a person reads before choosing: what it is and what it holds. */
+export interface FoundOverview {
+  /** The id it gets in the config: what `--save` takes, with its instance. */
+  readonly id: string
+  /** The name the device gave (`""` when it gave none, or was not read). */
+  readonly name: string
+  readonly deviceInstance: number
+  /** Where it answered; null when it is behind a router or more than one address answered for its instance. */
+  readonly address: string | null
+  /** The points it has that the config does not have yet: all of them for a device new to the config. */
+  readonly points: number
+  /** Those points by BACnet object type: `{ "analog-input": 4, "binary-value": 2 }`. */
+  readonly objectTypes: Readonly<Record<string, number>>
+  /** Whether the config has this device already (under this id): saving it adds only `points`. */
+  readonly inConfig: boolean
+  /** Why saving it adds nothing: every point is in the config, or there are none to read. */
+  readonly note?: string
+}
+
+/** The overview of `drafts`: one entry per device, for an agent to show and ask which to keep. */
+export const foundOverview = (
+  drafts: ReadonlyArray<Draft>,
+  names: ReadonlyMap<number, string>,
+  configured: ReadonlySet<string> = new Set()
+): ReadonlyArray<FoundOverview> =>
+  drafts.map((draft) => {
+    const objectTypes: Record<string, number> = {}
+    for (const point of draft.points) objectTypes[point.objectType] = (objectTypes[point.objectType] ?? 0) + 1
+    return {
+      id: draft.id,
+      name: names.get(draft.deviceInstance) ?? "",
+      deviceInstance: draft.deviceInstance,
+      address: draft.address ?? null,
+      points: draft.points.length,
+      objectTypes,
+      inConfig: configured.has(draft.id),
+      ...(draft.points.length > 0
+        ? {}
+        : configured.has(draft.id)
+          ? { note: "in the config already, with every point it lists" }
+          : { note: "no points to read: it lists none, or more than one address answered" })
+    }
+  })
+
+/** The overview as lines a person scans: one per device, its name, where it is and what it holds. */
+export const overviewLines = (found: ReadonlyArray<FoundOverview>) =>
+  found.map((device) => {
+    const types = Object.entries(device.objectTypes)
+      .map(([type, count]) => `${count} ${type}`)
+      .join(", ")
+    const name = device.name === "" || slugify(device.name) === device.id ? "" : ` "${device.name}"`
+    const where = device.address === null ? "" : ` at ${device.address}`
+    return `${device.id}${name} (instance ${device.deviceInstance}${where}): ${plural(device.points, "point")}${types === "" ? "" : ` (${types})`}${device.note === undefined ? "" : `; ${device.note}`}`
+  })
+
+/**
+ * The drafts `selection` names: `all` (every one with points), or ids and device instances separated by commas.
+ * A device the config has with every point already (`configured`) is `unchanged`, not a mistake, so saving the same
+ * selection twice works. Fails naming what matched nothing, with the ids there are, so a mistyped id never saves
+ * less than was meant.
+ */
+export const selectDrafts = (
+  drafts: ReadonlyArray<Draft>,
+  selection: string,
+  configured: ReadonlySet<string> = new Set()
+): Result.Result<{ readonly picked: ReadonlyArray<Draft>; readonly unchanged: ReadonlyArray<string> }, string> => {
+  const saved = (draft: Draft) => draft.points.length === 0 && configured.has(draft.id)
+  const usable = drafts.filter((draft) => draft.points.length > 0)
+  const wanted = selection
+    .split(",")
+    .map((each) => each.trim())
+    .filter((each) => each !== "")
+  if (wanted.length === 0) {
+    return Result.fail("--save takes all, or device ids or instances separated by commas")
+  }
+  if (wanted.length === 1 && wanted[0] === "all") {
+    return Result.succeed({ picked: usable, unchanged: drafts.filter(saved).map((draft) => draft.id) })
+  }
+  const picked: Array<Draft> = []
+  const unchanged: Array<string> = []
+  const unknown: Array<string> = []
+  const empty: Array<string> = []
+  for (const each of wanted) {
+    const draft = drafts.find((one) => one.id === each || String(one.deviceInstance) === each)
+    if (draft === undefined) unknown.push(each)
+    else if (saved(draft)) {
+      if (!unchanged.includes(draft.id)) unchanged.push(draft.id)
+    } else if (draft.points.length === 0) empty.push(draft.id)
+    else if (!picked.includes(draft)) picked.push(draft)
+  }
+  const available = usable.map((draft) => `${draft.id} (${draft.deviceInstance})`).join(", ") || "none"
+  if (unknown.length > 0) {
+    return Result.fail(`no device found as ${unknown.join(", ")}; found: ${available}`)
+  }
+  if (empty.length > 0) {
+    return Result.fail(
+      `${empty.join(", ")} has no points to read, so it cannot be saved; found with points: ${available}`
+    )
+  }
+  return Result.succeed({ picked, unchanged })
+}
+
+/**
+ * What `discover --json` (and a pipe) print: the drafts as `{ "devices": [...] }`, ready to paste into the config,
+ * with `found`, one overview entry per device to show before choosing, and `next`, the commands that save them.
+ */
+export const discoveredJson = (
+  drafts: ReadonlyArray<Draft>,
+  names: ReadonlyMap<number, string>,
+  configured: ReadonlySet<string>,
+  options: Pick<DiscoverOptions, "configPath" | "noConfig" | "address"> & { readonly command?: string | undefined } = {}
+) => {
+  const cli = options.command ?? "ot-gateway"
+  // The folder's config needs no naming; one device asked by address is asked the same way again.
+  const config =
+    (options.configPath === undefined || options.configPath === "ot-gateway.json"
+      ? ""
+      : ` ${shellArgument(options.configPath)}`) +
+    (options.address === undefined ? "" : ` --address ${shellArgument(options.address)}`)
+  const usable = drafts.filter((draft) => draft.points.length > 0)
+  const next =
+    usable.length === 0
+      ? []
+      : options.noConfig === true
+        ? [`${cli} init . --site <site> --broker <url> --devices none`, `${cli} discover --save all`]
+        : [
+            `${cli} discover${config} --save all`,
+            `${cli} discover${config} --save ${usable.map((draft) => draft.id).join(",")}`
+          ]
+  return { devices: drafts, found: foundOverview(drafts, names, configured), next }
+}
+
+/** `ot-gateway discover`: the drafts on stdout, with the overview and the commands that save them. */
+export const discover = (
+  config: GatewayConfig,
+  network?: Pick<Network, "udp">,
+  options: DiscoverOptions & { readonly command?: string | undefined } = {}
+) =>
+  Effect.flatMap(discoverFound(config, network, options), ({ drafts, names }) =>
+    printJson(discoveredJson(drafts, names, new Set(config.devices.map((device) => device.id)), options))
+  )
 
 /** `text` with its first letter upper-cased ("flow temperature" → "Flow temperature"). */
 const capitalized = (text: string) => {

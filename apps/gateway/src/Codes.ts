@@ -128,7 +128,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "config",
     reportedBy: ["config undo"],
     meaning: "There is no .bak next to the config, so there is no previous config to go back to.",
-    fix: "A save from the CLI or the status page keeps the previous config as .bak; without one, edit the config or restore it from your own backup.",
+    fix: "A save from the CLI or the status page keeps the previous config as .bak (not the empty config init writes, the first time); without one, edit the config or restore it from your own backup.",
     next: "ot-gateway check"
   },
   {
@@ -375,6 +375,53 @@ export const codes: ReadonlyArray<CodeEntry> = [
       "Docker Desktop (macOS, Windows) runs containers in a VM whose network cannot reach the building's devices by broadcast, so up stops before starting.",
     fix: "Run the gateway with ot-gateway run on this machine, or --force for simulated devices or a broker on this machine.",
     next: "ot-gateway run"
+  },
+  {
+    code: "background-unsupported",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "start runs the gateway as a background process, which this CLI does not do on Windows.",
+    fix: "Run the gateway in a terminal of its own, or under Docker on a Linux machine.",
+    next: "ot-gateway run"
+  },
+  {
+    code: "background-failed",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "The background process could not be started.",
+    fix: "Run the gateway in the foreground once: it prints why it cannot start.",
+    next: "ot-gateway run"
+  },
+  {
+    code: "already-running",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "The gateway of this config runs in the background already (its .ot-gateway.pid names a live process).",
+    fix: "Stop it first, then start it again to pick up a changed config.",
+    next: "ot-gateway stop"
+  },
+  {
+    code: "gateway-exited",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "The gateway started in the background and exited before every point had a value.",
+    fix: "Run it in the foreground once: it prints why it stopped (a status port in use, a config the broker refuses).",
+    next: "ot-gateway run"
+  },
+  {
+    code: "guide-missing",
+    area: "cli",
+    reportedBy: ["guide"],
+    meaning: "The setup guide is not part of this installation: a package or image built without it.",
+    fix: "Read it online: https://github.com/phocal-ai/ot-gateway/blob/main/.claude/skills/setup/SKILL.md, or install the latest release."
+  },
+  {
+    code: "pid-unconfirmed",
+    area: "deploy",
+    reportedBy: ["stop"],
+    meaning:
+      "The pid the background gateway was started with is alive, but ps could not say what it runs, so stop left it alone.",
+    fix: "Check what the pid runs (ps), and stop it yourself if it is the gateway."
   },
   {
     code: "compose-config-name",
@@ -656,8 +703,9 @@ export const codes: ReadonlyArray<CodeEntry> = [
     code: "bacnet-port-in-use",
     area: "device",
     reportedBy: ["doctor"],
-    meaning: "Another program on this machine holds the BACnet/IP port (UDP 47808 unless bacnet.port says otherwise).",
-    fix: "Stop it (a second gateway, the demo or a BACnet tool), or set bacnet.port to a free port; devices that answer a broadcast on 47808 then need a fixed address.",
+    meaning:
+      "Another program on this machine holds the BACnet/IP port (UDP 47808 unless bacnet.port says otherwise). When doctor finds a read or discover at work there, or this config's gateway, it is a warning.",
+    fix: "Another ot-gateway command gives the port back when it finishes: run doctor again then. Otherwise stop the program (a second gateway, the demo or a BACnet tool), or set bacnet.port to a free port; devices that answer a broadcast on 47808 then need a fixed address.",
     next: "ss -ulpn"
   },
   {

@@ -70,7 +70,42 @@ export interface DoctorOptions {
   readonly network?: Network
   /** The platform the commands in `next` are for (`process.platform`). */
   readonly platform?: string
+  /**
+   * The processes that hold a UDP port, with their command lines (`lsof`, `ss` and `ps` in the CLI), so a port taken
+   * by another ot-gateway command (a `read` or `discover` at work) is told apart from a foreign program. Without it,
+   * or when it finds none, the holder is not named.
+   */
+  readonly portHolders?: (port: number) => Effect.Effect<ReadonlyArray<PortHolder>>
 }
+
+/** A process that holds a port, and its command line. */
+export interface PortHolder {
+  readonly pid: number
+  readonly command: string
+}
+
+/** The commands that open the BACnet/IP port and give it back when they finish. */
+const ONE_SHOT = new Set(["read", "discover", "doctor", "probe"])
+/** The commands that hold it until stopped (`start` runs `run`). */
+const LASTING = new Set(["run", "demo", "simulate"])
+const ENTRY = /(^|\/)ot-gateway$|(^|\/)apps\/gateway\/src\/main\.(ts|mjs)$/
+const NODE = /(^|\/)node(js)?$/
+
+/**
+ * The ot-gateway command a command line runs, or undefined when it is not ot-gateway: the bin, a checkout's main.ts
+ * or the bundle's main.mjs as the program, or as node's script. `command` is `run` for the image's entrypoint, which
+ * names only the config.
+ */
+export const otGatewayCommand = (line: string): { readonly command: string } | undefined => {
+  const words = line.trim().split(/\s+/)
+  const at = NODE.test(words[0] ?? "") ? words.findIndex((word, index) => index > 0 && !word.startsWith("-")) : 0
+  if (at < 0 || !ENTRY.test(words[at] ?? "")) return undefined
+  const command = words.slice(at + 1).find((word) => ONE_SHOT.has(word) || LASTING.has(word))
+  return { command: command ?? "run" }
+}
+
+/** A process's program without its arguments, which can hold a secret (a broker URL with a password). */
+const programOf = (line: string) => line.trim().split(/\s+/)[0]?.split("/").at(-1) ?? "?"
 
 /** Something doctor found is failing: printed already, this makes the exit code 1. */
 export class DoctorProblems extends Schema.TaggedError<DoctorProblems>()("DoctorProblems", {
@@ -267,7 +302,16 @@ const askBacnet = Effect.fnUntraced(function* (
   settings: GatewayConfig["bacnet"],
   devices: ReadonlyArray<BacnetDevice>,
   nextOf: (device: BacnetDevice) => string | undefined,
-  options: { readonly network: Network | undefined; readonly platform: string; readonly gatewayMayRun: boolean }
+  options: {
+    readonly network: Network | undefined
+    readonly platform: string
+    readonly gatewayMayRun: boolean
+    readonly portHolders: DoctorOptions["portHolders"]
+    /** The status command for this config, for a gateway that holds the port. */
+    readonly status: string
+    /** The config's path, as a gateway of it names it on its command line. */
+    readonly config: string
+  }
 ) {
   const port = `${settings.bindAddress}:${settings.port}`
   const findings: Array<Finding> = []
@@ -281,16 +325,53 @@ const askBacnet = Effect.fnUntraced(function* (
   } else {
     const inUse = opened.failure.addressInUse === true
     const reason = inUse ? "in use by another program" : opened.failure.message
+    // Another ot-gateway command (a read or discover at work, a gateway doctor could not ask) is not a problem
+    // with this machine: it gives the port back when it is done.
+    const holders = inUse && options.portHolders !== undefined ? yield* options.portHolders(settings.port) : []
+    const ours = holders.flatMap((holder) => {
+      const what = otGatewayCommand(holder.command)
+      return what === undefined ? [] : [{ pid: holder.pid, line: holder.command, command: what.command }]
+    })[0]
     // A gateway doctor cannot ask (no status block, another one on its port) may be what holds it.
     const maybeOurs = inUse && options.gatewayMayRun
-    findings.push({
-      check: "bacnet-port",
-      status: maybeOurs ? "warn" : "fail",
-      message: `UDP ${port} cannot be opened: ${reason}${maybeOurs ? ", perhaps by this config's gateway" : ""}`,
-      code: inUse ? "bacnet-port-in-use" : "bacnet-port-unavailable",
-      hint: gatewayPortHintFor(reason).checks[0] ?? reason,
-      ...(inUse ? { next: portOwnerCommand(settings.port, options.platform) } : {})
-    })
+    if (ours !== undefined && ONE_SHOT.has(ours.command)) {
+      // A read or discover at work gives the port back when it finishes: nothing is wrong with this machine.
+      findings.push({
+        check: "bacnet-port",
+        status: "warn",
+        message: `UDP ${port} is held by ot-gateway ${ours.command} (pid ${ours.pid}) while it is at work`,
+        code: "bacnet-port-in-use",
+        hint: `another ot-gateway command is still at work and gives the port back when it finishes; run doctor again then`,
+        next: `ps -o command= -p ${ours.pid}`
+      })
+    } else if (ours !== undefined && ours.command === "run" && (maybeOurs || ours.line.includes(options.config))) {
+      findings.push({
+        check: "bacnet-port",
+        status: "warn",
+        message: `UDP ${port} is held by a gateway on this machine (pid ${ours.pid}), perhaps this config's`,
+        code: "bacnet-port-in-use",
+        hint: "a running gateway holds the port and reads the devices; ask it with status, or stop it before asking the devices directly",
+        next: options.status
+      })
+    } else {
+      const holder =
+        ours !== undefined
+          ? `ot-gateway ${ours.command} (pid ${ours.pid})`
+          : holders[0] !== undefined
+            ? `${programOf(holders[0].command)} (pid ${holders[0].pid})`
+            : undefined
+      findings.push({
+        check: "bacnet-port",
+        status: maybeOurs && holder === undefined ? "warn" : "fail",
+        message:
+          holder !== undefined
+            ? `UDP ${port} cannot be opened: held by ${holder}`
+            : `UDP ${port} cannot be opened: ${reason}${maybeOurs ? ", perhaps by this config's gateway" : ""}`,
+        code: inUse ? "bacnet-port-in-use" : "bacnet-port-unavailable",
+        hint: gatewayPortHintFor(reason).checks[0] ?? reason,
+        ...(inUse ? { next: portOwnerCommand(settings.port, options.platform) } : {})
+      })
+    }
     if (inUse) {
       const fallback = yield* makeBacnetNetwork({ ...settings, port: 0 }, options.network).pipe(
         Effect.map(Option.some),
@@ -361,6 +442,8 @@ const askDevices = Effect.fnUntraced(function* (
     readonly network: Network | undefined
     readonly platform: string
     readonly gatewayMayRun: boolean
+    readonly portHolders: DoctorOptions["portHolders"]
+    readonly config: string
   }
 ) {
   const nextOf = (device: Device) => deviceNext(device, command, options.cli)
@@ -398,7 +481,10 @@ const askDevices = Effect.fnUntraced(function* (
       : askBacnet(config.bacnet, bacnetDevices, nextOf, {
           network: options.network,
           platform: options.platform,
-          gatewayMayRun: options.gatewayMayRun
+          gatewayMayRun: options.gatewayMayRun,
+          portHolders: options.portHolders,
+          status: command("status"),
+          config: options.config
         })
   const [modbusFindings, bacnetFindings] = yield* Effect.all([modbus, bacnet], { concurrency: 2 })
   const simulated = config.devices.flatMap((device): ReadonlyArray<Finding> =>
@@ -712,7 +798,9 @@ export const runDoctor = Effect.fn("runDoctor")(function* (path: string, options
       cli,
       network: options.network,
       platform,
-      gatewayMayRun: gateway.mode === "unknown"
+      gatewayMayRun: gateway.mode === "unknown",
+      portHolders: options.portHolders,
+      config: resolve(path)
     })
     findings.push(...asked.devices, ...asked.port)
   }

@@ -391,13 +391,38 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     name: "discover",
     title: "Find BACnet devices",
     description:
-      "Find BACnet devices through the config's BACnet settings (the defaults when there is no config yet) and return a draft of their devices entries. Read-only",
+      "Find the BACnet devices on the LAN by broadcast (no address needed; on the machine's only network it asks there) through the config's BACnet settings, the defaults when there is no config yet. Returns found, one overview entry per device (id, name, instance, address, points, objectTypes) to show the user before choosing, devices, their draft config entries, and next. Read-only: discover_save saves the ones the user picks",
     input: {
       config: configArgument,
-      address: flagText("Ask only the device at this ip or ip:port instead of a broadcast")
+      address: flagText("Ask only the device at this ip or ip:port instead of a broadcast"),
+      wait: Schema.optionalKey(count("Listen for answers at least this many seconds (default 3)", 1, 30))
     },
     annotations: asks,
-    argv: ({ config, address }) => ["discover", config, flag("address", address)]
+    argv: ({ config, address, wait }) => ["discover", config, flag("address", address), flag("wait", wait)]
+  }),
+  defineTool({
+    name: "discover_save",
+    title: "Save discovered BACnet devices",
+    description:
+      "Discover again and save the BACnet devices the user chose into the config (which init writes first): all, or ids or instances as discover's found lists them, comma-separated. None is writable. A name that matches no device fails and saves nothing. dryRun defaults to true: only say what would be saved. Returns added, extended (points added to a device the config has), points, devices and next",
+    input: {
+      save: text("all, or device ids or instances separated by commas: boiler,ahu-1 or 1001,1002"),
+      config: configArgument,
+      address: flagText("Ask only the device at this ip or ip:port instead of a broadcast"),
+      wait: Schema.optionalKey(count("Listen for answers at least this many seconds (default 3)", 1, 30)),
+      dryRun: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Only say what would be saved, write nothing (default true)" })
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    argv: ({ save, config, address, wait, dryRun }) => [
+      "discover",
+      config,
+      flag("save", save),
+      flag("address", address),
+      flag("wait", wait),
+      flag("dry-run", dryRun ?? true)
+    ]
   }),
   defineTool({
     name: "discover_modbus",
@@ -726,10 +751,19 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ profile }) => ["profiles", "show", profile]
   }),
   defineTool({
+    name: "setup_guide",
+    title: "The setup guide",
+    description:
+      "The steps to take a user from nothing to a gateway publishing their devices' values: what to check, what to ask, the order, and the rules (never write to a device, no secrets in the config). Read it first when setting up a gateway; its otg <command> lines are this server's tools. Returns text: the guide as Markdown, starting with which tool each of its commands is",
+    input: {},
+    annotations: local,
+    argv: () => ["guide", "setup", "--mcp"]
+  }),
+  defineTool({
     name: "init",
     title: "Write a gateway's folder",
     description:
-      "Write a gateway's folder without asking anything: ot-gateway.json, compose.yaml and ot-gateway.env (the broker password's line empty: the user fills it with ot-gateway secret set broker-password). Give site and broker, and devices or points; without them a run that writes (dryRun false) fails with missing, or pass yes for the defaults (a simulated device, a broker on localhost). dryRun defaults to true: work it out and return it, write nothing; a dry run fills what is not given with those defaults, so what it returns is not yet what the user chose. Returns the config, the files and next",
+      "Write a gateway's folder without asking anything: ot-gateway.json, ot-gateway.env (the broker password's line empty: the user fills it with ot-gateway secret set broker-password) and, on Linux, compose.yaml (on macOS and Windows, whose Docker Desktop reaches no device on the LAN, the gateway runs with start instead). To pick BACnet devices with the user: devices none here, then discover, then discover_save. Give site and broker, and devices or points; without them a run that writes (dryRun false) fails with missing, or pass yes for the defaults (a simulated device, a broker on localhost). dryRun defaults to true: work it out and return it, write nothing; a dry run fills what is not given with those defaults, so what it returns is not yet what the user chose. Returns the config, the files and next",
     input: {
       directory: optionalText("The gateway's folder, created if missing (default .)"),
       site: optionalText("The site, the first topic segment (a slug: site-1)"),
@@ -797,10 +831,28 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     name: "up",
     title: "Start the gateway",
     description:
-      "Start the gateway of the config's folder with Docker Compose (writes compose.yaml when the folder has none) and wait until every point has a value. Linux with Docker only. isError with code, hint and next when values do not flow",
+      "Start the gateway of the config's folder with Docker Compose (writes compose.yaml when the folder has none) and wait until every point has a value. Linux with Docker only: on macOS use start. isError with code, hint and next when values do not flow",
     input: { config: configArgument, timeout: Schema.optionalKey(waitSeconds) },
     annotations: deploys,
     argv: ({ config, timeout }) => ["up", config, flag("timeout", timeout)]
+  }),
+  defineTool({
+    name: "start",
+    title: "Start the gateway in the background",
+    description:
+      "Start the gateway of the config's folder as a background process on this machine and wait until every point has a value: the way on macOS, where Docker Desktop reaches no device on the LAN. It runs until stop, a crash or a reboot. Returns pid, url and values; isError with code (already-running, gateway-exited, device-failing, values-missing), hint and next when values do not flow",
+    input: { config: configArgument, timeout: Schema.optionalKey(waitSeconds) },
+    annotations: deploys,
+    argv: ({ config, timeout }) => ["start", config, flag("timeout", timeout)]
+  }),
+  defineTool({
+    name: "stop",
+    title: "Stop the background gateway",
+    description:
+      "Stop the gateway that start runs in the background for the config's folder: no values are read or published until it is started again. stopped is false when none ran",
+    input: { config: configArgument },
+    annotations: { ...deploys, destructiveHint: true },
+    argv: ({ config }) => ["stop", config]
   }),
   defineTool({
     name: "restart",

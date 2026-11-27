@@ -17,13 +17,14 @@ pnpm typecheck
 pnpm test
 pnpm demo             # the gateway, a test broker and simulated devices in one process (status page on :8080)
 pnpm gateway          # build the status page (cached), then run apps/gateway with examples/gateway.json (with pnpm bench)
-pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, compose.yaml and ot-gateway.env out (the CLI: apps/gateway/src/Cli.ts)
+pnpm ot-gateway init .                     # questions in (init <folder> makes a folder, as create-next-app does), ot-gateway.json, ot-gateway.env and, on Linux, compose.yaml out (the CLI: apps/gateway/src/Cli.ts)
 pnpm ot-gateway init . --yes --site s --broker mqtt://host:1883 --points points.csv   # the same without questions
 pnpm ot-gateway check ot-gateway.json      # validate a config without connecting
-pnpm ot-gateway doctor ot-gateway.json     # every check in order (config, broker, gateway, devices, BACnet port, disk, clock), one line each and the next command (--json: findings with code, hint, next; exit 1 when one fails)
+pnpm ot-gateway doctor ot-gateway.json     # every check in order (config, broker, gateway, devices, BACnet port (another ot-gateway holding it is a warning), disk, clock), one line each and the next command (--json: findings with code, hint, next; exit 1 when one fails)
 pnpm ot-gateway up                         # the folder's gateway under Docker Compose (compose.yaml written when missing), until every point has a value (down, restart; exit 1 with code, hint, next)
 pnpm ot-gateway upgrade --check            # is a newer release out (upgrade: pull, check the config with it, switch compose.yaml's tag, wait for values, roll back when they do not come)
-pnpm ot-gateway discover ot-gateway.json   # find devices; in a terminal choose BACnet/IP or a Modbus scan, pick points, see the diff, save into the config, then the commands to read once or start, otherwise (--json, a pipe, no config yet) print a draft (--points-list points.csv writes a list to trim, --append adds to one)
+pnpm ot-gateway start                      # the folder's gateway in the background on this machine (macOS: Docker Desktop reaches no LAN device), until every point has a value; stop stops it (.ot-gateway.pid; apps/gateway/src/Background.ts)
+pnpm ot-gateway discover ot-gateway.json   # find devices; in a terminal choose BACnet/IP or a Modbus scan, pick points, see the diff, save into the config, then the commands to read once or start, otherwise (--json, a pipe, no config yet) print an overview (found) and a draft; --save all|<ids> saves without asking (--points-list points.csv writes a list to trim, --append adds to one)
 pnpm ot-gateway discover modbus 192.168.1.0/24   # find Modbus TCP devices and unit ids on a range, read-only and rate-limited (--unit-ids 1-247 behind a gateway, --points-list writes draft rows)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in (--protocol modbus|bacnet: only that protocol's columns)
@@ -49,7 +50,8 @@ pnpm ot-gateway messages                   # messages per topic since the gatewa
 pnpm ot-gateway logs --level warn          # the running gateway's recent log lines from memory, without docker logs (/api/logs; --follow, --json)
 pnpm ot-gateway explain broker-unreachable # what a code means, what to do, the next command (no code: all of them; --json; the table is apps/gateway/src/Codes.ts, docs/troubleshooting.md's "Codes" is checked against it)
 pnpm ot-gateway support                    # one redacted file for an issue report: versions, host, config, status, a day of events, the logs (--output -, --json)
-pnpm ot-gateway mcp                        # the commands as MCP tools over stdio, each result the command's --json (the tools: apps/gateway/src/McpTools.ts)
+pnpm ot-gateway mcp                        # the commands as MCP tools over stdio, each result the command's --json (the tools: apps/gateway/src/McpTools.ts), and the setup guide as the setup prompt and the setup_guide tool
+pnpm ot-gateway guide setup                # the setup guide (.claude/skills/setup/SKILL.md, shipped as guides/setup.md; apps/gateway/src/SetupGuide.ts)
 OT_GATEWAY_JSON=1 pnpm ot-gateway status    # --json on every command that takes it; a terminal gets the short view, a pipe the full text, --all expands (docs/operations.md, "People and agents")
 pnpm --filter @ot-gateway/core test   # one package
 pnpm --filter @ot-gateway/gateway sim   # the whole gateway on an in-memory network under virtual time (SIM_SEEDS, SIM_HOURS)
@@ -169,7 +171,7 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Quickstart
 
-`/setup` (`.claude/skills/setup/SKILL.md`) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
+`/setup` (`.claude/skills/setup/SKILL.md`, which the npm package and the image carry as `guides/setup.md` for `guide setup` and the MCP server's `setup` prompt) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
 
 ## Health and budget
 

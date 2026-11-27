@@ -54,6 +54,7 @@ import {
   Stream
 } from "effect"
 import { Stdio } from "effect/Stdio"
+import type { ChildProcessSpawner } from "effect/process"
 import { Argument, CliOutput, Command, CommandSpec, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
@@ -62,14 +63,21 @@ import { pointAlarmWhen } from "./Alarms.ts"
 import { acceptsConnections, pickPublicBroker, randomDemoSite, runDemo } from "./Demo.ts"
 import { simulateBacnet, SimulateError } from "./Simulate.ts"
 import { doctorProblems, formatDoctor, runDoctor } from "./Doctor.ts"
+import { processesLayer, startBackground, stopBackground } from "./Background.ts"
+import { mcpPreface, readSetupGuide } from "./SetupGuide.ts"
+import { udpPortHolders } from "./PortHolders.ts"
 import { dockerLayer, down, isDockerTag, nextLine, up, upgrade } from "./Deploy.ts"
 import {
   discover,
   DiscoverError,
+  discoverFound,
   discoverToPointsList,
   discoveryDefaults,
+  foundOverview,
   LISTEN_SECONDS,
-  type PointsListWritten
+  overviewLines,
+  type PointsListWritten,
+  selectDrafts
 } from "./Discover.ts"
 import { describeTranslation, edeToPointsList } from "./Ede.ts"
 import {
@@ -783,6 +791,115 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
 })
 
 /**
+ * The command that starts the gateway of a config for good on this platform: Docker Compose on Linux, a background
+ * process on macOS (Docker Desktop reaches no device on the LAN), and a terminal of its own on Windows.
+ */
+export const startCommand = (cli: string, argument: string, platform: string) => {
+  if (platform === "darwin") return `${cli} start${argument}`
+  // compose.yaml runs ./ot-gateway.json: a config named otherwise runs in a terminal.
+  const composed = argument === "" || /ot-gateway\.json'?$/.test(argument)
+  return platform === "win32" || !composed ? `${cli} run${argument}` : `${cli} up${argument}`
+}
+
+/**
+ * `config` asking on this machine's only network when it names no broadcast of its own: the limited broadcast
+ * (255.255.255.255) reaches no device behind most routers' settings. With several networks, or one device asked by
+ * address, it stays as it is (the terminal asks which network; bacnet.broadcastAddress picks one for good).
+ */
+const onlyNetwork = (config: GatewayConfig, address: string | undefined): GatewayConfig => {
+  const lans = lanInterfaces(networkInterfaces())
+  const [only] = lans
+  if (config.bacnet.broadcastAddress !== "255.255.255.255" || address !== undefined || lans.length !== 1) return config
+  return only === undefined ? config : { ...config, bacnet: { ...config.bacnet, broadcastAddress: only.broadcast } }
+}
+
+/**
+ * `discover --save <all|ids>` for agents and scripts: discover, keep the devices the selection names (ids or
+ * instances, as the overview lists them), merge them into the config as the terminal's save does, and say what was
+ * added. On the machine's only network the broadcast goes to that network, as in a terminal. A dry run writes
+ * nothing. The selection is checked against what answered: a name that matches no device fails, nothing saved.
+ */
+const discoverSaveSelected = Effect.fn("discoverSaveSelected")(function* (
+  path: string,
+  selection: string,
+  options: {
+    readonly address: string | undefined
+    readonly wait: number | undefined
+    readonly dryRun: boolean
+    readonly json: boolean
+  }
+) {
+  const fs = yield* FileSystem.FileSystem
+  const cli = yield* invocation
+  if (!(yield* fs.exists(path))) {
+    return yield* new DiscoverError({
+      message: `no ${path} to save into: write one first with ${cli} init . --site <site> --broker <url> --devices none, then discover --save again`
+    })
+  }
+  const fileText = yield* fs.readFileString(path)
+  const config = yield* loadConfig(path)
+  const asked = onlyNetwork(config, options.address)
+  const broadcast =
+    asked.bacnet.broadcastAddress === config.bacnet.broadcastAddress ? undefined : asked.bacnet.broadcastAddress
+  const { drafts, names } = yield* discoverFound(asked, undefined, {
+    address: options.address,
+    wait: options.wait,
+    configPath: path
+  })
+  const configured = new Set(config.devices.map((device) => device.id))
+  const selected = selectDrafts(drafts, selection, configured)
+  if (Result.isFailure(selected)) {
+    return yield* new DiscoverError({ message: `${selected.failure}; ${path} is as it was` })
+  }
+  const { picked, unchanged } = selected.success
+  if (picked.length === 0 && unchanged.length === 0) {
+    return yield* new DiscoverError({ message: `no device with points to read answered; ${path} is as it was` })
+  }
+  const located = picked.every((device) => device.address !== undefined)
+  const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
+  // Nothing new (every device named is saved already): the file stays as it is, and that is a success.
+  const writes = !options.dryRun && picked.length > 0
+  if (writes) yield* writeMerged(path, fileText, merged)
+  const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
+  const points = picked.reduce((total, device) => total + device.points.length, 0)
+  const next = [`${cli} read${argument}`, startCommand(cli, argument, process.platform)]
+  const chosen = new Set(picked.map((device) => device.id))
+  const report = {
+    ok: true,
+    dryRun: options.dryRun,
+    path,
+    saved: writes,
+    added: picked.length > 0 ? merged.added : [],
+    extended: picked.length > 0 ? merged.extended : [],
+    unchanged,
+    points,
+    devices: foundOverview(
+      drafts.filter((draft) => chosen.has(draft.id)),
+      names,
+      configured
+    ),
+    next: options.dryRun
+      ? [
+          `${cli} discover${argument}${options.address === undefined ? "" : ` --address ${shellArgument(options.address)}`} --save ${shellArgument(selection)}`
+        ]
+      : next
+  }
+  if (options.json) return yield* printJson(report)
+  const ui = plainUi
+  return yield* Console.log(
+    [
+      ...(options.dryRun
+        ? [`dry run, ${path} is as it was. It would add:`, ...overviewLines(report.devices).map((line) => `  ${line}`)]
+        : writes
+          ? savedLines(merged.config, merged.added, merged.extended, ui)
+          : []),
+      ...(unchanged.length === 0 ? [] : [`in ${path} already, with every point: ${unchanged.join(", ")}`]),
+      ...report.next.map((command) => `next: ${command}`)
+    ].join("\n")
+  )
+})
+
+/**
  * What the save added, one line per device: how often it is read and how many points commands may write, from the
  * saved config (a points list or the simulated device brings its own), and how to make a setpoint writable.
  */
@@ -818,7 +935,15 @@ const savedNext = Effect.fn("savedNext")(function* (argument: string, ui: Ui) {
     [
       ui.rows([
         ["Read once", ui.command(`${cli} read${argument}`), "add --publish to send the values to the broker too"],
-        ["Start it", ui.command(`${cli} run${argument}`), `or in Docker: ${cli} up`],
+        [
+          "Start it",
+          ui.command(`${cli} run${argument}`),
+          process.platform === "darwin"
+            ? `or in the background: ${cli} start${argument}`
+            : process.platform === "win32"
+              ? ""
+              : `or in Docker: ${cli} up`
+        ],
         ["All commands", ui.command(`${cli} --help`)]
       ]),
       ""
@@ -853,16 +978,40 @@ const discoverCommand = Command.make(
       Flag.optional,
       Flag.map(Option.getOrUndefined)
     ),
+    save: Flag.String("save").pipe(
+      Flag.withDescription(
+        "Without asking: save the BACnet devices found into the config, all of them (all) or the ones named by id or instance, comma-separated, as the overview (found) lists them"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    dryRun: dryRunFlag("With --save: say what would be saved, and write nothing"),
     json: jsonFlag
   },
   // The draft is JSON already; --json makes a failure JSON too, and what --points-list wrote.
-  ({ config, pointsList, append, address, wait, json }) =>
+  ({ config, pointsList, append, address, wait, save, dryRun, json }) =>
     Effect.gen(function* () {
       if (append && Option.isNone(pointsList)) {
         return yield* new DiscoverError({ message: "--append adds to the file --points-list names; give both" })
       }
       if (wait !== undefined && (!Number.isInteger(wait) || wait < 1 || wait > 30)) {
         return yield* new DiscoverError({ message: `--wait takes 1 to 30 seconds, not ${wait}` })
+      }
+      if (save !== undefined && Option.isSome(pointsList)) {
+        return yield* new DiscoverError({
+          message: "--save saves into the config and --points-list writes a list: give one"
+        })
+      }
+      if (dryRun && save === undefined) {
+        return yield* new DiscoverError({ message: "--dry-run goes with --save; discover alone writes nothing" })
+      }
+      if (save !== undefined) {
+        return yield* discoverSaveSelected(config, save, {
+          address: Option.getOrUndefined(address),
+          wait,
+          dryRun,
+          json
+        })
       }
       // A person at a terminal picks what to keep and saves it into the config; scripts and agents get the draft.
       // Without a config there is nothing to save into: the draft, as before, and init named as the way to one.
@@ -878,7 +1027,7 @@ const discoverCommand = Command.make(
         )
       }
       const found = yield* configForDiscovery(config)
-      const decoded = found.config
+      const decoded = onlyNetwork(found.config, Option.getOrUndefined(address))
       const options = {
         address: Option.getOrUndefined(address),
         wait,
@@ -896,19 +1045,23 @@ const discoverCommand = Command.make(
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "Find devices. In a terminal: choose BACnet/IP or a Modbus TCP scan (or a points list), pick the points to read, see what changes and save them into the config, then read them once or start the gateway. Otherwise (--json, a pipe, no config yet): print a draft of the BACnet devices' entries; nothing is written"
+    "Find devices. In a terminal: choose BACnet/IP or a Modbus TCP scan (or a points list), pick the points to read, see what changes and save them into the config, then read them once or start the gateway. Otherwise (--json, a pipe, no config yet): print the BACnet devices found, an overview of each (found) and their draft entries; nothing is written until --save all or --save <ids>"
   ),
   Command.withExamples([
     {
       command: "ot-gateway discover",
       description: "In a terminal: pick what to keep and save it into ot-gateway.json"
     },
-    { command: "ot-gateway discover --json", description: "Print the draft as JSON, in the config's shape" },
     { command: "ot-gateway discover --points-list points.csv", description: "Write it as a points list to trim" },
     {
       command: "ot-gateway discover --points-list points.csv --append",
       description: "Add it to a points list you have, rows it has already skipped"
     },
+    {
+      command: "ot-gateway discover --json",
+      description: "Agents: the overview (found) to show, then discover --save all or --save <id>,<id>"
+    },
+    { command: "ot-gateway discover --save boiler,ahu-1", description: "Save the devices named, without asking" },
     {
       command: "ot-gateway discover --address 10.20.3.40:47809",
       description: "Ask one device whose address a device list gives"
@@ -1079,7 +1232,11 @@ const init = Command.make(
       const config = yield* asked(initTarget(directory, flags.yes))
       const written = yield* asked(runInit(config, flags))
       if (written === undefined) return yield* Console.log(ui.done(`Kept ${config} as it is`))
-      const folder = yield* writeFolderFiles(config, written, { dryRun: flags.dryRun, timeZone: localTimeZone() })
+      const folder = yield* writeFolderFiles(config, written, {
+        dryRun: flags.dryRun,
+        timeZone: localTimeZone(),
+        platform: process.platform
+      })
       const files = { ...folder, written: [config, ...folder.written] }
       const context = {
         ssh: sshSession(yield* sshEnvironment),
@@ -1137,7 +1294,7 @@ const init = Command.make(
     )
 ).pipe(
   Command.withDescription(
-    "Answer a few questions (site, broker, devices) and get the gateway's folder: ot-gateway.json, compose.yaml, ot-gateway.env"
+    "Answer a few questions (site, broker, devices) and get the gateway's folder: ot-gateway.json, ot-gateway.env and, on Linux, compose.yaml (on macOS and Windows the gateway runs with start, since Docker Desktop reaches no device on the LAN)"
   ),
   Command.withExamples([
     {
@@ -2849,7 +3006,11 @@ const doctorCommand = Command.make(
   ({ config, all, json }) =>
     Effect.gen(function* () {
       const cli = yield* invocation
-      const report = yield* runDoctor(config, { cli })
+      const services = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>()
+      const report = yield* runDoctor(config, {
+        cli,
+        portHolders: (port) => udpPortHolders(port).pipe(Effect.provide(services))
+      })
       // A terminal gets one line per check, the devices summed up, and the one command to run; a pipe or a log every
       // device and the hint for each problem too.
       yield* json ? printJson(report) : Console.log(formatDoctor(report, { brief: process.stdout.isTTY, all, cli }))
@@ -2954,6 +3115,33 @@ const supportCommand = Command.make(
   ])
 )
 
+/** `guide setup`: the setup guide (SetupGuide.ts); `--mcp` starts it with how its commands map to the MCP tools. */
+const guideCommand = Command.make(
+  "guide",
+  {
+    name: Argument.Literals("name", ["setup"]).pipe(
+      Argument.withDescription("The guide: setup, from nothing to a running gateway"),
+      Argument.withDefault("setup" as const)
+    ),
+    mcp: Flag.Boolean("mcp").pipe(
+      Flag.withDescription("Start with how the guide's otg commands map to the tools of ot-gateway mcp"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ json, mcp }) =>
+    Effect.gen(function* () {
+      const guide = yield* readSetupGuide
+      const text = mcp ? `${mcpPreface}\n${guide}` : guide
+      yield* json ? printJson({ ok: true, name: "setup", text }) : printResult(text)
+    }).pipe(jsonFailure(json))
+).pipe(
+  Command.withDescription(
+    "Print the setup guide an agent follows to take a user from nothing to a running gateway (the /setup skill; ot-gateway mcp serves it as the setup prompt and the setup_guide tool)"
+  ),
+  Command.withExamples([{ command: "ot-gateway guide setup", description: "The setup guide, as Markdown" }])
+)
+
 /**
  * `mcp`: the commands as MCP tools on stdin and stdout. Its type is written out because a tool call runs `runCli`,
  * whose type is the CLI's, this command included.
@@ -2963,8 +3151,30 @@ const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeSe
     const version = yield* readVersion
     // stdout is the protocol's: what is printed besides goes to stderr.
     const log = yield* Console.Console
+    // Without the guide the tools still work: the server offers no prompt and says why on stderr.
+    const guide = yield* readSetupGuide.pipe(
+      Effect.map(Option.some),
+      Effect.catch((error) =>
+        Effect.as(
+          Effect.sync(() => log.error(`ot-gateway mcp: no setup prompt: ${error.message}`)),
+          Option.none<string>()
+        )
+      )
+    )
     yield* serveMcp({
       tools: mcpTools,
+      prompts: Option.match(guide, {
+        onNone: () => [],
+        onSome: (text) => [
+          {
+            name: "setup",
+            title: "Set up an OT Gateway",
+            description:
+              "Take the user from nothing to a gateway publishing their devices' values: the steps, the questions to ask and the rules (never write to a device, no secrets in the config)",
+            text: `${mcpPreface}\n${text}`
+          }
+        ]
+      }),
       version,
       // The server outlives a `secret set` the user runs beside it: each call reads the folder's env file again.
       run: (argv): Effect.Effect<unknown, unknown, NodeServices> =>
@@ -3073,6 +3283,40 @@ const downCommand = Command.make("down", { config: deployTarget, json: jsonFlag 
   Command.withExamples([{ command: "ot-gateway down", description: "Stop ./ot-gateway.json's gateway" }])
 )
 
+const startBackgroundCommand = Command.make(
+  "start",
+  { config: deployTarget, timeout: waitSeconds, noWait: noWaitFlag, json: jsonFlag },
+  ({ config, timeout, noWait, json }) =>
+    Effect.gen(function* () {
+      const context = yield* deployContext
+      const report = yield* startBackground(config, { ...context, wait: !noWait, timeout: Duration.seconds(timeout) })
+      yield* deployDone(json, report)
+    }).pipe(Effect.provide(processesLayer), jsonFailure(json, { action: "start", config }))
+).pipe(
+  Command.withDescription(
+    "Start the gateway of this folder in the background on this machine and wait until every point has a value: the way on macOS, where Docker Desktop reaches no device on the LAN. It runs until stop, a crash or a reboot (on Linux, up keeps it running). Exit 1 with code, hint and next when values do not flow"
+  ),
+  Command.withExamples([
+    {
+      command: "ot-gateway start",
+      description: "Start ./ot-gateway.json's gateway in the background, wait for values"
+    },
+    { command: "ot-gateway stop", description: "Stop it again" }
+  ])
+)
+
+const stopCommand = Command.make("stop", { config: deployTarget, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* stopBackground(config, yield* deployContext)
+    yield* deployDone(json, report)
+  }).pipe(Effect.provide(processesLayer), jsonFailure(json, { action: "stop", config }))
+).pipe(
+  Command.withDescription(
+    "Stop the gateway that start runs in the background for this folder (its outbox and history stay); nothing to do when none runs"
+  ),
+  Command.withExamples([{ command: "ot-gateway stop", description: "Stop ./ot-gateway.json's background gateway" }])
+)
+
 const upgradeCommand = Command.make(
   "upgrade",
   {
@@ -3138,6 +3382,8 @@ export const rootDescription = [
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
   "    init <folder> --dry-run --json   the folder init would write (with --site, --broker, --points <list>)",
+  "    discover --json                  the BACnet devices on the LAN, no address needed: found, one entry each to show; then discover --save all|<id>,<id>",
+  "    start --json                     on macOS: the gateway in the background until every point has a value (stop stops it); on Linux: up",
   "    check --json                     every mistake in a config, with its path",
   "    broker --json                    the broker: MQTT version, limits, a round trip",
   "    gateways list --json             every gateway on the broker (--broker <url>, no config needed); gateways status|points <gateway>",
@@ -3163,6 +3409,8 @@ export const cli = Command.make("ot-gateway").pipe(
     downCommand,
     restartCommand,
     upgradeCommand,
+    startBackgroundCommand,
+    stopCommand,
     discoverCommand,
     importCommand,
     configCommand,
@@ -3186,6 +3434,7 @@ export const cli = Command.make("ot-gateway").pipe(
     explainCommand,
     supportCommand,
     simulate,
+    guideCommand,
     mcpCommand
   ])
 )
@@ -3200,6 +3449,8 @@ const subcommands = new Set([
   "down",
   "restart",
   "upgrade",
+  "start",
+  "stop",
   "discover",
   "import",
   "config",
@@ -3223,6 +3474,7 @@ const subcommands = new Set([
   "explain",
   "support",
   "simulate",
+  "guide",
   "mcp"
 ])
 
