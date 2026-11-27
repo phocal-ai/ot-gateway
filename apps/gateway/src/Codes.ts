@@ -54,7 +54,25 @@ const areas: ReadonlyArray<CodeArea> = [
 ]
 
 /** Commands that read the config file before anything else. */
-const configCommands = ["check", "run", "doctor", "read", "write", "broker", "watch", "publish", "discover", "import"]
+/** Commands that change whether a point takes commands. */
+const pointCommands = ["points allow-commands", "points read-only"]
+/** Commands that change the config key by key. */
+const configEditCommands = ["config set", "config unset", "config remove", "config undo"]
+const configCommands = [
+  "check",
+  "run",
+  "doctor",
+  "read",
+  "write",
+  "broker",
+  "watch",
+  "publish",
+  "discover",
+  "import",
+  ...pointCommands,
+  "config get",
+  ...configEditCommands
+]
 /** Commands that ask the running gateway at its status page. */
 const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
 /** Commands that run the gateway under Docker Compose. */
@@ -88,6 +106,32 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway check --json"
   },
   {
+    code: "unknown-key",
+    area: "config",
+    reportedBy: ["config get", "config set", "config unset", "config remove"],
+    meaning:
+      "The key, device or point named is not in the config: a key is its path with dots between, a device or point its id.",
+    fix: "Use a name the hint lists; config get prints the whole config, and docs/configuration.md has every key.",
+    next: "ot-gateway config get"
+  },
+  {
+    code: "writes-not-here",
+    area: "config",
+    reportedBy: ["config set", "config unset"],
+    meaning:
+      "The change would make a point writable, set the limits of what a command may write, or move a point that takes commands (another id, register, object, scaling or device address), which config set never does.",
+    fix: "Allow commands on one named point with points allow-commands, on purpose; to rename or move a device or point that takes commands, make it read-only first, change it, and allow commands again.",
+    next: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25"
+  },
+  {
+    code: "no-backup",
+    area: "config",
+    reportedBy: ["config undo"],
+    meaning: "There is no .bak next to the config, so there is no previous config to go back to.",
+    fix: "A save from the CLI or the status page keeps the previous config as .bak; without one, edit the config or restore it from your own backup.",
+    next: "ot-gateway check"
+  },
+  {
     code: "no-status-page",
     area: "config",
     reportedBy: [...gatewayCommands, "upgrade"],
@@ -110,8 +154,35 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "broker",
     reportedBy: brokerCommands,
     meaning: "The variable mqtt.passwordEnv names is not set or is empty, so nothing was sent to the broker.",
-    fix: "Put the password in ot-gateway.env next to the config (NAME=...), or in /etc/ot-gateway/gateway.env under systemd.",
-    next: "ot-gateway broker"
+    fix: "Run ot-gateway secret set broker-password in the gateway's folder and type the password (it goes into ot-gateway.env, not shown); under systemd it is in /etc/ot-gateway/gateway.env.",
+    next: "ot-gateway secret list"
+  },
+  {
+    code: "no-password-variable",
+    area: "broker",
+    reportedBy: ["secret set"],
+    meaning:
+      "The config names no variable for the broker password (mqtt.passwordEnv), so the gateway would not read one.",
+    fix: "Name the login first: config set mqtt.username, then config set mqtt.passwordEnv MQTT_PASSWORD, then set the secret.",
+    next: "ot-gateway config set mqtt.passwordEnv MQTT_PASSWORD"
+  },
+  {
+    code: "secret-empty",
+    area: "broker",
+    reportedBy: ["secret set"],
+    meaning:
+      "No value arrived for the secret: nothing was typed, or nothing was piped in within a minute. Nothing was written.",
+    fix: "The person who has the secret runs the command in a terminal and types it there; an agent does not ask for it. A script pipes it in.",
+    next: "ot-gateway secret set broker-password"
+  },
+  {
+    code: "secret-not-writable",
+    area: "broker",
+    reportedBy: ["secret set", "secret list"],
+    meaning:
+      "ot-gateway.env could not be read or written, or the value has a single quote or a line break, which no env file spells the same for Docker Compose, systemd and the CLI.",
+    fix: "Run it as a user who may write the gateway's folder; for such a value, use another secret or write its line into the file by hand.",
+    next: "ot-gateway secret list"
   },
   {
     code: "broker-unreachable",
@@ -602,17 +673,35 @@ export const codes: ReadonlyArray<CodeEntry> = [
   {
     code: "unknown-point",
     area: "command",
-    reportedBy: commandReporters,
+    reportedBy: [...commandReporters, ...pointCommands],
     meaning: "No such device or point in the config (of this CLI, or of the running gateway).",
-    fix: "Use a device/point from the config; the hint lists the writable ones. When this config has it, the running gateway runs another: restart it.",
-    next: "ot-gateway status"
+    fix: "Use a device/point from the config; the hint lists them (for write, the writable ones). When write names one this config has, the running gateway runs another config: restart it.",
+    next: "ot-gateway check"
   },
   {
     code: "not-writable",
     area: "command",
     reportedBy: commandReporters,
     meaning: "The point lacks writable: true, so the guard refused the command before it reached the device.",
-    fix: "Set writable: true on it (with limits for a number) in the config or on the status page, and restart the gateway.",
+    fix: "Allow commands on it with ot-gateway points allow-commands (with --min and --max for a number), or on the status page, and restart the gateway.",
+    next: "ot-gateway check"
+  },
+  {
+    code: "invalid-limits",
+    area: "command",
+    reportedBy: ["points allow-commands"],
+    meaning:
+      "A point that takes a number needs the lowest and the highest value a command may set, lowest first; a switch takes none.",
+    fix: "Name both with --min and --max in the point's unit, as the person who runs the building gave them; leave both out for a switch.",
+    next: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25"
+  },
+  {
+    code: "config-not-saved",
+    area: "command",
+    reportedBy: [...pointCommands, ...configEditCommands],
+    meaning:
+      "The config file could not be written, or changed while the command ran, so it is as it was and no point changed.",
+    fix: "Run the command again; when it names a file it may not write, run it as a user who may write the config and its folder.",
     next: "ot-gateway check"
   },
   {

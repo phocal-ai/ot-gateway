@@ -74,17 +74,54 @@ export const pointsListFromText = Effect.fn("pointsListFromText")(function* (tex
   } satisfies PointsListText
 })
 
-/** The points list at `path`, as text; an EDE file comes back translated into one (Ede.ts). */
-export const readPointsList = Effect.fn("readPointsList")(function* (path: string) {
-  const fs = yield* FileSystem.FileSystem
-  const text = yield* fs
-    .readFileString(path)
-    .pipe(
-      Effect.catchReason("PlatformError", "NotFound", () =>
-        Effect.fail(new PointsListError({ message: `no points list at ${path}` }))
+/** In place of a points list's path: the list is given as text (`--text`), not read from a file. */
+export const givenAsText = "-"
+
+/** The most a list given as text may be: 100,000 points are about 10 MB. */
+const GIVEN_BYTES = 32 * 1024 * 1024
+
+/**
+ * The points list's text and what to call it: the file at `path`, or `given` when the list came as text, which
+ * `path` must then say with `-` so a file named by mistake is not passed over.
+ */
+export const pointsListSource = Effect.fn("pointsListSource")(function* (
+  path: string,
+  given: string | undefined,
+  what = "points list"
+) {
+  if (given === undefined) {
+    if (path === givenAsText) {
+      return yield* new PointsListError({ message: `- stands for a ${what} given with --text, and there is none` })
+    }
+    const fs = yield* FileSystem.FileSystem
+    const text = yield* fs
+      .readFileString(path)
+      .pipe(
+        Effect.catchReason("PlatformError", "NotFound", () =>
+          Effect.fail(new PointsListError({ message: `no ${what} at ${path}` }))
+        )
       )
-    )
-  const read = yield* pointsListFromText(text, path)
+    return { text, source: path }
+  }
+  if (path !== givenAsText) {
+    return yield* new PointsListError({
+      message: `${path} and --text both name a ${what}: write - in place of the file to take the text`
+    })
+  }
+  if (given.length > GIVEN_BYTES) {
+    return yield* new PointsListError({
+      message: `the ${what} given as text is over 32 MB: save it as a file and name that`
+    })
+  }
+  return { text: given, source: `the ${what} given` }
+})
+
+/**
+ * The points list at `path` (or `given` as text), as text; an EDE file comes back translated into one (Ede.ts).
+ */
+export const readPointsList = Effect.fn("readPointsList")(function* (path: string, given?: string) {
+  const { text, source } = yield* pointsListSource(path, given)
+  const read = yield* pointsListFromText(text, source)
   yield* Effect.forEach(read.notes, (note) => Console.error(note), { discard: true })
   return read.list
 })
@@ -166,7 +203,12 @@ const checkOnlyConfig: Readonly<Record<string, unknown>> = {
 export const importPointsList = Effect.fn("importPointsList")(function* (
   listPath: string,
   configPath: string | undefined,
-  options: { readonly dryRun: boolean; readonly command?: string | undefined }
+  options: {
+    readonly dryRun: boolean
+    readonly command?: string | undefined
+    /** The list itself, when `listPath` is `-`. */
+    readonly text?: string | undefined
+  }
 ) {
   const fs = yield* FileSystem.FileSystem
   const cli = options.command ?? "ot-gateway"
@@ -175,11 +217,11 @@ export const importPointsList = Effect.fn("importPointsList")(function* (
   const checkOnly = options.dryRun && configPath === undefined && !exists
   if (!exists && !checkOnly) {
     return yield* new PointsListError({
-      message: `no config at ${path}; import adds to one and never makes one. ${cli} init <folder> --points ${listPath} writes the gateway's folder with this list's devices; or name the config that is there: ${cli} import ${listPath} <config>`
+      message: `no config at ${path}; import adds to one and never makes one. ${cli} init <folder>${listPath === givenAsText ? "" : ` --points ${listPath}`} writes the gateway's folder${listPath === givenAsText ? "" : " with this list's devices"}; or name the config that is there: ${cli} import ${listPath} <config>`
     })
   }
   const existing = checkOnly ? [] : (yield* loadConfig(path)).devices.map((device) => device.id)
-  const listText = yield* readPointsList(listPath)
+  const listText = yield* readPointsList(listPath, options.text)
   const added = yield* devicesFromText(listText, listPath, existing)
   const units = unitsWritten(listText)
   // One read: the text the devices are appended to and the ETag the save checks, so a change in between is refused.

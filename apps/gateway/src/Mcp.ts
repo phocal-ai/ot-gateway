@@ -231,6 +231,10 @@ const instructions = [
   "Start with doctor when something is wrong, status for a running gateway, read to read points once without one.",
   "Paths are relative to the folder the server was started in; config defaults to ./ot-gateway.json.",
   "write changes a device: only writable points, within their limits, through the running gateway.",
+  "points_allow_commands makes one point writable: only when the user asked for that point by name, with the limits they gave, never guessed.",
+  "config_set, config_remove and config_undo change the config file (a dry run unless told otherwise), checked before it is written; restart makes the running gateway read it.",
+  "init writes a new gateway's folder (a dry run unless told otherwise); import takes a points list as a file, text or rows.",
+  "No tool takes a secret: secret_list says which are missing, and the user runs ot-gateway secret set <name> and types it there. Never ask for a password.",
   "up, restart, down and upgrade run the gateway under Docker Compose on this machine, and wait until values flow."
 ].join(" ")
 

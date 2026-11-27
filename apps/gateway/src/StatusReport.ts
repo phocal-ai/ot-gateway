@@ -528,8 +528,8 @@ const brokerState = (broker: GatewayStatus["broker"], now: number, started: numb
 
 /**
  * The report: the gateway, its broker and buffer, then one aligned line per device, and a hint when failing; then
- * the alarms, and with `recent` what failed in the last 15 minutes. `brief` (a terminal) with more than a few devices
- * counts them and lists only the ones not ok, the first few, each hint once: `status --all`, a pipe and --json have
+ * the alarms, and with `recent` what failed in the last 15 minutes. `brief` (a terminal) counts the devices
+ * however few and lists only the ones not ok, the first few, each hint once: `status --all`, a pipe and --json have
  * every device.
  */
 export const formatStatus = (
@@ -542,7 +542,8 @@ export const formatStatus = (
   const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
   const shared = sharedCause(status.devices, status.broker)
   const sharedHost = shared === undefined ? undefined : sharedHostOf(deviceSide(status.devices))
-  const brief = (options.brief ?? false) && status.devices.length > LISTED
+  // With no devices there is nothing to sum up or to list with --all.
+  const brief = (options.brief ?? false) && status.devices.length > 0
   // The failing first, then late, then starting: what needs a look most is never behind "and N more".
   const rank: Readonly<Record<string, number>> = { failing: 0, late: 1, starting: 2 }
   const needing = status.devices

@@ -40,7 +40,20 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Duration, Effect, FileSystem, Logger, Option, References, Result } from "effect"
+import {
+  Config,
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Logger,
+  Option,
+  Redacted,
+  References,
+  Result,
+  Stream
+} from "effect"
+import { Stdio } from "effect/Stdio"
 import { Argument, CliOutput, Command, CommandSpec, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
@@ -76,7 +89,19 @@ import {
 } from "./ModbusDiscover.ts"
 import { clearCommands, diffConfigs, diffReport, diffTitle, formatDiff, sideOfConfig } from "./Diff.ts"
 import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
-import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
+import {
+  formatConfigChange,
+  formatConfigGet,
+  formatConfigUndo,
+  getConfigValue,
+  removeFromConfig,
+  setConfigValue,
+  undoConfig
+} from "./ConfigEdit.ts"
+import { formatPointCommands, setPointCommands } from "./PointCommands.ts"
+import { loadEnvFile } from "./EnvFile.ts"
+import { formatSecretList, formatSecretSet, listSecrets, SecretFailed, secretTarget, setSecret } from "./Secret.ts"
+import { defaultConfigPath, describeUnits, importPointsList, pointsListSource } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
   broadcastAddress,
@@ -100,7 +125,7 @@ import {
   pointsListSchema,
   pointsListTemplate
 } from "./PointsSchema.ts"
-import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
+import { eventsReport, fetchStatusFor, intervalText, parseSince, statusOutcome } from "./StatusReport.ts"
 import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
@@ -124,7 +149,6 @@ import {
   formatReadReport,
   formatReadSummary,
   incompleteMessage,
-  VALUES_SHOWN,
   parseReadSelection,
   readOnce,
   readingsToSend,
@@ -145,7 +169,7 @@ import {
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
-import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv } from "./LoadConfig.ts"
+import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv, mistakeKinds } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
 import {
   describeProfile,
@@ -172,7 +196,7 @@ import {
 import { readVersion } from "./Version.ts"
 import { humanLogger, runView } from "./RunView.ts"
 import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
-import { count as countOf, LISTED, plural } from "./Words.ts"
+import { count as countOf, firstOf, LISTED, named, plural } from "./Words.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
@@ -212,18 +236,33 @@ export const shownPath = (path: string, cwd: string) => {
   return inside !== "" && !outside ? `./${inside}` : path
 }
 
-/** A device's line in `check`: what it is, where, how many points and how they are read. */
-const deviceLine = (device: Device) => {
-  const where =
-    device.protocol === "modbus-tcp"
-      ? `${device.host}:${device.port} unit ${device.unitId}`
-      : device.protocol === "bacnet-ip"
-        ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
-        : "simulated"
+/** How a device's points are read, short: `every 5 s`, `COV, else every 5 s`, `2 by COV, else every 5 s`. */
+const readingShort = (device: Device) => {
+  const cov = covPointIds(device).length
+  const polled = `every ${intervalText(device.pollIntervalMs)}`
+  if (cov === 0) return polled
+  return `${cov === device.points.length ? "COV" : `${countOf(cov)} by COV`}, else ${polled}`
+}
+
+/** Where a device is: `10.0.0.5:502 unit 1`, `device 1001 at 192.168.0.171`, `simulated`. */
+const whereOf = (device: Device) =>
+  device.protocol === "modbus-tcp"
+    ? `${device.host}:${device.port} unit ${device.unitId}`
+    : device.protocol === "bacnet-ip"
+      ? `device ${device.deviceInstance}${device.address === undefined ? ", found by broadcast" : ` at ${device.address}`}`
+      : "simulated"
+
+/** A device in a few words: `bacnet-ip device 1001 at 192.168.0.171, 3 points, COV, else every 5 s`. */
+const deviceText = (device: Device) => {
   const writable = device.points.filter((point) => point.writable).length
   const alarms = alarmPointIds(device).length
-  const reading = readingLabel(device)
-  return `  ${device.id}: ${device.protocol} ${where}, ${plural(device.points.length, "point")}${writable > 0 ? `, ${writable} writable` : ""}${alarms > 0 ? `, ${plural(alarms, "alarm")}` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
+  return [
+    `${device.protocol} ${whereOf(device)}`,
+    plural(device.points.length, "point"),
+    ...(writable > 0 ? [`${countOf(writable)} writable`] : []),
+    ...(alarms > 0 ? [plural(alarms, "alarm")] : []),
+    readingShort(device)
+  ].join(", ")
 }
 
 const pointsOf = (some: ReadonlyArray<Device>) => some.reduce((sum, device) => sum + device.points.length, 0)
@@ -235,48 +274,119 @@ const counted = (some: ReadonlyArray<Device>) => {
   const writable = writableOf(some)
   return `${plural(some.length, "device")}, ${plural(pointsOf(some), "point")}${writable > 0 ? `, ${countOf(writable)} writable` : ""}`
 }
-const devicesByProtocol = (devices: ReadonlyArray<Device>) => {
-  const protocols = [...new Set(devices.map((device) => device.protocol))]
-  const width = Math.max(0, ...protocols.map((protocol) => protocol.length))
-  return [
-    `  ${counted(devices)}`,
-    ...protocols.map(
-      (protocol) =>
-        `    ${protocol.padEnd(width)}  ${counted(devices.filter((device) => device.protocol === protocol))}`
-    ),
-    "  --all lists every device"
-  ]
+
+/** A line of `check`: a mark, a label and what it says, as `doctor` prints its findings. */
+interface CheckRow {
+  readonly mark: "✓" | "!" | "✗" | "–"
+  readonly label: string
+  readonly text: string
+  /** Lines under it, in its text column: a device each. */
+  readonly under?: ReadonlyArray<string>
 }
 
 /**
- * What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about.
- * `brief` (a terminal) sums more than a few devices up by protocol.
+ * The devices in one row: none yet (to do), or how many devices and points in total. In a terminal (`brief`) that is
+ * all, however few, without protocols; otherwise (--all, a pipe) a line for each device under it: its id, then its protocol.
+ */
+const devicesRow = (devices: ReadonlyArray<Device>, brief: boolean): CheckRow => {
+  if (devices.length === 0) return { mark: "!", label: "devices", text: "none yet: ot-gateway discover finds them" }
+  if (brief) return { mark: "✓", label: "devices", text: counted(devices) }
+  const width = Math.max(0, ...devices.map((device) => device.id.length))
+  return {
+    mark: "✓",
+    label: "devices",
+    text: counted(devices),
+    under: devices.map((device) => `${device.id.padEnd(width)}  ${deviceText(device)}`)
+  }
+}
+
+/** The rows of a valid config: the gateway, its broker, buffer, history, status page and devices. */
+const checkRows = (config: GatewayConfig, brief: boolean, cwd: string): ReadonlyArray<CheckRow> => {
+  const passwordWarning = mqttPasswordWarning(config.mqtt)
+  const status = config.status
+  return [
+    { mark: "✓", label: "config", text: `${config.site}/${config.building} gateway ${config.id}` },
+    passwordWarning === undefined
+      ? { mark: "✓", label: "broker", text: config.mqtt.url }
+      : { mark: "!", label: "broker", text: `${config.mqtt.url}: ${passwordWarning}` },
+    config.buffer === undefined
+      ? { mark: "!", label: "buffer", text: "none: values read while the broker is down are lost" }
+      : { mark: "✓", label: "buffer", text: shownPath(config.buffer.path, cwd) },
+    config.history === undefined
+      ? { mark: "–", label: "history", text: "none: no history page or ot-gateway history" }
+      : {
+          mark: "✓",
+          label: "history",
+          text: `${shownPath(config.history.path, cwd)}, per-minute values for ${plural(config.history.retentionDays, "day")}`
+        },
+    status === undefined
+      ? { mark: "–", label: "status", text: "no status page: status, events and doctor cannot ask the gateway" }
+      : status.bindAddress === "0.0.0.0"
+        ? {
+            mark: "✓",
+            label: "status",
+            text: `port ${status.port} on every address of this machine (http://localhost:${status.port} here)`
+          }
+        : { mark: "✓", label: "status", text: `http://${status.bindAddress}:${status.port}` },
+    devicesRow(config.devices, brief)
+  ]
+}
+
+/** Rows as `doctor` prints them: the mark, the label padded, the text; the lines under a row in its text column. */
+const formatRows = (rows: ReadonlyArray<CheckRow>) => {
+  const width = Math.max(0, ...rows.map((row) => row.label.length))
+  return rows.flatMap((row) => [
+    `${row.mark} ${row.label.padEnd(width)}  ${row.text}`,
+    ...(row.under ?? []).map((line) => `  ${" ".repeat(width)}    ${line}`)
+  ])
+}
+
+/**
+ * What `check` prints, the way `doctor` does: a line for the gateway, its broker, buffer, history, status page and
+ * devices, a mark in front (`!` for what start-up would warn about), then the verdict. `brief` (a terminal) counts
+ * the devices, however few, in total; otherwise each device has a line. `next` ends it with the command to run.
  */
 export const describeConfig = (
   config: GatewayConfig,
-  options: { readonly brief?: boolean } = {},
+  options: { readonly brief?: boolean; readonly next?: string } = {},
   cwd = process.cwd()
 ) => {
-  const passwordWarning = mqttPasswordWarning(config.mqtt)
+  const rows = checkRows(config, options.brief ?? false, cwd)
+  const warnings = rows.filter((row) => row.mark === "!").length
+  const verdict = `Config ok${warnings > 0 ? `, ${plural(warnings, "warning")}` : ""}.`
+  return [...formatRows(rows), "", options.next === undefined ? verdict : `${verdict} Next: ${options.next}`].join("\n")
+}
+
+/**
+ * An invalid config as `check` shows it in a terminal: one `✗ config` line with how many mistakes. A few are listed
+ * each with its path; many are grouped by what is wrong, a few paths each, since a points list with one bad column
+ * makes the same mistake on every row (`check --json` lists every mistake with its path).
+ */
+export const describeMistakes = (
+  path: string,
+  issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>
+) => {
+  const indent = "          "
+  const head = `✗ config  ${path} is not valid: ${plural(issues.length, "mistake")}`
+  if (issues.length <= LISTED) {
+    const width = Math.max(0, ...issues.map((issue) => (issue.path ?? "").length))
+    return [
+      head,
+      ...issues.map((issue) =>
+        issue.path === undefined
+          ? `${indent}${issue.message}`
+          : `${indent}${issue.path.padEnd(width)}  ${issue.message}`
+      )
+    ].join("\n")
+  }
+  const { shown, more } = firstOf(mistakeKinds(issues))
   return [
-    `config ok: ${config.site}/${config.building}, gateway ${config.id}, broker ${config.mqtt.url}`,
-    ...(passwordWarning === undefined ? [] : [`  warning: ${passwordWarning}`]),
-    config.buffer === undefined
-      ? "  no buffer: values read while the broker is down are lost"
-      : `  buffer ${shownPath(config.buffer.path, cwd)}`,
-    ...(config.history === undefined
-      ? []
-      : [
-          `  history ${shownPath(config.history.path, cwd)}, per-minute values for ${config.history.retentionDays} days`
-        ]),
-    config.status === undefined
-      ? "  no status page"
-      : config.status.bindAddress === "0.0.0.0"
-        ? `  status page on port ${config.status.port} at every address of this machine (http://localhost:${config.status.port} here)`
-        : `  status page http://${config.status.bindAddress}:${config.status.port}`,
-    ...((options.brief ?? false) && config.devices.length > LISTED
-      ? devicesByProtocol(config.devices)
-      : config.devices.map(deviceLine))
+    head,
+    ...shown.map(([message, paths]) =>
+      paths.length === 0 ? `${indent}${message}` : `${indent}${message}: ${named(paths, 3)}`
+    ),
+    ...(more > 0 ? [`${indent}and ${plural(more, "other kind")}`] : []),
+    `${indent}check --json lists every mistake with its path`
   ].join("\n")
 }
 
@@ -432,8 +542,8 @@ const run = Command.make(
 
 /**
  * What to run after a valid `check --json`: init's next steps for the config's folder (the broker, the points,
- * starting it, the status page), without the check itself. Only in the JSON: the text stays what it was, as
- * install.sh and the image validate a staged config with it.
+ * starting it, the status page), without the check itself. Only in the JSON: the text ends with `Config ok`, which
+ * the image's smoke test looks for.
  */
 const checkNext = Effect.fn("checkNext")(function* (path: string, config: GatewayConfig) {
   const fs = yield* FileSystem.FileSystem
@@ -464,9 +574,24 @@ const checkNext = Effect.fn("checkNext")(function* (path: string, config: Gatewa
 
 const check = Command.make("check", { config: configPath, all: allFlag, json: jsonFlag }, ({ config, all, json }) =>
   Effect.gen(function* () {
-    const decoded = yield* loadConfig(config)
+    const brief = process.stdout.isTTY && !all
+    const decoded = yield* loadConfig(config).pipe(
+      // A terminal gets the mistakes the way doctor prints a finding; a pipe and --json the error as before.
+      Effect.catchTag("ConfigFileError", (error) =>
+        // A person at a terminal gets the mistakes grouped, on stderr as every failure; a pipe and --json the error.
+        !json && process.stderr.isTTY && error.code === "invalid-config" && error.issues !== undefined
+          ? Console.error(describeMistakes(error.path, error.issues)).pipe(
+              Effect.andThen(Effect.sync(() => (process.exitCode = 1))),
+              Effect.as(undefined)
+            )
+          : Effect.fail(error)
+      )
+    )
+    if (decoded === undefined) return
     if (!json) {
-      return yield* Console.log(describeConfig(decoded, { brief: process.stdout.isTTY && !all }))
+      const cli = yield* invocation
+      const next = `${cli} doctor${config === DEFAULT_CONFIG ? "" : ` ${shellArgument(config)}`}`
+      return yield* Console.log(describeConfig(decoded, { brief, next }))
     }
     const { next, url, page } = yield* checkNext(config, decoded)
     yield* printJson({ ...configSummary(decoded), next, url, page })
@@ -681,7 +806,7 @@ export const savedLines = (
     ...extended.map((id) => ({ verb: `Added points to ${id}`, ...describe(id) }))
   ]
   const hint = lines.every((line) => line.writable === 0)
-    ? [ui.note("setpoints become writable on the status page or in the config")]
+    ? [ui.note("a setpoint takes commands after ot-gateway points allow-commands <device/point>")]
     : []
   return [...lines.map((line) => ui.done(`${line.verb}: ${line.text}`)), ...hint]
 }
@@ -1028,6 +1153,15 @@ const init = Command.make(
   ])
 )
 
+/** A list given as text instead of a file: for an agent that has the list but no file system (the MCP tools). */
+const listTextFlag = Flag.String("text").pipe(
+  Flag.withDescription(
+    "The list itself (CSV, JSON rows or EDE) instead of a file, with - in place of the file's name: for agents without a file to write"
+  ),
+  Flag.optional,
+  Flag.map(Option.getOrUndefined)
+)
+
 const importCommand = Command.make(
   "import",
   {
@@ -1047,10 +1181,11 @@ const importCommand = Command.make(
     dryRun: dryRunFlag(
       "Check the list and print its devices instead of adding them; without a config named or here, on their own"
     ),
+    text: listTextFlag,
     all: allFlag,
     json: jsonFlag
   },
-  ({ list, config, dryRun, all, json }) =>
+  ({ list, config, dryRun, text, all, json }) =>
     Effect.gen(function* () {
       const {
         added,
@@ -1060,7 +1195,8 @@ const importCommand = Command.make(
         units
       } = yield* importPointsList(list, config, {
         dryRun,
-        command: yield* invocation
+        command: yield* invocation,
+        text
       })
       const points = added.reduce((total, device) => total + device.points.length, 0)
       const alone = `no ${defaultConfigPath} here, so the devices were checked on their own; name a config to check them against it`
@@ -1153,11 +1289,19 @@ const templateCommand = Command.make(
     ] as const).pipe(
       Flag.withDescription("Only this protocol's example rows and the columns they can use"),
       Flag.optional
-    )
+    ),
+    json: jsonFlag
   },
-  ({ protocol }) => Effect.sync(() => process.stdout.write(pointsListTemplate(Option.getOrUndefined(protocol))))
+  ({ protocol, json }) => {
+    const csv = pointsListTemplate(Option.getOrUndefined(protocol))
+    return json
+      ? printJson({ ok: true, protocol: Option.getOrElse(protocol, () => "all"), csv })
+      : Effect.sync(() => process.stdout.write(csv))
+  }
 ).pipe(
-  Command.withDescription("A points list with example rows, as CSV on stdout: every column, or one protocol's"),
+  Command.withDescription(
+    "A points list with example rows, as CSV on stdout: every column, or one protocol's (--json: the same as csv)"
+  ),
   Command.withExamples([
     { command: "ot-gateway points template > points.csv", description: "Start a list to fill in" },
     { command: "ot-gateway points template --protocol modbus > points.csv", description: "Only Modbus TCP" },
@@ -1167,16 +1311,33 @@ const templateCommand = Command.make(
 
 const fromEdeCommand = Command.make(
   "from-ede",
-  { file: Argument.String("ede-file").pipe(Argument.withDescription("A BACnet EDE file (CSV, semicolons)")) },
-  ({ file }) =>
+  {
+    file: Argument.String("ede-file").pipe(
+      Argument.withDescription("A BACnet EDE file (CSV, semicolons); - with --text for the file's text itself")
+    ),
+    text: listTextFlag,
+    json: jsonFlag
+  },
+  ({ file, text, json }) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const translation = yield* edeToPointsList(yield* fs.readFileString(file))
-      yield* Console.error(describeTranslation(file, translation))
+      const given = yield* pointsListSource(file, text, "EDE file")
+      const translation = yield* edeToPointsList(given.text)
+      if (json) {
+        return yield* printJson({
+          ok: true,
+          devices: translation.devices,
+          points: translation.points,
+          skipped: translation.skipped,
+          csv: translation.list
+        })
+      }
+      yield* Console.error(describeTranslation(given.source, translation))
       yield* Effect.sync(() => process.stdout.write(translation.list))
-    })
+    }).pipe(jsonFailure(json))
 ).pipe(
-  Command.withDescription("A BACnet EDE file as a points list on stdout, to trim before import (import reads EDE too)"),
+  Command.withDescription(
+    "A BACnet EDE file as a points list on stdout, to trim before import (import reads EDE too). --json: csv, devices, points, skipped"
+  ),
   Command.withExamples([
     { command: "ot-gateway points from-ede building.csv > points.csv", description: "Translate it, then trim it" }
   ])
@@ -1238,6 +1399,341 @@ const exportCommand = Command.make(
   ])
 )
 
+const commandsTarget = Argument.String("point").pipe(
+  Argument.withDescription("One point as device/point, as in the config: heat-pump/setpoint"),
+  Argument.filter(
+    (text) => parseTarget(text) !== undefined,
+    () => "name one device/point"
+  )
+)
+
+const limitFlag = (name: "min" | "max", which: string) =>
+  Flag.Finite(name).pipe(
+    Flag.withDescription(
+      `The ${which} value a command may set, in the point's unit (after scaling); a number needs both, a switch neither`
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined)
+  )
+
+const pointCommandsDryRun = dryRunFlag("Check the change and print what it would do, without writing the config")
+
+const allowCommandsCommand = Command.make(
+  "allow-commands",
+  {
+    target: commandsTarget,
+    config: configPath,
+    min: limitFlag("min", "lowest"),
+    max: limitFlag("max", "highest"),
+    dryRun: pointCommandsDryRun,
+    json: jsonFlag
+  },
+  ({ target, config, min, max, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* setPointCommands(
+        config,
+        parseTarget(target) ?? { device: "", point: "" },
+        { allow: true, min, max },
+        { dryRun, command: yield* invocation }
+      )
+      yield* json ? printJson(report) : Console.log(formatPointCommands(report))
+    }).pipe(jsonFailure(json, { path: config, point: target }))
+).pipe(
+  Command.withDescription(
+    "Let one point take commands on its $set topic: writes writable and, for a number, the limits a command may set into the config, checked first. One point per call, on purpose; nothing is sent to the device, and the running gateway takes it with a restart. --json: point, source, setTopic, limits, changed, next"
+  ),
+  Command.withExamples([
+    {
+      command: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25",
+      description: "A setpoint, 15 to 25 in its unit"
+    },
+    { command: "ot-gateway points allow-commands plant/pump-enable", description: "A switch: on or off, no limits" },
+    {
+      command: "ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25 --dry-run --json",
+      description: "Only check it, for agents"
+    }
+  ])
+)
+
+const readOnlyCommand = Command.make(
+  "read-only",
+  { target: commandsTarget, config: configPath, dryRun: pointCommandsDryRun, json: jsonFlag },
+  ({ target, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* setPointCommands(
+        config,
+        parseTarget(target) ?? { device: "", point: "" },
+        { allow: false },
+        { dryRun, command: yield* invocation }
+      )
+      yield* json ? printJson(report) : Console.log(formatPointCommands(report))
+    }).pipe(jsonFailure(json, { path: config, point: target }))
+).pipe(
+  Command.withDescription(
+    "Make one point read-only again: takes writable and its limits out of the config, so the gateway refuses commands on it after a restart"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway points read-only heat-pump/setpoint", description: "No more commands on the setpoint" }
+  ])
+)
+
+const configFileFlag = Flag.String("config").pipe(
+  Flag.withDescription(`Path of the gateway's JSON config (default ${defaultConfigPath})`),
+  Flag.withDefault(defaultConfigPath)
+)
+
+const configKey = Argument.String("key").pipe(
+  Argument.withDescription(
+    "A key by its path, dots between; devices and points by id: mqtt.url, devices.heat-pump.pollIntervalMs, devices.heat-pump.points.setpoint.unit"
+  )
+)
+
+const configDryRun = dryRunFlag("Check the change and print what it would do, without writing the config")
+
+const configGetCommand = Command.make(
+  "get",
+  {
+    key: configKey.pipe(Argument.withDefault("")),
+    config: configFileFlag,
+    json: jsonFlag
+  },
+  ({ key, config, json }) =>
+    Effect.gen(function* () {
+      const report = yield* getConfigValue(config, key, { command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigGet(report))
+    }).pipe(jsonFailure(json, { path: config, key }))
+).pipe(
+  Command.withDescription(
+    "A key's value in the config, or the whole config without a key. --json: value (as the file has it), set (whether it has it) and effective (what the gateway runs with, defaults filled in)"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway config get mqtt.url", description: "The broker" },
+    {
+      command: "ot-gateway config get devices.heat-pump.pollIntervalMs --json",
+      description: "How often a device is read, its default when the file does not say"
+    }
+  ])
+)
+
+const configSetCommand = Command.make(
+  "set",
+  {
+    key: configKey,
+    value: Argument.String("value").pipe(
+      Argument.withDescription(
+        "The value: JSON when it reads as JSON (5000, true, '{\"factor\": 0.1}'), text otherwise (mqtts://broker:8883)"
+      ),
+      Argument.optional,
+      Argument.map(Option.getOrUndefined)
+    ),
+    valueFlag: Flag.String("value").pipe(
+      Flag.withDescription("The value as a flag, for one that starts with -: --value=-40"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    config: configFileFlag,
+    dryRun: configDryRun,
+    json: jsonFlag
+  },
+  ({ key, value, valueFlag, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const set = valueFlag ?? value
+      if (set === undefined || (value !== undefined && valueFlag !== undefined)) {
+        return yield* new UsageMistake({
+          message: "config set takes one value, after the key or as --value",
+          code: "usage",
+          missing: ["value"],
+          hint: "ot-gateway config set <key> <value>, or --value=<value> for one that starts with -"
+        })
+      }
+      const report = yield* setConfigValue(config, key, { set }, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigChange(report))
+    }).pipe(jsonFailure(json, { path: config, key }))
+).pipe(
+  Command.withDescription(
+    "Set one key of the config, checked with the gateway's schema before the file is written (the previous one is kept as .bak). It never makes a point writable: that is points allow-commands. --json: before, after, effective, changed, changes, next"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway config set mqtt.url mqtts://broker.example:8883", description: "Another broker" },
+    {
+      command: "ot-gateway config set devices.heat-pump.pollIntervalMs 10000",
+      description: "Read a device every 10 s"
+    },
+    {
+      command: "ot-gateway config set devices.heat-pump.points.setpoint.unit unit:DEG_C --dry-run --json",
+      description: "Only check a point's unit, for agents"
+    }
+  ])
+)
+
+const configUnsetCommand = Command.make(
+  "unset",
+  { key: configKey, config: configFileFlag, dryRun: configDryRun, json: jsonFlag },
+  ({ key, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* setConfigValue(config, key, { unset: true }, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigChange(report))
+    }).pipe(jsonFailure(json, { path: config, key }))
+).pipe(
+  Command.withDescription("Take one key out of the config, so its default applies again"),
+  Command.withExamples([
+    { command: "ot-gateway config unset devices.heat-pump.pollIntervalMs", description: "Back to every 5 s" }
+  ])
+)
+
+const configRemoveCommand = Command.make(
+  "remove",
+  {
+    target: Argument.String("target").pipe(
+      Argument.withDescription("A device, or one of its points as device/point: heat-pump, heat-pump/setpoint")
+    ),
+    config: configFileFlag,
+    dryRun: configDryRun,
+    json: jsonFlag
+  },
+  ({ target, config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* removeFromConfig(config, target, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigChange(report))
+    }).pipe(jsonFailure(json, { path: config, target }))
+).pipe(
+  Command.withDescription(
+    "Take a device, or one point of a device, out of the config (the previous file is kept as .bak). Its topics go silent after the restart; diff names the retained messages left on the broker"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway config remove heat-pump/return-temp", description: "One point" },
+    { command: "ot-gateway config remove heat-pump --dry-run", description: "A device, only checked" }
+  ])
+)
+
+const configUndoCommand = Command.make(
+  "undo",
+  { config: configFileFlag, dryRun: configDryRun, json: jsonFlag },
+  ({ config, dryRun, json }) =>
+    Effect.gen(function* () {
+      const report = yield* undoConfig(config, { dryRun, command: yield* invocation })
+      yield* json ? printJson(report) : Console.log(formatConfigUndo(report))
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "Put the previous config back: the file and its .bak (what the last save from this CLI, import or the status page replaced) change places, so undo again brings the change back"
+  )
+)
+
+const configCommand = Command.make("config").pipe(
+  Command.withDescription(
+    "Read and change the config key by key, checked before it is written: get, set, unset, remove a device or point, undo"
+  ),
+  Command.withSubcommands([
+    configGetCommand,
+    configSetCommand,
+    configUnsetCommand,
+    configRemoveCommand,
+    configUndoCommand
+  ])
+)
+
+/** The most a secret piped in may be: a password or a token, not a file. */
+const SECRET_BYTES = 64 * 1024
+
+/**
+ * A secret from stdin, when it is not a terminal: everything piped in, without the line break `echo` adds. A stdin
+ * that stays open and silent for a minute (an agent's shell) is no value, which the command says; once a byte
+ * came, a slow source (a secret store that asks for its own passphrase) is read to its end. More than a password
+ * is refused, not cut.
+ */
+const secretFromStdin = (name: string) =>
+  Effect.gen(function* () {
+    const stdio = yield* Stdio
+    let total = 0
+    const read = stdio.stdin.pipe(
+      Stream.takeUntil((chunk) => (total += chunk.length) > SECRET_BYTES),
+      Stream.runCollect,
+      Effect.catchTag("PlatformError", () => Effect.succeed<Array<Uint8Array>>([]))
+    )
+    const silent = Effect.sleep("60 seconds").pipe(
+      Effect.andThen(Effect.suspend(() => (total === 0 ? Effect.succeed<Array<Uint8Array>>([]) : Effect.never)))
+    )
+    const chunks = yield* Effect.raceFirst(read, silent)
+    if (total > SECRET_BYTES) {
+      return yield* new SecretFailed({
+        message: `the value piped in for ${name} is over 64 KiB, more than a password or a token: nothing was written`,
+        code: "secret-not-writable",
+        hint: "pipe in the secret itself, not a file that holds it"
+      })
+    }
+    const bytes = new Uint8Array(total)
+    let at = 0
+    for (const chunk of chunks) {
+      bytes.set(chunk, at)
+      at += chunk.length
+    }
+    return new TextDecoder().decode(bytes).replace(/\r?\n$/, "")
+  })
+
+const secretSetCommand = Command.make(
+  "set",
+  {
+    name: Argument.String("secret").pipe(
+      Argument.withDescription(
+        "broker-password (the variable mqtt.passwordEnv names), edit-token (the status page's), or a variable's name"
+      )
+    ),
+    config: configFileFlag,
+    generate: Flag.Boolean("generate").pipe(
+      Flag.withDescription("Make a long random value instead of asking for one: for edit-token"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ name, config, generate, json }) =>
+    Effect.gen(function* () {
+      const command = yield* invocation
+      // Before anything is asked: a name or a config that cannot take the secret is said first.
+      yield* secretTarget(config, name, command)
+      const value = generate
+        ? ({ generate: true } as const)
+        : process.stdin.isTTY
+          ? { value: Redacted.value(yield* Prompt.Password({ message: `${name}, not shown:` })) }
+          : { value: yield* secretFromStdin(name) }
+      const report = yield* setSecret(config, name, value, { command })
+      yield* json ? printJson(report) : Console.log(formatSecretSet(report))
+    }).pipe(jsonFailure(json, { path: config, secret: name }))
+).pipe(
+  Command.withDescription(
+    "Put a secret into ot-gateway.env next to the config: asked without echo in a terminal, read from stdin otherwise, never an argument and never printed. --json: variable, file, replaced, next"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway secret set broker-password", description: "Asks for the broker password, not shown" },
+    {
+      command: 'printf %s "$MQTT_PASSWORD" | ot-gateway secret set broker-password',
+      description: "From a script or a secret store"
+    },
+    {
+      command: "ot-gateway secret set edit-token --generate",
+      description: "A random token, so the status page can save the config over the network"
+    }
+  ])
+)
+
+const secretListCommand = Command.make("list", { config: configFileFlag, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* listSecrets(config, { command: yield* invocation })
+    yield* json ? printJson(report) : Console.log(formatSecretList(report))
+  }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "Which secrets the config needs and which ot-gateway.env has, by name only, never a value. --json: secrets [{secret, variable, needed, set}], missing, next"
+  )
+)
+
+const secretCommand = Command.make("secret").pipe(
+  Command.withDescription(
+    "The broker password and the edit token in ot-gateway.env, kept out of the config and off the screen: set, list"
+  ),
+  Command.withSubcommands([secretSetCommand, secretListCommand])
+)
+
 const profilesList = Command.make("list", { json: jsonFlag }, ({ json }) =>
   Effect.gen(function* () {
     const profiles = yield* libraryProfiles()
@@ -1293,8 +1789,17 @@ const profiles = Command.make("profiles").pipe(
 )
 
 const points = Command.make("points").pipe(
-  Command.withDescription("The points list, the CSV (or JSON) that import and init read: its schema and a template"),
-  Command.withSubcommands([schemaCommand, templateCommand, fromEdeCommand, exportCommand])
+  Command.withDescription(
+    "Points: the points list, the CSV (or JSON) that import and init read (its schema, a template, an export), and which points take commands"
+  ),
+  Command.withSubcommands([
+    schemaCommand,
+    templateCommand,
+    fromEdeCommand,
+    exportCommand,
+    allowCommandsCommand,
+    readOnlyCommand
+  ])
 )
 
 const contractCommand = Command.make(
@@ -1786,7 +2291,7 @@ const status = Command.make(
     )
 ).pipe(
   Command.withDescription(
-    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one (in a terminal, more than 10 devices are counted and only the ones not ok listed; --all lists each). Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
+    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one (in a terminal the devices are counted and only the ones not ok listed; --all lists each). Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
   ),
   Command.withExamples([
     { command: "ot-gateway status", description: "The gateway of ot-gateway.json in this folder" },
@@ -2163,8 +2668,8 @@ const readCommand = Command.make(
               ...(published === undefined ? {} : { published })
             })
           } else {
-            // A terminal shows every value of a few points, or of the ones named; of many, how many and what failed.
-            const brief = process.stdout.isTTY && !all && !chose && report.summary.points > VALUES_SHOWN
+            // A terminal shows how many were read and what failed, or every value of the ones named.
+            const brief = process.stdout.isTTY && !all && !chose
             yield* printResult(brief ? formatReadSummary(report) : formatReadReport(report))
             if (published !== undefined && failure === undefined) {
               const aggregated =
@@ -2461,7 +2966,12 @@ const mcpCommand = Command.make("mcp", {}, (): Effect.Effect<void, never, NodeSe
     yield* serveMcp({
       tools: mcpTools,
       version,
-      run: (argv): Effect.Effect<unknown, unknown, NodeServices> => runCli(argv),
+      // The server outlives a `secret set` the user runs beside it: each call reads the folder's env file again.
+      run: (argv): Effect.Effect<unknown, unknown, NodeServices> =>
+        Effect.andThen(
+          Effect.sync(() => loadEnvFile()),
+          runCli(argv)
+        ),
       log
     })
   }).pipe(Effect.updateService(Console.Console, stderrConsole))
@@ -2621,6 +3131,9 @@ export const rootDescription = [
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
+  "    config set <key> <value> --json  one key of the config, checked before it is written (get, unset, remove <device[/point]>, undo; --dry-run)",
+  "    secret list --json               which secrets the config needs and which are set, by name; the user sets one with secret set broker-password",
+  "    points allow-commands <device/point> --min=15 --max=25 --json   one point takes commands (read-only undoes it): only when the user names it",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
   "    import <list> --dry-run --json   check a points list, row by row",
@@ -2652,6 +3165,8 @@ export const cli = Command.make("ot-gateway").pipe(
     upgradeCommand,
     discoverCommand,
     importCommand,
+    configCommand,
+    secretCommand,
     diffCommand,
     points,
     profiles,
@@ -2687,6 +3202,8 @@ const subcommands = new Set([
   "upgrade",
   "discover",
   "import",
+  "config",
+  "secret",
   "diff",
   "points",
   "profiles",
@@ -2779,13 +3296,20 @@ export const takesJson = (path: ReadonlyArray<string>) =>
     onSome: (spec) => spec.flags.some((flag) => flag.name === "json")
   })
 
+/**
+ * Commands whose output is a points list a person redirects into a file (`points template > points.csv`): they
+ * take `--json` when it is typed, and `OT_GATEWAY_JSON` leaves them as they are, so the file stays a list.
+ */
+const listPrinters = new Set(["points template", "points from-ede"])
+const printsAList = (path: ReadonlyArray<string>) => listPrinters.has(path.slice(1).join(" "))
+
 /** Arguments that print help or the version, which stay text whatever `OT_GATEWAY_JSON` says. */
 const helpFlags = new Set(["--help", "-h", "--version", "-v"])
 
 /**
  * `argv` with `--json` added when `OT_GATEWAY_JSON` asks for it and the command takes it: one setting for an agent's
- * whole session instead of the flag on every command. A command without `--json` (run, demo), `--help`, and a
- * `--json` typed out (`--json=false` for text once) stay as typed.
+ * whole session instead of the flag on every command. A command without `--json` (run, demo), one that prints a
+ * points list (`listPrinters`), `--help`, and a `--json` typed out (`--json=false` for text once) stay as typed.
  */
 export const withJsonFromEnvironment = (
   argv: ReadonlyArray<string>,
@@ -2794,7 +3318,8 @@ export const withJsonFromEnvironment = (
   if (
     !jsonFromEnvironment(env) ||
     argv.some((arg) => isJsonFlag(arg) || helpFlags.has(arg)) ||
-    !takesJson(commandPath(toCliArgs(argv)))
+    !takesJson(commandPath(toCliArgs(argv))) ||
+    printsAList(commandPath(toCliArgs(argv)))
   ) {
     return argv
   }

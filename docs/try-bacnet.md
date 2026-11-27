@@ -62,7 +62,13 @@ Then the config, from the points list:
 npx ot-gateway init . --yes --site home --broker mqtt://localhost:1883 --points points.csv
 ```
 
-Nothing is writable until the config says so, on purpose. In `ot-gateway.json`, give the setpoint `writable` and the range a command may set:
+Nothing is writable until you say so, on purpose. Let the setpoint take commands, with the range a command may set:
+
+```bash
+npx ot-gateway points allow-commands demo-room/temperature-setpoint --min=15 --max=28
+```
+
+It writes `writable` and the `limits` into `ot-gateway.json`:
 
 ```json
 {
@@ -81,7 +87,15 @@ npx ot-gateway check
 npx ot-gateway read
 ```
 
-`read` asks the device once for each point and exits, without the broker:
+`read` asks the device once for each point and exits, without the broker. In a terminal it says how many were read and names any that failed:
+
+```
+3 points of 1 device read in 42 ms
+
+--all shows every value, read <device> one device's
+```
+
+`read demo-room` shows the device's values:
 
 ```
 demo-room/room-temperature      20.5 °C

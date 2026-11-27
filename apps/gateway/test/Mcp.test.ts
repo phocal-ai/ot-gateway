@@ -120,9 +120,127 @@ describe("mcp tools", () => {
     )
   })
 
-  it("mark write, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
+  it("import takes the list as text or as rows, so no file has to be written first", () => {
+    expect(argvOf("import", { text: "device_id,point_id\nmeter,power\n" })).toEqual(
+      Exit.succeed(["import", "-", "--text=device_id,point_id\nmeter,power\n", "--dry-run"])
+    )
+    expect(argvOf("import", { rows: [{ device_id: "meter", point_id: "power" }], dryRun: false })).toEqual(
+      Exit.succeed(["import", "-", '--text=[{"device_id":"meter","point_id":"power"}]'])
+    )
+    // A text that starts as a flag does is still one value of --text.
+    expect(argvOf("import", { text: "--config=/etc/passwd" })).toEqual(
+      Exit.succeed(["import", "-", "--text=--config=/etc/passwd", "--dry-run"])
+    )
+  })
+
+  it("import and points_from_ede take one source: none, or a file and a text together, is refused before the command", () => {
+    expect(Exit.isFailure(argvOf("import", { config: "site/ot-gateway.json", dryRun: false }))).toBe(true)
+    expect(Exit.isFailure(argvOf("import", { pointsList: "a.csv", text: "device,point\n" }))).toBe(true)
+    expect(Exit.isFailure(argvOf("import", { text: "device,point\n", rows: [] }))).toBe(true)
+    expect(Exit.isFailure(argvOf("points_from_ede", {}))).toBe(true)
+    expect(Exit.isFailure(argvOf("points_from_ede", { edeFile: "a.csv", text: "#EDE\n" }))).toBe(true)
+  })
+
+  it("points_template and points_from_ede return the list as text and write no file", () => {
+    expect(argvOf("points_template", {})).toEqual(Exit.succeed(["points", "template"]))
+    expect(argvOf("points_template", { protocol: "bacnet" })).toEqual(
+      Exit.succeed(["points", "template", "--protocol=bacnet"])
+    )
+    expect(argvOf("points_from_ede", { edeFile: "building.ede.csv" })).toEqual(
+      Exit.succeed(["points", "from-ede", "building.ede.csv"])
+    )
+    expect(argvOf("points_from_ede", { text: "#EDE\n" })).toEqual(
+      Exit.succeed(["points", "from-ede", "-", "--text=#EDE\n"])
+    )
+  })
+
+  it("init asks nothing, only works it out unless told otherwise, and has no place for a password", () => {
+    expect(argvOf("init", { site: "plant", broker: "mqtt://broker:1883", devices: "none" })).toEqual(
+      Exit.succeed(["init", ".", "--site=plant", "--broker=mqtt://broker:1883", "--devices=none", "--dry-run"])
+    )
+    expect(
+      argvOf("init", { directory: "gateway", yes: true, history: false, statusPort: 8081, dryRun: false })
+    ).toEqual(Exit.succeed(["init", "gateway", "--status-port=8081", "--no-history", "--yes"]))
+    expect(JSON.stringify(toolNamed("init").inputSchema)).toContain('"passwordEnv"')
+    expect(JSON.stringify(toolNamed("init").inputSchema)).not.toContain('"password"')
+    expect(Exit.isFailure(argvOf("init", { site: "plant", password: "secret" }))).toBe(true)
+  })
+
+  it("clears a retained topic, and offers no tool that publishes a message or sets a secret", () => {
+    expect(argvOf("clear_retained", { topic: "plant/hall/meter/power" })).toEqual(
+      Exit.succeed(["publish", "plant/hall/meter/power", "--retain"])
+    )
+    expect(Exit.isFailure(argvOf("clear_retained", { topic: "--retain=false" }))).toBe(true)
+    expect(argvOf("secret_list", { config: "site/ot-gateway.json" })).toEqual(
+      Exit.succeed(["secret", "list", "--config=site/ot-gateway.json"])
+    )
+    const names = mcpTools.map((tool) => tool.name)
+    expect(names).not.toContain("publish")
+    expect(names.filter((name) => name.startsWith("secret"))).toEqual(["secret_list"])
+  })
+
+  it("mark write, making a point writable, removing a device, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
-    expect(changing).toEqual(["write", "restart", "down", "upgrade"])
+    expect(changing).toEqual([
+      "write",
+      "points_allow_commands",
+      "config_remove",
+      "config_undo",
+      "init",
+      "clear_retained",
+      "restart",
+      "down",
+      "upgrade"
+    ])
+  })
+
+  it("config_set only checks unless told otherwise, and passes the value as JSON in a flag", () => {
+    expect(argvOf("config_set", { key: "devices.meter.pollIntervalMs", value: 10_000 })).toEqual(
+      Exit.succeed(["config", "set", "devices.meter.pollIntervalMs", "--value=10000", "--dry-run"])
+    )
+    // A text stays a text, digits and a leading - too.
+    expect(argvOf("config_set", { key: "mqtt.clientId", value: "5000", dryRun: false })).toEqual(
+      Exit.succeed(["config", "set", "mqtt.clientId", '--value="5000"'])
+    )
+    expect(
+      argvOf("config_set", {
+        key: "devices.meter.points.t.scaling",
+        value: { offset: -40 },
+        config: "a/ot-gateway.json"
+      })
+    ).toEqual(
+      Exit.succeed([
+        "config",
+        "set",
+        "devices.meter.points.t.scaling",
+        '--value={"offset":-40}',
+        "--config=a/ot-gateway.json",
+        "--dry-run"
+      ])
+    )
+    expect(argvOf("config_set", { key: "devices.meter.pollIntervalMs", unset: true })).toEqual(
+      Exit.succeed(["config", "unset", "devices.meter.pollIntervalMs", "--dry-run"])
+    )
+    expect(Exit.isFailure(argvOf("config_set", { key: "--config=/etc/passwd", value: 1 }))).toBe(true)
+    expect(argvOf("config_remove", { target: "meter/power" })).toEqual(
+      Exit.succeed(["config", "remove", "meter/power", "--dry-run"])
+    )
+    expect(argvOf("config_get", {})).toEqual(Exit.succeed(["config", "get"]))
+    expect(argvOf("config_undo", {})).toEqual(Exit.succeed(["config", "undo", "--dry-run"]))
+    expect(argvOf("config_undo", { dryRun: false })).toEqual(Exit.succeed(["config", "undo"]))
+  })
+
+  it("points_allow_commands only checks unless told otherwise, and passes limits as flags, negative ones too", () => {
+    expect(argvOf("points_allow_commands", { point: "heat-pump/setpoint", min: -5, max: 25 })).toEqual(
+      Exit.succeed(["points", "allow-commands", "heat-pump/setpoint", "--min=-5", "--max=25", "--dry-run"])
+    )
+    expect(
+      argvOf("points_allow_commands", { point: "plant/enable", config: "site/ot-gateway.json", dryRun: false })
+    ).toEqual(Exit.succeed(["points", "allow-commands", "plant/enable", "site/ot-gateway.json"]))
+    expect(Exit.isFailure(argvOf("points_allow_commands", { point: "--config=/etc/passwd" }))).toBe(true)
+    expect(argvOf("points_read_only", { point: "heat-pump/setpoint" })).toEqual(
+      Exit.succeed(["points", "read-only", "heat-pump/setpoint"])
+    )
   })
 
   it("passes up and upgrade's flags as flags", () => {

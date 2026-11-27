@@ -133,7 +133,7 @@ npx ot-gateway status           # one line per device
 - **BACnet often needs no AI.** `discover` writes a draft points list to trim, and EDE files, the CSV export most BACnet engineering tools produce, import directly.
 - **Device profiles for Modbus.** Modbus register maps are vendor PDFs in vendor layouts, which is where AI helps most. To avoid parsing the same meter twice, a profile describes one device model's registers, and a row in the points list names the profile and picks points by name. An AI agent writes a profile from a datasheet once; reviewed profiles go into a shared library, so the common meters need no AI over time. Profiles need a format and a review process before they are accepted from outside.
 - **With AI.** The agent translates the user's list into the standard one and checks it with `npx ot-gateway import --dry-run` until it is clean, then `init` writes the folder and `docker compose up -d` starts it. The prompt to paste is short (read `npx ot-gateway points schema`, translate, check, start) and works in any agent that runs commands; the `/setup` skill is the fuller version for Claude Code, and `ot-gateway mcp` offers the same commands as MCP tools.
-- **Writes stay a decision.** No list, profile or AI makes a point writable: that is set in the config, on purpose.
+- **Writes stay a decision.** No list, profile or discovery makes a point writable, and no agent on its own: a person allows commands on one named point, with limits for a number, through `points allow-commands`, the status page or the config. An agent runs that command when the person asks for that point, so it can help with everything a person can, and the decision stays the person's.
 
 ## Experience: people and agents
 

@@ -424,9 +424,6 @@ const countedLine = (report: ReadReport) => {
     : `${count(summary.read)} of ${plural(summary.points, "point")} read, ${count(summary.failed)} failed, in ${took(report.durationMs)}`
 }
 
-/** Up to this many points, a terminal shows every value; beyond, a summary and what failed (`--all`: every value). */
-export const VALUES_SHOWN = 20
-
 /** The first few of `items`, `name  why` aligned, and how many more. */
 const failureRows = (items: ReadonlyArray<{ readonly name: string; readonly why: string }>) => {
   const { shown, more } = firstOf(items)
@@ -438,7 +435,7 @@ const failureRows = (items: ReadonlyArray<{ readonly name: string; readonly why:
 }
 
 /**
- * The report for a person at a terminal when there are many points: how many were read, then the devices that did
+ * The report for a person at a terminal, however few points: how many were read, then the devices that did
  * not answer and the points that failed, the first few of each with why, and how to see the values. A pipe, --json
  * and `read <device>` get every value.
  */
@@ -463,7 +460,7 @@ export const formatReadSummary = (report: ReadReport): string => {
       ? []
       : [`${plural(failedPoints.length, "point")} failed:`, ...failureRows(failedPoints)]),
     "",
-    "The values: add --all for every one, or a device's id for its own"
+    "--all shows every value, read <device> one device's"
   ].join("\n")
 }
 
