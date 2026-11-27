@@ -181,6 +181,11 @@ export interface MqttClientOptions {
    * runs on the connection's read loop: hand the message on and return.
    */
   readonly onMessage?: (message: InboundMessage) => Effect.Effect<void>
+  /**
+   * Told when the broker answered a connection's SUBSCRIBE, with the filters it refused (none when it granted
+   * all). Retained messages on the granted ones follow it. It runs on the connection's read loop: return at once.
+   */
+  readonly onSubscribed?: (refused: ReadonlyArray<string>) => Effect.Effect<void>
 }
 
 /** Why the client has no connection: one it had broke (`lost`), or a dial failed or was refused. */
@@ -576,6 +581,9 @@ export const makeMqttClient = Effect.fn("makeMqttClient")(function* (
                   yield* Effect.logInfo("MQTT broker answered the SUBSCRIBE late").pipe(
                     Effect.annotateLogs({ outcome })
                   )
+                }
+                if (options.onSubscribed !== undefined) {
+                  yield* options.onSubscribed(refused.map((subscription) => subscription.filter))
                 }
                 if (refused.length > 0) {
                   yield* Effect.logError(

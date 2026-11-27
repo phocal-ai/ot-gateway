@@ -50,7 +50,7 @@ const argv = withFirstRun(process.argv.slice(2), {
 })
 const json = isJsonMode(argv)
 // A globally installed CLI says once a day when a newer release is out (UpdateNotice.ts); never for --json or mcp.
-const notice = updateNoticeWanted(toCliArgs(argv), process.env, process.stderr.isTTY)
+const notice = updateNoticeWanted(toCliArgs(argv), process.env, process.stderr.isTTY, process.argv[1])
 
 runCli(argv).pipe(
   notice ? withUpdateNotice({ folder: configFolder(process.env), now: Date.now() }) : identity,

@@ -1,4 +1,5 @@
 /** `gateways`: the gateways a broker knows, from their retained health and `$meta`, against the in-process broker. */
+import * as NodeServices from "@effect/platform-node/NodeServices"
 import * as NodeSocketServer from "@effect/platform-node/NodeSocketServer"
 import { describe, expect, it } from "@effect/vitest"
 import { parseConfig } from "@ot-gateway/core"
@@ -7,6 +8,7 @@ import { Effect } from "effect"
 import { publishOnce } from "../src/Broker.ts"
 import {
   brokerSettings,
+  fleetBroker,
   formatGatewayList,
   formatGatewayPoints,
   formatGatewayStatus,
@@ -135,6 +137,7 @@ describe("text", () => {
   it("prints points with unit and writable", () => {
     const text = formatGatewayPoints({
       gateway: "s/b/main",
+      status: "online",
       points: [
         {
           device: "room",
@@ -212,5 +215,29 @@ describe("against a broker", () => {
       const missing = yield* Effect.flip(gatewayStatus(config.mqtt, "nope", "300 millis"))
       expect(missing._tag === "FleetError" ? missing.code : missing._tag).toBe("gateway-not-found")
     }).pipe(Effect.scoped)
+  )
+})
+
+describe("refusals", () => {
+  it.live("fails with subscribe-refused when the broker's rules refuse the health topics", () =>
+    Effect.gen(function* () {
+      const server = yield* NodeSocketServer.make({ host: "127.0.0.1", port: 0 })
+      const control = makeBrokerControl()
+      control.refusedFilters.add("+/+/$gateway/+/health")
+      yield* serveMqtt(server, control).pipe(Effect.forkScoped)
+      const port = server.address._tag === "UnixPathAddress" ? 0 : server.address.port
+      const settings = yield* brokerSettings(`mqtt://127.0.0.1:${port}`, undefined)
+      const error = yield* Effect.flip(listGateways(settings, "200 millis"))
+      expect(error._tag === "FleetError" ? error.code : error._tag).toBe("subscribe-refused")
+    }).pipe(Effect.scoped)
+  )
+
+  it.effect("refuses --username without --broker, and calls unreadable health unreadable, not offline", () =>
+    Effect.gen(function* () {
+      const error = yield* Effect.flip(fleetBroker({ broker: undefined, username: "viewer", config: "x.json" }))
+      expect(error._tag).toBe("UsageMistake")
+      const odd = gatewayOf(healthOf("s/b/odd", JSON.stringify({ status: "rebooting" })))
+      expect(odd === undefined ? undefined : statusFailure(odd)?.code).toBe("health-unreadable")
+    }).pipe(Effect.provide(NodeServices.layer))
   )
 })

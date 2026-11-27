@@ -15,6 +15,11 @@ describe("updateNoticeWanted", () => {
     expect(updateNoticeWanted(["status"], { CI: "true" }, true)).toBe(false)
     expect(updateNoticeWanted(["status"], { OT_GATEWAY_NO_UPDATE_CHECK: "1" }, true)).toBe(false)
     expect(updateNoticeWanted(["status"], { OT_GATEWAY_NO_UPDATE_CHECK: "0" }, true)).toBe(true)
+    expect(updateNoticeWanted(["events", "--follow"], {}, true)).toBe(false)
+    expect(updateNoticeWanted(["watch"], {}, true)).toBe(false)
+    expect(updateNoticeWanted(["status"], {}, true, "/home/u/.npm/_npx/1a2b/node_modules/ot-gateway/main.mjs")).toBe(
+      false
+    )
   })
 })
 
@@ -55,13 +60,33 @@ describe("withUpdateNotice", () => {
     }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer]))
   )
 
-  it.effect("stays quiet when the registry cannot be asked, and for a build that is not a release", () =>
+  it.effect("stays quiet when the registry cannot be asked, and asks again only a day later", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem
       const folder = yield* fs.makeTempDirectoryScoped()
       const now = Date.UTC(2026, 10, 27)
-      yield* Effect.void.pipe(withUpdateNotice({ current: "v0.16.3", folder, now, latest: Effect.fail("offline") }))
-      yield* Effect.void.pipe(withUpdateNotice({ current: "dev", folder, now, latest: Effect.succeed("9.0.0") }))
+      let asked = 0
+      const offline = Effect.suspend(() => {
+        asked += 1
+        return Effect.fail("offline")
+      })
+      yield* Effect.void.pipe(withUpdateNotice({ current: "v0.16.3", folder, now, latest: offline }))
+      yield* Effect.void.pipe(withUpdateNotice({ current: "v0.16.3", folder, now: now + 1000, latest: offline }))
+      expect(asked).toBe(1)
+      // A defect in the question does not reach the command either.
+      const result = yield* Effect.succeed(7).pipe(
+        withUpdateNotice({ current: "v0.16.3", folder, now: now + CHECK_INTERVAL_MS, latest: Effect.die("boom") })
+      )
+      expect(result).toBe(7)
+      expect(yield* errors).toEqual([])
+    }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer]))
+  )
+
+  it.effect("does nothing for a build that is not a release", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const folder = yield* fs.makeTempDirectoryScoped()
+      yield* Effect.void.pipe(withUpdateNotice({ current: "dev", folder, now: 0, latest: Effect.succeed("9.0.0") }))
       expect(yield* errors).toEqual([])
       expect(yield* fs.exists(`${folder}/update-check.json`)).toBe(false)
     }).pipe(Effect.provide([NodeServices.layer, TestConsole.layer]))

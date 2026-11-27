@@ -59,10 +59,10 @@ const configCommands = ["check", "run", "doctor", "read", "write", "broker", "wa
 const gatewayCommands = ["status", "events", "history", "messages", "logs", "doctor"]
 /** Commands that run the gateway under Docker Compose. */
 const deployCommands = ["up", "down", "restart", "upgrade"]
-/** Commands that connect to the config's broker. */
-const brokerCommands = ["broker", "watch", "publish", "write", "doctor", "gateways"]
 /** Commands that ask a broker about the gateways it knows. */
 const fleetCommands = ["gateways list", "gateways status", "gateways points"]
+/** Commands that connect to the config's broker. */
+const brokerCommands = ["broker", "watch", "publish", "write", "doctor", ...fleetCommands]
 /** Where a device's failure class shows up. */
 const deviceReporters = ["status", "events", "doctor", "read", "the health topic"]
 /** Where a command's result shows up. */
@@ -209,6 +209,15 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway gateways list --broker mqtt://127.0.0.1:1883"
   },
   {
+    code: "subscribe-refused",
+    area: "broker",
+    reportedBy: fleetCommands,
+    meaning:
+      "The broker refused to let this login read the topics a gateways command needs: the gateways' health or their points' $meta.",
+    fix: "Give the login read access to +/+/$gateway/+/health and +/+/+/+/$meta in the broker's access rules, or use a login that has it (--username).",
+    next: "ot-gateway gateways list --broker mqtt://host:1883 --username viewer"
+  },
+  {
     code: "gateway-not-found",
     area: "gateway",
     reportedBy: ["gateways status", "gateways points"],
@@ -216,6 +225,15 @@ export const codes: ReadonlyArray<CodeEntry> = [
       "The broker keeps no health of the gateway named, or the name is not site/building/id or an id: it never connected to this broker, or it is under another site or building.",
     fix: "List the gateways the broker knows and use a name from there; check that the gateway's config names this broker.",
     next: "ot-gateway gateways list"
+  },
+  {
+    code: "health-unreadable",
+    area: "gateway",
+    reportedBy: fleetCommands,
+    meaning:
+      "A gateway's retained health is not a message this CLI reads: the gateway runs a newer release, or something else publishes on its health topic. It may well be online.",
+    fix: "Update the CLI (npm i -g ot-gateway@latest), then look at what the topic holds.",
+    next: "ot-gateway watch --topic '<site>/<building>/$gateway/#' --seconds 5"
   },
   {
     code: "gateway-ambiguous",

@@ -26,7 +26,7 @@ import { Deferred, type Duration, Effect, Option, Schema } from "effect"
 import { brokerClient, firstDialOf } from "./Broker.ts"
 import { withoutControls } from "./Discover.ts"
 import { type ConfigFileError, loadConfig } from "./LoadConfig.ts"
-import { localTime } from "./Output.ts"
+import { localTime, UsageMistake } from "./Output.ts"
 import { ago } from "./StatusReport.ts"
 
 /** Where `--broker` takes the password from, as the config's `mqtt.passwordEnv` would name it. */
@@ -35,13 +35,18 @@ export const BROKER_PASSWORD_ENV = "OT_GATEWAY_BROKER_PASSWORD"
 /** How long a command waits for retained messages after the broker accepted its subscription, by default. */
 export const DEFAULT_WAIT_SECONDS = 2
 
+/** How long a command waits for the broker to answer its SUBSCRIBE before it waits for messages anyway. */
+const SUBSCRIBE_TIMEOUT = "10 seconds"
+
 /** Why a `gateways` command gave no answer: which gateway, or that there was none to name. */
 export const FleetCode = Schema.Literals([
   "no-broker",
   "gateway-not-found",
   "gateway-ambiguous",
   "gateway-offline",
-  "gateway-unhealthy"
+  "gateway-unhealthy",
+  "health-unreadable",
+  "subscribe-refused"
 ])
 export type FleetCode = typeof FleetCode.Type
 
@@ -80,6 +85,14 @@ export const fleetBroker = Effect.fn("fleetBroker")(function* (options: {
   readonly config: string
 }) {
   if (options.broker !== undefined) return yield* brokerSettings(options.broker, options.username)
+  if (options.username !== undefined) {
+    return yield* new UsageMistake({
+      code: "usage",
+      message: "--username goes with --broker: without it the config's broker and login are used",
+      missing: ["--broker"],
+      hint: "pass --broker as well, or leave out --username"
+    })
+  }
   const config = yield* loadConfig(options.config).pipe(
     Effect.catchTag("ConfigFileError", (error): Effect.Effect<never, ConfigFileError | FleetError> =>
       error.code === "no-config"
@@ -226,8 +239,10 @@ export const collectMessages = Effect.fn("collectMessages")(function* (
 ) {
   const latest = new Map<string, InboundMessage>()
   const done = yield* Deferred.make<void>()
+  const subscribed = yield* Deferred.make<ReadonlyArray<string>>()
   const client = yield* brokerClient(settings, "gateways", {
     subscriptions: filters.map((filter) => ({ filter, qos: 0 as const })),
+    onSubscribed: (refused) => Deferred.succeed(subscribed, refused).pipe(Effect.asVoid),
     onMessage: (message) =>
       Effect.gen(function* () {
         if (message.payload === "") latest.delete(message.topic)
@@ -236,6 +251,16 @@ export const collectMessages = Effect.fn("collectMessages")(function* (
       })
   })
   yield* firstDialOf(client, settings)
+  // The wait counts from the broker's answer to the SUBSCRIBE, which the retained messages follow. A broker that
+  // does not answer in time gets the wait from now; one that refuses a filter (its ACL) is a failure, not "none".
+  const refused = yield* Deferred.await(subscribed).pipe(Effect.timeoutOption(SUBSCRIBE_TIMEOUT))
+  if (Option.isSome(refused) && refused.value.length > 0) {
+    return yield* new FleetError({
+      code: "subscribe-refused",
+      message: `${settings.url} refused the subscription to ${refused.value.join(", ")}`,
+      hint: `the broker's access rules do not let ${settings.username ?? "this login"} read those topics: allow it to read +/+/$gateway/+/health and +/+/+/+/$meta`
+    })
+  }
   yield* Effect.raceFirst(Deferred.await(done), Effect.sleep(wait))
   return [...latest.values()]
 }, Effect.scoped)
@@ -388,9 +413,14 @@ export const formatGatewayStatus = (gateway: FleetGateway, now: number) => {
 
 export const formatGatewayPoints = (report: {
   readonly gateway: string
+  readonly status: FleetGateway["status"]
   readonly points: ReadonlyArray<FleetPoint>
 }) => {
-  if (report.points.length === 0) return `${report.gateway}: the broker keeps no $meta of its points`
+  if (report.points.length === 0) {
+    return report.status === "online"
+      ? `${report.gateway}: the broker keeps no $meta of its points`
+      : `${report.gateway}: no $meta names it. It is ${report.status}, so its devices are not known, and the $meta of a release before $meta named its gateway cannot be told apart.`
+  }
   const width = Math.max(...report.points.map((point) => `${point.device}/${point.point}`.length))
   return [
     `${report.gateway}: ${report.points.length} point(s)`,
@@ -409,6 +439,13 @@ export const formatGatewayPoints = (report: {
 
 /** The failure after `gateways status` printed its report: offline, or a device failing. */
 export const statusFailure = (gateway: FleetGateway) => {
+  if (gateway.status === "unreadable") {
+    return new FleetError({
+      code: "health-unreadable",
+      message: `${gateway.name}: its health is not a message this CLI reads, so it may well be online`,
+      hint: "the gateway likely runs a newer release than this CLI (npm i -g ot-gateway@latest), or something else publishes on its health topic: ot-gateway watch --topic '<site>/<building>/$gateway/#' shows it"
+    })
+  }
   if (gateway.status !== "online") {
     return new FleetError({
       code: "gateway-offline",

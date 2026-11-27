@@ -13,7 +13,7 @@
 import { Console, Effect, Fiber, FileSystem, Option, Path, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http"
 import { homedir } from "node:os"
-import { parseRelease } from "./GatewayRelease.ts"
+import { compareReleases, parseRelease } from "./GatewayRelease.ts"
 import { readVersion } from "./Version.ts"
 
 export const REGISTRY_URL = "https://registry.npmjs.org/ot-gateway/latest"
@@ -27,18 +27,21 @@ const FETCH_TIMEOUT = "2 seconds"
 /** How long a command that ended waits for a question still running before it prints from the saved answer. */
 const JOIN_GRACE = "1 second"
 
-/** Commands that get no notice: they run until stopped, or speak a protocol on stdout. */
-const quietCommands = new Set(["run", "demo", "simulate", "mcp"])
+/** Commands that get no notice: they run until stopped (Ctrl-C would cut the line off), or speak a protocol on stdout. */
+const quietCommands = new Set(["run", "demo", "simulate", "mcp", "watch"])
 
 /** Whether to check and print a notice at all, for these arguments in this environment. */
 export const updateNoticeWanted = (
   args: ReadonlyArray<string>,
   env: Readonly<Record<string, string | undefined>>,
-  stderrIsTerminal: boolean
+  stderrIsTerminal: boolean,
+  /** The script that runs (`process.argv[1]`): one in npx's cache is not an install to update. */
+  script = ""
 ) => {
   const [command] = args
+  if (/[\\/]_npx[\\/]/.test(script)) return false
   if (command === undefined || quietCommands.has(command)) return false
-  if (args.some((arg) => arg === "--json" || arg === "--version" || arg === "-v")) return false
+  if (args.some((arg) => arg === "--json" || arg === "--follow" || arg === "--version" || arg === "-v")) return false
   const set = (name: string) => (env[name] ?? "") !== "" && env[name] !== "0"
   return stderrIsTerminal && !set("OT_GATEWAY_NO_UPDATE_CHECK") && !set("CI")
 }
@@ -48,11 +51,8 @@ export const isNewer = (latest: string, current: string) => {
   const next = parseRelease(latest)
   const now = parseRelease(current)
   if (next === undefined || now === undefined) return false
-  return compare(next, now) > 0
+  return compareReleases(next, now) > 0
 }
-
-const compare = (left: readonly number[], right: readonly number[]) =>
-  (left[0] ?? 0) - (right[0] ?? 0) || (left[1] ?? 0) - (right[1] ?? 0) || (left[2] ?? 0) - (right[2] ?? 0)
 
 const withV = (version: string) => (version.startsWith("v") ? version : `v${version}`)
 
@@ -108,17 +108,18 @@ export const withUpdateNotice =
         onNone: () => true,
         onSome: (check) => options.now - check.checkedAt >= CHECK_INTERVAL_MS || check.checkedAt > options.now
       })
-      const refresh = due
-        ? yield* Effect.forkDetach(
-            Effect.gen(function* () {
-              const latest = yield* options.latest ?? latestOnNpm
-              const check: SavedCheck = { checkedAt: options.now, latest }
-              yield* fs.makeDirectory(options.folder, { recursive: true })
-              yield* fs.writeFileString(file, `${JSON.stringify(check)}\n`)
-              return latest
-            }).pipe(Effect.option)
-          )
-        : undefined
+      const previous = Option.map(saved, (check) => check.latest)
+      // A failed question is saved too, with what the last one found: a machine without internet asks once a day,
+      // not on every command. Nothing in here, a defect neither, reaches the command's result.
+      const ask = Effect.gen(function* () {
+        const latest = yield* (options.latest ?? latestOnNpm).pipe(Effect.option)
+        const known = Option.orElse(latest, () => previous)
+        const check: SavedCheck = { checkedAt: options.now, latest: Option.getOrElse(known, () => "") }
+        yield* fs.makeDirectory(options.folder, { recursive: true })
+        yield* fs.writeFileString(file, `${JSON.stringify(check)}\n`)
+        return latest
+      }).pipe(Effect.catchCause(() => Effect.succeed(Option.none<string>())))
+      const refresh = due ? yield* Effect.forkDetach(ask) : undefined
       const result = yield* command
       const fresh =
         refresh === undefined
@@ -126,7 +127,7 @@ export const withUpdateNotice =
           : Option.flatten(yield* Fiber.join(refresh).pipe(Effect.timeoutOption(JOIN_GRACE)))
       // A question still out is given up, so the command exits now; the next run asks again.
       if (refresh !== undefined) yield* Fiber.interrupt(refresh)
-      const latest = Option.orElse(fresh, () => Option.map(saved, (check) => check.latest))
+      const latest = Option.orElse(fresh, () => previous)
       if (Option.isSome(latest) && isNewer(latest.value, current)) {
         yield* Console.error(noticeLine(current, latest.value))
       }
