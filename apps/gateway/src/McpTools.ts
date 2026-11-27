@@ -8,8 +8,10 @@
  * flag's value is passed as `--name=value`, and a positional that starts with `-` is refused, so `{"config":
  * "--points-list=/etc/passwd"}` is a mistake, not a file written.
  *
- * Commands that ask questions (`init`), run until stopped (`run`, `demo`, `simulate`), or write to stdout
- * directly (`points template`, `points from-ede`) are not offered.
+ * Commands that run until stopped (`run`, `demo`, `simulate`) are not offered, and neither is `secret set`: a
+ * secret is typed by the user into the command, so it never passes through an agent's conversation. Of `publish`
+ * only clearing a retained message is one (`clear_retained`): a message of an agent's own on the gateway's
+ * topics could pass for a value.
  *
  * `points_allow_commands` is the one tool that makes a point writable: one point, named, a dry run unless told
  * otherwise, and marked destructive so a client asks its user first.
@@ -431,16 +433,58 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     name: "import",
     title: "Import a points list",
     description:
-      "Check a points list (CSV or JSON) and, with dryRun false, add its devices to the config (none writable). dryRun defaults to true: only check and return the devices",
+      "Check a points list and, with dryRun false, add its devices to the config (none writable). The list is a file (pointsList), its text (text: CSV, JSON rows or a BACnet EDE file) or rows (objects with the columns points_schema lists), so no file has to be written first. dryRun defaults to true: only check and return the devices",
     input: {
-      pointsList: text("Path of the points list"),
+      pointsList: optionalText("Path of the points list, when it is a file"),
+      text: Schema.optionalKey(
+        Schema.String.annotate({ description: "The list itself instead of a file: CSV, JSON rows or EDE text" })
+      ),
+      rows: Schema.optionalKey(
+        Schema.Array(Schema.Record(Schema.String, Schema.Json)).annotate({
+          description: "The list as rows instead of a file: one object per point, keyed by column"
+        })
+      ),
       config: configArgument,
       dryRun: Schema.optionalKey(
         Schema.Boolean.annotate({ description: "Only check and return the devices (default true)" })
       )
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
-    argv: ({ pointsList, config, dryRun }) => ["import", pointsList, config, flag("dry-run", dryRun ?? true)]
+    argv: ({ pointsList, text: given, rows, config, dryRun }) => {
+      const inline = rows === undefined ? given : JSON.stringify(rows)
+      return [
+        "import",
+        inline === undefined ? pointsList : "-",
+        config,
+        flag("text", inline),
+        flag("dry-run", dryRun ?? true)
+      ]
+    }
+  }),
+  defineTool({
+    name: "points_template",
+    title: "Points list template",
+    description:
+      "A points list with example rows to fill in, as CSV text (csv): every column, or only one protocol's. Writes no file",
+    input: {
+      protocol: Schema.optionalKey(
+        Schema.Literals(["modbus", "bacnet"]).annotate({ description: "Only this protocol's rows and columns" })
+      )
+    },
+    annotations: local,
+    argv: ({ protocol }) => ["points", "template", flag("protocol", protocol)]
+  }),
+  defineTool({
+    name: "points_from_ede",
+    title: "Translate a BACnet EDE file",
+    description:
+      "A BACnet EDE file (the CSV export of BACnet engineering tools) as a points list: csv, with how many devices and points it has and what was skipped (schedules, trend logs). Give the file (edeFile) or its text. Writes no file; import reads EDE directly too",
+    input: {
+      edeFile: optionalText("Path of the EDE file"),
+      text: Schema.optionalKey(Schema.String.annotate({ description: "The EDE file's text instead of a path" }))
+    },
+    annotations: local,
+    argv: ({ edeFile, text: given }) => ["points", "from-ede", given === undefined ? edeFile : "-", flag("text", given)]
   }),
   defineTool({
     name: "points_schema",
@@ -653,6 +697,74 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     input: { profile: text("A profile id, or a path ending in .json") },
     annotations: local,
     argv: ({ profile }) => ["profiles", "show", profile]
+  }),
+  defineTool({
+    name: "init",
+    title: "Write a gateway's folder",
+    description:
+      "Write a gateway's folder without asking anything: ot-gateway.json, compose.yaml and ot-gateway.env (the broker password's line empty: the user fills it with ot-gateway secret set broker-password). Give site and broker, and devices or points; without them it fails with missing, or pass yes for the defaults (a simulated device, a broker on localhost). dryRun defaults to true: work it out and return it, write nothing. Returns the config, the files and next",
+    input: {
+      directory: optionalText("The gateway's folder, created if missing (default .)"),
+      site: optionalText("The site, the first topic segment (a slug: site-1)"),
+      building: optionalText("The building, the second topic segment"),
+      broker: optionalText("The MQTT broker URL, mqtts:// for TLS"),
+      username: optionalText("The broker username; its password never goes here"),
+      passwordEnv: optionalText("The env variable the broker password is read from (default MQTT_PASSWORD)"),
+      devices: Schema.optionalKey(
+        Schema.Literals(["simulated", "discover", "none"]).annotate({
+          description: "Where the devices come from: a simulated one, BACnet discovery, or none yet"
+        })
+      ),
+      points: optionalText("Path of a points list (CSV or JSON) to take the devices from"),
+      broadcast: optionalText("The broadcast address for BACnet discovery, when there are several networks"),
+      statusPort: Schema.optionalKey(count("The status page's port (default 8080)", 1, 65_535)),
+      history: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Keep every read for the status page's charts (default true)" })
+      ),
+      yes: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Take the defaults for whatever is not given, instead of failing" })
+      ),
+      force: Schema.optionalKey(Schema.Boolean.annotate({ description: "Replace a config that is there" })),
+      dryRun: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Work it out and return it, write nothing (default true)" })
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    argv: (input) => [
+      "init",
+      input.directory ?? ".",
+      flag("site", input.site),
+      flag("building", input.building),
+      flag("broker", input.broker),
+      flag("username", input.username),
+      flag("password-env", input.passwordEnv),
+      flag("devices", input.devices),
+      flag("points", input.points),
+      flag("broadcast", input.broadcast),
+      flag("status-port", input.statusPort),
+      flag("no-history", input.history === false),
+      flag("yes", input.yes),
+      flag("force", input.force),
+      flag("dry-run", input.dryRun ?? true)
+    ]
+  }),
+  defineTool({
+    name: "clear_retained",
+    title: "Clear a retained message",
+    description:
+      "Clear the retained message the broker keeps on one topic (an empty retained message there), as the gateway's user: what diff asks for after a device or point left or was renamed (its stale lists the topics). It sends nothing else: publishing a message of your own is not a tool, and a command to a device goes through write",
+    input: { topic: text("The topic, without wildcards, as diff's stale lists it"), config: configArgument },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
+    argv: ({ topic, config }) => ["publish", topic, flag("config", config), "--retain"]
+  }),
+  defineTool({
+    name: "secret_list",
+    title: "Which secrets are set",
+    description:
+      "Which secrets the config needs (the broker password, the status page's edit token) and which ot-gateway.env has, by name only, never a value; missing lists the ones the gateway needs and lacks, and next the command the user runs to set each. There is no tool that sets a secret: the user types it into ot-gateway secret set, so it never passes through this conversation",
+    input: { config: configArgument },
+    annotations: local,
+    argv: ({ config }) => ["secret", "list", flag("config", config)]
   }),
   defineTool({
     name: "up",

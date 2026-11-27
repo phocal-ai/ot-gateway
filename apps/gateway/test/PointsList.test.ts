@@ -425,6 +425,29 @@ describe("importPointsList", () => {
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
+  it.effect("takes the list as text in place of a file, and says so when a file and a text are both named", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem
+      const directory = yield* fs.makeTempDirectoryScoped()
+      const configPath = `${directory}/gateway.json`
+      yield* fs.writeFileString(configPath, JSON.stringify(initConfig(answers, [])))
+      const list = yield* fs.readFileString(examplePoints)
+
+      const checked = yield* importPointsList("-", configPath, { dryRun: true, text: list })
+      expect(checked.added.map((device) => device.id)).toEqual(["energy-meter", "pv-inverter", "heat-pump"])
+      const rows = JSON.stringify([
+        { device: "Meter 2", point: "Power", host: "192.168.1.20", register: 100, type: "float32" }
+      ])
+      const result = yield* importPointsList("-", configPath, { dryRun: false, text: rows })
+      expect(result.config?.devices.map((device) => device.id)).toEqual(["meter-2"])
+
+      const both = yield* importPointsList(examplePoints, configPath, { dryRun: true, text: list }).pipe(Effect.flip)
+      expect(both.message).toContain("both name a points list")
+      const neither = yield* importPointsList("-", configPath, { dryRun: true }).pipe(Effect.flip)
+      expect(neither.message).toBe("- stands for a list given with --text, and there is none")
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+
   it.effect("keeps the previous config as .bak, leaves no .tmp and keeps the file's mode", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem

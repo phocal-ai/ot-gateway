@@ -40,7 +40,20 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Duration, Effect, FileSystem, Logger, Option, References, Result } from "effect"
+import {
+  Config,
+  Console,
+  Duration,
+  Effect,
+  FileSystem,
+  Logger,
+  Option,
+  Redacted,
+  References,
+  Result,
+  Stream
+} from "effect"
+import { Stdio } from "effect/Stdio"
 import { Argument, CliOutput, Command, CommandSpec, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
@@ -86,7 +99,8 @@ import {
   undoConfig
 } from "./ConfigEdit.ts"
 import { formatPointCommands, setPointCommands } from "./PointCommands.ts"
-import { defaultConfigPath, describeUnits, importPointsList } from "./Import.ts"
+import { formatSecretList, formatSecretSet, listSecrets, setSecret } from "./Secret.ts"
+import { defaultConfigPath, describeUnits, importPointsList, pointsListSource } from "./Import.ts"
 import { writeFolderFiles } from "./Folder.ts"
 import {
   broadcastAddress,
@@ -1138,6 +1152,15 @@ const init = Command.make(
   ])
 )
 
+/** A list given as text instead of a file: for an agent that has the list but no file system (the MCP tools). */
+const listTextFlag = Flag.String("text").pipe(
+  Flag.withDescription(
+    "The list itself (CSV, JSON rows or EDE) instead of a file, with - in place of the file's name: for agents without a file to write"
+  ),
+  Flag.optional,
+  Flag.map(Option.getOrUndefined)
+)
+
 const importCommand = Command.make(
   "import",
   {
@@ -1157,10 +1180,11 @@ const importCommand = Command.make(
     dryRun: dryRunFlag(
       "Check the list and print its devices instead of adding them; without a config named or here, on their own"
     ),
+    text: listTextFlag,
     all: allFlag,
     json: jsonFlag
   },
-  ({ list, config, dryRun, all, json }) =>
+  ({ list, config, dryRun, text, all, json }) =>
     Effect.gen(function* () {
       const {
         added,
@@ -1170,7 +1194,8 @@ const importCommand = Command.make(
         units
       } = yield* importPointsList(list, config, {
         dryRun,
-        command: yield* invocation
+        command: yield* invocation,
+        text
       })
       const points = added.reduce((total, device) => total + device.points.length, 0)
       const alone = `no ${defaultConfigPath} here, so the devices were checked on their own; name a config to check them against it`
@@ -1263,11 +1288,19 @@ const templateCommand = Command.make(
     ] as const).pipe(
       Flag.withDescription("Only this protocol's example rows and the columns they can use"),
       Flag.optional
-    )
+    ),
+    json: jsonFlag
   },
-  ({ protocol }) => Effect.sync(() => process.stdout.write(pointsListTemplate(Option.getOrUndefined(protocol))))
+  ({ protocol, json }) => {
+    const csv = pointsListTemplate(Option.getOrUndefined(protocol))
+    return json
+      ? printJson({ ok: true, protocol: Option.getOrElse(protocol, () => "all"), csv })
+      : Effect.sync(() => process.stdout.write(csv))
+  }
 ).pipe(
-  Command.withDescription("A points list with example rows, as CSV on stdout: every column, or one protocol's"),
+  Command.withDescription(
+    "A points list with example rows, as CSV on stdout: every column, or one protocol's (--json: the same as csv)"
+  ),
   Command.withExamples([
     { command: "ot-gateway points template > points.csv", description: "Start a list to fill in" },
     { command: "ot-gateway points template --protocol modbus > points.csv", description: "Only Modbus TCP" },
@@ -1277,16 +1310,33 @@ const templateCommand = Command.make(
 
 const fromEdeCommand = Command.make(
   "from-ede",
-  { file: Argument.String("ede-file").pipe(Argument.withDescription("A BACnet EDE file (CSV, semicolons)")) },
-  ({ file }) =>
+  {
+    file: Argument.String("ede-file").pipe(
+      Argument.withDescription("A BACnet EDE file (CSV, semicolons); - with --text for the file's text itself")
+    ),
+    text: listTextFlag,
+    json: jsonFlag
+  },
+  ({ file, text, json }) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem
-      const translation = yield* edeToPointsList(yield* fs.readFileString(file))
-      yield* Console.error(describeTranslation(file, translation))
+      const given = yield* pointsListSource(file, text)
+      const translation = yield* edeToPointsList(given.text)
+      if (json) {
+        return yield* printJson({
+          ok: true,
+          devices: translation.devices,
+          points: translation.points,
+          skipped: translation.skipped,
+          csv: translation.list
+        })
+      }
+      yield* Console.error(describeTranslation(given.source, translation))
       yield* Effect.sync(() => process.stdout.write(translation.list))
-    })
+    }).pipe(jsonFailure(json))
 ).pipe(
-  Command.withDescription("A BACnet EDE file as a points list on stdout, to trim before import (import reads EDE too)"),
+  Command.withDescription(
+    "A BACnet EDE file as a points list on stdout, to trim before import (import reads EDE too). --json: csv, devices, points, skipped"
+  ),
   Command.withExamples([
     { command: "ot-gateway points from-ede building.csv > points.csv", description: "Translate it, then trim it" }
   ])
@@ -1580,6 +1630,97 @@ const configCommand = Command.make("config").pipe(
     configRemoveCommand,
     configUndoCommand
   ])
+)
+
+/** The most a secret piped in may be: a password or a token, not a file. */
+const SECRET_BYTES = 64 * 1024
+
+/**
+ * A secret from stdin, when it is not a terminal: everything piped in, without the line break `echo` adds. Nothing
+ * within ten seconds (an agent's shell, whose stdin stays open and silent) is no value, which the command says.
+ */
+const secretFromStdin = Effect.gen(function* () {
+  const stdio = yield* Stdio
+  const bytes = yield* stdio.stdin.pipe(
+    Stream.takeUntil((chunk) => chunk.length > SECRET_BYTES),
+    Stream.runFold(
+      () => new Uint8Array(0),
+      (all, chunk) => {
+        if (all.length + chunk.length > SECRET_BYTES) return all
+        const joined = new Uint8Array(all.length + chunk.length)
+        joined.set(all)
+        joined.set(chunk, all.length)
+        return joined
+      }
+    ),
+    Effect.timeoutOption("10 seconds"),
+    Effect.catchTag("PlatformError", () => Effect.succeed(Option.none<Uint8Array>()))
+  )
+  return Option.match(bytes, {
+    onNone: () => "",
+    onSome: (read) => new TextDecoder().decode(read).replace(/\r?\n$/, "")
+  })
+})
+
+const secretSetCommand = Command.make(
+  "set",
+  {
+    name: Argument.String("secret").pipe(
+      Argument.withDescription(
+        "broker-password (the variable mqtt.passwordEnv names), edit-token (the status page's), or a variable's name"
+      )
+    ),
+    config: configFileFlag,
+    generate: Flag.Boolean("generate").pipe(
+      Flag.withDescription("Make a long random value instead of asking for one: for edit-token"),
+      Flag.withDefault(false)
+    ),
+    json: jsonFlag
+  },
+  ({ name, config, generate, json }) =>
+    Effect.gen(function* () {
+      const command = yield* invocation
+      const value = generate
+        ? ({ generate: true } as const)
+        : process.stdin.isTTY
+          ? { value: Redacted.value(yield* Prompt.Password({ message: `${name}, not shown:` })) }
+          : { value: yield* secretFromStdin }
+      const report = yield* setSecret(config, name, value, { command })
+      yield* json ? printJson(report) : Console.log(formatSecretSet(report))
+    }).pipe(jsonFailure(json, { path: config, secret: name }))
+).pipe(
+  Command.withDescription(
+    "Put a secret into ot-gateway.env next to the config: asked without echo in a terminal, read from stdin otherwise, never an argument and never printed. --json: variable, file, replaced, next"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway secret set broker-password", description: "Asks for the broker password, not shown" },
+    {
+      command: 'printf %s "$MQTT_PASSWORD" | ot-gateway secret set broker-password',
+      description: "From a script or a secret store"
+    },
+    {
+      command: "ot-gateway secret set edit-token --generate",
+      description: "A random token, so the status page can save the config over the network"
+    }
+  ])
+)
+
+const secretListCommand = Command.make("list", { config: configFileFlag, json: jsonFlag }, ({ config, json }) =>
+  Effect.gen(function* () {
+    const report = yield* listSecrets(config, { command: yield* invocation })
+    yield* json ? printJson(report) : Console.log(formatSecretList(report))
+  }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "Which secrets the config needs and which ot-gateway.env has, by name only, never a value. --json: secrets [{secret, variable, needed, set}], missing, next"
+  )
+)
+
+const secretCommand = Command.make("secret").pipe(
+  Command.withDescription(
+    "The broker password and the edit token in ot-gateway.env, kept out of the config and off the screen: set, list"
+  ),
+  Command.withSubcommands([secretSetCommand, secretListCommand])
 )
 
 const profilesList = Command.make("list", { json: jsonFlag }, ({ json }) =>
@@ -2975,6 +3116,7 @@ export const rootDescription = [
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
   "    config set <key> <value> --json  one key of the config, checked before it is written (get, unset, remove <device[/point]>, undo; --dry-run)",
+  "    secret list --json               which secrets the config needs and which are set, by name; the user sets one with secret set broker-password",
   "    points allow-commands <device/point> --min=15 --max=25 --json   one point takes commands (read-only undoes it): only when the user names it",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
   "    profiles list --json             Modbus models a points list row takes the registers of by name",
@@ -3008,6 +3150,7 @@ export const cli = Command.make("ot-gateway").pipe(
     discoverCommand,
     importCommand,
     configCommand,
+    secretCommand,
     diffCommand,
     points,
     profiles,
@@ -3044,6 +3187,7 @@ const subcommands = new Set([
   "discover",
   "import",
   "config",
+  "secret",
   "diff",
   "points",
   "profiles",
@@ -3136,13 +3280,20 @@ export const takesJson = (path: ReadonlyArray<string>) =>
     onSome: (spec) => spec.flags.some((flag) => flag.name === "json")
   })
 
+/**
+ * Commands whose output is a points list a person redirects into a file (`points template > points.csv`): they
+ * take `--json` when it is typed, and `OT_GATEWAY_JSON` leaves them as they are, so the file stays a list.
+ */
+const listPrinters = new Set(["points template", "points from-ede"])
+const printsAList = (path: ReadonlyArray<string>) => listPrinters.has(path.slice(1).join(" "))
+
 /** Arguments that print help or the version, which stay text whatever `OT_GATEWAY_JSON` says. */
 const helpFlags = new Set(["--help", "-h", "--version", "-v"])
 
 /**
  * `argv` with `--json` added when `OT_GATEWAY_JSON` asks for it and the command takes it: one setting for an agent's
- * whole session instead of the flag on every command. A command without `--json` (run, demo), `--help`, and a
- * `--json` typed out (`--json=false` for text once) stay as typed.
+ * whole session instead of the flag on every command. A command without `--json` (run, demo), one that prints a
+ * points list (`listPrinters`), `--help`, and a `--json` typed out (`--json=false` for text once) stay as typed.
  */
 export const withJsonFromEnvironment = (
   argv: ReadonlyArray<string>,
@@ -3151,7 +3302,8 @@ export const withJsonFromEnvironment = (
   if (
     !jsonFromEnvironment(env) ||
     argv.some((arg) => isJsonFlag(arg) || helpFlags.has(arg)) ||
-    !takesJson(commandPath(toCliArgs(argv)))
+    !takesJson(commandPath(toCliArgs(argv))) ||
+    printsAList(commandPath(toCliArgs(argv)))
   ) {
     return argv
   }

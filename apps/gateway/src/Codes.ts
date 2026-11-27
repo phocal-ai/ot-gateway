@@ -154,8 +154,35 @@ export const codes: ReadonlyArray<CodeEntry> = [
     area: "broker",
     reportedBy: brokerCommands,
     meaning: "The variable mqtt.passwordEnv names is not set or is empty, so nothing was sent to the broker.",
-    fix: "Put the password in ot-gateway.env next to the config (NAME=...), or in /etc/ot-gateway/gateway.env under systemd.",
-    next: "ot-gateway broker"
+    fix: "Run ot-gateway secret set broker-password in the gateway's folder and type the password (it goes into ot-gateway.env, not shown); under systemd it is in /etc/ot-gateway/gateway.env.",
+    next: "ot-gateway secret list"
+  },
+  {
+    code: "no-password-variable",
+    area: "broker",
+    reportedBy: ["secret set"],
+    meaning:
+      "The config names no variable for the broker password (mqtt.passwordEnv), so the gateway would not read one.",
+    fix: "Name the login first: config set mqtt.username, then config set mqtt.passwordEnv MQTT_PASSWORD, then set the secret.",
+    next: "ot-gateway config set mqtt.passwordEnv MQTT_PASSWORD"
+  },
+  {
+    code: "secret-empty",
+    area: "broker",
+    reportedBy: ["secret set"],
+    meaning:
+      "No value arrived for the secret: nothing was typed, or nothing was piped in within ten seconds. Nothing was written.",
+    fix: "The person who has the secret runs the command in a terminal and types it there; an agent does not ask for it. A script pipes it in.",
+    next: "ot-gateway secret set broker-password"
+  },
+  {
+    code: "secret-not-writable",
+    area: "broker",
+    reportedBy: ["secret set", "secret list"],
+    meaning:
+      "ot-gateway.env could not be read or written, or the value has a single quote or a line break, which no env file spells the same for Docker Compose, systemd and the CLI.",
+    fix: "Run it as a user who may write the gateway's folder; for such a value, use another secret or write its line into the file by hand.",
+    next: "ot-gateway secret list"
   },
   {
     code: "broker-unreachable",

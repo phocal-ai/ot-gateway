@@ -26,19 +26,12 @@ const leafCommands = () => {
 }
 
 describe("the output rule across commands", () => {
-  it("gives every one-shot command --json; the exceptions run until stopped or print a points list already", () => {
+  it("gives every one-shot command --json; the exceptions run until stopped", () => {
     const withoutJson = leafCommands()
       .filter((command) => !command.flags.has("json"))
       .map((command) => command.words)
     // A new command takes --json, or joins this list on purpose.
-    expect(withoutJson.toSorted()).toEqual([
-      "demo",
-      "mcp",
-      "points from-ede",
-      "points template",
-      "run",
-      "simulate bacnet"
-    ])
+    expect(withoutJson.toSorted()).toEqual(["demo", "mcp", "run", "simulate bacnet"])
   })
 
   it("gives --all only to commands that also take --json, since a pipe and --json always get every row", () => {
@@ -68,6 +61,9 @@ describe("OT_GATEWAY_JSON", () => {
       "mqtt://pi",
       "--json"
     ])
+    // A points list redirected into a file stays one.
+    expect(withJsonFromEnvironment(["points", "template"], env)).toEqual(["points", "template"])
+    expect(withJsonFromEnvironment(["points", "from-ede", "a.csv"], env)).toEqual(["points", "from-ede", "a.csv"])
     expect(withJsonFromEnvironment(["publish", "a/b", "--", "-1"], env)).toEqual([
       "publish",
       "a/b",

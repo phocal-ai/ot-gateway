@@ -120,6 +120,57 @@ describe("mcp tools", () => {
     )
   })
 
+  it("import takes the list as text or as rows, so no file has to be written first", () => {
+    expect(argvOf("import", { text: "device_id,point_id\nmeter,power\n" })).toEqual(
+      Exit.succeed(["import", "-", "--text=device_id,point_id\nmeter,power\n", "--dry-run"])
+    )
+    expect(argvOf("import", { rows: [{ device_id: "meter", point_id: "power" }], dryRun: false })).toEqual(
+      Exit.succeed(["import", "-", '--text=[{"device_id":"meter","point_id":"power"}]'])
+    )
+    // A text that starts as a flag does is still one value of --text.
+    expect(argvOf("import", { text: "--config=/etc/passwd" })).toEqual(
+      Exit.succeed(["import", "-", "--text=--config=/etc/passwd", "--dry-run"])
+    )
+  })
+
+  it("points_template and points_from_ede return the list as text and write no file", () => {
+    expect(argvOf("points_template", {})).toEqual(Exit.succeed(["points", "template"]))
+    expect(argvOf("points_template", { protocol: "bacnet" })).toEqual(
+      Exit.succeed(["points", "template", "--protocol=bacnet"])
+    )
+    expect(argvOf("points_from_ede", { edeFile: "building.ede.csv" })).toEqual(
+      Exit.succeed(["points", "from-ede", "building.ede.csv"])
+    )
+    expect(argvOf("points_from_ede", { text: "#EDE\n" })).toEqual(
+      Exit.succeed(["points", "from-ede", "-", "--text=#EDE\n"])
+    )
+  })
+
+  it("init asks nothing, only works it out unless told otherwise, and has no place for a password", () => {
+    expect(argvOf("init", { site: "plant", broker: "mqtt://broker:1883", devices: "none" })).toEqual(
+      Exit.succeed(["init", ".", "--site=plant", "--broker=mqtt://broker:1883", "--devices=none", "--dry-run"])
+    )
+    expect(
+      argvOf("init", { directory: "gateway", yes: true, history: false, statusPort: 8081, dryRun: false })
+    ).toEqual(Exit.succeed(["init", "gateway", "--status-port=8081", "--no-history", "--yes"]))
+    expect(JSON.stringify(toolNamed("init").inputSchema)).toContain('"passwordEnv"')
+    expect(JSON.stringify(toolNamed("init").inputSchema)).not.toContain('"password"')
+    expect(Exit.isFailure(argvOf("init", { site: "plant", password: "secret" }))).toBe(true)
+  })
+
+  it("clears a retained topic, and offers no tool that publishes a message or sets a secret", () => {
+    expect(argvOf("clear_retained", { topic: "plant/hall/meter/power" })).toEqual(
+      Exit.succeed(["publish", "plant/hall/meter/power", "--retain"])
+    )
+    expect(Exit.isFailure(argvOf("clear_retained", { topic: "--retain=false" }))).toBe(true)
+    expect(argvOf("secret_list", { config: "site/ot-gateway.json" })).toEqual(
+      Exit.succeed(["secret", "list", "--config=site/ot-gateway.json"])
+    )
+    const names = mcpTools.map((tool) => tool.name)
+    expect(names).not.toContain("publish")
+    expect(names.filter((name) => name.startsWith("secret"))).toEqual(["secret_list"])
+  })
+
   it("mark write, making a point writable, removing a device, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
     expect(changing).toEqual([
@@ -127,6 +178,8 @@ describe("mcp tools", () => {
       "points_allow_commands",
       "config_remove",
       "config_undo",
+      "init",
+      "clear_retained",
       "restart",
       "down",
       "upgrade"
