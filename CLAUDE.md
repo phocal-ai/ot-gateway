@@ -50,6 +50,7 @@ pnpm ot-gateway messages                   # messages per topic since the gatewa
 pnpm ot-gateway logs --level warn          # the running gateway's recent log lines from memory, without docker logs (/api/logs; --follow, --json)
 pnpm ot-gateway explain broker-unreachable # what a code means, what to do, the next command (no code: all of them; --json; the table is apps/gateway/src/Codes.ts, docs/troubleshooting.md's "Codes" is checked against it)
 pnpm ot-gateway support                    # one redacted file for an issue report: versions, host, config, status, a day of events, the logs (--output -, --json)
+pnpm ot-gateway report draft --title "…" --what "…"   # a bug in ot-gateway as a public issue text in a file: names, addresses and secrets replaced by placeholders, existing issues with the same fingerprint (report send <draft> --yes files it with gh, else prints the link; apps/gateway/src/Report.ts)
 pnpm ot-gateway mcp                        # the commands as MCP tools over stdio, each result the command's --json (the tools: apps/gateway/src/McpTools.ts), and the setup guide as the setup prompt and the setup_guide tool
 pnpm ot-gateway guide setup                # the setup guide (.claude/skills/setup/SKILL.md, shipped as guides/setup.md; apps/gateway/src/SetupGuide.ts)
 OT_GATEWAY_JSON=1 pnpm ot-gateway status    # --json on every command that takes it; a terminal gets the short view, a pipe the full text, --all expands (docs/operations.md, "People and agents")
