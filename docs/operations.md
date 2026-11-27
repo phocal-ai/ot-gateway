@@ -133,6 +133,20 @@ docker compose up -d --force-recreate
 
 Under systemd, you can also run `install.sh` again with the new file: it checks it before replacing the old one. To find BACnet devices for the config, stop the gateway first (both need UDP 47808), then run `node apps/gateway/src/main.ts --discover /etc/ot-gateway/gateway.json`.
 
+The file does not have to be edited by hand. `ot-gateway config` changes it key by key, for a person in a terminal and for an AI agent alike:
+
+```bash
+ot-gateway config get devices.heat-pump.pollIntervalMs          # what the file says, or the default it runs with
+ot-gateway config set devices.heat-pump.pollIntervalMs 10000    # a key by its path, devices and points by their id
+ot-gateway config set mqtt.url mqtts://broker.example:8883 --dry-run   # only check it and say what it would change
+ot-gateway config set devices.heat-pump.points.flow.scaling '{"factor": 0.1}'   # a value is JSON when it reads as JSON, text otherwise
+ot-gateway config unset devices.heat-pump.pollIntervalMs        # take a key out: its default applies again
+ot-gateway config remove heat-pump/return-temp                  # a point, or a whole device (config remove heat-pump)
+ot-gateway config undo                                          # the previous file back; again, and the change is back
+```
+
+Every change passes the same check as `ot-gateway check` before the file is written, so a mistake changes nothing and is listed with its path (`issues` with `--json`). The previous file is kept as `ot-gateway.json.bak`, which `config undo` swaps back in. The result names what changed (`changes`) and the commands to run next (`next`): `diff`, then `restart`. A value that starts with `-` goes in a flag (`--value=-40`), and `--config` names another file. A new device or point comes from `import` or `discover`, not from `config set`. And `config set` never makes a point writable or changes the limits of one: `ot-gateway points allow-commands` does that, one point at a time, on purpose ([Commands](../README.md#commands)); it refuses with `writes-not-here` and says so.
+
 Before the restart, `ot-gateway diff` shows what the edited file changes on the broker against the gateway running now (its status page): topics that are new, go silent or move (a point or device renamed, found by its register or object; the site or building changed), points that take commands now or no longer do, whose retained `$meta` changes, which topics keep their name but read another register or scaling, and which settings change, by name. A point that leaves keeps its retained `$meta` on the broker when its device leaves too, or when the site, building or gateway id changes, as the gateway clears only its own devices' ghosts: `diff` lists each one with the `ot-gateway publish <topic> --retain` that clears it after the change. When the broker's address changes, everything the gateway retained stays on the old broker: `diff` lists it all, and the clear commands need the config from before. `--against ot-gateway.json.bak` compares with the file before the last save or import instead, without a running gateway (and names it in those commands); `--url` asks a running gateway the edited file no longer points at. `--json` gives `added`, `removed`, `moved`, `writable`, `meta`, `values`, `settings`, `brokerChanged` and `stale`.
 
 To keep a points list in step with a config changed here or on the status page, `ot-gateway points export > points.csv` writes the config's devices back as one (`--format json` for the JSON form). `import` reads it back into the same devices. What a list has no column for stays in the config only, and `export` names it on stderr: writable points and their limits, semantics, device settings such as `requestGapMs`. A point it would describe wrongly (a bit of a register, a BACnet property other than the present value) and simulated devices are left out.

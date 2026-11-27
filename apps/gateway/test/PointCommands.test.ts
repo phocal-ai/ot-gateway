@@ -154,7 +154,7 @@ describe("setPointCommands", () => {
             { dryRun: false }
           )
         )
-        expect(refused).toMatchObject({ _tag: "PointCommandsFailed", code: "invalid-limits" })
+        expect(refused).toMatchObject({ _tag: "ConfigEditFailed", code: "invalid-limits" })
         const report = yield* setPointCommands(
           path,
           { device: "heat-pump", point: "enable" },
@@ -175,7 +175,7 @@ describe("setPointCommands", () => {
         const target = { device: "heat-pump", point: "setpoint" }
         for (const change of [{ allow: true }, { allow: true, min: 15 }, { allow: true, min: 25, max: 15 }] as const) {
           const refused = yield* Effect.flip(setPointCommands(path, target, change, { dryRun: false, command: "otg" }))
-          expect(refused).toMatchObject({ _tag: "PointCommandsFailed", code: "invalid-limits" })
+          expect(refused).toMatchObject({ _tag: "ConfigEditFailed", code: "invalid-limits" })
           expect(refused).toHaveProperty(
             "hint",
             expect.stringContaining("otg points allow-commands heat-pump/setpoint")

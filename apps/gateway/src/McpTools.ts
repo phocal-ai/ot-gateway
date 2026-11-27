@@ -510,6 +510,87 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ point, config, dryRun }) => ["points", "read-only", point, config, flag("dry-run", dryRun)]
   }),
   defineTool({
+    name: "config_get",
+    title: "Read a config key",
+    description:
+      "A key's value in the config, or the whole config without key: value (as the file has it), set (whether the file has it) and effective (what the gateway runs with, defaults filled in). The config holds no secret",
+    input: {
+      key: optionalText(
+        "The key by its path, dots between, devices and points by id: mqtt.url, devices.heat-pump.pollIntervalMs"
+      ),
+      config: configArgument
+    },
+    annotations: local,
+    argv: ({ key, config }) => ["config", "get", key, flag("config", config)]
+  }),
+  defineTool({
+    name: "config_set",
+    title: "Set a config key",
+    description:
+      "Set one key of the config (value), or take it out so its default applies (unset: true), checked with the gateway's schema before the file is written; the previous file is kept and config_undo puts it back. It never makes a point writable (points_allow_commands does). dryRun defaults to true: only check and return before, after, effective, changes and next. The running gateway takes a saved change with restart",
+    input: {
+      key: text(
+        "The key by its path, dots between, devices and points by id: mqtt.url, devices.heat-pump.points.setpoint.unit"
+      ),
+      value: Schema.optionalKey(
+        Schema.Json.annotate({
+          description: "The value, as JSON: a text, a number, true or false, an object or a list"
+        })
+      ),
+      unset: Schema.optionalKey(Schema.Boolean.annotate({ description: "Take the key out instead of setting it" })),
+      config: configArgument,
+      dryRun: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Only check and return what would change (default true)" })
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    argv: ({ key, value, unset, config, dryRun }) =>
+      unset === true
+        ? ["config", "unset", key, flag("config", config), flag("dry-run", dryRun ?? true)]
+        : [
+            "config",
+            "set",
+            key,
+            // Always as JSON, so the text "5000" stays a text and is not read as a number; left out, the command asks for it.
+            flag("value", value === undefined ? undefined : JSON.stringify(value)),
+            flag("config", config),
+            flag("dry-run", dryRun ?? true)
+          ]
+  }),
+  defineTool({
+    name: "config_remove",
+    title: "Remove a device or point",
+    description:
+      "Take a device, or one point of a device (device/point), out of the config. Its topics go silent after restart, and diff names the retained messages left on the broker. dryRun defaults to true: only check and return what would change",
+    input: {
+      target: text("A device, or one of its points as device/point: heat-pump, heat-pump/return-temp"),
+      config: configArgument,
+      dryRun: Schema.optionalKey(
+        Schema.Boolean.annotate({ description: "Only check and return what would change (default true)" })
+      )
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    argv: ({ target, config, dryRun }) => [
+      "config",
+      "remove",
+      target,
+      flag("config", config),
+      flag("dry-run", dryRun ?? true)
+    ]
+  }),
+  defineTool({
+    name: "config_undo",
+    title: "Put the previous config back",
+    description:
+      "Put the previous config back: the file and its .bak (what the last save replaced) change places, so calling it again brings the change back. Returns changes and next",
+    input: {
+      config: configArgument,
+      dryRun: Schema.optionalKey(Schema.Boolean.annotate({ description: "Only return what would change" }))
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    argv: ({ config, dryRun }) => ["config", "undo", flag("config", config), flag("dry-run", dryRun)]
+  }),
+  defineTool({
     name: "diff",
     title: "What a config change does",
     description:

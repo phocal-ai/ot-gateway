@@ -4,35 +4,15 @@
  *
  * This is the one command that makes a point writable, so a person or an agent does it on purpose: one point per
  * call, named as `device/point`, never a list or a pattern, and a number only with the lowest and highest value a
- * command may set. The file keeps every other key and is written as `init` and the status page write it (two
- * spaces, one key per line); the result passes the gateway's schema before it is written
+ * command may set. The file keeps every other key (ConfigFileEdit.ts); the result passes the gateway's schema before it is written
  * (a BACnet device needs a fixed address, an input register stays read-only), and the previous file is the `.bak`.
  * Nothing is sent to a device: the running gateway reads the file when it restarts, and every command still goes
  * through the command guard (VISION.md, principle 6).
  */
-import {
-  type AnyPoint,
-  type Device,
-  type GatewayConfig,
-  type Limits,
-  parseConfig,
-  pointTopic,
-  writeKind
-} from "@ot-gateway/core"
-import { Effect, FileSystem, Predicate, Schema } from "effect"
-import { shellArgument } from "./Output.ts"
-import { configIssues, describeIssues, etagOf, makeConfigStore } from "./ConfigStore.ts"
-import { defaultConfigPath } from "./Import.ts"
-import { ConfigFileIssue, loadConfig } from "./LoadConfig.ts"
+import { type AnyPoint, type Device, type GatewayConfig, type Limits, writeKind } from "@ot-gateway/core"
+import { Effect, Predicate } from "effect"
+import { afterSave, configArgument, ConfigEditFailed, editConfigFile, type RawConfig } from "./ConfigFileEdit.ts"
 import { pointCatalog } from "./PointCatalog.ts"
-
-/** Why a point's commands were not changed; nothing was written. */
-export class PointCommandsFailed extends Schema.TaggedError<PointCommandsFailed>()("PointCommandsFailed", {
-  message: Schema.String,
-  code: Schema.String,
-  hint: Schema.optionalKey(Schema.String),
-  issues: Schema.optionalKey(Schema.Array(ConfigFileIssue))
-}) {}
 
 /** What to do with a point: take commands (a number within `limits`), or none. */
 export type PointCommandsChange =
@@ -63,9 +43,6 @@ export interface PointCommandsReport {
   readonly next: ReadonlyArray<{ readonly command: string; readonly description: string }>
 }
 
-/** The config file as it is, every key kept. */
-const ConfigObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown))
-
 const hasId = (value: unknown, id: string): value is Readonly<Record<string, unknown>> =>
   Predicate.isObject(value) && Predicate.hasProperty(value, "id") && value.id === id
 
@@ -76,10 +53,10 @@ const listOf = (value: unknown): ReadonlyArray<unknown> => (Array.isArray(value)
  * key order of the point) as it was. The point is one the decoded config has, so it is found here too.
  */
 export const withPointCommands = (
-  raw: Readonly<Record<string, unknown>>,
+  raw: RawConfig,
   target: { readonly device: string; readonly point: string },
   commands: { readonly writable: true; readonly limits?: Limits | undefined } | { readonly writable: false }
-): Readonly<Record<string, unknown>> => ({
+): RawConfig => ({
   ...raw,
   devices: listOf(raw["devices"]).map((device) =>
     hasId(device, target.device)
@@ -97,8 +74,6 @@ export const withPointCommands = (
   )
 })
 
-const sameLimits = (a: Limits | undefined, b: Limits | undefined) => a?.min === b?.min && a?.max === b?.max
-
 const pointNames = (device: Device) => {
   const ids = device.points.map((point) => `${device.id}/${point.id}`)
   return `${ids.slice(0, 10).join(", ")}${ids.length > 10 ? `, and ${ids.length - 10} more` : ""}`
@@ -109,7 +84,7 @@ const find = (config: GatewayConfig, target: { readonly device: string; readonly
   const device = config.devices.find((candidate) => candidate.id === target.device)
   const point = device?.points.find((candidate) => candidate.id === target.point)
   if (device !== undefined && point !== undefined) return { device, point }
-  return new PointCommandsFailed({
+  return new ConfigEditFailed({
     message: `${target.device}/${target.point}: ${device === undefined ? "no such device" : "no such point"} in ${path}`,
     code: "unknown-point",
     hint:
@@ -128,13 +103,13 @@ const limitsFor = (
   point: AnyPoint,
   change: { readonly min?: number | undefined; readonly max?: number | undefined },
   cli: string
-): Limits | undefined | PointCommandsFailed => {
+): Limits | undefined | ConfigEditFailed => {
   const target = `${device.id}/${point.id}`
   const kind = writeKind(device, point)
   const named = change.min !== undefined || change.max !== undefined
   if (kind === "binary") {
     return named
-      ? new PointCommandsFailed({
+      ? new ConfigEditFailed({
           message: `${target} is a switch: it takes true or false, so it has no lowest and highest value`,
           code: "invalid-limits",
           hint: `${cli} points allow-commands ${target}`
@@ -146,14 +121,14 @@ const limitsFor = (
   // not named by whoever allows commands now.
   if (!named && point.writable && point.limits !== undefined) return point.limits
   if (change.min === undefined || change.max === undefined) {
-    return new PointCommandsFailed({
+    return new ConfigEditFailed({
       message: `${target} takes a number, so it needs the lowest and the highest ${what} a command may set: there is no unlimited write`,
       code: "invalid-limits",
       hint: `${cli} points allow-commands ${target} --min=<lowest> --max=<highest>, in the point's unit${point.unit === undefined ? "" : ` (${point.unit})`}; ask the person who runs the building when they did not name them`
     })
   }
   if (change.min > change.max) {
-    return new PointCommandsFailed({
+    return new ConfigEditFailed({
       message: `${target}: --min ${change.min} is above --max ${change.max}`,
       code: "invalid-limits",
       hint: `${cli} points allow-commands ${target} --min=${change.max} --max=${change.min}`
@@ -172,100 +147,58 @@ export const setPointCommands = Effect.fn("setPointCommands")(function* (
   change: PointCommandsChange,
   options: { readonly dryRun: boolean; readonly command?: string | undefined }
 ) {
-  const fs = yield* FileSystem.FileSystem
   const cli = options.command ?? "ot-gateway"
   const name = `${target.device}/${target.point}`
-  // The config's own failures first, as every command reports them (no-config, invalid-config with its issues).
-  yield* loadConfig(path)
-  // Then one read: the text that is judged, changed and whose ETag the save checks, so a change in between is refused.
-  const changedMeanwhile = new PointCommandsFailed({
-    message: `${path} changed while this ran (saved from the status page, or edited): nothing was written`,
-    code: "config-not-saved",
-    hint: `run it again: ${cli} points ${change.allow ? "allow-commands" : "read-only"} ${name}`
-  })
-  const fileText = yield* fs.readFileString(path).pipe(Effect.mapError(() => changedMeanwhile))
-  const current = yield* parseConfig(fileText).pipe(Effect.mapError(() => changedMeanwhile))
-  const raw = yield* Schema.decodeUnknownEffect(ConfigObject)(fileText).pipe(Effect.mapError(() => changedMeanwhile))
-  const found = find(current, target, path)
-  if (found instanceof PointCommandsFailed) return yield* found
-  const limits = change.allow ? limitsFor(found.device, found.point, change, cli) : undefined
-  if (limits instanceof PointCommandsFailed) return yield* limits
-
-  const text = `${JSON.stringify(
-    withPointCommands(raw, target, change.allow ? { writable: true, limits } : { writable: false }),
-    null,
-    2
-  )}\n`
-  const config = yield* parseConfig(text).pipe(
-    Effect.catchTag("SchemaError", (error) => {
-      const issues = configIssues(error.issue)
-      return Effect.fail(
-        new PointCommandsFailed({
-          message: `${name} cannot take commands${options.dryRun ? "" : ", so nothing was written"}:\n${describeIssues(issues).join("\n")}`,
-          code: "invalid-config",
-          hint: `fix what the message names in ${path}, then run this again; ${cli} explain invalid-config`,
-          issues: issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }))
-        })
-      )
-    })
+  const at = configArgument(path)
+  const command = `${cli} points ${change.allow ? "allow-commands" : "read-only"} ${name}${at}`
+  const edited = yield* editConfigFile(
+    path,
+    {
+      again: command,
+      refused: `${name} cannot take commands`,
+      change: (raw, current) => {
+        const found = find(current, target, path)
+        if (found instanceof ConfigEditFailed) return found
+        const limits = change.allow ? limitsFor(found.device, found.point, change, cli) : undefined
+        if (limits instanceof ConfigEditFailed) return limits
+        return {
+          raw: withPointCommands(raw, target, change.allow ? { writable: true, limits } : { writable: false }),
+          // The change keeps every device and point, so the point is in the config after it too.
+          report: (after) => {
+            const point = find(after, target, path)
+            const info = pointCatalog(after).points.find(
+              (each) => each.device === target.device && each.id === target.point
+            )
+            return point instanceof ConfigEditFailed || info === undefined
+              ? undefined
+              : { ...point, source: info.source, topic: info.topic }
+          }
+        }
+      }
+    },
+    options
   )
-  const info = pointCatalog(config).points.find((each) => each.device === target.device && each.id === target.point)
-  const after = find(config, target, path)
-  // The change keeps every device and point, so both are there: said as a failure all the same, never a defect.
-  if (after instanceof PointCommandsFailed) return yield* after
-  if (info === undefined) return yield* changedMeanwhile
-  const changed = found.point.writable !== after.point.writable || !sameLimits(found.point.limits, after.point.limits)
-  const topic = pointTopic({ site: config.site, building: config.building, device: target.device, point: target.point })
-  const saved = changed && !options.dryRun
-  if (saved) {
-    const store = yield* makeConfigStore(path)
-    yield* store.save(text, etagOf(fileText)).pipe(
-      Effect.catchTags({
-        ConfigConflict: () => Effect.fail(changedMeanwhile),
-        ConfigInvalid: (error) =>
-          Effect.fail(
-            new PointCommandsFailed({
-              message: error.message,
-              code: "invalid-config",
-              hint: `fix what the message names in ${path}, then run this again; ${cli} explain invalid-config`,
-              issues: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message }))
-            })
-          ),
-        ConfigUnreadable: (error) =>
-          Effect.fail(new PointCommandsFailed({ message: error.message, code: "config-not-saved" })),
-        ConfigWriteFailed: (error) =>
-          Effect.fail(
-            new PointCommandsFailed({
-              message: `${error.message}; ${path} is as it was`,
-              code: "config-not-saved",
-              hint: `the user running this must be able to write ${path} and its folder`
-            })
-          )
-      })
-    )
+  const after = edited.report
+  if (after === undefined) {
+    return yield* new ConfigEditFailed({
+      message: `${name} is not in ${path} after the change: nothing was written`,
+      code: "config-not-saved",
+      hint: `run it again: ${command}`
+    })
   }
-  // The commands to run next name the config when it is not the one they find themselves.
-  const at = path === defaultConfigPath ? "" : ` ${shellArgument(path)}`
+  const { changed } = edited
+  const limits = after.point.limits
   const next = !changed
     ? []
     : options.dryRun
       ? [
           {
-            command: `${cli} points ${change.allow ? "allow-commands" : "read-only"} ${name}${at}${
-              after.point.limits === undefined ? "" : ` --min=${after.point.limits.min} --max=${after.point.limits.max}`
-            }`,
+            command: `${command}${limits === undefined ? "" : ` --min=${limits.min} --max=${limits.max}`}`,
             description: "Write it into the config"
           }
         ]
       : [
-          {
-            command: `${cli} diff${at}`,
-            description: "What the saved config changes on the broker against the running gateway"
-          },
-          {
-            command: `${cli} restart${at}`,
-            description: "The running gateway reads the config again; under systemd, restart its service"
-          },
+          ...afterSave(cli, path),
           ...(after.point.writable
             ? [{ command: `${cli} write ${name} <value>${at}`, description: "Send a command and see its result" }]
             : [])
@@ -276,14 +209,14 @@ export const setPointCommands = Effect.fn("setPointCommands")(function* (
     dryRun: options.dryRun,
     point: name,
     name: after.point.name,
-    source: info.source,
-    topic,
-    ...(after.point.writable ? { setTopic: `${topic}/$set` } : {}),
+    source: after.source,
+    topic: after.topic,
+    ...(after.point.writable ? { setTopic: `${after.topic}/$set` } : {}),
     writable: after.point.writable,
-    ...(after.point.limits === undefined ? {} : { limits: after.point.limits }),
+    ...(limits === undefined ? {} : { limits }),
     takes: writeKind(after.device, after.point),
     changed,
-    ...(saved ? { backup: `${path}.bak` } : {}),
+    ...(edited.backup === undefined ? {} : { backup: edited.backup }),
     next
   } satisfies PointCommandsReport
 })

@@ -30,6 +30,7 @@ pnpm ot-gateway points schema              # the points list's columns (--json; 
 pnpm ot-gateway points from-ede examples/building.ede.csv   # a BACnet EDE file as a points list (import reads EDE directly too)
 pnpm ot-gateway points export > points.csv   # the config's devices as a points list again, for import (--format json; what a list cannot carry is named on stderr)
 pnpm ot-gateway points allow-commands heat-pump/setpoint --min=15 --max=25   # one point takes commands on its $set topic: writable and limits into the config, checked first (points read-only undoes it; --dry-run, --json; apps/gateway/src/PointCommands.ts)
+pnpm ot-gateway config set devices.heat-pump.pollIntervalMs 10000   # one key of the config by its path, devices and points by id, checked before it is written (config get|unset, config remove <device[/point]>, config undo: the .bak back; --dry-run, --json; never makes a point writable; apps/gateway/src/ConfigEdit.ts)
 pnpm ot-gateway diff                       # what ./ot-gateway.json changes on the broker against the running gateway: topics new, silent, moved, writable, stale $meta (--against <old.json>, --json)
 pnpm ot-gateway contract                   # the MQTT contract: topics and each message's fields (--json: the JSON Schemas; contract value --json: one)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker (--check: only what is off the contract)
