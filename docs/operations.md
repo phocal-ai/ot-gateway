@@ -402,6 +402,18 @@ s/b gateway main, up 2 h (since 10:19:30)
                    check: Is the device switched on and its Modbus TCP server (or its network module) enabled?
 ```
 
+### People and agents
+
+Every command follows one rule, so neither has to guess:
+
+- **A terminal** gets the short view: counts, and only what needs a look. `--all` shows every device, point, topic or column.
+- **A pipe** (a script, an agent's shell) gets the same text in full, and nothing asks a question.
+- **`--json`** gets the full result as one JSON document on stdout, a failure too as `{ok: false, error, code, hint, next}`. Progress and banners go to stderr. Nothing asks, and the exit code stays as it is: 1 for a failure, 2 for a usage mistake. `OT_GATEWAY_JSON=1` adds `--json` to every command that takes it, so an agent can set it once per session. `run`, `demo`, `simulate`, `mcp`, `points template` and `points from-ede` take no `--json`: they run until stopped, or what they print is a points list already.
+- **`--verbose`** is the log: `run --verbose` prints the gateway's log instead of the overview, as it does under Docker or in a pipe.
+- **`--yes`** answers every question with its default (`init`).
+
+Under a coding agent (`AI_AGENT`, `CLAUDECODE`, `CURSOR_AGENT`, `GEMINI_CLI` or `CODEX_SANDBOX` set), a failure and a command's `--help` end with a line pointing at `--json` and `ot-gateway mcp`. Nothing else changes: an agent gets what a pipe gets. `ot-gateway mcp` offers the commands as MCP tools, each result the command's `--json`.
+
 ### Many devices
 
 A site has hundreds of devices and thousands of points, so in a terminal the commands count them and name only what needs a look, the first few. `status` with more than 10 devices says `215 devices: 200 ok, 15 failing`, lists the first five that are not ok (a check said once for devices failing the same way) and `and 10 more failing`. `doctor` sums the devices up in one `devices` line (`200 of 215 devices ok, 15 failing`) and names the first five failing ones; one device keeps its own line. `check` sums more than 10 devices up by protocol, `read` of more than 20 points prints how many were read and what failed (`read <device>` shows a device's values), `diff` sums many topics up per device, `messages` shows the totals and the topics whose messages did not all reach the broker, and `gateways status` and `gateways points` list the failing devices and the writable points. `--all` lists every device, point or topic there. A pipe, `--json` and the MCP tools always get every one, so scripts and agents see the whole site.

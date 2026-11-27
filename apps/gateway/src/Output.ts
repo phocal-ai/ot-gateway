@@ -12,6 +12,35 @@ import { CliError } from "effect/cli"
 export const isJsonMode = (argv: ReadonlyArray<string>) => argv.includes("--json")
 
 /**
+ * Whether `OT_GATEWAY_JSON` asks for `--json` on every command that has it: set and not `0`, `false`, `no` or
+ * `off`. An agent's setup sets it once instead of adding `--json` to each command (`withJsonFromEnvironment`).
+ */
+export const jsonFromEnvironment = (env: Readonly<Record<string, string | undefined>>) => {
+  const value = (env["OT_GATEWAY_JSON"] ?? "").trim().toLowerCase()
+  return value !== "" && !["0", "false", "no", "off"].includes(value)
+}
+
+/**
+ * The variables coding agents set for the commands they run, as `@vercel/detect-agent` reads them: `AI_AGENT`
+ * names any agent (the proposed convention), the others one agent each.
+ */
+const agentVariables = ["AI_AGENT", "CLAUDECODE", "CURSOR_AGENT", "GEMINI_CLI", "CODEX_SANDBOX"] as const
+
+/**
+ * Whether the CLI runs under a coding agent, from its variables. It only adds a hint to help and failures (where
+ * `--json` and `ot-gateway mcp` are): the output stays what a terminal or a pipe gets, as cf (Cloudflare's CLI) does.
+ */
+export const runsUnderAgent = (env: Readonly<Record<string, string | undefined>>) =>
+  agentVariables.some((name) => (env[name] ?? "") !== "" && env[name] !== "0")
+
+/** Whether help and failures carry `agentHint`: `main.ts` sets it when `runsUnderAgent`; off in tests and for MCP. */
+export const AgentHints = Context.Reference<boolean>("@ot-gateway/gateway/AgentHints", { defaultValue: () => false })
+
+/** The hint an agent gets below a failure or a command's help, when the command has `--json`. */
+export const agentHint =
+  "for agents: --json (or OT_GATEWAY_JSON=1) prints this as JSON with code, hint and next; ot-gateway mcp offers the commands as tools"
+
+/**
  * Where results go when that is not the `Console`: `--json` mode sets it to the process's console (stdout) and
  * points the `Console` at stderr. Unset, results are `Console.log` lines like everything else, as tests see them.
  */
@@ -153,7 +182,7 @@ export const usageFailure = (error: CliError.ShowHelp) => ({
  * usage mistake (Shutdown.ts) and 1 for the rest.
  */
 export const reportFailure =
-  (options: { readonly json: boolean; readonly longRunning: boolean }) =>
+  (options: { readonly json: boolean; readonly longRunning: boolean; readonly agentHint?: boolean }) =>
   <E extends { readonly message: string }>(cause: Cause.Cause<E>) => {
     if (Cause.hasInterruptsOnly(cause)) return Effect.void
     const error = Cause.findError(cause)
@@ -171,9 +200,12 @@ export const reportFailure =
     return options.longRunning
       ? Effect.logError(describeFailure(error.success))
       : Console.error(
-          withNext(
-            withHint(failureLine(describeFailure(error.success)), failureFields(error.success)["hint"]),
-            failureFields(error.success)["next"]
+          withAgentHint(
+            withNext(
+              withHint(failureLine(describeFailure(error.success)), failureFields(error.success)["hint"]),
+              failureFields(error.success)["next"]
+            ),
+            options.agentHint === true
           )
         )
   }
@@ -183,6 +215,9 @@ export const withHint = (line: string, hint: unknown) => (typeof hint === "strin
 
 /** A failure's lines with the command to run next below them, as `--json` has it in `next`. */
 export const withNext = (text: string, next: unknown) => (typeof next === "string" ? `${text}\n  next: ${next}` : text)
+
+/** A failure's lines with `agentHint` below them, for an agent that ran the command without `--json`. */
+export const withAgentHint = (text: string, hint: boolean) => (hint ? `${text}\n  ${agentHint}` : text)
 
 /** An expected failure of a one-shot command, as stderr shows it. */
 export const failureLine = (message: string) => `error: ${message}`

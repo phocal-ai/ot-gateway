@@ -41,7 +41,7 @@
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
 import { Config, Console, Duration, Effect, FileSystem, Logger, Option, References, Result } from "effect"
-import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
+import { Argument, CliOutput, Command, CommandSpec, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { mergeDiscovered, writeMerged } from "./DiscoverSave.ts"
@@ -163,7 +163,10 @@ import {
   printResult,
   shellArgument,
   stderrConsole,
-  UsageMistake
+  UsageMistake,
+  AgentHints,
+  agentHint,
+  jsonFromEnvironment
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
 import { humanLogger, runView } from "./RunView.ts"
@@ -1101,8 +1104,16 @@ const schemaCommand = Command.make(
   "schema",
   {
     json: jsonFlag,
+    all: Flag.Boolean("all").pipe(
+      Flag.withDescription(
+        "In a terminal, every column in full rather than one line each; a pipe and --json always get them in full"
+      ),
+      Flag.withDefault(false)
+    ),
     brief: Flag.Boolean("brief").pipe(
-      Flag.withDescription("Each column's name, scope, required, first sentence and values, one line each; no aliases"),
+      Flag.withDescription(
+        "One line per column (name, scope, required, first sentence, values; no aliases), in a pipe and with --json too"
+      ),
       Flag.withDefault(false)
     ),
     jsonSchema: Flag.Boolean("json-schema").pipe(
@@ -1110,18 +1121,18 @@ const schemaCommand = Command.make(
       Flag.withDefault(false)
     )
   },
-  ({ json, brief, jsonSchema }) =>
+  ({ json, all, brief, jsonSchema }) =>
     jsonSchema
       ? printJson(pointsListJsonSchema())
       : json
         ? brief
           ? printResult(briefPointsListSchemaJson())
           : printJson(pointsListSchema())
-        : Console.log(describePointsListSchema({ brief }))
+        : Console.log(describePointsListSchema({ brief: brief || (process.stdout.isTTY && !all) }))
 ).pipe(
   Command.withDescription("The points list's columns, rules and allowed values"),
   Command.withExamples([
-    { command: "ot-gateway points schema", description: "Every column, for people" },
+    { command: "ot-gateway points schema", description: "Every column, one line each in a terminal (--all: in full)" },
     { command: "ot-gateway points schema --brief --json", description: "The columns in short, for agents" },
     { command: "ot-gateway points schema --json", description: "Everything, with the column names import also reads" },
     { command: "ot-gateway points schema --json-schema", description: "The JSON form's JSON Schema" }
@@ -2604,7 +2615,7 @@ const simulate = Command.make("simulate").pipe(
 export const rootDescription = [
   "OT Gateway: Modbus TCP and BACnet/IP in, MQTT 5 or 3.1.1 out, safe commands back",
   "",
-  "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON.",
+  "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
   "    points schema --json             the points list's columns: translate any list or EDE file into it (CSV, or JSON rows: --json-schema)",
@@ -2732,12 +2743,59 @@ const looksLikePath = (arg: string) => arg.includes("/") || arg.includes("\\") |
 export const versionLine = (name: string, version: string) =>
   `${name} ${/^\d+\.\d/.test(version) ? `v${version}` : version}`
 
-/** The CLI's output, with `--version` printed by `versionLine`; help and errors as the CLI prints them. */
+/**
+ * The command `args` (as `toCliArgs` gives them) runs, as its path from `ot-gateway` down: the words that name a
+ * subcommand, flags skipped. `["status", "--json"]` is `["ot-gateway", "status"]`.
+ */
+export const commandPath = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
+  const path: Array<string> = [cli.name]
+  for (const arg of args) {
+    if (arg === "--") break
+    if (arg.startsWith("-")) continue
+    const spec = CommandSpec.resolve(cli, path)
+    if (Option.isNone(spec) || !spec.value.subcommands.some((sub) => sub.name === arg || sub.alias === arg)) break
+    path.push(spec.value.subcommands.find((sub) => sub.alias === arg)?.name ?? arg)
+  }
+  return path
+}
+
+/** Whether the command at `path` (from `ot-gateway` down) takes `--json`. */
+export const takesJson = (path: ReadonlyArray<string>) =>
+  Option.match(CommandSpec.resolve(cli, path), {
+    onNone: () => false,
+    onSome: (spec) => spec.flags.some((flag) => flag.name === "json")
+  })
+
+/**
+ * `argv` with `--json` added when `OT_GATEWAY_JSON` asks for it and the command takes it: one setting for an agent's
+ * whole session instead of the flag on every command. A command without `--json` (run, demo) runs as typed.
+ */
+export const withJsonFromEnvironment = (
+  argv: ReadonlyArray<string>,
+  env: Readonly<Record<string, string | undefined>>
+): ReadonlyArray<string> => {
+  if (!jsonFromEnvironment(env) || argv.includes("--json") || !takesJson(commandPath(toCliArgs(argv)))) return argv
+  const end = argv.indexOf("--")
+  return end === -1 ? [...argv, "--json"] : [...argv.slice(0, end), "--json", ...argv.slice(end)]
+}
+
+/**
+ * The CLI's output, with `--version` printed by `versionLine`; help and errors as the CLI prints them. Under an agent
+ * (`AgentHints`), a command's help ends with `agentHint` when the command takes `--json`.
+ */
 const presenter: CliOutput.Presenter = {
   present: (event) =>
     event._tag === "Version"
       ? Console.log(versionLine(event.name, event.version))
-      : CliOutput.defaultPresenter.present(event)
+      : CliOutput.defaultPresenter
+          .present(event)
+          .pipe(
+            Effect.andThen(
+              event._tag === "Help" && takesJson(event.commandPath)
+                ? Effect.flatMap(AgentHints, (hints) => (hints ? Console.log(`\n${agentHint}`) : Effect.void))
+                : Effect.void
+            )
+          )
 }
 
 /** Runs the command line for `argv` (without node and the script). */
