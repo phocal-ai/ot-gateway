@@ -152,6 +152,9 @@ describe("check with many devices", () => {
     const all = describeConfig(bigConfig).split("\n")
     expect(all).toContain("             ahu-020  simulator simulated, 1 point, every 5 s")
     expect(all.filter((line) => line.trimStart().startsWith("ahu-"))).toHaveLength(20)
+    expect(all.find((line) => line.trimStart().startsWith("meter "))).toContain(
+      "modbus-tcp 10.0.0.5:502 unit 1, 1 point, 1 writable"
+    )
   })
 
   it("sums up one device too, and says when there are none", () => {
