@@ -180,8 +180,8 @@ export const codes: ReadonlyArray<CodeEntry> = [
     reportedBy: gatewayCommands,
     meaning:
       "No gateway answered at the status page's address: it is not running, or its page listens on another address or port.",
-    fix: "Start it (docker compose up -d in its folder, or ot-gateway run), name its config, or pass --url for a page elsewhere.",
-    next: "docker compose up -d"
+    fix: "Start it (ot-gateway up in its folder, which runs Docker Compose, or ot-gateway run), name its config, or pass --url for a page elsewhere.",
+    next: "ot-gateway up"
   },
   {
     code: "gateway-unreadable",

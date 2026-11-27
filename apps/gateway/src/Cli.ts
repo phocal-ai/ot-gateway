@@ -168,7 +168,7 @@ import {
 import { readVersion } from "./Version.ts"
 import { humanLogger, runView } from "./RunView.ts"
 import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
-import { count as countOf, LISTED, named, plural } from "./Words.ts"
+import { count as countOf, LISTED, plural } from "./Words.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
@@ -231,7 +231,7 @@ const counted = (some: ReadonlyArray<Device>) => {
   const writable = writableOf(some)
   return `${plural(some.length, "device")}, ${plural(pointsOf(some), "point")}${writable > 0 ? `, ${countOf(writable)} writable` : ""}`
 }
-const devicesByProtocol = (devices: ReadonlyArray<Device>, cli: string) => {
+const devicesByProtocol = (devices: ReadonlyArray<Device>) => {
   const protocols = [...new Set(devices.map((device) => device.protocol))]
   const width = Math.max(0, ...protocols.map((protocol) => protocol.length))
   return [
@@ -240,7 +240,7 @@ const devicesByProtocol = (devices: ReadonlyArray<Device>, cli: string) => {
       (protocol) =>
         `    ${protocol.padEnd(width)}  ${counted(devices.filter((device) => device.protocol === protocol))}`
     ),
-    `  ${cli} check --all lists every device`
+    "  --all lists every device"
   ]
 }
 
@@ -250,7 +250,7 @@ const devicesByProtocol = (devices: ReadonlyArray<Device>, cli: string) => {
  */
 export const describeConfig = (
   config: GatewayConfig,
-  options: { readonly brief?: boolean; readonly cli?: string } = {},
+  options: { readonly brief?: boolean } = {},
   cwd = process.cwd()
 ) => {
   const passwordWarning = mqttPasswordWarning(config.mqtt)
@@ -271,7 +271,7 @@ export const describeConfig = (
         ? `  status page on port ${config.status.port} at every address of this machine (http://localhost:${config.status.port} here)`
         : `  status page http://${config.status.bindAddress}:${config.status.port}`,
     ...((options.brief ?? false) && config.devices.length > LISTED
-      ? devicesByProtocol(config.devices, options.cli ?? "ot-gateway")
+      ? devicesByProtocol(config.devices)
       : config.devices.map(deviceLine))
   ].join("\n")
 }
@@ -462,9 +462,7 @@ const check = Command.make("check", { config: configPath, all: allFlag, json: js
   Effect.gen(function* () {
     const decoded = yield* loadConfig(config)
     if (!json) {
-      return yield* Console.log(
-        describeConfig(decoded, { brief: process.stdout.isTTY && !all, cli: yield* invocation })
-      )
+      return yield* Console.log(describeConfig(decoded, { brief: process.stdout.isTTY && !all }))
     }
     const { next, url, page } = yield* checkNext(config, decoded)
     yield* printJson({ ...configSummary(decoded), next, url, page })
@@ -1045,9 +1043,10 @@ const importCommand = Command.make(
     dryRun: dryRunFlag(
       "Check the list and print its devices instead of adding them; without a config named or here, on their own"
     ),
+    all: allFlag,
     json: jsonFlag
   },
-  ({ list, config, dryRun, json }) =>
+  ({ list, config, dryRun, all, json }) =>
     Effect.gen(function* () {
       const {
         added,
@@ -1084,7 +1083,7 @@ const importCommand = Command.make(
         `added ${plural(added.length, "device")} with ${plural(points, "point")} to ${against}, none writable`
       )
       if (unitLines.length > 0) yield* Console.log(unitLines.join("\n"))
-      yield* Console.log(describeConfig(written, { brief: process.stdout.isTTY, cli: yield* invocation }))
+      yield* Console.log(describeConfig(written, { brief: process.stdout.isTTY && !all }))
     }).pipe(jsonFailure(json, { path: config ?? defaultConfigPath }))
 ).pipe(
   Command.withDescription(
@@ -1768,9 +1767,7 @@ const status = Command.make(
       Effect.flatMap((target) => fetchStatusFor(target, { json })),
       jsonFailure(json, { url: url ?? null, path: config ?? configFlag ?? null }),
       Effect.flatMap(({ status: report, recent }) =>
-        Effect.flatMap(invocation, (cli) =>
-          statusOutcome(json, { failOnAlarm, brief: process.stdout.isTTY && !all, cli })(report, recent)
-        )
+        statusOutcome(json, { failOnAlarm, brief: process.stdout.isTTY && !all })(report, recent)
       )
     )
 ).pipe(
@@ -1933,7 +1930,6 @@ const messagesCommand = Command.make(
       return yield* messagesReport(target, selection, {
         json,
         brief: process.stdout.isTTY && !all,
-        cli: yield* invocation,
         since,
         sinceMs: since === undefined ? undefined : parseSince(since)
       })
@@ -2123,10 +2119,10 @@ const readCommand = Command.make(
                 : sent.failed.length === 0
                   ? undefined
                   : new BrokerCommandError({
-                      message: `${countOf(sent.failed.length)} of ${plural(sent.failed.length + sent.sent, "value")} not sent: ${named(
-                        sent.failed.map((each) => `${each.topic}: ${each.message}`),
-                        3
-                      )}`,
+                      message: `${countOf(sent.failed.length)} of ${plural(sent.failed.length + sent.sent, "value")} not sent: ${sent.failed
+                        .slice(0, 3)
+                        .map((each) => `${each.topic}: ${each.message}`)
+                        .join("; ")}${sent.failed.length > 3 ? `; and ${countOf(sent.failed.length - 3)} more` : ""}`,
                       hint: "ot-gateway broker checks the connection; the broker's access rules (ACL) must allow publishing to these topics"
                     })
           const published =
@@ -2155,7 +2151,7 @@ const readCommand = Command.make(
           } else {
             // A terminal shows every value of a few points, or of the ones named; of many, how many and what failed.
             const brief = process.stdout.isTTY && !all && !chose && report.summary.points > VALUES_SHOWN
-            yield* printResult(brief ? formatReadSummary(report, yield* invocation) : formatReadReport(report))
+            yield* printResult(brief ? formatReadSummary(report) : formatReadReport(report))
             if (published !== undefined && failure === undefined) {
               const aggregated =
                 published.skipped === undefined

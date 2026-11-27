@@ -118,7 +118,12 @@ export const briefMessages = (messages: ReadonlyArray<MessageStatus>) => {
     .filter((message) => !short.includes(message))
     .toSorted((a, b) => b.count - a.count)
     .slice(0, NAMED)
-  return { shown: [...short.slice(0, LISTED), ...busiest], short: short.length }
+  return {
+    short: short.slice(0, LISTED),
+    shortMore: Math.max(0, short.length - LISTED),
+    shortCount: short.length,
+    busiest
+  }
 }
 
 export const NOT_COUNTED_LINE = `  (this gateway does not count what reached the broker: upgrade it to v${EVENTS_RELEASE.join(".")} or later for that)`
@@ -190,11 +195,45 @@ export interface MessagesOptions {
   readonly json?: boolean
   /** A terminal without --all: of many topics, the totals and the ones that need a look. */
   readonly brief?: boolean
-  /** How the CLI was run, for the commands it names. */
-  readonly cli?: string
   /** `--since` as typed (`10m`) and in ms, at most `MESSAGE_WINDOW_MINUTES`: the counts of that window only. */
   readonly since?: string | undefined
   readonly sinceMs?: number | undefined
+}
+
+/**
+ * The brief report: the totals, the topics whose messages did not all reach the broker (the first ten and how many
+ * more), the busiest under their own heading, and how to see the rest.
+ */
+const briefLines = (
+  messages: ReadonlyArray<MessageStatus>,
+  totals: MessageTotals,
+  context: {
+    readonly prefix: string
+    readonly now: number
+    readonly modes: PublishModes
+    readonly buffer: BufferContext
+  }
+) => {
+  const picked = briefMessages(messages)
+  const lines = (some: ReadonlyArray<MessageStatus>) =>
+    formatMessages(some, context.prefix, context.now, context.modes, context.buffer)
+  const counted = totals.delivered !== undefined
+  return [
+    formatTotals(totals, context.buffer),
+    ...(picked.shortCount === 0
+      ? []
+      : [
+          `  ${plural(picked.shortCount, "topic")} with messages that did not reach the broker:`,
+          ...lines(picked.short),
+          ...(picked.shortMore > 0 ? [`  and ${count(picked.shortMore)} more`] : [])
+        ]),
+    picked.shortCount === 0 && counted
+      ? `  every message reached the broker; the busiest of ${plural(messages.length, "topic")}:`
+      : `  the busiest of ${plural(messages.length, "topic")}:`,
+    ...lines(picked.busiest),
+    ...(counted ? [] : [NOT_COUNTED_LINE]),
+    "  add a device's id for its topics, --all for every topic"
+  ]
 }
 
 /** The longest `--since` the gateway can count, in ms. */
@@ -225,7 +264,6 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const totals = messageTotals(messages)
   const gateway = { site: status.site, building: status.building, id: status.id }
   const brief = (options.brief ?? false) && selections.length === 0 && messages.length > TOPICS_LISTED
-  const shown = briefMessages(messages)
   if (options.json === true) {
     return yield* printJsonWithLocalTimes(messagesJson(gateway, status, { ...answer, messages }, modes))
   }
@@ -253,14 +291,7 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
                 : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
         : brief
-          ? [
-              formatTotals(totals, status.buffer),
-              ...(shown.short > 0
-                ? [`  ${plural(shown.short, "topic")} with messages that did not reach the broker:`]
-                : [`  every message reached the broker; the busiest of ${plural(messages.length, "topic")}:`]),
-              ...formatMessages(shown.shown, prefix, status.now, modes, status.buffer),
-              `  ${options.cli ?? "ot-gateway"} messages <device> lists a device's topics, --all every topic`
-            ]
+          ? briefLines(messages, totals, { prefix, now: status.now, modes, buffer: status.buffer })
           : [
               ...formatMessages(messages, prefix, status.now, modes, status.buffer),
               formatTotals(totals, status.buffer),

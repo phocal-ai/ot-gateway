@@ -442,7 +442,7 @@ const failureRows = (items: ReadonlyArray<{ readonly name: string; readonly why:
  * not answer and the points that failed, the first few of each with why, and how to see the values. A pipe, --json
  * and `read <device>` get every value.
  */
-export const formatReadSummary = (report: ReadReport, cli = "ot-gateway"): string => {
+export const formatReadSummary = (report: ReadReport): string => {
   const silent = report.devices.filter((device) => device.error !== undefined)
   const failedPoints = report.devices.flatMap((device) =>
     device.error !== undefined
@@ -463,7 +463,7 @@ export const formatReadSummary = (report: ReadReport, cli = "ot-gateway"): strin
       ? []
       : [`${plural(failedPoints.length, "point")} failed:`, ...failureRows(failedPoints)]),
     "",
-    `The values: ${cli} read --all, or ${cli} read <device> for one device`
+    "The values: add --all for every one, or a device's id for its own"
   ].join("\n")
 }
 

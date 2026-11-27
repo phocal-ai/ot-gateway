@@ -76,7 +76,7 @@ export const mistakesText = (issues: ReadonlyArray<{ readonly path?: string; rea
       .slice(0, KINDS)
       .flatMap(([message, paths]) => [message, ...(paths.length === 0 ? [] : [`  at ${named(paths, 3)}`])]),
     ...(kinds.length > KINDS ? [`and ${plural(kinds.length - KINDS, "other kind")}`] : []),
-    "ot-gateway check --json lists every mistake with its path"
+    "check --json lists every mistake with its path"
   ].join("\n")
 }
 

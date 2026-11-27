@@ -370,6 +370,23 @@ describe("events", () => {
     ])
   })
 
+  it("says a device's check again when it fails the same way after it recovered", () => {
+    const again: EventLog = {
+      now,
+      capacity: 500,
+      dropped: 0,
+      events: [
+        { id: 1, at: at(10, 0, 0), type: "device-failing", device: "pump", reason: "protocol", error: "exception 2" },
+        { id: 2, at: at(10, 5, 0), type: "device-recovered", device: "pump", downMs: 300_000 },
+        { id: 3, at: at(12, 0, 0), type: "device-failing", device: "pump", reason: "protocol", error: "exception 2" }
+      ]
+    }
+    const checks = formatEvents(again, Number.POSITIVE_INFINITY, "all")
+      .split("\n")
+      .filter((line) => line.trim().startsWith("check: "))
+    expect(checks).toHaveLength(2)
+  })
+
   it("leads with power, switch and cable for a device that answered before it failed, config for one that never did", () => {
     expect(formatEvents(boilerTimeout(false), Number.POSITIVE_INFINITY, "all", protocolOf).split("\n")[1]).toBe(
       "                  check: Is the device instance in the config the device's own (its Device object, not a point)?"

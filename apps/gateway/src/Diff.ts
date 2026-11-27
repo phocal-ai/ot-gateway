@@ -359,6 +359,14 @@ const changeLines = <A>(
   ]
 }
 
+/** What becomes of a group's `$meta`: cleared, kept, or `3 of 15 keep their $meta`. */
+const metaFate = (kept: number, all: number) =>
+  kept === 0
+    ? "the gateway clears their $meta"
+    : kept === all
+      ? "their $meta stays"
+      : `${count(kept)} of ${count(all)} keep their $meta`
+
 /**
  * The diff for people: one line per topic that changes, marked `+` (new), `-` (silent), `→` (moved), `!` (takes
  * commands now), `~` (its `$meta` changes), then the settings, and last what stays on the broker with the
@@ -391,7 +399,7 @@ export const formatDiff = (
       (each) =>
         `  - ${each.topic}  goes silent${each.metaCleared ? "; the gateway clears its $meta" : "; its $meta stays"}`,
       (device, group) =>
-        `  - ${device}/…  ${plural(group.length, "topic")} go silent${group.every((each) => each.metaCleared) ? "; the gateway clears their $meta" : "; their $meta stays"}`
+        `  - ${device}/…  ${plural(group.length, "topic")} go silent; ${metaFate(group.filter((each) => !each.metaCleared).length, group.length)}`
     ),
     ...changeLines(
       diff.moved,

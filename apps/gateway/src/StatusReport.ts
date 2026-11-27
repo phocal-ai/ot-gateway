@@ -535,7 +535,7 @@ const brokerState = (broker: GatewayStatus["broker"], now: number, started: numb
 export const formatStatus = (
   status: GatewayStatus,
   recent?: RecentIncidents,
-  options: { readonly brief?: boolean; readonly cli?: string } = {}
+  options: { readonly brief?: boolean } = {}
 ) => {
   const stateOf = (device: GatewayStatus["devices"][number]) => deviceStateName(device, status.now)
   const failing = status.devices.filter((device) => device.status === "failing").length
@@ -543,7 +543,11 @@ export const formatStatus = (
   const shared = sharedCause(status.devices, status.broker)
   const sharedHost = shared === undefined ? undefined : sharedHostOf(deviceSide(status.devices))
   const brief = (options.brief ?? false) && status.devices.length > LISTED
-  const needing = status.devices.filter((device) => stateOf(device) !== "ok")
+  // The failing first, then late, then starting: what needs a look most is never behind "and N more".
+  const rank: Readonly<Record<string, number>> = { failing: 0, late: 1, starting: 2 }
+  const needing = status.devices
+    .filter((device) => stateOf(device) !== "ok")
+    .toSorted((a, b) => (rank[stateOf(a)] ?? 3) - (rank[stateOf(b)] ?? 3))
   const { shown, more } = brief ? firstOf(needing) : { shown: status.devices, more: 0 }
   const width = Math.max(0, ...shown.map((device) => device.id.length))
   const states = ["ok", "failing", "late", "starting"].flatMap((state) => {
@@ -577,7 +581,7 @@ export const formatStatus = (
     deviceHeader,
     ...deviceLines,
     ...(more > 0 ? [`    and ${count(more)} more ${restState(needing.slice(shown.length).map(stateOf))}`] : []),
-    ...(brief ? [`    ${options.cli ?? "ot-gateway"} status --all lists every device`] : []),
+    ...(brief ? ["    --all lists every device"] : []),
     ...(shared === undefined ? [] : [`  ${shared}`]),
     ...alarmLines(status.alarms ?? [], status.now, brief),
     ...(recent === undefined ? [] : recentLines(recent, status.now)),
@@ -748,12 +752,12 @@ export class AlarmActive extends Schema.TaggedError<AlarmActive>()("AlarmActive"
  */
 export const statusOutcome = (
   json: boolean,
-  options: { readonly failOnAlarm?: boolean; readonly brief?: boolean; readonly cli?: string } = {}
+  options: { readonly failOnAlarm?: boolean; readonly brief?: boolean } = {}
 ) =>
   Effect.fnUntraced(function* (status: GatewayStatus, recent?: RecentIncidents) {
     yield* json
       ? printJsonWithLocalTimes(statusJson(status, recent))
-      : Console.log(formatStatus(status, recent, { brief: options.brief ?? false, cli: options.cli ?? "ot-gateway" }))
+      : Console.log(formatStatus(status, recent, { brief: options.brief ?? false }))
     const summary = unhealthySummary(status)
     if (summary !== undefined) return yield* new GatewayUnhealthy({ message: summary })
     const active = activeAlarms(status)
@@ -982,8 +986,9 @@ export const formatEvents = (
       const indent = " ".repeat(localTime(event.at, log.now).length + 2 + width + 2)
       const found = advice.get(event.id)
       const checks = adviceLines(found?.hint, indent, found?.leads === true ? LEAD_CHECKS : 1)
+      // Only for failures in a row: any other event in between, and the next failure has its checks again.
       const repeated = checks.length > 0 && checks.every((check, index) => previous[index] === check)
-      if (checks.length > 0) previous = checks
+      previous = checks
       return [
         line,
         ...(repeated ? [] : checks),

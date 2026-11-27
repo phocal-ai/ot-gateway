@@ -394,7 +394,9 @@ export interface FleetTextOptions {
  */
 export const formatGatewayStatus = (gateway: FleetGateway, now: number, options: FleetTextOptions = {}) => {
   const brief = (options.brief ?? false) && gateway.devices.length > LISTED
-  const needing = gateway.devices.filter((device) => device.status !== "ok")
+  const needing = gateway.devices
+    .filter((device) => device.status !== "ok")
+    .toSorted((a, b) => Number(b.status === "failing") - Number(a.status === "failing"))
   const { shown, more } = brief ? firstOf(needing) : { shown: gateway.devices, more: 0 }
   const width = Math.max(0, ...shown.map((device) => device.id.length))
   const host = gateway.host

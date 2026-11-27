@@ -144,7 +144,7 @@ describe("check with many devices", () => {
       "  21 devices, 21 points, 1 writable",
       "    simulator   20 devices, 20 points",
       "    modbus-tcp  1 device, 1 point, 1 writable",
-      "  ot-gateway check --all lists every device"
+      "  --all lists every device"
     ])
     const all = describeConfig(bigConfig).split("\n")
     expect(all).toContain("  ahu-020: simulator simulated, 1 point, every 5000 ms")
@@ -165,7 +165,7 @@ describe("check with many devices", () => {
       "  at devices.0.points.0.name, devices.0.points.1.name, devices.0.points.2.name and 2,997 more",
       "Expected a slug",
       "  at site",
-      "ot-gateway check --json lists every mistake with its path"
+      "check --json lists every mistake with its path"
     ])
   })
 })
@@ -217,7 +217,7 @@ describe("read with many points", () => {
       "  ahu-099/t  exception 2",
       "  ahu-099/h  exception 2",
       "",
-      "The values: ot-gateway read --all, or ot-gateway read <device> for one device"
+      "The values: add --all for every one, or a device's id for its own"
     ])
   })
 
@@ -270,8 +270,23 @@ describe("status with many devices", () => {
     expect(lines.filter((line) => line.startsWith("    meter-"))).toHaveLength(5)
     expect(lines.filter((line) => line.includes("check: "))).toHaveLength(1)
     expect(lines).toContain("    and 3 more failing")
-    expect(lines).toContain("    ot-gateway status --all lists every device")
+    expect(lines).toContain("    --all lists every device")
     expect(lines.some((line) => line.includes("ahu-001"))).toBe(false)
+  })
+
+  it("puts the failing devices before the ones still starting", () => {
+    const starting: DeviceStatus = { ...device("x", "ok"), status: "starting" }
+    const restarted: GatewayStatus = {
+      ...status,
+      devices: [
+        ...ids("new", 8).map((id) => ({ ...starting, id })),
+        ...ids("ahu", 10).map((id) => device(id, "ok")),
+        device("meter", "failing")
+      ]
+    }
+    const lines = formatStatus(restarted, undefined, { brief: true }).split("\n")
+    expect(lines[3]).toMatch(/^ {4}meter +failing /)
+    expect(lines).toContain("    and 4 more starting")
   })
 
   it("lists every device and every hint otherwise", () => {
@@ -386,10 +401,10 @@ describe("messages and watch with many devices", () => {
       ...ids("ahu", 30).map((id, index) => message(`s/b/${id}/t`, index, index)),
       message("s/b/meter/p", 5, 2)
     ]
-    const { shown, short } = briefMessages(messages)
-    expect(short).toBe(1)
-    expect(shown.map((each) => each.topic)).toEqual([
-      "s/b/meter/p",
+    const picked = briefMessages(messages)
+    expect(picked.shortCount).toBe(1)
+    expect(picked.short.map((each) => each.topic)).toEqual(["s/b/meter/p"])
+    expect(picked.busiest.map((each) => each.topic)).toEqual([
       "s/b/ahu-030/t",
       "s/b/ahu-029/t",
       "s/b/ahu-028/t",
