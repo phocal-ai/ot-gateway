@@ -751,6 +751,15 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     argv: ({ profile }) => ["profiles", "show", profile]
   }),
   defineTool({
+    name: "setup_guide",
+    title: "The setup guide",
+    description:
+      "The steps to take a user from nothing to a gateway publishing their devices' values: what to check, what to ask, the order, and the rules (never write to a device, no secrets in the config). Read it first when setting up a gateway; its otg <command> lines are this server's tools. Returns text: the guide as Markdown, starting with which tool each of its commands is",
+    input: {},
+    annotations: local,
+    argv: () => ["guide", "setup", "--mcp"]
+  }),
+  defineTool({
     name: "init",
     title: "Write a gateway's folder",
     description:

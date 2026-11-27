@@ -29,6 +29,7 @@ on:
       - "scripts/soak.sh"
       - "examples/**"
       - "profiles/**"
+      - ".claude/skills/setup/**"
       - "packaging/compose.yaml"
       - "packaging/ot-gateway"
       - ".github/workflows/image.yml"
@@ -99,6 +100,7 @@ jobs:
           docker run --rm -v "$work/gateway.json:/etc/ot-gateway/gateway.json:ro" ot-gateway:smoke --check /etc/ot-gateway/gateway.json
           # The files the CLI finds next to the bundle: the device profiles and the version.
           docker run --rm ot-gateway:smoke profiles list --json | grep -q '"id": "eastron-sdm630"'
+          docker run --rm ot-gateway:smoke guide setup --json | grep -q '"name": "setup"'
           docker run --rm ot-gateway:smoke --version
           # A preview build names itself (the status page, health and telemetry read the same VERSION file).
           if [ -n "$VERSION" ]; then docker run --rm ot-gateway:smoke --version | grep -qF "$VERSION"; fi

@@ -409,6 +409,13 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway run"
   },
   {
+    code: "guide-missing",
+    area: "cli",
+    reportedBy: ["guide"],
+    meaning: "The setup guide is not part of this installation: a package or image built without it.",
+    fix: "Read it online: https://github.com/phocal-ai/ot-gateway/blob/main/.claude/skills/setup/SKILL.md, or install the latest release."
+  },
+  {
     code: "pid-unconfirmed",
     area: "deploy",
     reportedBy: ["stop"],
@@ -696,8 +703,9 @@ export const codes: ReadonlyArray<CodeEntry> = [
     code: "bacnet-port-in-use",
     area: "device",
     reportedBy: ["doctor"],
-    meaning: "Another program on this machine holds the BACnet/IP port (UDP 47808 unless bacnet.port says otherwise).",
-    fix: "Stop it (a second gateway, the demo or a BACnet tool), or set bacnet.port to a free port; devices that answer a broadcast on 47808 then need a fixed address.",
+    meaning:
+      "Another program on this machine holds the BACnet/IP port (UDP 47808 unless bacnet.port says otherwise). When doctor finds a read or discover at work there, or this config's gateway, it is a warning.",
+    fix: "Another ot-gateway command gives the port back when it finishes: run doctor again then. Otherwise stop the program (a second gateway, the demo or a BACnet tool), or set bacnet.port to a free port; devices that answer a broadcast on 47808 then need a fixed address.",
     next: "ss -ulpn"
   },
   {

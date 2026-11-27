@@ -39,7 +39,7 @@ if [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 
 rm -rf "$out" "$repo"/dist/ot-gateway-*.tgz
-mkdir -p "$out/apps/gateway/src" "$out/apps/web" "$out/examples" "$out/packaging" "$out/profiles"
+mkdir -p "$out/apps/gateway/src" "$out/apps/web" "$out/examples" "$out/packaging" "$out/profiles" "$out/guides"
 
 # The status page (a static export, cached by Turborepo) and the bundle (scripts/bundle.sh, which the image runs too).
 pnpm -C "$repo" exec turbo run build --filter=@ot-gateway/web --output-logs=errors-only
@@ -50,6 +50,8 @@ cp "$repo/examples/gateway.json" "$out/examples/"
 cp "$repo/packaging/compose.yaml" "$out/packaging/"
 # The device profile library that points lists name (Profile.ts).
 cp "$repo"/profiles/*.json "$out/profiles/"
+# The setup guide, which `guide setup` prints and `mcp` serves (apps/gateway/src/SetupGuide.ts).
+cp "$repo/.claude/skills/setup/SKILL.md" "$out/guides/setup.md"
 # What --version, telemetry and the status page report: the tag, as the container image has it.
 echo "v$version" >"$out/VERSION"
 cp "$repo/LICENSE" "$out/"
@@ -67,7 +69,7 @@ cat >"$out/package.json" <<EOF
   "keywords": ["bacnet", "modbus", "mqtt", "building-automation", "gateway", "iot", "effect"],
   "type": "module",
   "bin": { "ot-gateway": "apps/gateway/src/main.mjs" },
-  "files": ["apps", "examples", "packaging", "profiles", "VERSION"],
+  "files": ["apps", "examples", "guides", "packaging", "profiles", "VERSION"],
   "engines": { "node": ">=22.18" }
 }
 EOF

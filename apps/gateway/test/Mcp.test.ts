@@ -7,9 +7,18 @@ import { describe, expect, it } from "@effect/vitest"
 import { Console, Effect, Exit, Predicate, Sink, Stream } from "effect"
 import * as Stdio from "effect/Stdio"
 import { runCli } from "../src/Cli.ts"
-import { boundedLines, lineConsole, PROTOCOL_VERSIONS, runTool, serveMcp, type RunCommand } from "../src/Mcp.ts"
+import {
+  boundedLines,
+  lineConsole,
+  type McpPrompt,
+  PROTOCOL_VERSIONS,
+  runTool,
+  serveMcp,
+  type RunCommand
+} from "../src/Mcp.ts"
 import { mcpTools, toolNamesUnique } from "../src/McpTools.ts"
 import { printJson } from "../src/Output.ts"
+import { mcpPreface, readSetupGuide, withoutFrontmatter } from "../src/SetupGuide.ts"
 
 const silent = lineConsole(() => {})
 
@@ -22,7 +31,7 @@ const toolNamed = (name: string) => {
 const argvOf = (name: string, input: unknown) => Effect.runSync(Effect.exit(toolNamed(name).argv(input)))
 
 /** Serves the lines as stdin until they end, and returns each line the server wrote, parsed. */
-const serve = (lines: ReadonlyArray<unknown>, run: RunCommand<never>) =>
+const serve = (lines: ReadonlyArray<unknown>, run: RunCommand<never>, prompts: ReadonlyArray<McpPrompt> = []) =>
   Effect.gen(function* () {
     const written: Array<string> = []
     const stdio = Stdio.layerTest({
@@ -36,7 +45,7 @@ const serve = (lines: ReadonlyArray<unknown>, run: RunCommand<never>) =>
           })
         )
     })
-    yield* serveMcp({ tools: mcpTools, version: "1.2.3", run, log: silent }).pipe(Effect.provide(stdio))
+    yield* serveMcp({ tools: mcpTools, version: "1.2.3", run, log: silent, prompts }).pipe(Effect.provide(stdio))
     return written
       .join("")
       .split("\n")
@@ -291,6 +300,43 @@ describe("mcp server", () => {
       // The notification has no answer.
       expect(messages).toHaveLength(3)
     })
+  )
+
+  it.effect("serves the setup guide as a prompt, and offers prompts only when it has one", () =>
+    Effect.gen(function* () {
+      const setup: McpPrompt = { name: "setup", title: "Set up", description: "From nothing", text: "Run otg init." }
+      const messages = yield* serve(
+        [
+          request(1, "initialize", { protocolVersion: "2025-06-18" }),
+          request(2, "prompts/list"),
+          request(3, "prompts/get", { name: "setup" }),
+          request(4, "prompts/get", { name: "other" })
+        ],
+        echo,
+        [setup]
+      )
+      expect(byId(messages, 1)).toMatchObject({ result: { capabilities: { tools: {}, prompts: {} } } })
+      expect(byId(messages, 2)).toMatchObject({
+        result: { prompts: [{ name: "setup", title: "Set up", description: "From nothing" }] }
+      })
+      expect(byId(messages, 3)).toMatchObject({
+        result: { messages: [{ role: "user", content: { type: "text", text: "Run otg init." } }] }
+      })
+      expect(byId(messages, 4)).toMatchObject({ error: { code: -32602 } })
+      const without = yield* serve([request(1, "initialize", { protocolVersion: "2025-06-18" })], echo)
+      expect(byId(without, 1)).not.toMatchObject({ result: { capabilities: { prompts: {} } } })
+    })
+  )
+
+  it.effect("reads the setup guide of this checkout without its frontmatter, and names the tools for MCP", () =>
+    Effect.gen(function* () {
+      const text = yield* readSetupGuide
+      expect(text.startsWith("---")).toBe(false)
+      expect(text).toContain("otg init")
+      expect(withoutFrontmatter("---\nname: x\n---\n\nBody")).toBe("Body")
+      expect(mcpPreface).toContain("discover_save")
+      expect(argvOf("setup_guide", {})).toEqual(Exit.succeed(["guide", "setup", "--mcp"]))
+    }).pipe(Effect.provide(NodeServices.layer))
   )
 
   it.effect("lists the tools with their schemas and annotations", () =>
