@@ -22,6 +22,7 @@ import { parseDeviceAddress } from "@ot-gateway/bacnet"
 import { folderConfigName, type FolderFiles } from "./Folder.ts"
 import { devicesFromFile } from "./Import.ts"
 import { shellArgument } from "./Output.ts"
+import { textInput } from "./TextInput.ts"
 import { CurrentUi, plainUi, spinning, type Ui } from "./Ui.ts"
 import { picker } from "./Picker.ts"
 import {
@@ -209,7 +210,7 @@ const slug = (
   message: string,
   fallback: string,
   suggested = fallback
-) => answer(flag, given, yes, fallback, Prompt.String({ message, default: suggested, validate: validSlug }), validSlug)
+) => answer(flag, given, yes, fallback, textInput({ message, placeholder: suggested, validate: validSlug }), validSlug)
 
 /** Whether a broker answers on localhost:1883, so the broker question can say so; at most a second. */
 export const localBrokerAnswers = NodeSocket.makeNet({ host: "localhost", port: 1883, openTimeout: "1 second" }).pipe(
@@ -235,9 +236,9 @@ const brokerUrl = Effect.fn("brokerUrl")(function* (flags: InitFlags, localBroke
     "mqtt://localhost:1883",
     Console.error(brokerNote(asks && (yield* localBroker))).pipe(
       Effect.andThen(
-        Prompt.String({
+        textInput({
           message: "Which MQTT broker should it publish to?",
-          default: "mqtt://localhost:1883",
+          placeholder: "mqtt://localhost:1883",
           validate: validBrokerUrl
         })
       )
@@ -269,9 +270,9 @@ const login = Effect.fn("login")(function* (flags: InitFlags) {
     "MQTT_PASSWORD",
     Console.error("the password stays out of ot-gateway.json: it goes in ot-gateway.env, under this variable").pipe(
       Effect.andThen(
-        Prompt.String({
+        textInput({
           message: "Which variable holds the password?",
-          default: "MQTT_PASSWORD",
+          placeholder: "MQTT_PASSWORD",
           validate: validEnvName
         })
       )
@@ -309,7 +310,7 @@ const devicesFromList: Effect.Effect<
   Terminal.QuitError,
   Prompt.Environment
 > = Effect.gen(function* () {
-  const path = yield* Prompt.String({ message: "Points list (CSV, see docs/first-building.md)", default: "points.csv" })
+  const path = yield* textInput({ message: "Points list (CSV, see docs/first-building.md)", placeholder: "points.csv" })
   return yield* devicesFromFile(path).pipe(
     Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
     Effect.catchTags({
@@ -434,9 +435,9 @@ const validModbusRange = (value: string) => {
  */
 const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (suggested: string) {
   yield* Console.error("a network (192.168.1.0/24), first-last (192.168.1.10-40) or one address; port 502")
-  const range = yield* Prompt.String({
+  const range = yield* textInput({
     message: "Which addresses should the scan ask?",
-    default: suggested,
+    placeholder: suggested,
     validate: validModbusRange
   })
   const targets = parseRange(range)
@@ -636,7 +637,7 @@ export const initTarget = Effect.fn("initTarget")(function* (argument: string | 
     argument ??
     (yes
       ? defaultFolder
-      : yield* Prompt.String({ message: "Where should the gateway's files go?", default: ".", validate: validFolder }))
+      : yield* textInput({ message: "Where should the gateway's files go?", placeholder: ".", validate: validFolder }))
   return join(folder.trim(), folderConfigName)
 })
 
