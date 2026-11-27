@@ -923,6 +923,13 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway report draft --help"
   },
   {
+    code: "report-unconfirmed",
+    area: "cli",
+    reportedBy: ["report send"],
+    meaning: "The GitHub CLI (gh) did not finish within 30 seconds, so it is not known whether the report was filed.",
+    fix: "Look at the repository's newest issues (the hint has the link) before sending again, so the report is not filed twice."
+  },
+  {
     code: "report-not-filed",
     area: "cli",
     reportedBy: ["report send"],

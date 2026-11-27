@@ -3194,6 +3194,10 @@ const reportSendCommand = Command.make(
       Flag.withDescription(
         "Add the report as a comment to this issue, which reports the same bug, instead of a new one"
       ),
+      Flag.filter(
+        (issue) => issue >= 1,
+        (issue) => `--to takes an issue's number, not ${issue}`
+      ),
       Flag.optional,
       Flag.map(Option.getOrUndefined)
     ),

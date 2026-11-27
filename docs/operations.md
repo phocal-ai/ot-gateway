@@ -614,13 +614,13 @@ An issue is public, so the text is stricter than the support bundle's. Replaced 
 | the home folder in a path                                                                   | `~`, `/home/user`                                          |
 | secrets, as in the support bundle, and a URL's credentials                                  | `[redacted]`                                               |
 
-What stays is what a bug is about: the protocol, register addresses and types, BACnet object types and instances, the device's vendor and model, versions. A name the config does not hold (a person, a street, a customer in a sentence) cannot be found, which is why you read the text first. A word of yours that happens to be an id in the config is replaced too: a device called `meter` turns "the meter" into "the device-1".
+What stays is what a bug is about: the protocol, register addresses and types, BACnet object types and instances, the device's vendor and model, versions. A frame's bytes (`response 00:01:00:00:00:05:01:03`) and a version with four parts (`firmware 2.1.0.14`) are left as they are, although they look like addresses. A name the config does not hold (a person, a street, a customer in a sentence) cannot be found, which is why you read the text first. A word of yours that happens to be an id in the config is replaced too: a device called `meter` turns "the meter" into "the device-1".
 
 The fingerprint is twelve hex digits made from the code, the command and the error with numbers and placeholders taken out, so the same bug has the same fingerprint on another site. `draft` searches the repository's issues for it (the one request it makes, without a login) and lists what it finds; `report send <draft> --to <number>` then adds your report to that issue as a comment instead of opening a second one.
 
 `report send` runs the same replacements over the draft once more, so a line you added by hand is covered, and then:
 
-- with the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`) it says what it would file, where and under which account, and with `--yes` files it;
+- with the [GitHub CLI](https://cli.github.com) signed in (`gh auth login`) it says what it would file, where and under which account, and with `--yes` files it (when `gh` does not finish within 30 seconds, the code is `report-unconfirmed`: look at the repository's issues before sending again);
 - without it, or with `--link`, it prints a link that opens GitHub's issue form with the text filled in, for you to submit in a browser;
 - without a GitHub account, the file is the report: pass it on to whoever supports the gateway.
 

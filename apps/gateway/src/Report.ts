@@ -46,6 +46,7 @@ import { latestRelease as newestRelease } from "./Deploy.ts"
 import { compareReleases, parseRelease, versionName } from "./GatewayRelease.ts"
 import { defaultConfigPath } from "./Import.ts"
 import { loadConfig } from "./LoadConfig.ts"
+import { shellArgument } from "./Output.ts"
 import { REDACTED, redactText, secretsOf } from "./Support.ts"
 import { readVersion } from "./Version.ts"
 import { plural } from "./Words.ts"
@@ -63,7 +64,7 @@ const MAX_LINK_LENGTH = 6_000
 /** A report could not be written or filed. */
 export class ReportFailed extends Schema.TaggedError<ReportFailed>()("ReportFailed", {
   message: Schema.String,
-  code: Schema.Literals(["report-draft-invalid", "report-not-filed"]),
+  code: Schema.Literals(["report-draft-invalid", "report-not-filed", "report-unconfirmed"]),
   hint: Schema.optionalKey(Schema.String),
   next: Schema.optionalKey(Schema.String)
 }) {}
@@ -89,7 +90,65 @@ const MIN_IDENTIFIER_LENGTH = 3
 const isPlaceholder = (value: string) => /^(site|building|gateway|device|point|host|ip|mac)-\d+$/.test(value)
 
 /** Words the draft itself is made of: a site called `ot-gateway` must not rewrite the line that carries the fingerprint. */
-const reserved = new Set(["ot-gateway", "otg", "ot-gateway-report", "report", "fingerprint"])
+const reserved = new Set([
+  "ot-gateway",
+  "otg",
+  "ot-gateway-report",
+  "fingerprint",
+  // The draft's own labels, and the commands: a point called `status` or `Error` would otherwise rewrite the
+  // command line on this site only, and with it the fingerprint.
+  "command",
+  "code",
+  "error",
+  "protocol",
+  "node",
+  "expected",
+  "device",
+  "point",
+  "site",
+  "building",
+  "gateway",
+  "check",
+  "config",
+  "contract",
+  "demo",
+  "diff",
+  "discover",
+  "doctor",
+  "down",
+  "events",
+  "explain",
+  "guide",
+  "history",
+  "import",
+  "init",
+  "logs",
+  "mcp",
+  "messages",
+  "points",
+  "probe",
+  "profiles",
+  "publish",
+  "read",
+  "report",
+  "restart",
+  "run",
+  "secret",
+  "simulate",
+  "start",
+  "status",
+  "stop",
+  "support",
+  "upgrade",
+  "watch",
+  "write",
+  "gateways",
+  "broker"
+])
+
+/** A name worth replacing: long enough to be one, not a placeholder already, and not a word of the draft itself. */
+const replaceable = (value: string) =>
+  value.trim().length >= MIN_IDENTIFIER_LENGTH && !isPlaceholder(value) && !reserved.has(value.toLowerCase())
 
 const isAddress = (host: string) => /^[\d.]+$/.test(host) || host.includes(":")
 
@@ -155,13 +214,7 @@ export const identifiersOf = (config: GatewayConfig): ReadonlyArray<Identifier> 
   if (config.mqtt.clientId !== undefined) {
     found.push({ kind: "login", value: config.mqtt.clientId, placeholder: "client-id" })
   }
-  return found.filter(
-    (each) =>
-      each.value.trim().length >= MIN_IDENTIFIER_LENGTH &&
-      !isPlaceholder(each.value) &&
-      !reserved.has(each.value) &&
-      each.value !== each.placeholder
-  )
+  return found.filter((each) => replaceable(each.value) && each.value !== each.placeholder)
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -170,23 +223,44 @@ const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&
 const asWord = (value: string, flags: string) =>
   new RegExp(`(?<![A-Za-z0-9_-])${escapeRegExp(value)}(?![A-Za-z0-9_-])`, flags)
 
-/** The next free number for placeholders such as `ip-3`, so a second pass does not reuse one the text has. */
-const numbering = (text: string, prefix: string) => {
-  const seen = new Map<string, string>()
-  let last = 0
+/**
+ * The placeholders given so far for addresses and unknown hosts. One report shares one of these over all its texts,
+ * so an address is the same placeholder in the title and in the steps, and two addresses never share one.
+ */
+export interface Numbers {
+  readonly seen: Map<string, string>
+  readonly last: Map<string, number>
+}
+
+export const newNumbers = (): Numbers => ({ seen: new Map(), last: new Map() })
+
+/**
+ * The next free placeholder such as `ip-3`: after the ones `numbers` gave, the ones the text has (a second pass over
+ * a draft) and `floor` (the config's own `host-N`).
+ */
+const numbering = (text: string, prefix: string, numbers: Numbers, floor = 0) => {
+  let last = Math.max(numbers.last.get(prefix) ?? 0, floor)
   for (const match of text.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${prefix}-(\\d+)(?![A-Za-z0-9_-])`, "g"))) {
     last = Math.max(last, Number(match[1]))
   }
+  numbers.last.set(prefix, last)
   return (value: string) => {
-    const key = value.toLowerCase()
-    const known = seen.get(key)
+    const key = `${prefix} ${value.toLowerCase()}`
+    const known = numbers.seen.get(key)
     if (known !== undefined) return known
-    last += 1
-    const placeholder = `${prefix}-${last}`
-    seen.set(key, placeholder)
+    const next = (numbers.last.get(prefix) ?? 0) + 1
+    numbers.last.set(prefix, next)
+    const placeholder = `${prefix}-${next}`
+    numbers.seen.set(key, placeholder)
     return placeholder
   }
 }
+
+/** What comes right before a run of bytes that is a frame, not a hardware address. */
+const bytesBefore = /(frame|bytes?|pdu|adu|apdu|npdu|hex|payload|request|response|data|sent|received|rx|tx)\W{0,3}$/i
+
+/** What comes right before four dotted numbers that are a version, not an address. */
+const versionBefore = /(version|firmware|fw|rev|revision|release|build|\bv)\W{0,2}$/i
 
 /** Addresses that are the same on every machine. */
 const sharedIpv4 = (address: string) =>
@@ -199,6 +273,8 @@ export interface PublicTextOptions {
   readonly secrets?: Iterable<string>
   /** This machine's name and the user's home folder; left out in tests. */
   readonly machine?: { readonly hostname: string; readonly home: string }
+  /** The placeholders given so far, when this text is one of several of a report. */
+  readonly numbers?: Numbers
 }
 
 /**
@@ -236,7 +312,7 @@ export const publicText = (text: string, options: PublicTextOptions = {}) => {
   const machine = options.machine?.hostname ?? ""
   const identifiers = [
     ...(options.identifiers ?? []),
-    ...(machine.length >= MIN_IDENTIFIER_LENGTH && !publicHosts.has(machine.toLowerCase())
+    ...(replaceable(machine) && !publicHosts.has(machine.toLowerCase())
       ? [{ kind: "host", value: machine, placeholder: "this-machine", phrase: true }]
       : [])
   ].toSorted((left, right) => right.value.length - left.value.length)
@@ -251,28 +327,41 @@ export const publicText = (text: string, options: PublicTextOptions = {}) => {
     count("email")
     return "email"
   })
-  const mac = numbering(clean, "mac")
-  clean = clean.replace(/(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f:-])/g, (address) => {
-    count("address")
-    return mac(address)
-  })
-  const ip = numbering(clean, "ip")
-  // Four numbers of at most three digits, not part of a longer dotted number.
-  clean = clean.replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d]|\.\d)/g, (address) => {
-    if (sharedIpv4(address)) return address
+  const numbers = options.numbers ?? newNumbers()
+  const mac = numbering(clean, "mac", numbers)
+  // Six bytes, unless the words before them say they are a frame's.
+  clean = clean.replace(
+    /(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f:-])/g,
+    (address, offset: number, whole: string) => {
+      if (bytesBefore.test(whole.slice(Math.max(0, offset - 16), offset))) return address
+      count("address")
+      return mac(address)
+    }
+  )
+  const ip = numbering(clean, "ip", numbers)
+  // Four numbers up to 255, not part of a longer dotted number and not a version (`firmware 2.1.0.14`).
+  clean = clean.replace(/(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?![\d]|\.\d)/g, (address, offset: number, whole: string) => {
+    if (sharedIpv4(address) || address.split(".").some((part) => Number(part) > 255)) return address
+    if (versionBefore.test(whole.slice(Math.max(0, offset - 12), offset))) return address
     count("address")
     return ip(address)
   })
-  // IPv6: four or more groups, or a `::` between groups (a clock time has three groups and no `::`).
+  // IPv6: four or more groups with one of three or four digits, or a `::` between groups. A clock time has three
+  // groups, and a frame's bytes (`00:01:00:00:00:05`) two digits each.
   clean = clean.replace(
     /(?<![\w:.])(?:(?:[0-9A-Fa-f]{1,4}:){3,7}[0-9A-Fa-f]{1,4}|(?:[0-9A-Fa-f]{1,4}:){1,6}:(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4}){0,5})?)(?![\w:.])/g,
     (address) => {
+      if (!address.includes("::") && !/[0-9A-Fa-f]{3}/.test(address)) return address
       count("address")
       return ip(address)
     }
   )
   // A URL's host that is none of the above: a name the config does not hold.
-  const host = numbering(clean, "host")
+  const hostFloor = Math.max(
+    0,
+    ...(options.identifiers ?? []).map((each) => Number(/^host-(\d+)$/.exec(each.placeholder)?.[1] ?? 0))
+  )
+  const host = numbering(clean, "host", numbers, hostFloor)
   clean = clean.replace(
     /\b((?:mqtts?|wss?|https?|tcp):\/\/(?:[^@/\s]*@)?)([^/:\s"'`<>)\]]+)/gi,
     (whole, head: string, name: string) => {
@@ -351,14 +440,17 @@ export interface GhResult {
   readonly stderr: string
 }
 
+/** `gh` did not finish in time: what it was asked to do may or may not have happened. */
+export class GhTimedOut extends Schema.TaggedError<GhTimedOut>()("GhTimedOut", { message: Schema.String }) {}
+
 /** GitHub as a report needs it: the public issue search, and the user's own `gh` to file with. */
 export class GitHub extends Context.Service<
   GitHub,
   {
     /** Issues of the repository that match `query`, without signing in. */
     readonly searchIssues: (query: string) => Effect.Effect<ReadonlyArray<IssueRef>, ReportFailed>
-    /** Runs `gh <args>`; none when there is no `gh` on this machine, or it did not finish in time. */
-    readonly gh: (args: ReadonlyArray<string>) => Effect.Effect<Option.Option<GhResult>>
+    /** Runs `gh <args>`; none when there is no `gh` on this machine to start. */
+    readonly gh: (args: ReadonlyArray<string>) => Effect.Effect<Option.Option<GhResult>, GhTimedOut>
     /** The newest release's tag, when GitHub says. */
     readonly latestRelease: Effect.Effect<Option.Option<string>>
   }
@@ -418,7 +510,15 @@ export const gitHubLayer = Layer.effect(
           )
           return { exitCode: Number(exitCode), stdout, stderr } satisfies GhResult
         })
-      ).pipe(Effect.timeout(GH_TIMEOUT), Effect.option)
+      ).pipe(
+        // Not started (no gh on the PATH) is an answer; not finished is not one.
+        Effect.option,
+        Effect.timeoutOrElse({
+          duration: GH_TIMEOUT,
+          orElse: () =>
+            Effect.fail(new GhTimedOut({ message: `gh ${args.slice(0, 2).join(" ")} did not finish within 30 s` }))
+        })
+      )
     const latestRelease = newestRelease.pipe(
       Effect.map((newest) => newest.tag),
       Effect.option
@@ -528,6 +628,21 @@ export const reportFileName = (now: number) => {
   return `ot-gateway-report-${at.getFullYear()}${two(at.getMonth() + 1)}${two(at.getDate())}-${two(at.getHours())}${two(at.getMinutes())}${two(at.getSeconds())}.md`
 }
 
+/** The `report send` line for a draft, with the config it was made with, so the second pass replaces the same names. */
+const sendLine = (given: {
+  readonly cli: string
+  readonly draft: string
+  readonly config?: string | undefined
+  readonly to?: number | undefined
+  readonly flag?: "--yes" | "--link"
+}) =>
+  [
+    `${given.cli} report send ${shellArgument(given.draft)}`,
+    ...(given.config === undefined ? [] : [`--config ${shellArgument(given.config)}`]),
+    ...(given.to === undefined ? [] : [`--to ${given.to}`]),
+    ...(given.flag === undefined ? [] : [given.flag])
+  ].join(" ")
+
 /** The draft of a report: its text in a file, and what to settle before it is filed. Sends nothing but a search. */
 export const draftReport = Effect.fn("draftReport")(function* (options: DraftOptions) {
   const fs = yield* FileSystem.FileSystem
@@ -536,8 +651,10 @@ export const draftReport = Effect.fn("draftReport")(function* (options: DraftOpt
   const path = options.config ?? defaultConfigPath
   const site = yield* readSite(path, options.env ?? process.env, options.machine)
   let replaced: Replaced = {}
+  // One numbering for every part, so an address is the same placeholder in the title and in the steps.
+  const numbers = newNumbers()
   const clean = (text: string) => {
-    const result = publicText(text, site.options)
+    const result = publicText(text, { ...site.options, numbers })
     replaced = addCounts(replaced, result.replaced)
     return result.text
   }
@@ -576,7 +693,8 @@ export const draftReport = Effect.fn("draftReport")(function* (options: DraftOpt
 
   const error = input.error === undefined ? undefined : clean(input.error).replace(/\s+/g, " ").trim()
   const command = input.command === undefined ? undefined : clean(input.command).replace(/\s+/g, " ").trim()
-  const fingerprint = fingerprintOf({ code: input.code, command, error, title })
+  // The command's own words from the command as it was run: cleaned, a point called like a command would change them.
+  const fingerprint = fingerprintOf({ code: input.code, command: input.command, error, title })
   const device = site.config?.devices.find((each) => each.id === input.device)
   const deviceLines = [
     ...(device === undefined ? [] : [`- Protocol: ${device.protocol}`]),
@@ -631,7 +749,8 @@ export const draftReport = Effect.fn("draftReport")(function* (options: DraftOpt
         })
     )
   )
-  const to = existing[0] === undefined ? "" : ` --to ${existing[0].number}`
+  // A comment goes to an issue that is still open; a closed one was fixed or declined, which the list says.
+  const open = existing.find((issue) => issue.state === "open")
   return {
     path: options.output,
     title,
@@ -640,7 +759,7 @@ export const draftReport = Effect.fn("draftReport")(function* (options: DraftOpt
     replaced,
     existing,
     warnings,
-    next: `${options.cli} report send ${options.output}${to}`
+    next: sendLine({ cli: options.cli, draft: options.output, config: options.config, to: open?.number })
   } satisfies ReportDraft
 })
 
@@ -796,7 +915,10 @@ export const sendReport = Effect.fn("sendReport")(function* (options: SendOption
 
   const status = options.link
     ? Option.none<GhResult>()
-    : yield* github.gh(["auth", "status", "--hostname", "github.com"])
+    : yield* github
+        .gh(["auth", "status", "--hostname", "github.com"])
+        // A gh that does not answer whether it is signed in is not one to file with.
+        .pipe(Effect.catchTag("GhTimedOut", () => Effect.succeedNone))
   const signedIn = Option.isSome(status) && status.value.exitCode === 0
   if (!signedIn) {
     const link =
@@ -827,7 +949,7 @@ export const sendReport = Effect.fn("sendReport")(function* (options: SendOption
       note: `Not filed. With --yes this text becomes ${target} on github.com/${REPORT_REPOSITORY}, public${
         account === undefined ? "" : `, under the GitHub account ${account}`
       }. Add --yes only after the user has read it and agreed.`,
-      next: `${options.cli} report send ${options.draft}${options.to === undefined ? "" : ` --to ${options.to}`} --yes`
+      next: sendLine({ ...options, flag: "--yes" })
     })
   }
   const args =
@@ -842,13 +964,27 @@ export const sendReport = Effect.fn("sendReport")(function* (options: SendOption
           "--body",
           `**${draft.title}**\n\n${draft.body}`
         ]
-  const result = yield* github.gh(args)
+  const result = yield* github.gh(args).pipe(
+    Effect.catchTag("GhTimedOut", (timeout) =>
+      Effect.fail(
+        new ReportFailed({
+          code: "report-unconfirmed",
+          message: `${timeout.message}: the report may or may not be on GitHub`,
+          hint: `Look for it before sending again, so it is not filed twice: ${
+            options.to === undefined
+              ? `${ISSUES_URL}?q=${fingerprintIn(cleaned.text) ?? ""}`
+              : `${ISSUES_URL}/${options.to}`
+          }`
+        })
+      )
+    )
+  )
   if (Option.isNone(result) || result.value.exitCode !== 0) {
     return yield* new ReportFailed({
       code: "report-not-filed",
-      message: `gh did not file the report: ${Option.isNone(result) ? "it did not finish in time" : lastLineOf(result.value)}`,
+      message: `gh did not file the report: ${Option.isNone(result) ? "it could not be started" : lastLineOf(result.value)}`,
       hint: "Open the form in a browser instead",
-      next: `${options.cli} report send ${options.draft}${options.to === undefined ? "" : ` --to ${options.to}`} --link`
+      next: sendLine({ ...options, flag: "--link" })
     })
   }
   const url = /https:\/\/github\.com\/\S+/.exec(result.value.stdout)?.[0]

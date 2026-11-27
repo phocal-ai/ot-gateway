@@ -13,6 +13,7 @@ import {
   fingerprintIn,
   fingerprintOf,
   formatDraft,
+  GhTimedOut,
   formatSend,
   type GhResult,
   GitHub,
@@ -20,6 +21,7 @@ import {
   type IssueRef,
   issueLink,
   MAX_REPORT_LENGTH,
+  newNumbers,
   parseDraft,
   publicText,
   ReportFailed,
@@ -119,6 +121,43 @@ describe("publicText", () => {
     expect(publicText(`${first.text} and 172.16.0.9`, options).text).toContain("and ip-3")
   })
 
+  it("keeps a frame's bytes and a version, which only look like addresses", () => {
+    const { text } = publicText(
+      "response 00:01:00:00:00:05:01:03 is rejected, frame 01-03-02-00-0A-FF too; firmware 2.1.0.14, v1.2.3.4 and 300.1.2.3; from 00-1A-2B-3C-4D-5E at 10.0.0.7",
+      options
+    )
+    expect(text).toBe(
+      "response 00:01:00:00:00:05:01:03 is rejected, frame 01-03-02-00-0A-FF too; firmware 2.1.0.14, v1.2.3.4 and 300.1.2.3; from mac-1 at ip-1"
+    )
+  })
+
+  it("shares one numbering over the parts of a report, and numbers an unknown host after the config's", () => {
+    const numbers = newNumbers()
+    const shared = { ...options, numbers }
+    expect(publicText("10.0.0.5 times out", shared).text).toBe("ip-1 times out")
+    expect(publicText("probe 10.0.0.9:502 works, 10.0.0.5 does not", shared).text).toBe(
+      "probe ip-2:502 works, ip-1 does not"
+    )
+    // host-1 and host-2 are the config's broker and device, also where this text names neither.
+    expect(publicText("http://scada.other.example/x", shared).text).toBe("http://host-3/x")
+  })
+
+  it("leaves the tool's own name when the machine is called like it, and a point called like a command", () => {
+    expect(publicText("ot-gateway read x", { machine: { hostname: "ot-gateway", home: "/root" } }).text).toBe(
+      "ot-gateway read x"
+    )
+    const named = Schema.decodeUnknownSync(GatewayConfig)({
+      ...site,
+      devices: [
+        {
+          ...site.devices[1],
+          points: [{ id: "status", name: "Error", table: "input", address: 1, dataType: "int16" }]
+        }
+      ]
+    })
+    expect(identifiersOf(named).filter((each) => each.kind === "point")).toEqual([])
+  })
+
   it("does not let a site named like the tool rewrite the draft's own lines", () => {
     const named = Schema.decodeUnknownSync(GatewayConfig)({ ...site, site: "ot-gateway", building: "report" })
     expect(identifiersOf(named).map((each) => each.kind)).not.toContain("site")
@@ -155,6 +194,12 @@ describe("fingerprint", () => {
     expect(commandWords("")).toBe("")
   })
 
+  it("does not change with the arguments, which are the site's", () => {
+    expect(fingerprintOf({ code: "timeout", command: "ot-gateway read device-1/point-2", title: "t" })).toBe(
+      fingerprintOf({ code: "timeout", command: "ot-gateway read meter/energy --json", title: "t" })
+    )
+  })
+
   it("falls back on the title when there is no error", () => {
     expect(fingerprintOf({ title: "Status page shows 3 devices twice" })).toBe(
       fingerprintOf({ title: "status page shows 12 devices  twice" })
@@ -167,8 +212,8 @@ const gitHub = (given: {
   readonly found?: ReadonlyArray<IssueRef>
   readonly searchFails?: boolean
   readonly newest?: string
-  /** `gh`'s answers by its first two words; no `gh` at all when left out. */
-  readonly gh?: Readonly<Record<string, GhResult>>
+  /** `gh`'s answers by its first two words (`"timeout"`: it does not finish); no `gh` at all when left out. */
+  readonly gh?: Readonly<Record<string, GhResult | "timeout">>
 }) => {
   const calls: Array<ReadonlyArray<string>> = []
   const layer = Layer.succeed(
@@ -179,9 +224,12 @@ const gitHub = (given: {
           ? Effect.fail(new ReportFailed({ code: "report-not-filed", message: "could not search the issues" }))
           : Effect.succeed(given.found ?? []),
       gh: (args) =>
-        Effect.sync(() => {
+        Effect.suspend(() => {
           calls.push(args)
-          return Option.fromNullishOr(given.gh?.[args.slice(0, 2).join(" ")])
+          const answer = given.gh?.[args.slice(0, 2).join(" ")]
+          return answer === "timeout"
+            ? Effect.fail(new GhTimedOut({ message: "gh issue create did not finish within 30 s" }))
+            : Effect.succeed(Option.fromNullishOr(answer))
         }),
       latestRelease: Effect.succeed(Option.fromNullishOr(given.newest))
     })
@@ -249,7 +297,7 @@ describe("report draft", () => {
         // The code is one explain covers, and the same bug is reported already: both are said before filing.
         expect(draft.warnings.map((warning) => warning.about)).toEqual(["code"])
         expect(draft.existing).toEqual(found)
-        expect(draft.next).toBe(`ot-gateway report send ${output} --to 212`)
+        expect(draft.next).toBe(`ot-gateway report send ${output} --config ${join(folder, "ot-gateway.json")} --to 212`)
         expect(formatDraft(draft)).toContain("Nothing is filed yet.")
         expect(formatDraft(draft)).toContain("#212 float64 reads fail (open)")
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
@@ -271,7 +319,9 @@ describe("report draft", () => {
       expect(draft.text).toContain("TypeError at ip-1")
       expect(draft.warnings.map((warning) => warning.about)).toEqual(["config", "search"])
       expect(draft.existing).toEqual([])
-      expect(draft.next).toBe(`npx ot-gateway report send ${join(folder, "report.md")}`)
+      expect(draft.next).toBe(
+        `npx ot-gateway report send ${join(folder, "report.md")} --config ${join(folder, "ot-gateway.json")}`
+      )
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 
@@ -326,7 +376,7 @@ describe("report send", () => {
         machine
       }).pipe(Effect.provide(github.layer))
       expect(result).toMatchObject({ filed: false, method: "gh", target: "a new issue", account: "octo-user" })
-      expect(result.next).toBe(`ot-gateway report send ${output} --yes`)
+      expect(result.next).toBe(`ot-gateway report send ${output} --config ${config} --yes`)
       expect(result.note).toContain("Not filed")
       expect(github.calls.map((call) => call.slice(0, 2).join(" "))).toEqual(["auth status"])
       expect(formatSend(result)).toContain("## What happened")
@@ -455,7 +505,10 @@ describe("report send", () => {
         cli: "ot-gateway",
         machine
       }).pipe(Effect.provide(github.layer), Effect.flip)
-      expect(failed).toMatchObject({ code: "report-not-filed", next: `ot-gateway report send ${output} --link` })
+      expect(failed).toMatchObject({
+        code: "report-not-filed",
+        next: `ot-gateway report send ${output} --config ${config} --link`
+      })
       expect(failed.message).toContain("HTTP 403: forbidden")
       const other = join(folder, "notes.md")
       yield* fs.writeFileString(other, "# Notes\n\nNot a report.\n")
@@ -479,6 +532,51 @@ describe("report send", () => {
         machine
       }).pipe(Effect.provide(github.layer), Effect.flip)
       expect(missing.code).toBe("report-draft-invalid")
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
+  )
+})
+
+describe("a gh that does not finish", () => {
+  it.effect("is not taken as filed nor as not filed: look first, so the report is not there twice", () =>
+    Effect.gen(function* () {
+      const folder = yield* folderWithSite
+      const output = join(folder, "report.md")
+      const config = join(folder, "ot-gateway.json")
+      const draft = yield* draftReport({ input, config, env: {}, cli: "ot-gateway", output, machine }).pipe(
+        Effect.provide(
+          gitHub({
+            found: [
+              { number: 150, title: "old", url: "https://github.com/x/y/issues/150", state: "closed" },
+              { number: 212, title: "new", url: "https://github.com/x/y/issues/212", state: "open" }
+            ]
+          }).layer
+        )
+      )
+      // The comment goes to the open issue, not the closed one the search lists first.
+      expect(draft.next).toContain("--to 212")
+      const stuck = yield* sendReport({
+        draft: output,
+        config,
+        env: {},
+        yes: true,
+        link: false,
+        cli: "ot-gateway",
+        machine
+      }).pipe(Effect.provide(gitHub({ gh: { "auth status": signedIn, "issue create": "timeout" } }).layer), Effect.flip)
+      expect(stuck.code).toBe("report-unconfirmed")
+      expect(stuck.hint).toContain(`issues?q=${draft.fingerprint}`)
+      expect(stuck.next).toBeUndefined()
+      // A gh that does not say whether it is signed in is not filed with: the link instead.
+      const unsure = yield* sendReport({
+        draft: output,
+        config,
+        env: {},
+        yes: true,
+        link: false,
+        cli: "ot-gateway",
+        machine
+      }).pipe(Effect.provide(gitHub({ gh: { "auth status": "timeout" } }).layer))
+      expect(unsure).toMatchObject({ filed: false, method: "link" })
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })
