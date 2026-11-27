@@ -115,6 +115,16 @@ npx ot-gateway write demo-room/temperature-setpoint 24
 
 The device prints `write: Temperature setpoint set to 24 °C (priority 8)` (and `heating on at …`, if the heating was off), `watch` shows the heating at `true` and the temperature rising, and `write` prints `✓ demo-room/temperature-setpoint = 24 °C (written in 90 ms)`. It sends what any MQTT client would, `{"value": 24}` on `home/main/demo-room/temperature-setpoint/$set`, and waits for the gateway's answer on `…/$set/result`. A value outside `limits` is refused before it is sent, and by the gateway too, and never reaches the device.
 
+## From another network, over a VPN
+
+The device's machine can stay at home while the laptop travels: put both on an overlay VPN such as Tailscale or WireGuard, and the device's machine gets an IPv4 address of its own there (Tailscale's are `100.x.y.z`; `tailscale ip -4 <host name>` prints it). SSH and everything that goes to an address work across it as on the LAN. A broadcast does not: the VPN carries packets to one address, not to a subnet, so `discover` without an address finds nothing. Name the device instead:
+
+```bash
+npx ot-gateway discover --address 100.101.102.103 --points-list points.csv
+```
+
+`discover` writes that address into the device's entry, so `read`, `run` and `write` go there too. A config made on the LAN reads over the VPN once the device's `address` is its VPN address: an `address` takes an IPv4 address, not a host name. This reaches a device on the VPN host itself, such as this simulator. A device elsewhere on that LAN needs the host to route for the subnet (a Tailscale subnet router, `--advertise-routes=192.168.1.0/24`), and is still found only by its address.
+
 ## When it does not work
 
 | Symptom                                                         | Cause and fix                                                                                                                                                                                                                                                                                                                                                                                                                           |
