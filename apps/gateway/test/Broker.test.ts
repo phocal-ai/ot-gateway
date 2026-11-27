@@ -21,6 +21,7 @@ import {
   formatBrokerReport,
   formatPublished,
   publishOnce,
+  publishReadings,
   refusalFailure,
   roundTripFailure
 } from "../src/Broker.ts"
@@ -177,6 +178,30 @@ describe("ot-gateway broker", () => {
       expect.stringContaining("did not come back")
     ])
   })
+})
+
+describe("ot-gateway read --publish", () => {
+  it.live("sends each value once as the gateway's value message, not retained", () =>
+    Effect.gen(function* () {
+      const control = makeBrokerControl()
+      const config = yield* brokerAndConfig(control)
+      const sent = yield* publishReadings(
+        config,
+        [
+          { topic: "s/b/room/temperature", value: 21.5, unit: "°C" },
+          { topic: "s/b/room/heating", value: false }
+        ],
+        1_700_000_000_000
+      )
+      expect(sent).toEqual({ broker: config.mqtt.url, sent: 2, failed: [] })
+      // Sent side by side: the order on the wire is not the point.
+      expect(control.messages.toSorted((a, b) => a.topic.localeCompare(b.topic))).toMatchObject([
+        { topic: "s/b/room/heating", payload: '{"value":false,"ts":1700000000000}', qos: 1 },
+        { topic: "s/b/room/temperature", payload: '{"value":21.5,"unit":"°C","ts":1700000000000}', qos: 1 }
+      ])
+      expect(control.retained.size).toBe(0)
+    })
+  )
 })
 
 describe("ot-gateway publish", () => {

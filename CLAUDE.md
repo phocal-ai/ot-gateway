@@ -23,7 +23,7 @@ pnpm ot-gateway check ot-gateway.json      # validate a config without connectin
 pnpm ot-gateway doctor ot-gateway.json     # every check in order (config, broker, gateway, devices, BACnet port, disk, clock), one line each and the next command (--json: findings with code, hint, next; exit 1 when one fails)
 pnpm ot-gateway up                         # the folder's gateway under Docker Compose (compose.yaml written when missing), until every point has a value (down, restart; exit 1 with code, hint, next)
 pnpm ot-gateway upgrade --check            # is a newer release out (upgrade: pull, check the config with it, switch compose.yaml's tag, wait for values, roll back when they do not come)
-pnpm ot-gateway discover ot-gateway.json   # find devices; in a terminal choose BACnet/IP or a Modbus scan, pick points, see the diff, save into the config, read once or start, otherwise (--json, a pipe, no config yet) print a draft (--points-list points.csv writes a list to trim, --append adds to one)
+pnpm ot-gateway discover ot-gateway.json   # find devices; in a terminal choose BACnet/IP or a Modbus scan, pick points, see the diff, save into the config, then the commands to read once or start, otherwise (--json, a pipe, no config yet) print a draft (--points-list points.csv writes a list to trim, --append adds to one)
 pnpm ot-gateway discover modbus 192.168.1.0/24   # find Modbus TCP devices and unit ids on a range, read-only and rate-limited (--unit-ids 1-247 behind a gateway, --points-list writes draft rows)
 pnpm ot-gateway import points.csv          # add a points list's devices to ot-gateway.json (examples/points.csv)
 pnpm ot-gateway points schema              # the points list's columns (--json; --brief --json in short); points template prints a list to fill in (--protocol modbus|bacnet: only that protocol's columns)
@@ -33,7 +33,7 @@ pnpm ot-gateway diff                       # what ./ot-gateway.json changes on t
 pnpm ot-gateway contract                   # the MQTT contract: topics and each message's fields (--json: the JSON Schemas; contract value --json: one)
 pnpm ot-gateway watch ot-gateway.json      # print what arrives at the config's broker (--check: only what is off the contract)
 pnpm ot-gateway broker ot-gateway.json     # the broker's MQTT version and limits, and a round trip
-pnpm ot-gateway read                       # every point of ./ot-gateway.json read once, without a running gateway or broker (read <device>[/<point>], --json; exit 1 when one fails)
+pnpm ot-gateway read                       # every point of ./ot-gateway.json read once, without a running gateway or broker (read <device>[/<point>], --json, --publish also sends them to the broker once; exit 1 when one fails)
 pnpm ot-gateway probe 127.0.0.1:5020 100   # read Modbus registers once (read-only): every type and byte order they read as, a points list row
 pnpm ot-gateway simulate bacnet            # a simulated BACnet/IP device on the LAN (a room: temperature, writable setpoint, heating) to try from another machine (docs/try-bacnet.md)
 pnpm ot-gateway publish <topic> [payload]  # one message (--retain with no payload clears a retained topic)

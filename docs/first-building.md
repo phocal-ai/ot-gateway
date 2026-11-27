@@ -50,7 +50,7 @@ pnpm ot-gateway discover
 2. **Which points.** It lists every point it found by name, unit and object, all ticked: untick what the gateway should not read (space toggles, `a` ticks all or none). With more than 25 points it keeps them all and says so; leave out the ones you don't need later, on the status page or in `ot-gateway.json`. Nothing else is asked: points are read every 5 seconds (or sent by the device on change), and none is writable until you make a setpoint writable on the status page or in the config. Nothing is written to a device during discovery.
 3. **When nothing is found** (or discovery cannot run, say another BACnet program holds UDP 47808), or you untick every point, it offers the protocols again, one BACnet device by its address (`ip` or `ip:port`, for a device on another subnet or port; `--address` asks it straight away), or none for now.
 4. **What changes, then save.** When the config has devices already, it shows what the save changes on the broker, as `ot-gateway diff` does (new topics, and anything that moves). It saves after a yes: new devices after the ones there, new points of a device the config has after its own. Run it again whenever a device is added to the building.
-5. **What next.** Read every point once (as often as you like), start the gateway in this terminal (Ctrl-C stops it), or stop here with the commands for later.
+5. **Next.** It stops there and names the commands for what comes next: `ot-gateway read` reads every point once (`--publish` also sends the values to the broker once), `ot-gateway run` starts the gateway in this terminal, `ot-gateway up` under Docker.
 
 Without a terminal, `discover` prints the draft as JSON and saves nothing, as before.
 
@@ -128,11 +128,11 @@ With a coding agent, `/setup` in Claude Code (or the prompt in [Set it up with A
 
 ```bash
 pnpm ot-gateway check     # every mistake, with where it is; nothing connects yet
-pnpm ot-gateway read      # every point read once, to see the devices answer; nothing is published
+pnpm ot-gateway read      # every point read once, to see the devices answer; nothing is published (--publish sends them once)
 pnpm ot-gateway run       # start the gateway
 ```
 
-`check` lists every mistake with its place in the file (`["devices"][0]["points"][1]["dataType"]`) and what it expected there. `read` asks each device once through the gateway's own drivers and prints a line per point, its value and unit or why it failed, then exits (with 1 when a point failed): `read <device>` or `read <device>/<point>` for fewer, `--json` for scripts. It needs no broker, and it only reads. `run` starts polling and sending; stop it with Ctrl-C.
+`check` lists every mistake with its place in the file (`["devices"][0]["points"][1]["dataType"]`) and what it expected there. `read` asks each device once through the gateway's own drivers and prints a line per point, its value and unit or why it failed, then exits (with 1 when a point failed): `read <device>` or `read <device>/<point>` for fewer, `--json` for scripts. It needs no broker, and it only reads; `--publish` also sends each value read to its topic on the broker once (not retained, as the gateway sends a read), to see them arrive in an MQTT client. `run` starts polling and sending; stop it with Ctrl-C.
 
 ## 5. See your values arrive
 
