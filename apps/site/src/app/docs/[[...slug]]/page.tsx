@@ -3,6 +3,9 @@ import defaultMdxComponents from "fumadocs-ui/mdx"
 import type { Metadata } from "next"
 import { notFound } from "next/navigation"
 import { Diagram } from "@/components/docs/diagrams.tsx"
+import { ExplorePrompt } from "@/components/docs/explore-prompt.tsx"
+import { explorePrompts, markdownTwin } from "@/content/explore.ts"
+import { site } from "@/lib/site.ts"
 import { pageMarkdownUrl, source } from "@/lib/source.ts"
 
 interface Props {
@@ -14,6 +17,7 @@ const Page = async ({ params }: Props) => {
   const page = source.getPage(slug)
   if (page === undefined) notFound()
   const Body = page.data.body
+  const prompts = explorePrompts(page.data.title, markdownTwin(site.publicUrl, page.url))
   return (
     <DocsPage toc={page.data.toc}>
       <DocsTitle>{page.data.title}</DocsTitle>
@@ -27,6 +31,7 @@ const Page = async ({ params }: Props) => {
         </a>
       </div>
       <DocsBody>
+        <ExplorePrompt prompts={prompts} />
         <Body components={{ ...defaultMdxComponents, Diagram }} />
       </DocsBody>
     </DocsPage>
