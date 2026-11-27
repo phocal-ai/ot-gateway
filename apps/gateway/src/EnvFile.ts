@@ -17,7 +17,14 @@ export const envFileName = "ot-gateway.env"
 export const missingFromEnv = (text: string, env: Readonly<Record<string, string | undefined>>) =>
   Object.entries(parseEnv(text)).filter(([name, value]) => value !== "" && env[name] === undefined)
 
-/** Adds the variables of `./ot-gateway.env` that are not set already to `process.env`. */
+/** What each env file put into an environment: the variable and the value it had there. */
+const fromFiles = new WeakMap<object, Map<string, { readonly file: string; readonly value: string }>>()
+
+/**
+ * Adds the variables of `./ot-gateway.env` that are not set already to `process.env`. Read again (the MCP server
+ * does before each tool call, since `secret set` changes the file while it runs), a variable this file set
+ * earlier takes the file's value now; one the shell or another file set stays.
+ */
 export const loadEnvFile = (file = envFileName, env: Record<string, string | undefined> = process.env) => {
   let text: string
   try {
@@ -28,5 +35,17 @@ export const loadEnvFile = (file = envFileName, env: Record<string, string | und
     if (!missing) process.stderr.write(`ot-gateway: could not read ${file}: ${String(error)}\n`)
     return
   }
-  for (const [name, value] of missingFromEnv(text, env)) env[name] = value
+  const set = fromFiles.get(env) ?? new Map<string, { readonly file: string; readonly value: string }>()
+  fromFiles.set(env, set)
+  const own = Object.fromEntries(
+    Object.entries(env).filter(([name, value]) => {
+      const before = set.get(name)
+      return !(before !== undefined && before.file === file && before.value === value)
+    })
+  )
+  for (const [name, value] of missingFromEnv(text, own)) {
+    if (value === undefined) continue
+    env[name] = value
+    set.set(name, { file, value })
+  }
 }

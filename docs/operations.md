@@ -23,7 +23,7 @@ ot-gateway init .
 
 The first line installs the command, without `sudo` ([`packaging/ot-gateway`](../packaging/ot-gateway), a short shell script). `--retry-all-errors` makes curl retry a failed name lookup too, which `--retry` alone does not: a router's DNS that drops out for a few seconds would otherwise fail the install. It runs the CLI from the image with the current folder mounted, on the host network so that `discover`, `watch` and `status` reach the building network and the gateway's status page, and as you, so the files it writes are yours. It takes the image tag of the running gateway, or else the one the folder's `compose.yaml` pins (or `~/ot-gateway/compose.yaml`), so the command is always the same version as the gateway, and `OT_GATEWAY_TAG=<tag> ot-gateway …` runs another. A terminal gets colors and prompts; a pipe, a script or an AI agent gets plain lines. Over `ssh pi@host 'command'` the login profile is not read, so call it as `~/.local/bin/ot-gateway`. Give `watch` a `--seconds` there: stopping the `docker` command does not stop the container. `demo`, `run` and `watch` run in containers named after them (`ot-gateway-demo`, `ot-gateway-run`, `ot-gateway-watch`), so `docker stop ot-gateway-demo` stops one left in the background, and a second one is refused while the first runs. The first run (and the first after an upgrade) pulls the image, about 460 MB, and retries a failed pull twice; a wrong tag or no access to Docker fails at once, and either way the last line names the image and Docker's reason.
 
-Fill in the password, then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
+Fill in the password (`ot-gateway secret set broker-password` asks for it and writes it there), then go on with the check below. With a config written elsewhere, fetch `compose.yaml` yourself:
 
 ```bash
 curl -fsSLO --retry 4 --retry-all-errors --retry-delay 2 https://raw.githubusercontent.com/phocal-ai/ot-gateway/v0.17.3/packaging/compose.yaml
@@ -93,7 +93,7 @@ The script:
 
 The service runs as `ot-gateway` with a read-only view of the system except `/var/lib/ot-gateway`, restarts five seconds after any exit, and is held to 512 MB.
 
-Put the broker password in the env file, under the name the config's `mqtt.passwordEnv` gives:
+Put the broker password in the env file, under the name the config's `mqtt.passwordEnv` gives (in a gateway's folder, `ot-gateway secret set broker-password` does that, [Secrets](#secrets)):
 
 ```bash
 sudoedit /etc/ot-gateway/gateway.env
@@ -152,6 +152,21 @@ Before the restart, `ot-gateway diff` shows what the edited file changes on the 
 To keep a points list in step with a config changed here or on the status page, `ot-gateway points export > points.csv` writes the config's devices back as one (`--format json` for the JSON form). `import` reads it back into the same devices. What a list has no column for stays in the config only, and `export` names it on stderr: writable points and their limits, semantics, device settings such as `requestGapMs`. A point it would describe wrongly (a bit of a register, a BACnet property other than the present value) and simulated devices are left out.
 
 A change by hand is read when the gateway starts: the gateway does not watch the file. The status page's editor is the way to change settings without a restart.
+
+### Secrets
+
+The broker password and the status page's edit token are not in `ot-gateway.json`: they are lines of `ot-gateway.env` next to it, which Docker Compose and the CLI read. `ot-gateway secret` writes them without the value ever being an argument (it would stay in the shell's history), printed, or in a result:
+
+```bash
+ot-gateway secret set broker-password        # asks for it without showing it, and writes the variable mqtt.passwordEnv names
+ot-gateway secret set edit-token --generate  # a random token for saving from the status page over the network
+printf %s "$PASSWORD" | ot-gateway secret set broker-password   # in a script: read from stdin
+ot-gateway secret list                       # which the config needs and which are set, by name only
+```
+
+`secret set` keeps every other line of the file, replaces it through a temporary file and leaves it readable by you alone. A name that is neither `broker-password` nor `edit-token` is taken as the variable itself (`secret set OTEL_EXPORTER_OTLP_HEADERS`). `--config` names a config in another folder. The running gateway reads the file when it starts, so `ot-gateway restart` follows; `--json` gives `variable`, `file`, `replaced` and `next`.
+
+An AI agent does not ask for a password and does not pipe one in: it runs `secret list --json`, and when `missing` names one it gives the person the command under `next` to run and type the secret into. That is also why the MCP server has `secret_list` and no tool that sets one.
 
 ## Editing in the status page
 

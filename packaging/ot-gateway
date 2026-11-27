@@ -152,6 +152,10 @@ esac
 # Long-running commands get a name to stop them by; the others may run side by side, unnamed.
 name=
 case ${1:-} in demo | run | watch | simulate) name=ot-gateway-$1 ;; esac
+# `secret set` asks for a password without showing it, which takes a terminal on stdin whatever stdout is: without
+# -t the container would read what is typed from a pipe, shown on the screen.
+typed=
+case "${1:-} ${2:-}" in "secret set") [ -t 0 ] && typed=1 ;; esac
 if [ -n "$name" ]; then
   state=$(docker inspect --format '{{.State.Running}}' "$name" 2>/dev/null) || state=
   case $state in
@@ -186,7 +190,7 @@ if [ -n "$deploy" ]; then
 else
   set -- -v "$PWD:/work" -w /work "$@"
 fi
-if [ -t 0 ] && [ -t 1 ]; then
+if [ -t 0 ] && { [ -t 1 ] || [ -n "$typed" ]; }; then
   exec docker run --rm -i -t --network host --user "$(id -u):$(id -g)" -e SSH_CONNECTION -e USER -e TZ \
     -e OT_GATEWAY_JSON -e AI_AGENT -e CLAUDECODE -e CURSOR_AGENT -e GEMINI_CLI -e CODEX_SANDBOX -e OT_GATEWAY_DATA_DIR= "$@"
 fi
