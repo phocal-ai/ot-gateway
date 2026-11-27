@@ -32,17 +32,20 @@ const JOIN_GRACE = "1 second"
 /** Commands that get no notice: they run until stopped (Ctrl-C would cut the line off), or speak a protocol on stdout. */
 const quietCommands = new Set(["run", "demo", "simulate", "mcp", "watch"])
 
+/** npx, pnpm dlx, bunx and yarn dlx run from a cache: there is no install to update. */
+const runsFromCache =
+  /[\\/]_npx[\\/]|[\\/]pnpm[^\\/]*[\\/]dlx[\\/]|[\\/]\.bun[\\/]install[\\/]cache[\\/]|[\\/]dlx-[^\\/]+[\\/]/
+
 /** Whether to check and print a notice at all, for these arguments in this environment. */
 export const updateNoticeWanted = (
   args: ReadonlyArray<string>,
   env: Readonly<Record<string, string | undefined>>,
   stderrIsTerminal: boolean,
-  /** The script that runs (`process.argv[1]`): one in npx's cache is not an install to update. */
+  /** The script that runs (`process.argv[1]`, symlinks resolved): one in npx's cache is not an install to update. */
   script = ""
 ) => {
   const [command] = args
-  // npx and pnpm dlx run from a cache: there is no install to update.
-  if (/[\\/]_npx[\\/]|[\\/]pnpm[^\\/]*[\\/]dlx[\\/]/.test(script)) return false
+  if (runsFromCache.test(script)) return false
   if (command === undefined || quietCommands.has(command)) return false
   if (args.some((arg) => arg === "--json" || arg === "--follow" || arg === "--version" || arg === "-v")) return false
   const set = (name: string) => (env[name] ?? "") !== "" && env[name] !== "0"
@@ -60,17 +63,15 @@ export const isNewer = (latest: string, current: string) => {
 const withV = (version: string) => (version.startsWith("v") ? version : `v${version}`)
 
 /**
- * The command that updates a global install, for the package manager that made it: told by where the script lies
- * (pnpm keeps global packages under `<PNPM_HOME>/global/5/node_modules` and links them from its `.pnpm` store, yarn under `yarn/global`,
- * bun under `.bun/install/global`), then by the user agent a package manager sets, and npm otherwise.
+ * The command that updates a global install, for the package manager that made it, told by where the script lies once
+ * symlinks are resolved: pnpm keeps global packages under `<PNPM_HOME>/global/<n>/`, yarn under `yarn/global` (`Yarn\Data\global`
+ * on Windows), bun under `.bun/install/global`, and anything else is npm's. The user agent is not asked: a script run by
+ * pnpm passes it on to an `ot-gateway` that npm installed.
  */
-export const updateCommand = (script: string, env: Readonly<Record<string, string | undefined>>) => {
-  const agent = env["npm_config_user_agent"] ?? ""
-  if (/[\\/]global[\\/]\d+[\\/]node_modules[\\/]|[\\/]\.pnpm[\\/]/.test(script) || agent.startsWith("pnpm/"))
-    return "pnpm add -g ot-gateway@latest"
-  if (/[\\/]yarn[\\/]global[\\/]/.test(script) || agent.startsWith("yarn/")) return "yarn global add ot-gateway@latest"
-  if (/[\\/]\.bun[\\/]install[\\/]global[\\/]/.test(script) || agent.startsWith("bun/"))
-    return "bun add -g ot-gateway@latest"
+export const updateCommand = (script: string) => {
+  if (/[\\/]global[\\/]\d+[\\/]/.test(script)) return "pnpm add -g ot-gateway@latest"
+  if (/[\\/]yarn[\\/](data[\\/])?global[\\/]/i.test(script)) return "yarn global add ot-gateway@latest"
+  if (/[\\/]\.bun[\\/]install[\\/]global[\\/]/.test(script)) return "bun add -g ot-gateway@latest"
   return "npm i -g ot-gateway@latest"
 }
 

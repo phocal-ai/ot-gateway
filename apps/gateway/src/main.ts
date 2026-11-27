@@ -17,7 +17,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime"
 import * as NodeServices from "@effect/platform-node/NodeServices"
 import { Console, Effect, Logger } from "effect"
 import { identity } from "effect/Function"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
 import { isLongRunning, runCli, toCliArgs, withFirstRun } from "./Cli.ts"
 import { loadEnvFile } from "./EnvFile.ts"
@@ -50,14 +50,22 @@ const argv = withFirstRun(process.argv.slice(2), {
 })
 const json = isJsonMode(argv)
 // A globally installed CLI says once a day when a newer release is out (UpdateNotice.ts); never for --json or mcp.
-const notice = updateNoticeWanted(toCliArgs(argv), process.env, process.stderr.isTTY, process.argv[1])
+// The script with symlinks resolved: bun and yarn link their bin folder to the install.
+const script = (() => {
+  try {
+    return realpathSync(process.argv[1] ?? "")
+  } catch {
+    return process.argv[1] ?? ""
+  }
+})()
+const notice = updateNoticeWanted(toCliArgs(argv), process.env, process.stderr.isTTY, script)
 
 runCli(argv).pipe(
   notice
     ? withUpdateNotice({
         folder: configFolder(process.env),
         now: Date.now(),
-        command: updateCommand(process.argv[1] ?? "", process.env)
+        command: updateCommand(script)
       })
     : identity,
   // A reader that closes stdout (`watch | head`) ends a command as done, exit code 0: every streaming command.
