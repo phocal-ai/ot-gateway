@@ -377,6 +377,38 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway run"
   },
   {
+    code: "background-unsupported",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "start runs the gateway as a background process, which this CLI does not do on Windows.",
+    fix: "Run the gateway in a terminal of its own, or under Docker on a Linux machine.",
+    next: "ot-gateway run"
+  },
+  {
+    code: "background-failed",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "The background process could not be started.",
+    fix: "Run the gateway in the foreground once: it prints why it cannot start.",
+    next: "ot-gateway run"
+  },
+  {
+    code: "already-running",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "The gateway of this config runs in the background already (its .ot-gateway.pid names a live process).",
+    fix: "Stop it first, then start it again to pick up a changed config.",
+    next: "ot-gateway stop"
+  },
+  {
+    code: "gateway-exited",
+    area: "deploy",
+    reportedBy: ["start"],
+    meaning: "The gateway started in the background and exited before every point had a value.",
+    fix: "Run it in the foreground once: it prints why it stopped (a status port in use, a config the broker refuses).",
+    next: "ot-gateway run"
+  },
+  {
     code: "compose-config-name",
     area: "deploy",
     reportedBy: ["up", "restart", "upgrade"],

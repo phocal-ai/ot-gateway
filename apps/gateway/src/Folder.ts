@@ -4,6 +4,8 @@
  * in the config: the broker password (left empty for the operator, when the broker needs a login) and the
  * telemetry variables (commented out). `init` writes the last two next to the config.
  *
+ * On macOS and Windows there is no compose.yaml (`dockerDesktopReason`): the gateway runs there with `start`.
+ *
  * Neither file is ever replaced: a compose.yaml may have been edited, and an env file holds a secret. The env
  * file is created readable by its owner only, and nothing here reads it back.
  */
@@ -13,6 +15,13 @@ import { fileURLToPath } from "node:url"
 
 /** packaging/compose.yaml, as installed next to this app: in a checkout, the npm package and the image alike. */
 export const composeTemplatePath = fileURLToPath(new URL("../../../packaging/compose.yaml", import.meta.url))
+
+/**
+ * Why there is no compose.yaml on macOS and Windows: Docker Desktop runs containers in a VM that reaches no device on
+ * the LAN, so the gateway runs on the machine itself (`ot-gateway start`). `ot-gateway up --force` writes one anyway.
+ */
+export const dockerDesktopReason =
+  "Docker Desktop on this machine cannot reach devices on the LAN, so the gateway runs here with ot-gateway start (up --force writes compose.yaml for simulated devices)"
 
 /** The config's name in the folder: compose.yaml mounts `./ot-gateway.json`. */
 export const folderConfigName = "ot-gateway.json"
@@ -60,7 +69,7 @@ export const envFileText = (passwordEnv: string | undefined, timeZone?: string) 
 export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
   configPath: string,
   config: GatewayConfig,
-  options: { readonly dryRun?: boolean; readonly timeZone?: string } = {}
+  options: { readonly dryRun?: boolean; readonly timeZone?: string; readonly platform?: string } = {}
 ) {
   const fs = yield* FileSystem.FileSystem
   const path = yield* Path.Path
@@ -75,9 +84,11 @@ export const writeFolderFiles = Effect.fn("writeFolderFiles")(function* (
   })
 
   const noCompose =
-    path.basename(configPath) === folderConfigName
-      ? undefined
-      : `compose.yaml runs ./${folderConfigName}; this config is ${path.basename(configPath)}`
+    options.platform === "darwin" || options.platform === "win32"
+      ? dockerDesktopReason
+      : path.basename(configPath) === folderConfigName
+        ? undefined
+        : `compose.yaml runs ./${folderConfigName}; this config is ${path.basename(configPath)}`
   if (noCompose === undefined) {
     yield* create(path.join(folder, "compose.yaml"), yield* fs.readFileString(composeTemplatePath), 0o644)
   }

@@ -3,7 +3,8 @@
  * same check as `ot-gateway check`, every issue with its path), and save one.
  *
  * A save is refused when the file changed since the page read it (the ETag is a hash of the text, so a hand edit, a
- * `git pull` or another browser is noticed), keeps the previous version as `<file>.bak`, and replaces the file
+ * `git pull` or another browser is noticed), keeps the previous version as `<file>.bak` (unless it is the empty config
+ * init has just written, and there is no `.bak` yet), and replaces the file
  * atomically: the new text goes to `<file>.tmp`, is synced to disk and renamed over the file, so a power cut leaves
  * the old config or the new one, never half of each. That needs the file's folder to be writable: a single file
  * bind-mounted into a container cannot be replaced by a rename (EBUSY), which is why compose.yaml mounts the folder.
@@ -21,11 +22,13 @@ export interface ConfigText {
   readonly etag: string
 }
 
-/** A save that went through: the new ETag, the text it replaced, and the config it holds now. */
+/** A save that went through: the new ETag, the text it replaced, the config it holds now, and whether `.bak` has it. */
 export interface SavedConfig {
   readonly etag: string
   readonly previous: string
   readonly config: GatewayConfig
+  /** Whether the replaced text went to `<file>.bak`: not for init's empty config, the first time (`keepsBackup`). */
+  readonly backedUp: boolean
 }
 
 /** Whether a save can work here; when not, why and the change that makes it work. */
@@ -193,6 +196,18 @@ export const makeConfigStore = Effect.fn("makeConfigStore")(function* (configPat
     Effect.orElseSucceed(() => 0o644)
   )
 
+  /**
+   * Whether a save keeps `previous` as the `.bak`: always, except for a config without devices in a folder without a
+   * `.bak` yet, which is the one init has just written. Its first devices (import, discover --save) then leave no
+   * backup of an empty config behind; any later save backs up as before, and undo works from there.
+   */
+  const keepsBackup = (previous: string) =>
+    Effect.gen(function* () {
+      if (yield* fs.exists(`${path}.bak`).pipe(Effect.orElseSucceed(() => true))) return true
+      const parsed = yield* checkConfigText(previous)
+      return Result.isFailure(parsed) || parsed.success.devices.length > 0
+    })
+
   const save = Effect.fn("ConfigStore.save")(function* (text: string, etag: string) {
     const current = yield* read
     if (current.etag !== etag) {
@@ -209,9 +224,10 @@ export const makeConfigStore = Effect.fn("makeConfigStore")(function* (configPat
       })
     }
     const mode = yield* modeOf
-    yield* replaceFile(`${path}.bak`, current.text, mode)
+    const backedUp = yield* keepsBackup(current.text)
+    if (backedUp) yield* replaceFile(`${path}.bak`, current.text, mode)
     yield* replaceFile(path, text, mode)
-    return { etag: etagOf(text), previous: current.text, config: checked.success } satisfies SavedConfig
+    return { etag: etagOf(text), previous: current.text, config: checked.success, backedUp } satisfies SavedConfig
   }, Semaphore.withPermit(writing))
 
   const restore = Effect.fn("ConfigStore.restore")(function* (previous: string) {

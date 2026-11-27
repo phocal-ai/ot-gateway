@@ -69,7 +69,11 @@ export const DeployCode = Schema.Literals([
   "pull-failed",
   "config-rejected",
   "upgrade-rolled-back",
-  "rollback-failed"
+  "rollback-failed",
+  "background-unsupported",
+  "background-failed",
+  "already-running",
+  "gateway-exited"
 ])
 export type DeployCode = typeof DeployCode.Type
 
