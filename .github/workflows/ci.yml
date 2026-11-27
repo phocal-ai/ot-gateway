@@ -43,3 +43,10 @@ jobs:
         run: pnpm --filter @ot-gateway/web build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
+      # The docs site, whose pages come from docs/*.md and the README. Vercel builds a preview only when the
+      # site's own code changed (apps/site/scripts/ignore-build.sh), so this is where a docs change is built
+      # before it reaches dev.
+      - name: Build the docs site
+        run: pnpm --filter @ot-gateway/site build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
