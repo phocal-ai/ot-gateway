@@ -531,7 +531,10 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
   const asked =
     broadcast === undefined ? config : { ...config, bacnet: { ...config.bacnet, broadcastAddress: broadcast } }
   const picked = yield* discoverInteractively(asked, () => suggestedModbusRange(lans), { address, wait })
-  if (picked.length === 0) return yield* Console.log(ui.note(`nothing to save; ${path} is as it was`))
+  if (picked.length === 0) {
+    yield* Console.log(ui.note(`nothing to save; ${path} is as it was`))
+    return undefined
+  }
   const located = picked.every((device) => device.protocol !== "bacnet-ip" || "address" in device)
   const merged = yield* mergeDiscovered(path, fileText, picked, located ? undefined : broadcast)
   const argument = path === DEFAULT_CONFIG ? "" : ` ${shellArgument(path)}`
@@ -547,7 +550,10 @@ const discoverAndSave = Effect.fn("discoverAndSave")(function* (
     message: `Save ${picked.length} device${picked.length === 1 ? "" : "s"} and ${points} point${points === 1 ? "" : "s"} to ${path}?`,
     initial: true
   })
-  if (!save) return yield* Console.log(ui.note(`nothing saved; ${path} is as it was`))
+  if (!save) {
+    yield* Console.log(ui.note(`nothing saved; ${path} is as it was`))
+    return undefined
+  }
   yield* writeMerged(path, fileText, merged)
   yield* Console.log(["", ...savedLines(merged.config, merged.added, merged.extended, ui), ""].join("\n"))
   return yield* afterSave(merged.config, path, argument, ui)
@@ -623,7 +629,7 @@ const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: 
   while (true) {
     const next = yield* Prompt.Select<AfterSave>({ message: "What next?", choices })
     if (next === "done") {
-      return yield* Console.log(
+      yield* Console.log(
         [
           "",
           ui.rows([
@@ -634,10 +640,12 @@ const afterSave = Effect.fn("afterSave")(function* (saved: GatewayConfig, path: 
           ""
         ].join("\n")
       )
+      return undefined
     }
     if (next === "start") {
       yield* Console.log(`\n${statusPageLine(ui, `http://127.0.0.1:${saved.status?.port ?? 8080}`)}\n`)
-      return yield* runConfigured(saved, path).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
+      // Started by the caller, outside the column: the gateway's log lines are its own, not notes.
+      return { start: saved, path }
     }
     yield* readEveryPoint(saved, ui)
   }
@@ -688,7 +696,11 @@ const discoverCommand = Command.make(
         if (yield* fs.exists(config)) {
           const ui = terminalUi()
           yield* Console.error(ui.header("ot-gateway discover", yield* readVersion))
-          return yield* discoverAndSave(config, Option.getOrUndefined(address), ui, wait).pipe(inColumn(ui))
+          const outcome = yield* discoverAndSave(config, Option.getOrUndefined(address), ui, wait).pipe(inColumn(ui))
+          if (outcome === undefined) return
+          return yield* runConfigured(outcome.start, outcome.path).pipe(
+            Effect.provideService(References.MinimumLogLevel, "Info")
+          )
         }
         yield* Console.error(
           `no ${config} here, so the devices found are printed, not saved: ${yield* invocation} init sets up the broker and the site, then discover saves the devices you pick`

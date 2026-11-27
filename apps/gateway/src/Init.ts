@@ -444,12 +444,12 @@ const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (sugg
       () => `Scanning ${asked} of ${total} address${total === 1 ? "" : "es"} on port ${MODBUS_PORT}, read-only`
     )
   )
-  // A person gets the units, one line each; the scan's advice for scripts (--points-list, next) is left out.
+  // A person gets the units, one line each, and why an address answered without one; the scan's advice for
+  // scripts (--points-list, next) is left out.
   const [heading = "", ...rows] = formatScan(report).split("\n")
-  if (foundUnits(report).length > 0) {
-    yield* Console.error(ui.done(heading.replace(/:$/, "")))
-    yield* Console.error(rows.filter((line) => line.startsWith("  ")).join("\n"))
-  }
+  const details = rows.filter((line) => line.startsWith("  ")).join("\n")
+  yield* Console.error(foundUnits(report).length > 0 ? ui.done(heading.replace(/:$/, "")) : heading)
+  if (details !== "") yield* Console.error(details)
   const units = foundUnits(report)
   const readable = units.filter((unit) => unit.table !== undefined)
   if (readable.length < units.length) {

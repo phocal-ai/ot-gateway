@@ -4,7 +4,7 @@
  * third, so the answers, what was found and what comes next line up under each other. Notes are dim, commands
  * cyan, as the prompts color their answers. Scripts and agents never see any of this: their output is unchanged.
  */
-import { Console, Context, Effect, Fiber } from "effect"
+import { Console, Context, Effect, Fiber, References } from "effect"
 import { Prompt } from "effect/cli"
 import { stripVTControlCharacters } from "node:util"
 import { WhoIsProgress, type WhoIsShown } from "./Discover.ts"
@@ -106,6 +106,8 @@ export const spinning =
           })
           const spinner = yield* Effect.forkChild(Effect.forever(Effect.andThen(draw, Effect.sleep("80 millis"))))
           return yield* effect.pipe(
+            // A log line would land on the spinner's line: only errors while it turns, and what the step says after.
+            Effect.provideService(References.MinimumLogLevel, "Error"),
             Effect.ensuring(
               Fiber.interrupt(spinner).pipe(Effect.andThen(Effect.sync(() => process.stderr.write("\r\u001b[2K"))))
             )
@@ -176,15 +178,17 @@ export const notesConsole =
     timeLog: (label, ...args) => base.timeLog(label, ...args),
     trace: (...args) => base.trace(...args),
     warn: (...args) => base.warn(...args),
+    // Only text becomes a note; anything else (an error, a logger's annotations) is passed on as it is.
     error: (...args) =>
-      base.error(
-        args
-          .map((arg) => (typeof arg === "string" ? arg : String(arg)))
-          .join(" ")
-          .split("\n")
-          .map((line) => (styled(line) ? line : ui.note(line)))
-          .join("\n")
-      )
+      args.every((arg) => typeof arg === "string")
+        ? base.error(
+            args
+              .join(" ")
+              .split("\n")
+              .map((line) => (styled(line) ? line : ui.note(line)))
+              .join("\n")
+          )
+        : base.error(...args)
   })
 
 /** `effect` with the prompts' theme and stderr's notes in the column of `ui`. */

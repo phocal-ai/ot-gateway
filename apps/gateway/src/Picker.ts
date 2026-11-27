@@ -69,15 +69,16 @@ export const pickerLines = <A>(
     const title = row.title.padEnd(titleWidth)
     const details = row.details.map((detail, column) => detail.padEnd(detailWidths[column] ?? 0)).join("  ")
     const text = `${pointer} ${box} ${focused ? ui.bold(title) : title}  ${ui.dim(details.trimEnd())}`
-    return plain(text).length > width ? fit(text, width) : text
+    return fit(text, width)
   })
   const more = rows.length > end - start ? ui.dim(`  ${start + 1}-${end} of ${rows.length}`) : undefined
+  // Every line cut to the width: a wrapped line would leave part of the old frame behind when it is cleared.
   return [
     `${ui.command(symbols.ask)} ${ui.bold(message)}`,
     ...lines,
     ...(more === undefined ? [] : [more]),
     state.error === undefined ? ui.dim(`  ${pickerKeys}`) : `  ${ui.dim(pickerKeys)}  ${state.error}`
-  ]
+  ].map((line) => fit(line, width))
 }
 
 /** What the line that stays says: how many of the rows were ticked. */
