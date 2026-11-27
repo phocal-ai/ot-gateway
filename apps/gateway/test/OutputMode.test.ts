@@ -9,7 +9,7 @@ import { Effect, Option } from "effect"
 import { CommandSpec } from "effect/cli"
 import { TestConsole } from "effect/testing"
 import { cli, commandPath, runCli, takesJson, withJsonFromEnvironment } from "../src/Cli.ts"
-import { AgentHints, agentHint, jsonFromEnvironment, runsUnderAgent, withAgentHint } from "../src/Output.ts"
+import { AgentHints, agentHint, isJsonMode, jsonFromEnvironment, runsUnderAgent, withAgentHint } from "../src/Output.ts"
 
 /** Every command that runs (no subcommands), as its words after `ot-gateway`, with the flags it takes. */
 const leafCommands = () => {
@@ -85,6 +85,26 @@ describe("OT_GATEWAY_JSON", () => {
     expect(withJsonFromEnvironment(["points"], env)).toEqual(["points"])
     expect(withJsonFromEnvironment(["demo"], env)).toEqual(["demo"])
     expect(withJsonFromEnvironment(["status"], {})).toEqual(["status"])
+  })
+
+  it("leaves --help, --version and a --json typed out (--json=false: text once) alone", () => {
+    const env = { OT_GATEWAY_JSON: "1" }
+    expect(withJsonFromEnvironment(["check", "--help"], env)).toEqual(["check", "--help"])
+    expect(withJsonFromEnvironment(["--version"], env)).toEqual(["--version"])
+    expect(withJsonFromEnvironment(["status", "--json=false"], env)).toEqual(["status", "--json=false"])
+    expect(isJsonMode(["status", "--json=false"])).toBe(false)
+    expect(isJsonMode(["status", "--json=true"])).toBe(true)
+  })
+
+  it("skips a flag's value before the command", () => {
+    expect(commandPath(["--log-level", "debug", "status"])).toEqual(["ot-gateway", "status"])
+    expect(commandPath(["--log-level=debug", "status"])).toEqual(["ot-gateway", "status"])
+    expect(withJsonFromEnvironment(["--log-level", "debug", "status"], { OT_GATEWAY_JSON: "1" })).toEqual([
+      "--log-level",
+      "debug",
+      "status",
+      "--json"
+    ])
   })
 
   it("finds the command through flags and arguments", () => {

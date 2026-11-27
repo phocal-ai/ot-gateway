@@ -61,13 +61,11 @@ if (extraEnvFile !== undefined && extraEnvFile !== "") loadEnvFile(extraEnvFile)
 
 // A bare `ot-gateway` in a terminal, with no config here yet, is a first run: it starts init. OT_GATEWAY_JSON=1 adds
 // --json to every command that takes it.
-const argv = withJsonFromEnvironment(
-  withFirstRun(process.argv.slice(2), {
-    terminal: process.stdin.isTTY && process.stdout.isTTY,
-    configHere: existsSync("ot-gateway.json")
-  }),
-  process.env
-)
+// The variable first: a first run's init stays the questions in a terminal.
+const argv = withFirstRun(withJsonFromEnvironment(process.argv.slice(2), process.env), {
+  terminal: process.stdin.isTTY && process.stdout.isTTY,
+  configHere: existsSync("ot-gateway.json")
+})
 const json = isJsonMode(argv)
 // Under a coding agent, help and failures say where --json and mcp are; the output itself stays the same.
 const agentHints = !json && runsUnderAgent(process.env)

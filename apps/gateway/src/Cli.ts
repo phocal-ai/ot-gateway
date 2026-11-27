@@ -166,6 +166,7 @@ import {
   UsageMistake,
   AgentHints,
   agentHint,
+  isJsonFlag,
   jsonFromEnvironment
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
@@ -1128,7 +1129,9 @@ const schemaCommand = Command.make(
         ? brief
           ? printResult(briefPointsListSchemaJson())
           : printJson(pointsListSchema())
-        : Console.log(describePointsListSchema({ brief: brief || (process.stdout.isTTY && !all) }))
+        : Console.log(
+            describePointsListSchema({ brief: brief || (process.stdout.isTTY && !all), allHint: !brief && !all })
+          )
 ).pipe(
   Command.withDescription("The points list's columns, rules and allowed values"),
   Command.withExamples([
@@ -2745,16 +2748,26 @@ export const versionLine = (name: string, version: string) =>
 
 /**
  * The command `args` (as `toCliArgs` gives them) runs, as its path from `ot-gateway` down: the words that name a
- * subcommand, flags skipped. `["status", "--json"]` is `["ot-gateway", "status"]`.
+ * subcommand, flags and their values skipped. `["--log-level", "debug", "status"]` is `["ot-gateway", "status"]`.
  */
 export const commandPath = (args: ReadonlyArray<string>): ReadonlyArray<string> => {
   const path: Array<string> = [cli.name]
-  for (const arg of args) {
-    if (arg === "--") break
-    if (arg.startsWith("-")) continue
+  let index = 0
+  while (index < args.length) {
+    const arg = args[index] ?? ""
     const spec = CommandSpec.resolve(cli, path)
-    if (Option.isNone(spec) || !spec.value.subcommands.some((sub) => sub.name === arg || sub.alias === arg)) break
-    path.push(spec.value.subcommands.find((sub) => sub.alias === arg)?.name ?? arg)
+    if (arg === "--" || Option.isNone(spec)) break
+    if (arg.startsWith("-")) {
+      // A flag that takes a value has it in the next argument, unless it is written `--flag=value`.
+      const name = arg.replace(/^-+/, "")
+      const flag = spec.value.flags.find((each) => each.name === name || each.aliases.includes(name))
+      index += flag !== undefined && flag.typeName !== "boolean" && !arg.includes("=") ? 2 : 1
+      continue
+    }
+    const sub = spec.value.subcommands.find((each) => each.name === arg || each.alias === arg)
+    if (sub === undefined) break
+    path.push(sub.name)
+    index += 1
   }
   return path
 }
@@ -2766,15 +2779,25 @@ export const takesJson = (path: ReadonlyArray<string>) =>
     onSome: (spec) => spec.flags.some((flag) => flag.name === "json")
   })
 
+/** Arguments that print help or the version, which stay text whatever `OT_GATEWAY_JSON` says. */
+const helpFlags = new Set(["--help", "-h", "--version", "-v"])
+
 /**
  * `argv` with `--json` added when `OT_GATEWAY_JSON` asks for it and the command takes it: one setting for an agent's
- * whole session instead of the flag on every command. A command without `--json` (run, demo) runs as typed.
+ * whole session instead of the flag on every command. A command without `--json` (run, demo), `--help`, and a
+ * `--json` typed out (`--json=false` for text once) stay as typed.
  */
 export const withJsonFromEnvironment = (
   argv: ReadonlyArray<string>,
   env: Readonly<Record<string, string | undefined>>
 ): ReadonlyArray<string> => {
-  if (!jsonFromEnvironment(env) || argv.includes("--json") || !takesJson(commandPath(toCliArgs(argv)))) return argv
+  if (
+    !jsonFromEnvironment(env) ||
+    argv.some((arg) => isJsonFlag(arg) || helpFlags.has(arg)) ||
+    !takesJson(commandPath(toCliArgs(argv)))
+  ) {
+    return argv
+  }
   const end = argv.indexOf("--")
   return end === -1 ? [...argv, "--json"] : [...argv.slice(0, end), "--json", ...argv.slice(end)]
 }

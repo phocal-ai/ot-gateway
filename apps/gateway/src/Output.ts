@@ -8,8 +8,12 @@ import { Cause, Console, Context, Effect, Predicate, Result, Schema } from "effe
 import type { EventEmitter } from "node:events"
 import { CliError } from "effect/cli"
 
-/** `--json` anywhere on the command line, as the CLI's flags take it. */
-export const isJsonMode = (argv: ReadonlyArray<string>) => argv.includes("--json")
+/** `--json` (or `--json=<value>`) as one argument, the form the CLI's flags take. */
+export const isJsonFlag = (arg: string) => arg === "--json" || arg.startsWith("--json=")
+
+/** `--json` anywhere on the command line, as the CLI's flags take it (`--json=false` is text, as asked). */
+export const isJsonMode = (argv: ReadonlyArray<string>) =>
+  argv.some((arg) => arg === "--json" || (arg.startsWith("--json=") && !["--json=false", "--json=0"].includes(arg)))
 
 /**
  * Whether `OT_GATEWAY_JSON` asks for `--json` on every command that has it: set and not `0`, `false`, `no` or
@@ -38,7 +42,7 @@ export const AgentHints = Context.Reference<boolean>("@ot-gateway/gateway/AgentH
 
 /** The hint an agent gets below a failure or a command's help, when the command has `--json`. */
 export const agentHint =
-  "for agents: --json (or OT_GATEWAY_JSON=1) prints this as JSON with code, hint and next; ot-gateway mcp offers the commands as tools"
+  "for agents: --json (or OT_GATEWAY_JSON=1) gives results and failures as JSON with code, hint and next; ot-gateway mcp offers the commands as tools"
 
 /**
  * Where results go when that is not the `Console`: `--json` mode sets it to the process's console (stdout) and
