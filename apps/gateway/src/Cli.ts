@@ -40,7 +40,7 @@
  * them: `ot-gateway path.json` runs, `--check path.json` checks and `--discover path.json` discovers.
  */
 import { covPointIds, type Device, type GatewayConfig, mqttPasswordWarning } from "@ot-gateway/core"
-import { Config, Console, Duration, Effect, FileSystem, Option, References, Result } from "effect"
+import { Config, Console, Duration, Effect, FileSystem, Logger, Option, References, Result } from "effect"
 import { Argument, CliOutput, Command, Flag, Prompt } from "effect/cli"
 import { networkInterfaces } from "node:os"
 import { dirname, isAbsolute, join, relative, sep } from "node:path"
@@ -101,7 +101,7 @@ import {
   pointsListTemplate
 } from "./PointsSchema.ts"
 import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
-import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget } from "./GatewayTarget.ts"
+import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
 import { logsReport } from "./LogsReport.ts"
@@ -164,6 +164,7 @@ import {
   UsageMistake
 } from "./Output.ts"
 import { readVersion } from "./Version.ts"
+import { humanLogger, runView } from "./RunView.ts"
 import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
@@ -306,18 +307,32 @@ const jsonFailure =
 const dryRunFlag = (description: string) =>
   Flag.Boolean("dry-run").pipe(Flag.withDescription(description), Flag.withDefault(false))
 
+/** Whether `run` shows a person the overview and the changes (RunView.ts) instead of the log: both ends a terminal. */
+export const humanRun = (verbose: boolean, stdoutIsTTY: boolean | undefined, stderrIsTTY: boolean | undefined) =>
+  !verbose && stdoutIsTTY === true && stderrIsTTY === true
+
 /**
  * The gateway for `config`, with host monitoring and telemetry, until it is stopped. With the file it came from,
  * the status page can edit it.
  */
-const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfig, path?: string) {
+const runConfigured = Effect.fn("runConfigured")(function* (config: GatewayConfig, path?: string, human = false) {
   const version = yield* readVersion
   const configFile = path === undefined ? undefined : yield* configFileSource(path)
-  return yield* Effect.scoped(
+  const ui = terminalUi()
+  const pageUrl = config.status === undefined ? undefined : statusUrlOf(config.status)
+  if (human) yield* Console.error(ui.header("ot-gateway run", version))
+  const running = Effect.scoped(
     Effect.flatMap(liveHostSources, (host) =>
-      runGateway(config, { host, version, ...(configFile === undefined ? {} : { configFile }) })
+      runGateway(config, {
+        host,
+        version,
+        ...(configFile === undefined ? {} : { configFile }),
+        ...(human ? { watch: runView(ui, config, pageUrl) } : {})
+      })
     )
   ).pipe(Effect.provide(telemetryLayer(config, version)))
+  // The person's logger replaces the one on stderr, outside telemetry's, which adds to it; the ring adds to both.
+  return yield* human ? running.pipe(Effect.provide(Logger.layer([humanLogger(ui)]))) : running
 })
 
 const DEFAULT_CONFIG = "ot-gateway.json"
@@ -327,25 +342,43 @@ const configPath = Argument.String("config").pipe(
   Argument.withDefault(DEFAULT_CONFIG)
 )
 
-const run = Command.make("run", { config: configPath }, ({ config }) =>
-  loadConfig(config).pipe(
-    // `ot-gateway chek` reaches run as a config path (the form from before subcommands): name the command meant.
-    Effect.catchTag("ConfigFileError", (error) => {
-      const meant = config.includes(".") || config.includes("/") ? undefined : closestMatch(config, subcommands)
-      return Effect.fail(
-        meant === undefined
-          ? error
-          : new ConfigFileError({
-              path: config,
-              message: `${config} is not a command; did you mean ot-gateway ${meant}?`
-            })
+const run = Command.make(
+  "run",
+  {
+    config: configPath,
+    verbose: Flag.Boolean("verbose").pipe(
+      Flag.withDescription(
+        "Print the gateway's log, as under Docker or in a pipe, instead of the overview and the changes a terminal gets"
+      ),
+      Flag.withDefault(false)
+    )
+  },
+  ({ config, verbose }) =>
+    loadConfig(config).pipe(
+      // `ot-gateway chek` reaches run as a config path (the form from before subcommands): name the command meant.
+      Effect.catchTag("ConfigFileError", (error) => {
+        const meant = config.includes(".") || config.includes("/") ? undefined : closestMatch(config, subcommands)
+        return Effect.fail(
+          meant === undefined
+            ? error
+            : new ConfigFileError({
+                path: config,
+                message: `${config} is not a command; did you mean ot-gateway ${meant}?`
+              })
+        )
+      }),
+      Effect.flatMap((loaded) =>
+        runConfigured(loaded, config, humanRun(verbose, process.stdout.isTTY, process.stderr.isTTY))
       )
-    }),
-    Effect.flatMap((loaded) => runConfigured(loaded, config))
-  )
+    )
 ).pipe(
-  Command.withDescription("Run the gateway: poll the devices in the config and publish to its broker"),
-  Command.withExamples([{ command: "ot-gateway run /etc/ot-gateway/gateway.json", description: "Run a config" }])
+  Command.withDescription(
+    "Run the gateway: poll the devices in the config and publish to its broker. In a terminal it shows an overview and then what changes; elsewhere (Docker, a pipe, --verbose) its log"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway run /etc/ot-gateway/gateway.json", description: "Run a config" },
+    { command: "ot-gateway run --verbose", description: "The gateway's log instead of the overview" }
+  ])
 )
 
 /**
@@ -914,8 +947,9 @@ const init = Command.make(
         return yield* Console.log(["", ...summary.later, ""].join("\n"))
       }
       const loaded = yield* loadConfig(config)
-      yield* Console.log(`\n${statusPageLine(ui, initNext(config, written, files, context).url)}\n`)
-      return yield* runConfigured(loaded, config).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
+      const human = humanRun(false, process.stdout.isTTY, process.stderr.isTTY)
+      if (!human) yield* Console.log(`\n${statusPageLine(ui, initNext(config, written, files, context).url)}\n`)
+      return yield* runConfigured(loaded, config, human).pipe(Effect.provideService(References.MinimumLogLevel, "Info"))
     }).pipe(
       jsonFailure(json),
       Effect.catchTag("QuitError", () =>

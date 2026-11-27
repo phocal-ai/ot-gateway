@@ -129,7 +129,7 @@ With a coding agent, `/setup` in Claude Code (or the prompt in [Set it up with A
 ```bash
 pnpm ot-gateway check     # every mistake, with where it is; nothing connects yet
 pnpm ot-gateway read      # every point read once, to see the devices answer; nothing is published (--publish sends them once)
-pnpm ot-gateway run       # start the gateway
+pnpm ot-gateway run       # start the gateway: in a terminal, an overview and then what changes (--verbose: the log)
 ```
 
 `check` lists every mistake with its place in the file (`["devices"][0]["points"][1]["dataType"]`) and what it expected there. `read` asks each device once through the gateway's own drivers and prints a line per point, its value and unit or why it failed, then exits (with 1 when a point failed): `read <device>` or `read <device>/<point>` for fewer, `--json` for scripts. It needs no broker, and it only reads; `--publish` also sends each value read to its topic on the broker once (not retained, as the gateway sends a read), to see them arrive in an MQTT client. `run` starts polling and sending; stop it with Ctrl-C.

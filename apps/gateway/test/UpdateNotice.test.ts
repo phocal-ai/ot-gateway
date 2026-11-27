@@ -68,7 +68,7 @@ describe("updateCommand", () => {
       "bun add -g ot-gateway@latest"
     )
     expect(noticeLine("v0.16.3", "0.17.0", pnpm)).toBe(
-      "Update available: v0.16.3 → v0.17.0. Run pnpm add -g ot-gateway@latest"
+      "Update available: v0.16.3 → v0.17.0. Run pnpm add -g ot-gateway@0.17.0"
     )
   })
 

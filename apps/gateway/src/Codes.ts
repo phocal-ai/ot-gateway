@@ -232,7 +232,7 @@ export const codes: ReadonlyArray<CodeEntry> = [
     reportedBy: fleetCommands,
     meaning:
       "A gateway's retained health is not a message this CLI reads: the gateway runs a newer release, or something else publishes on its health topic. It may well be online.",
-    fix: "Update the CLI (npm i -g ot-gateway@latest, or pnpm add -g ot-gateway@latest), then look at what the topic holds.",
+    fix: "Update the CLI (npm i -g ot-gateway@latest, or pnpm add -g ot-gateway@VERSION with the VERSION npm view ot-gateway version prints), then look at what the topic holds.",
     next: "ot-gateway watch --topic '<site>/<building>/$gateway/#' --seconds 5"
   },
   {
