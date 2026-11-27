@@ -542,7 +542,7 @@ export const formatStatus = (
   const late = status.devices.filter((device) => isDeviceLate(device, status.now)).length
   const shared = sharedCause(status.devices, status.broker)
   const sharedHost = shared === undefined ? undefined : sharedHostOf(deviceSide(status.devices))
-  const brief = (options.brief ?? false) && status.devices.length > LISTED
+  const brief = options.brief ?? false
   // The failing first, then late, then starting: what needs a look most is never behind "and N more".
   const rank: Readonly<Record<string, number>> = { failing: 0, late: 1, starting: 2 }
   const needing = status.devices

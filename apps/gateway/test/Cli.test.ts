@@ -135,7 +135,7 @@ describe("check", () => {
     Effect.gen(function* () {
       const config = yield* bacnetConfig({})
       expect(describeConfig(config)).toContain(
-        "heat-pump: bacnet-ip device 2001 at 127.0.0.1:47809, 3 points: 2 by COV where the device supports it, polled every 5000 ms otherwise"
+        "heat-pump  bacnet-ip device 2001 at 127.0.0.1:47809, 3 points, 2 by COV, else every 5 s"
       )
       expect(configSummary(config).devices).toEqual([
         {
@@ -152,11 +152,9 @@ describe("check", () => {
       const allPushed = yield* bacnetConfig({
         points: [{ id: "flow", name: "Flow", objectType: "analog-input", instance: 1 }]
       })
-      expect(describeConfig(allPushed)).toContain(
-        "1 point: COV where the device supports it, polled every 5000 ms otherwise"
-      )
+      expect(describeConfig(allPushed)).toContain("1 point, COV, else every 5 s")
       const polled = yield* bacnetConfig({ cov: false })
-      expect(describeConfig(polled)).toContain("3 points, every 5000 ms")
+      expect(describeConfig(polled)).toContain("3 points, every 5 s")
       expect(configSummary(polled).devices[0]?.covPoints).toEqual([])
     })
   )
@@ -210,9 +208,9 @@ describe("demo", () => {
       expect(banner).toContain("http://localhost:8080")
       expect(banner).toContain("energy-meter (Modbus TCP)")
       expect(banner).toContain("init to describe your own building")
-      expect(describeConfig(config)).toContain("config ok: demo-site/building-a")
+      expect(describeConfig(config)).toContain("✓ config   demo-site/building-a gateway")
       expect(describeConfig(config)).toContain(
-        "\n  status page on port 8080 at every address of this machine (http://localhost:8080 here)\n"
+        "\n✓ status   port 8080 on every address of this machine (http://localhost:8080 here)\n"
       )
     }).pipe(Effect.provide(NodeServices.layer))
   )

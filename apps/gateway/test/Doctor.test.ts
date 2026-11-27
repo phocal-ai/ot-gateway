@@ -362,9 +362,10 @@ describe("doctor's findings", () => {
     ])
     expect(doctor).toMatchObject({ ok: false, next: "ot-gateway broker", counts: { ok: 1, warn: 1, fail: 1, skip: 0 } })
     expect(formatDoctor(doctor, { brief: true }).split("\n")).toEqual([
-      "✓ config  s/b gateway main, 1 device",
-      "✗ broker  could not connect",
-      "! meter   late",
+      "✓ config   s/b gateway main, 1 device",
+      "✗ broker   could not connect",
+      "! devices  1 device, 1 with a warning",
+      "! meter    late",
       "",
       "1 problem, 1 warning. Next: ot-gateway broker"
     ])

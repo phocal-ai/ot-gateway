@@ -100,7 +100,7 @@ import {
   pointsListSchema,
   pointsListTemplate
 } from "./PointsSchema.ts"
-import { eventsReport, fetchStatusFor, parseSince, statusOutcome } from "./StatusReport.ts"
+import { eventsReport, fetchStatusFor, intervalText, parseSince, statusOutcome } from "./StatusReport.ts"
 import { chooseConfig, DEFAULT_STATUS_URL, resolveTarget, statusUrlOf } from "./GatewayTarget.ts"
 import { historyReport, parseSelection } from "./HistoryReport.ts"
 import { MESSAGE_WINDOW_MS, messagesReport } from "./MessagesReport.ts"
@@ -124,7 +124,6 @@ import {
   formatReadReport,
   formatReadSummary,
   incompleteMessage,
-  VALUES_SHOWN,
   parseReadSelection,
   readOnce,
   readingsToSend,
@@ -145,7 +144,7 @@ import {
 } from "./Broker.ts"
 import { runGateway } from "./Gateway.ts"
 import { liveHostSources } from "./Host.ts"
-import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv } from "./LoadConfig.ts"
+import { ConfigFileError, configFileSource, loadConfig, loadFolderEnv, mistakeKinds } from "./LoadConfig.ts"
 import { closestMatch } from "./Suggest.ts"
 import {
   describeProfile,
@@ -172,7 +171,7 @@ import {
 import { readVersion } from "./Version.ts"
 import { humanLogger, runView } from "./RunView.ts"
 import { inColumn, plainUi, terminalUi, type Ui } from "./Ui.ts"
-import { count as countOf, LISTED, plural } from "./Words.ts"
+import { count as countOf, firstOf, LISTED, named, plural } from "./Words.ts"
 import { codeJson, codes, codesTable, explainCode, formatCode, formatCodeList } from "./Codes.ts"
 import { formatSupportSummary, supportBundle, supportFileName } from "./Support.ts"
 import type { NodeServices } from "@effect/platform-node/NodeServices"
@@ -212,18 +211,33 @@ export const shownPath = (path: string, cwd: string) => {
   return inside !== "" && !outside ? `./${inside}` : path
 }
 
-/** A device's line in `check`: what it is, where, how many points and how they are read. */
-const deviceLine = (device: Device) => {
-  const where =
-    device.protocol === "modbus-tcp"
-      ? `${device.host}:${device.port} unit ${device.unitId}`
-      : device.protocol === "bacnet-ip"
-        ? `device ${device.deviceInstance}${device.address === undefined ? " (discovered)" : ` at ${device.address}`}`
-        : "simulated"
+/** How a device's points are read, short: `every 5 s`, `COV, else every 5 s`, `2 by COV, else every 5 s`. */
+const readingShort = (device: Device) => {
+  const cov = covPointIds(device).length
+  const polled = `every ${intervalText(device.pollIntervalMs)}`
+  if (cov === 0) return polled
+  return `${cov === device.points.length ? "COV" : `${countOf(cov)} by COV`}, else ${polled}`
+}
+
+/** Where a device is: `10.0.0.5:502 unit 1`, `device 1001 at 192.168.0.171`, `simulated`. */
+const whereOf = (device: Device) =>
+  device.protocol === "modbus-tcp"
+    ? `${device.host}:${device.port} unit ${device.unitId}`
+    : device.protocol === "bacnet-ip"
+      ? `device ${device.deviceInstance}${device.address === undefined ? ", found by broadcast" : ` at ${device.address}`}`
+      : "simulated"
+
+/** A device in a few words: `bacnet-ip device 1001 at 192.168.0.171, 3 points, COV, else every 5 s`. */
+const deviceText = (device: Device) => {
   const writable = device.points.filter((point) => point.writable).length
   const alarms = alarmPointIds(device).length
-  const reading = readingLabel(device)
-  return `  ${device.id}: ${device.protocol} ${where}, ${plural(device.points.length, "point")}${writable > 0 ? `, ${writable} writable` : ""}${alarms > 0 ? `, ${plural(alarms, "alarm")}` : ""}${covPointIds(device).length > 0 ? ": " : ", "}${reading}`
+  return [
+    `${device.protocol} ${whereOf(device)}`,
+    plural(device.points.length, "point"),
+    ...(writable > 0 ? [`${countOf(writable)} writable`] : []),
+    ...(alarms > 0 ? [plural(alarms, "alarm")] : []),
+    readingShort(device)
+  ].join(", ")
 }
 
 const pointsOf = (some: ReadonlyArray<Device>) => some.reduce((sum, device) => sum + device.points.length, 0)
@@ -235,48 +249,134 @@ const counted = (some: ReadonlyArray<Device>) => {
   const writable = writableOf(some)
   return `${plural(some.length, "device")}, ${plural(pointsOf(some), "point")}${writable > 0 ? `, ${countOf(writable)} writable` : ""}`
 }
-const devicesByProtocol = (devices: ReadonlyArray<Device>) => {
-  const protocols = [...new Set(devices.map((device) => device.protocol))]
-  const width = Math.max(0, ...protocols.map((protocol) => protocol.length))
-  return [
-    `  ${counted(devices)}`,
-    ...protocols.map(
-      (protocol) =>
-        `    ${protocol.padEnd(width)}  ${counted(devices.filter((device) => device.protocol === protocol))}`
-    ),
-    "  --all lists every device"
-  ]
+
+/** A line of `check`: a mark, a label and what it says, as `doctor` prints its findings. */
+interface CheckRow {
+  readonly mark: "✓" | "!" | "✗" | "–"
+  readonly label: string
+  readonly text: string
+  /** Lines under it, in its text column: a device each, or the protocols. */
+  readonly under?: ReadonlyArray<string>
 }
 
 /**
- * What `check` prints: the gateway the config describes, one line per device, and what start-up would warn about.
- * `brief` (a terminal) sums more than a few devices up by protocol.
+ * The devices in one row: none yet (to do), or how many. In a terminal (`brief`) that is all, however few, with the
+ * protocols when there are several; otherwise (--all, a pipe) a line for each device under it.
+ */
+const devicesRow = (devices: ReadonlyArray<Device>, brief: boolean): CheckRow => {
+  if (devices.length === 0) return { mark: "!", label: "devices", text: "none yet: ot-gateway discover finds them" }
+  if (brief) {
+    const protocols = [...new Set(devices.map((device) => device.protocol))]
+    const [one] = protocols
+    if (protocols.length === 1 && one !== undefined) {
+      return { mark: "✓", label: "devices", text: `${counted(devices)}, ${one}` }
+    }
+    const width = Math.max(0, ...protocols.map((protocol) => protocol.length))
+    return {
+      mark: "✓",
+      label: "devices",
+      text: counted(devices),
+      under: protocols.map(
+        (protocol) => `${protocol.padEnd(width)}  ${counted(devices.filter((device) => device.protocol === protocol))}`
+      )
+    }
+  }
+  const width = Math.max(0, ...devices.map((device) => device.id.length))
+  return {
+    mark: "✓",
+    label: "devices",
+    text: counted(devices),
+    under: devices.map((device) => `${device.id.padEnd(width)}  ${deviceText(device)}`)
+  }
+}
+
+/** The rows of a valid config: the gateway, its broker, buffer, history, status page and devices. */
+const checkRows = (config: GatewayConfig, brief: boolean, cwd: string): ReadonlyArray<CheckRow> => {
+  const passwordWarning = mqttPasswordWarning(config.mqtt)
+  const status = config.status
+  return [
+    { mark: "✓", label: "config", text: `${config.site}/${config.building} gateway ${config.id}` },
+    passwordWarning === undefined
+      ? { mark: "✓", label: "broker", text: config.mqtt.url }
+      : { mark: "!", label: "broker", text: `${config.mqtt.url}: ${passwordWarning}` },
+    config.buffer === undefined
+      ? { mark: "!", label: "buffer", text: "none: values read while the broker is down are lost" }
+      : { mark: "✓", label: "buffer", text: shownPath(config.buffer.path, cwd) },
+    config.history === undefined
+      ? { mark: "–", label: "history", text: "none: no history page or ot-gateway history" }
+      : {
+          mark: "✓",
+          label: "history",
+          text: `${shownPath(config.history.path, cwd)}, per-minute values for ${plural(config.history.retentionDays, "day")}`
+        },
+    status === undefined
+      ? { mark: "–", label: "status", text: "no status page: status, events and doctor cannot ask the gateway" }
+      : status.bindAddress === "0.0.0.0"
+        ? {
+            mark: "✓",
+            label: "status",
+            text: `port ${status.port} on every address of this machine (http://localhost:${status.port} here)`
+          }
+        : { mark: "✓", label: "status", text: `http://${status.bindAddress}:${status.port}` },
+    devicesRow(config.devices, brief)
+  ]
+}
+
+/** Rows as `doctor` prints them: the mark, the label padded, the text; the lines under a row in its text column. */
+const formatRows = (rows: ReadonlyArray<CheckRow>) => {
+  const width = Math.max(0, ...rows.map((row) => row.label.length))
+  return rows.flatMap((row) => [
+    `${row.mark} ${row.label.padEnd(width)}  ${row.text}`,
+    ...(row.under ?? []).map((line) => `  ${" ".repeat(width)}    ${line}`)
+  ])
+}
+
+/**
+ * What `check` prints, the way `doctor` does: a line for the gateway, its broker, buffer, history, status page and
+ * devices, a mark in front (`!` for what start-up would warn about), then the verdict. `brief` (a terminal) sums
+ * more than 10 devices up by protocol; otherwise each device has a line. `next` ends it with the command to run.
  */
 export const describeConfig = (
   config: GatewayConfig,
-  options: { readonly brief?: boolean } = {},
+  options: { readonly brief?: boolean; readonly next?: string } = {},
   cwd = process.cwd()
 ) => {
-  const passwordWarning = mqttPasswordWarning(config.mqtt)
+  const rows = checkRows(config, options.brief ?? false, cwd)
+  const warnings = rows.filter((row) => row.mark === "!").length
+  const verdict = `Config ok${warnings > 0 ? `, ${plural(warnings, "warning")}` : ""}.`
+  return [...formatRows(rows), "", options.next === undefined ? verdict : `${verdict} Next: ${options.next}`].join("\n")
+}
+
+/**
+ * An invalid config as `check` shows it in a terminal: one `✗ config` line with how many mistakes. A few are listed
+ * each with its path; many are grouped by what is wrong, a few paths each, since a points list with one bad column
+ * makes the same mistake on every row (`check --json` lists every mistake with its path).
+ */
+export const describeMistakes = (
+  path: string,
+  issues: ReadonlyArray<{ readonly path?: string; readonly message: string }>
+) => {
+  const indent = "          "
+  const head = `✗ config  ${path} is not valid: ${plural(issues.length, "mistake")}`
+  if (issues.length <= LISTED) {
+    const width = Math.max(0, ...issues.map((issue) => (issue.path ?? "").length))
+    return [
+      head,
+      ...issues.map((issue) =>
+        issue.path === undefined
+          ? `${indent}${issue.message}`
+          : `${indent}${issue.path.padEnd(width)}  ${issue.message}`
+      )
+    ].join("\n")
+  }
+  const { shown, more } = firstOf(mistakeKinds(issues))
   return [
-    `config ok: ${config.site}/${config.building}, gateway ${config.id}, broker ${config.mqtt.url}`,
-    ...(passwordWarning === undefined ? [] : [`  warning: ${passwordWarning}`]),
-    config.buffer === undefined
-      ? "  no buffer: values read while the broker is down are lost"
-      : `  buffer ${shownPath(config.buffer.path, cwd)}`,
-    ...(config.history === undefined
-      ? []
-      : [
-          `  history ${shownPath(config.history.path, cwd)}, per-minute values for ${config.history.retentionDays} days`
-        ]),
-    config.status === undefined
-      ? "  no status page"
-      : config.status.bindAddress === "0.0.0.0"
-        ? `  status page on port ${config.status.port} at every address of this machine (http://localhost:${config.status.port} here)`
-        : `  status page http://${config.status.bindAddress}:${config.status.port}`,
-    ...((options.brief ?? false) && config.devices.length > LISTED
-      ? devicesByProtocol(config.devices)
-      : config.devices.map(deviceLine))
+    head,
+    ...shown.map(([message, paths]) =>
+      paths.length === 0 ? `${indent}${message}` : `${indent}${message}: ${named(paths, 3)}`
+    ),
+    ...(more > 0 ? [`${indent}and ${plural(more, "other kind")}`] : []),
+    `${indent}check --json lists every mistake with its path`
   ].join("\n")
 }
 
@@ -464,9 +564,23 @@ const checkNext = Effect.fn("checkNext")(function* (path: string, config: Gatewa
 
 const check = Command.make("check", { config: configPath, all: allFlag, json: jsonFlag }, ({ config, all, json }) =>
   Effect.gen(function* () {
-    const decoded = yield* loadConfig(config)
+    const brief = process.stdout.isTTY && !all
+    const decoded = yield* loadConfig(config).pipe(
+      // A terminal gets the mistakes the way doctor prints a finding; a pipe and --json the error as before.
+      Effect.catchTag("ConfigFileError", (error) =>
+        !json && process.stdout.isTTY && error.code === "invalid-config" && error.issues !== undefined
+          ? Console.log(describeMistakes(error.path, error.issues)).pipe(
+              Effect.andThen(Effect.sync(() => (process.exitCode = 1))),
+              Effect.as(undefined)
+            )
+          : Effect.fail(error)
+      )
+    )
+    if (decoded === undefined) return
     if (!json) {
-      return yield* Console.log(describeConfig(decoded, { brief: process.stdout.isTTY && !all }))
+      const cli = yield* invocation
+      const next = `${cli} doctor${config === DEFAULT_CONFIG ? "" : ` ${shellArgument(config)}`}`
+      return yield* Console.log(describeConfig(decoded, { brief, next }))
     }
     const { next, url, page } = yield* checkNext(config, decoded)
     yield* printJson({ ...configSummary(decoded), next, url, page })
@@ -2164,7 +2278,7 @@ const readCommand = Command.make(
             })
           } else {
             // A terminal shows every value of a few points, or of the ones named; of many, how many and what failed.
-            const brief = process.stdout.isTTY && !all && !chose && report.summary.points > VALUES_SHOWN
+            const brief = process.stdout.isTTY && !all && !chose
             yield* printResult(brief ? formatReadSummary(report) : formatReadReport(report))
             if (published !== undefined && failure === undefined) {
               const aggregated =

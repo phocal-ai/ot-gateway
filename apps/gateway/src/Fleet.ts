@@ -393,7 +393,7 @@ export interface FleetTextOptions {
  * ones not ok, the first few; --all, a pipe and --json have every device.
  */
 export const formatGatewayStatus = (gateway: FleetGateway, now: number, options: FleetTextOptions = {}) => {
-  const brief = (options.brief ?? false) && gateway.devices.length > LISTED
+  const brief = options.brief ?? false
   const needing = gateway.devices
     .filter((device) => device.status !== "ok")
     .toSorted((a, b) => Number(b.status === "failing") - Number(a.status === "failing"))
@@ -432,9 +432,6 @@ export const formatGatewayStatus = (gateway: FleetGateway, now: number, options:
   ].join("\n")
 }
 
-/** Up to this many points, a terminal lists each; beyond, how many and the writable ones. */
-const POINTS_LISTED = 20
-
 export const formatGatewayPoints = (
   report: {
     readonly gateway: string
@@ -450,7 +447,7 @@ export const formatGatewayPoints = (
   }
   const devices = new Set(report.points.map((point) => point.device)).size
   const writable = report.points.filter((point) => point.writable)
-  const brief = (options.brief ?? false) && report.points.length > POINTS_LISTED
+  const brief = options.brief ?? false
   // A terminal with many points: how many, and the writable ones, which take commands.
   const { shown, more } = brief ? firstOf(writable, LISTED) : { shown: report.points, more: 0 }
   const width = Math.max(0, ...shown.map((point) => `${point.device}/${point.point}`.length))

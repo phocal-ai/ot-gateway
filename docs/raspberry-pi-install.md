@@ -163,7 +163,7 @@ Check it with the gateway itself:
 ot-gateway check
 ```
 
-It prints `config ok` and what it will poll; anything else names the field to fix. With `/setup` and an AI agent (README, "Set it up with AI"), the agent runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
+It prints a line each for the broker, buffer, history, status page and devices, then `Config ok`; anything else names the field to fix. With `/setup` and an AI agent (README, "Set it up with AI"), the agent runs these same commands over SSH. A config you already wrote elsewhere goes next to `compose.yaml` as `ot-gateway.json` (`scp ot-gateway.json ot-gateway:ot-gateway/`).
 
 ## 7. Start it
 

@@ -58,7 +58,7 @@ site-1/building-b/main: 3 points on 2 devices
   heat-pump/setpoint         Room setpoint  [unit:DEG_C]  writable
 ```
 
-With more than 10 devices or 20 points, a terminal lists only the failing devices and the writable points, the first few, and `--all` lists every one; a pipe and `--json` always do.
+A terminal lists only the failing devices and the writable points, the first few, and `--all` lists every one; a pipe and `--json` always do.
 
 `offline` comes with its reason: `shutdown` after a clean stop, or `connection-lost` when the broker sent the gateway's last will because the gateway, its machine or its network went away. Add `--json` to any of them for the same in JSON ([what each field is](operations.md#every-gateway-on-a-broker)).
 
