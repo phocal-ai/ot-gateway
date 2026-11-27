@@ -123,6 +123,7 @@ export const faultSchedule = (
   const busyUntil = new Map<string, number>()
   const faults: Array<Fault> = []
   let at = 5 * 60_000
+  let wallStep = 0
   while (true) {
     at += Math.round(-Math.log(1 - random()) * meanGapMs)
     let roll = random() * total
@@ -146,7 +147,12 @@ export const faultSchedule = (
     busyUntil.set(target, at + durationMs)
     if (kind === "clock-step") {
       // A step stays: the wall clock is wrong from here on, by 10 s to 2 h, ahead or behind.
-      const stepMs = Math.round((random() < 0.5 ? -1 : 1) * (10_000 + random() * 7_190_000))
+      const sign = random() < 0.5 ? -1 : 1
+      const magnitude = Math.round(10_000 + random() * 7_190_000)
+      // Virtual time starts at 0, so the wall clock must never be stepped before the epoch: no real
+      // clock reads that, and the contract's `ts >= 0` rejects it. Such a step goes forward instead.
+      const stepMs = at + wallStep - magnitude < 0 ? magnitude : sign * magnitude
+      wallStep += stepMs
       faults.push({ at, kind, target, durationMs: 0, stepMs })
       continue
     }
