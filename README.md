@@ -140,42 +140,29 @@ OT Gateway runs TypeScript directly on Node's built-in type stripping, so there 
 
 ## Set it up with AI
 
-The fastest way to your own building is to let a coding agent do it. In [Claude Code](https://claude.com/claude-code), from the checkout:
+The fastest way to your own building is to let an AI agent do it, any agent. The `ot-gateway` command carries what it needs: an MCP server with every command as a tool, and the setup guide, the steps from nothing to values on your broker. Install the server for your agent ([Claude Code, Cursor, VS Code, Codex, Gemini CLI and others](docs/agents.md)), for example:
 
 ```text
-/setup
+/plugin marketplace add phocal-ai/ot-gateway
+/plugin install ot-gateway@ot-gateway
 ```
 
-The skill checks Node, shows the demo, then asks about your devices and broker in one round. It writes the gateway's folder with `ot-gateway init`, turns BACnet discovery, an EDE file, your points list or Modbus datasheets into the standard points list, and checks it with the CLI. Then it runs the gateway until values flow and, on request, starts it with Docker Compose. It never makes a point writable unless you ask.
-
-An agent that has `ot-gateway mcp` as an MCP server gets the same guide from it: the `setup` prompt, or the `setup_guide` tool ([As MCP tools](docs/headless.md#as-mcp-tools)); `ot-gateway guide setup` prints it.
-
-With any other agent that can run commands (Cursor, Codex, Gemini CLI, …), paste:
+in Claude Code, or `codex mcp add ot-gateway -- npx -y ot-gateway mcp`. Then tell it what you want and what you know:
 
 ```text
-Set up an OT Gateway for my site. Read
-https://raw.githubusercontent.com/phocal-ai/ot-gateway/main/.claude/skills/setup/SKILL.md and follow it
-step by step, with npx ot-gateway and no clone: run the commands yourself, ask me only what you cannot
-find out, never write to a device, and keep secrets out of the JSON config. Stop when values from my
-devices reach the broker.
+Set up OT Gateway for my site with the ot-gateway MCP server: follow its setup guide.
+My devices: BACnet/IP on this network. Broker: mqtts://broker.example:8883, user gateway.
 ```
+
+An agent without MCP that can run commands and read the web follows the same guide from its address: `Set up OT Gateway for my site: follow https://ot-gateway.vercel.app/docs/setup-guide.md`, and your site on the next line.
+
+The guide checks Node, shows the demo, asks about your devices and broker in one round, writes the gateway's folder with `ot-gateway init`, turns BACnet discovery, an EDE file, your points list or Modbus datasheets into the standard points list, and checks it with the CLI. Then it runs the gateway until values flow and, on request, starts it for good. It never makes a point writable unless you ask, and keeps the broker password out of the config and out of the chat. In a checkout of this repository, Claude Code has it as `/setup`.
 
 To have your agent reach for the CLI on its own, add one line to its instructions (`AGENTS.md`, `CLAUDE.md`):
 
 ```text
 For OT Gateway configs, points lists and folders, use `npx ot-gateway`; start with `npx ot-gateway --help`.
 ```
-
-To draft BACnet points yourself, `discover` finds the devices through the config's `bacnet` settings, or the defaults (UDP 47808, a broadcast) in a folder with no config yet, where the list it writes then starts one: `init . --points`. It prints their `devices` entries, with object names as ids and QUDT units, all read-only:
-
-```bash
-pnpm ot-gateway discover path/to/gateway.json
-pnpm ot-gateway discover --points-list points.csv   # the same as a points list, every row publish sample (every read): delete the rows you don't need, then import it (fails when the file exists or nothing answered)
-pnpm ot-gateway discover --points-list points.csv --append   # add them to a list you have (Modbus rows, say): its rows and separator kept, rows it has skipped
-pnpm ot-gateway discover --address 10.20.3.40:47809  # only the device at that address: another subnet without a BBMD, or another port
-```
-
-Before you make any point of a device writable, confirm its drafted `address` against a source you trust (commissioning sheet, device display, DHCP reservation). A device that answered from more than one address (two devices sharing an instance, or one device on several addresses) gets a warning and no `address` in the draft: take it from that source, and use the warning's list only to see which hosts to check. Once a device in the config has an `address`, `discover` reads it there and drafts the points it does not have yet.
 
 ## Running it for real
 

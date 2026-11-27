@@ -12,11 +12,12 @@
         "tsconfig.json",
         "../../tsconfig.base.json",
         "../../docs/*.md",
-        "../../README.md"
+        "../../README.md",
+        "../../.claude/skills/setup/SKILL.md"
       ]
     },
     "test": {
-      "inputs": ["src/**", "test/**", "../../docs/*.md", "../../README.md"]
+      "inputs": ["src/**", "test/**", "../../docs/*.md", "../../README.md", "../../.claude/skills/setup/SKILL.md"]
     },
     "build": {
       "description": "Not cached: the pages come from docs/*.md, the README and whatever else scripts/content.ts lists, so a cached build could deploy stale docs",

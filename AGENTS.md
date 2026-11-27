@@ -1,3 +1,10 @@
+# AGENTS.md
+
+For any coding agent in this repository.
+
+- **Setting up a gateway for a user** (their devices, their broker): follow the setup guide, [`.claude/skills/setup/SKILL.md`](.claude/skills/setup/SKILL.md). It is an [Agent Skill](https://agentskills.io) and the one text every way of setting up reads: the `ot-gateway mcp` server serves it as its `setup` prompt and `setup_guide` tool, `ot-gateway guide setup` prints it, and the docs site has it at `/docs/setup-guide`. In a checkout, run the CLI as `pnpm -s ot-gateway`. How each agent gets it: [docs/agents.md](docs/agents.md).
+- **Working on OT Gateway itself:** [CLAUDE.md](CLAUDE.md) is the contributor guide for every agent, whatever its name: the commands, the repo layout, the non-negotiable rules and the Effect conventions. Read it before changing code, then [docs/VISION.md](docs/VISION.md) for the why.
+
 <!-- BEGIN:turborepo-agent-rules -->
 
 # This is NOT the Turborepo you know

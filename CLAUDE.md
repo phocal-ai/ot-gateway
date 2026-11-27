@@ -171,7 +171,7 @@ Project hooks in `.claude/settings.json` back this up:
 
 ## Quickstart
 
-`/setup` (`.claude/skills/setup/SKILL.md`, which the npm package and the image carry as `guides/setup.md` for `guide setup` and the MCP server's `setup` prompt) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. The README's "Set it up with AI" prompt points other agents at the same file, so keep the skill agent-neutral, and update it when config or commands change.
+`/setup` (`.claude/skills/setup/SKILL.md`, which the npm package and the image carry as `guides/setup.md` for `guide setup` and the MCP server's `setup` prompt) takes a user from nothing to a running gateway through the CLI (`npx ot-gateway`, or `pnpm ot-gateway` in a checkout): `init` writes the folder, everything else becomes the standard points list, Docker Compose runs it. Every other agent gets the same file: the docs site serves it as `/docs/setup-guide` (and in `llms.txt`), `docs/agents.md` installs the MCP server in each client, and the Claude Code plugin (`.claude-plugin/marketplace.json`, `plugins/ot-gateway/`) is the server plus a skill that only points at the server's guide. None of them holds steps of its own, so keep the steps in the skill, keep it agent-neutral, and update it when config or commands change. `AGENTS.md` sends agents here, or to the guide.
 
 ## Health and budget
 
