@@ -333,8 +333,9 @@ const formatRows = (rows: ReadonlyArray<CheckRow>) => {
 
 /**
  * What `check` prints, the way `doctor` does: a line for the gateway, its broker, buffer, history, status page and
- * devices, a mark in front (`!` for what start-up would warn about), then the verdict. `brief` (a terminal) sums
- * more than 10 devices up by protocol; otherwise each device has a line. `next` ends it with the command to run.
+ * devices, a mark in front (`!` for what start-up would warn about), then the verdict. `brief` (a terminal) counts
+ * the devices, by protocol when there are several, however few; otherwise each device has a line. `next` ends it
+ * with the command to run.
  */
 export const describeConfig = (
   config: GatewayConfig,
@@ -532,8 +533,8 @@ const run = Command.make(
 
 /**
  * What to run after a valid `check --json`: init's next steps for the config's folder (the broker, the points,
- * starting it, the status page), without the check itself. Only in the JSON: the text stays what it was, as
- * install.sh and the image validate a staged config with it.
+ * starting it, the status page), without the check itself. Only in the JSON: the text ends with `Config ok`, which
+ * the image's smoke test looks for.
  */
 const checkNext = Effect.fn("checkNext")(function* (path: string, config: GatewayConfig) {
   const fs = yield* FileSystem.FileSystem
@@ -568,8 +569,9 @@ const check = Command.make("check", { config: configPath, all: allFlag, json: js
     const decoded = yield* loadConfig(config).pipe(
       // A terminal gets the mistakes the way doctor prints a finding; a pipe and --json the error as before.
       Effect.catchTag("ConfigFileError", (error) =>
-        !json && process.stdout.isTTY && error.code === "invalid-config" && error.issues !== undefined
-          ? Console.log(describeMistakes(error.path, error.issues)).pipe(
+        // A person at a terminal gets the mistakes grouped, on stderr as every failure; a pipe and --json the error.
+        !json && process.stderr.isTTY && error.code === "invalid-config" && error.issues !== undefined
+          ? Console.error(describeMistakes(error.path, error.issues)).pipe(
               Effect.andThen(Effect.sync(() => (process.exitCode = 1))),
               Effect.as(undefined)
             )
@@ -1900,7 +1902,7 @@ const status = Command.make(
     )
 ).pipe(
   Command.withDescription(
-    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one (in a terminal, more than 10 devices are counted and only the ones not ok listed; --all lists each). Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
+    "The running gateway's status: its name first, its broker, buffer and one line per device, with what to check first for a failing one (in a terminal the devices are counted and only the ones not ok listed; --all lists each). Exits with 1 when a device is failing or the broker is not connected, or when another gateway than the config's answers; an active alarm only with --fail-on-alarm"
   ),
   Command.withExamples([
     { command: "ot-gateway status", description: "The gateway of ot-gateway.json in this folder" },
@@ -2277,7 +2279,7 @@ const readCommand = Command.make(
               ...(published === undefined ? {} : { published })
             })
           } else {
-            // A terminal shows every value of a few points, or of the ones named; of many, how many and what failed.
+            // A terminal shows how many were read and what failed, or every value of the ones named.
             const brief = process.stdout.isTTY && !all && !chose
             yield* printResult(brief ? formatReadSummary(report) : formatReadReport(report))
             if (published !== undefined && failure === undefined) {

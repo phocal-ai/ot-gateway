@@ -103,7 +103,7 @@ export const failingDeviceLines = (
 }
 
 /**
- * The topics a terminal names when there are many: the ones whose messages did not all reach the broker, then the
+ * The topics a terminal names: the ones whose messages did not all reach the broker, then the
  * busiest, the first few of each; `messages <device>` or `--all` list every topic, --json too.
  */
 export const briefMessages = (messages: ReadonlyArray<MessageStatus>) => {

@@ -263,7 +263,7 @@ describe("read with many points", () => {
       "  ahu-099/t  exception 2",
       "  ahu-099/h  exception 2",
       "",
-      "The values: add --all for every one, or a device's id for its own"
+      "--all shows every value, read <device> one device's"
     ])
   })
 

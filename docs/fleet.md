@@ -39,7 +39,7 @@ ot-gateway gateways points site-1/building-b/main --broker mqtts://broker.exampl
   site-2/plant/main       offline     connection-lost
 ```
 
-`gateways status` gives one of them device by device, with its machine, and exits with 1 when it is offline or a device fails:
+`gateways status` gives one of them with its machine, and exits with 1 when it is offline or a device fails. With `--all` it goes device by device:
 
 ```text
 site-1/building-b/main  online      2 devices: 1 ok, 1 failing, up since 08:12:44, heartbeat 9 s ago
@@ -49,7 +49,7 @@ site-1/building-b/main  online      2 devices: 1 ok, 1 failing, up since 08:12:4
   heat-pump     failing since 10:41:07 (timeout), last read 12 min ago
 ```
 
-`gateways points` lists what it publishes:
+`gateways points --all` lists what it publishes:
 
 ```text
 site-1/building-b/main: 3 points on 2 devices

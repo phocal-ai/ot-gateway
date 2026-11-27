@@ -391,7 +391,7 @@ For scripts, `GET /api/status`, `GET /api/messages`, `GET /api/points`, `GET /ap
 
 The CLI reads gateways of the previous minor release, so it can be updated before the gateway: against a v0.12 gateway `status`, `history` and `messages` leave out what it does not keep (its events, what reached the broker) and say so, and `events` and `messages --since` say `this gateway runs v0.12.0, the CLI is v0.13.0` with the two ways out: upgrade the gateway, or run the CLI at the gateway's version (`npx ot-gateway@0.12.0`).
 
-`ot-gateway status` prints one line for the gateway, its broker and buffer, and one per device. A device says how often it is read (`every 5 s`); a failing one says since when and why, and below it the first thing to check for that failure (the status page's device panel has the rest); the broker says since when it is connected or away, with the last error and the failed connects since start:
+`ot-gateway status` prints one line for the gateway, its broker and buffer, and the devices counted. In a terminal it names only the devices that are not ok; `--all` (and a pipe) gives one line per device. A device says how often it is read (`every 5 s`); a failing one says since when and why, and below it the first thing to check for that failure (the status page's device panel has the rest); the broker says since when it is connected or away, with the last error and the failed connects since start. With `--all`:
 
 ```
 s/b gateway main, up 2 h (since 10:19:30)
