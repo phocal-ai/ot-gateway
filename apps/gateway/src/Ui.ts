@@ -75,10 +75,25 @@ export const makeUi = (colors: boolean, width = 80, live = false) => {
         .split("\n")
         .map((line) => (line === "" ? "" : `  ${line}`))
         .join("\n"),
-    /** Labels and values in two columns, the labels dim: what to run next. */
-    rows: (pairs: ReadonlyArray<readonly [string, string]>) => {
-      const labelWidth = Math.max(0, ...pairs.map(([label]) => label.length))
-      return pairs.map(([label, value]) => `  ${dim(label.padEnd(labelWidth))}  ${value}`).join("\n")
+    /**
+     * Labels and values in two columns, the labels dim: what to run next. A row's hint follows its value, dim, or goes
+     * on the line under it when the two do not fit the width, so no line wraps onto the labels.
+     */
+    rows: (rows: ReadonlyArray<readonly [label: string, value: string, hint?: string]>) => {
+      const labelWidth = Math.max(0, ...rows.map(([label]) => label.length))
+      const column = " ".repeat(labelWidth + 4)
+      return rows
+        .map(([label, value, hint]) => {
+          const first = `  ${dim(label.padEnd(labelWidth))}  ${value}`
+          if (hint === undefined || hint === "") return first
+          const together = `${first}  ${hint}`
+          if (plain(together).length <= width) return `${first}  ${dim(hint)}`
+          return [
+            first,
+            ...wrap(hint, Math.max(20, width - column.length)).map((part) => `${column}${dim(part)}`)
+          ].join("\n")
+        })
+        .join("\n")
     }
   }
 }

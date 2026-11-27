@@ -21,6 +21,15 @@ describe("one column", () => {
     ).toBe("  Next          a\n  All commands  b")
   })
 
+  it("puts a row's hint after its value, or under it when the two do not fit", () => {
+    const rows = [["Start it", "ot-gateway run", "or in Docker: ot-gateway up"]] as const
+    expect(makeUi(false, 80).rows(rows)).toBe("  Start it  ot-gateway run  or in Docker: ot-gateway up")
+    expect(makeUi(false, 40).rows(rows).split("\n")).toEqual([
+      "  Start it  ot-gateway run",
+      "            or in Docker: ot-gateway up"
+    ])
+  })
+
   it("colors only on a terminal without NO_COLOR, and measures text without its colors", () => {
     expect(colorsWanted(true, {})).toBe(true)
     expect(colorsWanted(true, { NO_COLOR: "1" })).toBe(false)

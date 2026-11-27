@@ -899,14 +899,10 @@ export const initSummary = (
     /** Said when the gateway is not started now. */
     later:
       config.devices.length === 0
-        ? [
-            ui.rows([
-              ["Next", `${ui.command(`${cli} discover${argument}`)}  ${ui.dim("find BACnet/IP or Modbus TCP devices")}`]
-            ])
-          ]
+        ? [ui.rows([["Next", ui.command(`${cli} discover${argument}`), "find BACnet/IP or Modbus TCP devices"]])]
         : [
             ui.rows([
-              ["Start it", `${ui.command(run)}${compose === undefined ? "" : ui.dim(`  or in Docker: ${compose}`)}`],
+              ["Start it", ui.command(run), compose === undefined ? "" : `or in Docker: ${compose}`],
               ["Read once", ui.command(`${cli} read${argument}`)],
               ["Status page", ui.command(url)],
               ["All commands", ui.command(`${cli} --help`)]
