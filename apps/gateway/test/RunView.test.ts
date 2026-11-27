@@ -42,7 +42,7 @@ describe("run in a terminal", () => {
     )
     expect(lines).toEqual([
       "✔ Broker mqtt://localhost:1883 connected",
-      "✔ room: 3 points read",
+      "✔ room: reading 3 points",
       "✖ meter: could not connect: connection refused",
       "",
       "  Status page  http://127.0.0.1:8080\n  Topics       hall/main/<device>/<point>\n  Stop         Ctrl-C  the changes that matter show up below"
@@ -74,7 +74,7 @@ describe("run in a terminal", () => {
     expect(still).toEqual([])
     expect([...waiting]).toEqual(["room"])
     const answered = answeredLines(plainUi, waiting, { broker, devices: [{ id: "room", status: "ok", pointCount: 3 }] })
-    expect(answered).toEqual(["✔ room: 3 points read"])
+    expect(answered).toEqual(["✔ room: reading 3 points"])
     expect(waiting.size).toBe(0)
   })
 
