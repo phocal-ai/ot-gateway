@@ -33,16 +33,16 @@ ot-gateway gateways points site-1/building-b/main --broker mqtts://broker.exampl
 `gateways list` prints one line per gateway:
 
 ```text
-3 gateway(s) on mqtts://broker.example:8883
-  site-1/building-a/main  online      3 device(s): 3 ok, up since 08:12:40, heartbeat 21 s ago
-  site-1/building-b/main  online      2 device(s): 1 ok, 1 failing, up since 08:12:44, heartbeat 9 s ago
+3 gateways on mqtts://broker.example:8883
+  site-1/building-a/main  online      3 devices: 3 ok, up since 08:12:40, heartbeat 21 s ago
+  site-1/building-b/main  online      2 devices: 1 ok, 1 failing, up since 08:12:44, heartbeat 9 s ago
   site-2/plant/main       offline     connection-lost
 ```
 
 `gateways status` gives one of them device by device, with its machine, and exits with 1 when it is offline or a device fails:
 
 ```text
-site-1/building-b/main  online      2 device(s): 1 ok, 1 failing, up since 08:12:44, heartbeat 9 s ago
+site-1/building-b/main  online      2 devices: 1 ok, 1 failing, up since 08:12:44, heartbeat 9 s ago
   MQTT contract 1.0
   host: memory 139 MB, event-loop lag 5 ms, disk free 6012 MB, 52 °C
   energy-meter  ok, last read 4 s ago
@@ -52,11 +52,13 @@ site-1/building-b/main  online      2 device(s): 1 ok, 1 failing, up since 08:12
 `gateways points` lists what it publishes:
 
 ```text
-site-1/building-b/main: 3 point(s)
+site-1/building-b/main: 3 points on 2 devices
   energy-meter/active-power  Active power  [unit:KiloW]
   heat-pump/flow-temp        Flow temperature  [unit:DEG_C]
   heat-pump/setpoint         Room setpoint  [unit:DEG_C]  writable
 ```
+
+With more than 10 devices or 20 points, a terminal lists only the failing devices and the writable points, the first few, and `--all` lists every one; a pipe and `--json` always do.
 
 `offline` comes with its reason: `shutdown` after a clean stop, or `connection-lost` when the broker sent the gateway's last will because the gateway, its machine or its network went away. Add `--json` to any of them for the same in JSON ([what each field is](operations.md#every-gateway-on-a-broker)).
 

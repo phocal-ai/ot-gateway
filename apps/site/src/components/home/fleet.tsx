@@ -22,8 +22,8 @@ const Window = ({ title, children }: { readonly title: string; readonly children
 )
 
 const lines: ReadonlyArray<readonly [string, "good" | "warn" | "bad", string]> = [
-  ["site-1/building-a/main", "good", "online      3 device(s): 3 ok"],
-  ["site-1/building-b/main", "warn", "online      2 device(s): 1 ok, 1 failing"],
+  ["site-1/building-a/main", "good", "online      3 devices: 3 ok"],
+  ["site-1/building-b/main", "warn", "online      2 devices: 1 ok, 1 failing"],
   ["site-2/plant/main", "bad", "offline     connection-lost"]
 ]
 
@@ -41,7 +41,7 @@ export const Fleet = () => (
       <p>
         <span className="text-[var(--series-1)]">$</span> ot-gateway gateways list --broker mqtts://broker.example:8883
       </p>
-      <p className="text-fd-muted-foreground mt-2">3 gateway(s) on mqtts://broker.example:8883</p>
+      <p className="text-fd-muted-foreground mt-2">3 gateways on mqtts://broker.example:8883</p>
       <pre className="whitespace-pre">
         {lines.map(([name, state, rest]) => (
           <span className="block" key={name}>
