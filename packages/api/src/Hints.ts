@@ -33,8 +33,6 @@ const bacnetSubnets =
 const bacnetRouted =
   "Behind a BACnet router (an MS/TP trunk, another network number): is the router up, and does it route the device's network number?"
 const bacnetFirewall = "Is a firewall or a VLAN between the gateway and the device blocking UDP 47808?"
-const macLocalNetwork =
-  "Gateway on a Mac? macOS Local Network privacy refuses LAN traffic from a terminal app it has not allowed (System Settings > Privacy & Security > Local Network), and from tmux or screen started before; ping still works."
 
 /** How the gateway says it cannot open its own BACnet/IP port (`openBacnet`), as `gatewaySideFailure` reads it. */
 export const bacnetPortFailure = (port: number, reason: string) =>
@@ -100,8 +98,7 @@ export const hintRules: ReadonlyArray<Rule> = [
         "Is the device switched on and its network cable plugged in (link light)?",
         bacnetPort,
         bacnetSubnets,
-        bacnetFirewall,
-        macLocalNetwork
+        bacnetFirewall
       ]
     }
   },
@@ -136,8 +133,7 @@ export const hintRules: ReadonlyArray<Rule> = [
       checks: [
         "Is the device switched on and its network cable plugged in (link light)?",
         "Is the address in the config right, and is it in a network the gateway can reach (subnet, route)?",
-        firewall,
-        macLocalNetwork
+        firewall
       ]
     }
   },

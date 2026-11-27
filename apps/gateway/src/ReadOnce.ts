@@ -303,11 +303,11 @@ const readDevice = (
       })
     )
     const finished = yield* monotonicMillis
+    // The Mac's own refusal first: another note (a Modbus device's clients) would send the reader the wrong way.
     const note =
-      outcome.note ??
       (outcome.read._tag === "unreachable" && network === undefined
         ? macLocalNetworkNote(process.platform, outcome.read.error.message)
-        : undefined)
+        : undefined) ?? outcome.note
     const points =
       outcome.read._tag === "read" ? outcome.read.points.map((test) => pointRead(config, device, test)) : []
     const result: DeviceRead = {
@@ -330,7 +330,7 @@ const readDevice = (
  * exempt, so the network looks fine.
  */
 export const macLocalNetworkNote = (platform: string, message: string | undefined) =>
-  platform === "darwin" && message !== undefined && /unreachable|no route/i.test(message)
+  platform === "darwin" && message !== undefined && /\bunreachable\b/i.test(message)
     ? "On macOS this is often Local Network privacy, not the device: allow your terminal app under System Settings > Privacy & Security > Local Network. Inside tmux or screen, restart its server from that app (tmux kill-server), or run the command outside it."
     : undefined
 
