@@ -16,6 +16,7 @@ import { Effect, Result } from "effect"
 import { toCsv } from "./Csv.ts"
 import { slugify } from "./Slug.ts"
 import { PointsListError, readDelimited } from "./PointsList.ts"
+import { plural } from "./Words.ts"
 
 /** A header field as compared: letters and digits only, lower case (`# device obj.-instance` → `deviceobjinstance`). */
 const headerKey = (field: string) => field.toLowerCase().replace(/[^a-z0-9]/g, "")
@@ -169,5 +170,5 @@ export const describeTranslation = (path: string, translation: EdeTranslation) =
   const skipped = Object.entries(translation.skipped)
     .map(([type, count]) => `${count} ${type}`)
     .join(", ")
-  return `${path}: an EDE file, ${translation.points} point(s) of ${translation.devices} device(s)${skipped === "" ? "" : `; skipped what is not a point: ${skipped}`}`
+  return `${path}: an EDE file, ${plural(translation.points, "point")} of ${plural(translation.devices, "device")}${skipped === "" ? "" : `; skipped what is not a point: ${skipped}`}`
 }

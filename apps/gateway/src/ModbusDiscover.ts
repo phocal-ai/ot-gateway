@@ -33,6 +33,7 @@ import { isEde } from "./Ede.ts"
 import { shellArgument } from "./Output.ts"
 import { appendToPointsList } from "./PointsListAppend.ts"
 import { parseEndpoint } from "./Probe.ts"
+import { plural } from "./Words.ts"
 
 /** Why a Modbus scan did not run or found nothing: `code` for scripts, `hint` for what to do next. */
 export class ModbusDiscoverError extends Schema.TaggedError<ModbusDiscoverError>()("ModbusDiscoverError", {
@@ -570,7 +571,7 @@ export const scanNext = (report: ModbusScanReport, options: Pick<PointsListOptio
 export const formatScan = (report: ModbusScanReport, options: Pick<PointsListOptions, "command"> = {}) => {
   const units = foundUnits(report)
   const lines: Array<string> = [
-    `${units.length} Modbus unit(s) found on ${report.scanned} address(es)${units.length > 0 ? ":" : ""}`
+    `${plural(units.length, "Modbus unit")} found on ${plural(report.scanned, "address", "addresses")}${units.length > 0 ? ":" : ""}`
   ]
   for (const host of report.hosts) {
     const endpoint = endpointText(host)
@@ -637,8 +638,8 @@ export const nothingFound = (report: ModbusScanReport, options: Pick<PointsListO
     code: "none-found",
     message:
       listening === 0
-        ? `no Modbus device found: nothing took a connection on ${report.port === undefined ? "the ports asked" : `port ${report.port}`} at the ${report.scanned} address(es) of ${report.range}`
-        : `no Modbus unit answered on ${report.range}: ${listening} address(es) took a connection, none answered as a unit`,
+        ? `no Modbus device found: nothing took a connection on ${report.port === undefined ? "the ports asked" : `port ${report.port}`} at the ${plural(report.scanned, "address", "addresses")} of ${report.range}`
+        : `no Modbus unit answered on ${report.range}: ${plural(listening, "address", "addresses")} took a connection, none answered as a unit`,
     hint:
       next ??
       report.hosts.map((host) => hostHint(host, report)).find((hint) => hint !== undefined) ??
@@ -684,7 +685,7 @@ export const scanToPointsList = Effect.fn("scanToPointsList")(function* (
   const unnamed = units.filter((unit) => unit.table === undefined).length
   const fill =
     unnamed > 0
-      ? `fill in the register, table and type of the ${unnamed} row(s) without one, from the datasheet`
+      ? `fill in the register, table and type of the ${plural(unnamed, "row")} without one, from the datasheet`
       : "replace each placeholder point with the datasheet's registers"
   if (existing === undefined) {
     yield* writeAtomically(path, modbusDraftPointsList(units))
@@ -697,7 +698,7 @@ export const scanToPointsList = Effect.fn("scanToPointsList")(function* (
       appended: false,
       next
     }
-    return { written, message: `wrote ${rows.length} unit(s) to ${path}. ${capitalize(fill)}, then: ${next}` }
+    return { written, message: `wrote ${plural(rows.length, "unit")} to ${path}. ${capitalize(fill)}, then: ${next}` }
   }
   const merged = appendToPointsList(existing, modbusDraftColumns, rows)
   if (Result.isFailure(merged)) {
@@ -717,7 +718,7 @@ export const scanToPointsList = Effect.fn("scanToPointsList")(function* (
   return {
     written,
     message:
-      `added ${added} unit(s), skipped ${skipped} already in the list, to ${path}` +
+      `added ${plural(added, "unit")}, skipped ${skipped} already in the list, to ${path}` +
       (added > 0 ? `. ${capitalize(fill)}, then: ${next}` : "; it was left as it was")
   }
 })

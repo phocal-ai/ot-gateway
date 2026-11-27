@@ -27,6 +27,7 @@ import { loadConfig } from "./LoadConfig.ts"
 import { shellArgument } from "./Output.ts"
 import { pointCatalog } from "./PointCatalog.ts"
 import { askGateway, fetchGatewayStatus, type GatewayAnswerUnreadable, GatewayUnreachable } from "./StatusReport.ts"
+import { count, firstOf, LISTED, NAMED, plural } from "./Words.ts"
 
 /** One side of the comparison: a gateway's identity, its points, and its settings by key. */
 export interface DiffSide {
@@ -324,36 +325,112 @@ export const clearCommands = (diff: ConfigDiff, context: ClearContext): Readonly
   return diff.stale.map((topic) => clearCommand(context.command, topic, config))
 }
 
+/** Up to this many topic lines, the diff lists each; beyond, a terminal sums them up per device. */
+const TOPICS_LISTED = 20
+
+/** The device's part of a topic: `site/building/device` of `site/building/device/point`. */
+const deviceOf = (topic: string) => topic.slice(0, Math.max(0, topic.lastIndexOf("/")))
+
+/**
+ * Lines for one kind of change: one per topic, or with `grouped` one per device, `+ site/building/ahu-1/…  15 new
+ * topics`, a device's single topic still on its own, the first devices and how many more.
+ */
+const changeLines = <A>(
+  items: ReadonlyArray<A>,
+  grouped: boolean,
+  groupOf: (item: A) => string,
+  one: (item: A) => string,
+  many: (group: string, items: ReadonlyArray<A>) => string
+) => {
+  if (!grouped) return items.map(one)
+  const groups = new Map<string, Array<A>>()
+  for (const item of items) {
+    const group = groups.get(groupOf(item)) ?? []
+    group.push(item)
+    groups.set(groupOf(item), group)
+  }
+  const { shown, more } = firstOf([...groups], LISTED)
+  return [
+    ...shown.map(([name, group]) => {
+      const [only] = group
+      return group.length === 1 && only !== undefined ? one(only) : many(name, group)
+    }),
+    ...(more > 0 ? [`  … and ${plural(more, "more device")}`] : [])
+  ]
+}
+
 /**
  * The diff for people: one line per topic that changes, marked `+` (new), `-` (silent), `→` (moved), `!` (takes
  * commands now), `~` (its `$meta` changes), then the settings, and last what stays on the broker with the
- * command that clears it. `title` says what was compared with what.
+ * command that clears it. `title` says what was compared with what. `brief` (a terminal) sums many topics up per
+ * device, the first few devices; a point that takes commands now is always named. --json lists every topic.
  */
-export const formatDiff = (diff: ConfigDiff, title: string, context: ClearContext): string => {
+export const formatDiff = (
+  diff: ConfigDiff,
+  title: string,
+  context: ClearContext,
+  options: { readonly brief?: boolean } = {}
+): string => {
   const lines = [title]
   if (!diff.changed)
     return [...lines, "✓ nothing changes on the broker: the same topics, writable points and settings"].join("\n")
-  for (const each of diff.added) lines.push(`  + ${each.topic}  new topic`)
-  for (const each of diff.removed) {
-    lines.push(
-      `  - ${each.topic}  goes silent${each.metaCleared ? "; the gateway clears its $meta" : "; its $meta stays"}`
+  const topicLines = diff.added.length + diff.removed.length + diff.moved.length + diff.meta.length + diff.values.length
+  const grouped = (options.brief ?? false) && topicLines > TOPICS_LISTED
+  lines.push(
+    ...changeLines(
+      diff.added,
+      grouped,
+      (each) => deviceOf(each.topic),
+      (each) => `  + ${each.topic}  new topic`,
+      (device, group) => `  + ${device}/…  ${plural(group.length, "new topic")}`
+    ),
+    ...changeLines(
+      diff.removed,
+      grouped,
+      (each) => deviceOf(each.topic),
+      (each) =>
+        `  - ${each.topic}  goes silent${each.metaCleared ? "; the gateway clears its $meta" : "; its $meta stays"}`,
+      (device, group) =>
+        `  - ${device}/…  ${plural(group.length, "topic")} go silent${group.every((each) => each.metaCleared) ? "; the gateway clears their $meta" : "; their $meta stays"}`
+    ),
+    ...changeLines(
+      diff.moved,
+      grouped,
+      (each) => `${deviceOf(each.from)} → ${deviceOf(each.to)}`,
+      (each) => `  → ${each.from} → ${each.to}  ${moveText[each.reason]}`,
+      (devices, group) => `  → ${devices}  ${plural(group.length, "topic")} moved`
     )
-  }
-  for (const each of diff.moved) lines.push(`  → ${each.from} → ${each.to}  ${moveText[each.reason]}`)
+  )
   for (const each of diff.writable) {
     lines.push(
       `  ! ${each.topic}  ${each.change}${each.change === "no longer writable" ? "" : limitsText(each.limits)}`
     )
   }
-  for (const each of diff.meta) lines.push(`  ~ ${each.topic}  $meta: ${each.fields.join(", ")}`)
-  for (const each of diff.values) lines.push(`  ~ ${each.topic}  values: ${each.fields.join(", ")} (same topic)`)
+  lines.push(
+    ...changeLines(
+      diff.meta,
+      grouped,
+      (each) => deviceOf(each.topic),
+      (each) => `  ~ ${each.topic}  $meta: ${each.fields.join(", ")}`,
+      (device, group) =>
+        `  ~ ${device}/…  $meta of ${plural(group.length, "topic")}: ${[...new Set(group.flatMap((each) => each.fields))].join(", ")}`
+    ),
+    ...changeLines(
+      diff.values,
+      grouped,
+      (each) => deviceOf(each.topic),
+      (each) => `  ~ ${each.topic}  values: ${each.fields.join(", ")} (same topic)`,
+      (device, group) =>
+        `  ~ ${device}/…  values of ${plural(group.length, "topic")}: ${[...new Set(group.flatMap((each) => each.fields))].join(", ")} (same topics)`
+    )
+  )
   if (diff.health !== undefined) lines.push(`  → ${diff.health.from} → ${diff.health.to}  health`)
   for (const each of diff.settings) lines.push(`  ~ ${each}`)
   const counts = [
-    diff.added.length > 0 ? `${diff.added.length} new` : undefined,
-    diff.removed.length > 0 ? `${diff.removed.length} silent` : undefined,
-    diff.moved.length > 0 ? `${diff.moved.length} moved` : undefined,
-    diff.writable.length > 0 ? `${diff.writable.length} writable change(s)` : undefined
+    diff.added.length > 0 ? `${count(diff.added.length)} new` : undefined,
+    diff.removed.length > 0 ? `${count(diff.removed.length)} silent` : undefined,
+    diff.moved.length > 0 ? `${count(diff.moved.length)} moved` : undefined,
+    diff.writable.length > 0 ? plural(diff.writable.length, "writable change") : undefined
   ].filter((each) => each !== undefined)
   // Only a topic that moves or goes silent asks something of the consumers; new ones they pick up as they like.
   const follow = diff.moved.length + diff.removed.length > 0 ? "; consumers of moved or silent topics must follow" : ""
@@ -361,14 +438,20 @@ export const formatDiff = (diff: ConfigDiff, title: string, context: ClearContex
   if (diff.stale.length > 0) {
     const where = diff.brokerChanged ? "the old broker" : "the broker"
     const commands = clearCommands(diff, context)
+    const stays = diff.stale.length === 1 ? "stays" : "stay"
     if (commands.length === 0) {
       lines.push(
-        `✗ ${diff.stale.length} retained message(s) stay on ${where}; clear each there with ${context.command} publish <topic> --retain --config <the config from before> (--json lists them)`
+        `✗ ${plural(diff.stale.length, "retained message")} ${stays} on ${where}; clear each there with ${context.command} publish <topic> --retain --config <the config from before> (--json lists them)`
       )
     } else {
-      lines.push(`✗ ${diff.stale.length} retained message(s) stay on ${where} after the change; clear each with:`)
-      for (const each of commands.slice(0, 10)) lines.push(`  ${each}`)
-      if (commands.length > 10) lines.push(`  … and ${commands.length - 10} more (--json lists them all)`)
+      lines.push(
+        `✗ ${plural(diff.stale.length, "retained message")} ${stays} on ${where} after the change; clear each with:`
+      )
+      const listed = grouped ? NAMED : 10
+      for (const each of commands.slice(0, listed)) lines.push(`  ${each}`)
+      if (commands.length > listed) {
+        lines.push(`  … and ${count(commands.length - listed)} more (--json lists them all)`)
+      }
     }
   }
   return lines.join("\n")

@@ -153,7 +153,7 @@ describe("readOnce against the BACnet room simulator", () => {
       const ghost = report.devices[0]?.points.find((point) => point.id === "ghost")
       expect(ghost).toMatchObject({ ok: false, error: { code: "protocol", message: "object: unknown-object" } })
       expect(ghost?.value).toBeUndefined()
-      expect(incompleteMessage(report)).toBe("1 of 4 point(s) not read (demo-room)")
+      expect(incompleteMessage(report)).toBe("1 of 4 points not read (demo-room)")
     }).pipe(Effect.scoped)
   )
 
@@ -282,7 +282,7 @@ describe("formatReadReport", () => {
       "  10.0.0.5:502, unit 1",
       "  check: Is it on?",
       "",
-      "2 of 4 point(s) read, 2 failed, in 412 ms"
+      "2 of 4 points read, 2 failed, in 412 ms"
     ])
   })
 
@@ -294,7 +294,7 @@ describe("formatReadReport", () => {
       summary: { devices: 1, points: 2, read: 2, failed: 0 },
       devices: report.devices.slice(0, 1).map((device) => ({ ...device, ok: true, points: device.points.slice(0, 2) }))
     }
-    expect(formatReadReport(fine).split("\n").at(-1)).toBe("2 point(s) of 1 device(s) read in 1.3 s")
+    expect(formatReadReport(fine).split("\n").at(-1)).toBe("2 points of 1 device read in 1.3 s")
   })
 })
 

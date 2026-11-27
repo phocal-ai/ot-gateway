@@ -26,6 +26,7 @@ import type { PointSelection } from "./HistoryReport.ts"
 import { printJsonWithLocalTimes } from "./JsonTimes.ts"
 import { localTime, printResult } from "./Output.ts"
 import { ago, askGateway, fetchGatewayStatus, requireEvents } from "./StatusReport.ts"
+import { count, LISTED, NAMED, named, nounFor, plural } from "./Words.ts"
 
 /** Payloads are cut here on the terminal; `--json` has them as the gateway keeps them (2,000 characters). */
 const MAX_PAYLOAD = 80
@@ -44,8 +45,8 @@ export const selectMessages = (
     if (selections.length === 0) return true
     const rest = message.topic.slice(prefix.length)
     return selections.some((selection) => {
-      const named = selection.point === undefined ? selection.device : `${selection.device}/${selection.point}`
-      return rest === named || rest.startsWith(`${named}/`)
+      const chosen = selection.point === undefined ? selection.device : `${selection.device}/${selection.point}`
+      return rest === chosen || rest.startsWith(`${chosen}/`)
     })
   })
 
@@ -70,7 +71,7 @@ const shortfallSuffix = (
 
 /** `", 2 reached the broker"`, or nothing from a gateway before v0.13, which does not count it. */
 const reachedText = (delivered: number | undefined) =>
-  delivered === undefined ? "" : `, ${delivered} reached the broker`
+  delivered === undefined ? "" : `, ${count(delivered)} reached the broker`
 
 /** Under the totals of a gateway before v0.13: why they do not say what reached the broker. */
 /**
@@ -83,17 +84,42 @@ export const failingDeviceLines = (
     readonly devices: ReadonlyArray<Pick<GatewayStatus["devices"][number], "id" | "status" | "failingSince">>
   },
   selections: ReadonlyArray<PointSelection>
-) =>
-  status.devices
-    .filter(
-      (device) =>
-        device.status === "failing" &&
-        (selections.length === 0 || selections.some((selection) => selection.device === device.id))
-    )
-    .map(
-      (device) =>
-        `  (${device.id} sends no values: failing${device.failingSince === undefined ? "" : ` since ${localTime(device.failingSince, status.now)}`}; ot-gateway status says why)`
-    )
+) => {
+  const failing = status.devices.filter(
+    (device) =>
+      device.status === "failing" &&
+      (selections.length === 0 || selections.some((selection) => selection.device === device.id))
+  )
+  // Many failing devices are one line: which, the first few, rather than a line for each.
+  if (failing.length > NAMED) {
+    return [
+      `  (${plural(failing.length, "failing device")} send no values: ${named(failing.map((device) => device.id))}; ot-gateway status says why)`
+    ]
+  }
+  return failing.map(
+    (device) =>
+      `  (${device.id} sends no values: failing${device.failingSince === undefined ? "" : ` since ${localTime(device.failingSince, status.now)}`}; ot-gateway status says why)`
+  )
+}
+
+/** Up to this many topics, a terminal lists each; beyond, the totals and the topics that need a look. */
+const TOPICS_LISTED = 20
+
+/**
+ * The topics a terminal names when there are many: the ones whose messages did not all reach the broker, then the
+ * busiest, the first few of each; `messages <device>` or `--all` list every topic, --json too.
+ */
+export const briefMessages = (messages: ReadonlyArray<MessageStatus>) => {
+  const short = messages.filter((message) => {
+    const shortfall = messageShortfall(message)
+    return shortfall.waiting + shortfall.notSent + shortfall.lost > 0
+  })
+  const busiest = messages
+    .filter((message) => !short.includes(message))
+    .toSorted((a, b) => b.count - a.count)
+    .slice(0, NAMED)
+  return { shown: [...short.slice(0, LISTED), ...busiest], short: short.length }
+}
 
 export const NOT_COUNTED_LINE = `  (this gateway does not count what reached the broker: upgrade it to v${EVENTS_RELEASE.join(".")} or later for that)`
 
@@ -124,17 +150,17 @@ export const formatMessages = (
 }
 
 /**
- * The topics listed added up: `  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (2 waiting in
+ * The topics listed added up: `  total: 4 sent (3 values, 1 $meta, 0 health), 2 reached the broker (2 waiting in
  * the buffer)`, with command results and other topics named only when there are some.
  */
 export const formatTotals = (totals: MessageTotals, buffer?: BufferContext) => {
   const kinds = [
-    `${totals.values} value(s)`,
-    `${totals.meta} $meta`,
-    `${totals.health} health`,
-    ...(totals.other > 0 ? [`${totals.other} other`] : [])
+    plural(totals.values, "value"),
+    `${count(totals.meta)} $meta`,
+    `${count(totals.health)} health`,
+    ...(totals.other > 0 ? [`${count(totals.other)} other`] : [])
   ].join(", ")
-  return `  total: ${totals.all} sent (${kinds})${reachedText(totals.delivered)}${shortfallSuffix(totals, buffer)}`
+  return `  total: ${count(totals.all)} sent (${kinds})${reachedText(totals.delivered)}${shortfallSuffix(totals, buffer)}`
 }
 
 /**
@@ -162,6 +188,10 @@ export const messagesJson = (
 
 export interface MessagesOptions {
   readonly json?: boolean
+  /** A terminal without --all: of many topics, the totals and the ones that need a look. */
+  readonly brief?: boolean
+  /** How the CLI was run, for the commands it names. */
+  readonly cli?: string
   /** `--since` as typed (`10m`) and in ms, at most `MESSAGE_WINDOW_MINUTES`: the counts of that window only. */
   readonly since?: string | undefined
   readonly sinceMs?: number | undefined
@@ -194,6 +224,8 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
   const messages = selectMessages(answer.messages, prefix, selections)
   const totals = messageTotals(messages)
   const gateway = { site: status.site, building: status.building, id: status.id }
+  const brief = (options.brief ?? false) && selections.length === 0 && messages.length > TOPICS_LISTED
+  const shown = briefMessages(messages)
   if (options.json === true) {
     return yield* printJsonWithLocalTimes(messagesJson(gateway, status, { ...answer, messages }, modes))
   }
@@ -220,15 +252,26 @@ export const messagesReport = Effect.fn("messagesReport")(function* (
                 ? "  nothing published yet"
                 : "  nothing published on these topics yet: ot-gateway status lists the devices"
           ]
-        : [
-            ...formatMessages(messages, prefix, status.now, modes, status.buffer),
-            formatTotals(totals, status.buffer),
-            ...(totals.delivered === undefined ? [NOT_COUNTED_LINE] : [])
-          ]),
+        : brief
+          ? [
+              formatTotals(totals, status.buffer),
+              ...(shown.short > 0
+                ? [`  ${plural(shown.short, "topic")} with messages that did not reach the broker:`]
+                : [`  every message reached the broker; the busiest of ${plural(messages.length, "topic")}:`]),
+              ...formatMessages(shown.shown, prefix, status.now, modes, status.buffer),
+              `  ${options.cli ?? "ot-gateway"} messages <device> lists a device's topics, --all every topic`
+            ]
+          : [
+              ...formatMessages(messages, prefix, status.now, modes, status.buffer),
+              formatTotals(totals, status.buffer),
+              ...(totals.delivered === undefined ? [NOT_COUNTED_LINE] : [])
+            ]),
       ...failingDeviceLines(status, selections),
       ...(why === undefined ? [] : [why]),
       ...(answer.droppedTopics > 0
-        ? [`  (${answer.droppedTopics} more topic(s) not kept: the gateway keeps the latest message of 2000 topics)`]
+        ? [
+            `  (${count(answer.droppedTopics)} more ${nounFor(answer.droppedTopics, "topic")} not kept: the gateway keeps the latest message of 2000 topics)`
+          ]
         : [])
     ].join("\n")
   )

@@ -248,7 +248,7 @@ describe("events --follow", () => {
       expect(asked).toEqual([4, 4, 5, 5, 5, 1])
       expect((yield* TestConsole.logLines).map(String)).toEqual([
         `${localTime(at(12, 19, 32), now)}  meter  ok again after 40 s`,
-        `${localTime(at(12, 19, 40), now)}  gateway  started (v2, 1 device(s))`
+        `${localTime(at(12, 19, 40), now)}  gateway  started (v2, 1 device)`
       ])
       expect((yield* TestConsole.errorLines).map(String)).toEqual([
         "lost the gateway, asking again: no gateway status at u",
@@ -862,7 +862,7 @@ describe("against a running status page", () => {
         expect(report[2]).toMatch(/retained {2}publish: every read$/)
         // The topics listed, added up.
         expect(report[3]).toBe(
-          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (1 waiting for the broker; 1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect)"
+          "  total: 4 sent (3 values, 1 $meta, 0 health), 2 reached the broker (1 waiting for the broker; 1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect)"
         )
         expect(report.at(-1)).toBe("  (since the gateway started; --since 10m counts the last minutes, up to 60m back)")
         // The last minutes only, over the window endpoint: the same counts here, all sent within this minute.
@@ -874,7 +874,7 @@ describe("against a running status page", () => {
         expect(recent[0]).toMatch(/: messages per topic in the last 5m, since it started at /)
         expect(recent[1]).toMatch(/3 sent, 2 reached the broker/)
         expect(recent[3]).toBe(
-          "  total: 4 sent (3 value(s), 1 $meta, 0 health), 2 reached the broker (1 waiting for the broker; 1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect)"
+          "  total: 4 sent (3 values, 1 $meta, 0 health), 2 reached the broker (1 waiting for the broker; 1 not sent while the broker was away: retained, not buffered, the latest goes out on reconnect)"
         )
         expect(recent).toHaveLength(4)
         yield* messagesReport(target, [], { json: true, since: "5m", sinceMs: 300_000 })

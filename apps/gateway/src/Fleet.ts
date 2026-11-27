@@ -28,6 +28,7 @@ import { withoutControls } from "./Discover.ts"
 import { type ConfigFileError, loadConfig } from "./LoadConfig.ts"
 import { localTime, UsageMistake } from "./Output.ts"
 import { ago } from "./StatusReport.ts"
+import { count, firstOf, LISTED, named, plural } from "./Words.ts"
 
 /** Where `--broker` takes the password from, as the config's `mqtt.passwordEnv` would name it. */
 export const BROKER_PASSWORD_ENV = "OT_GATEWAY_BROKER_PASSWORD"
@@ -343,12 +344,14 @@ export const gatewayPoints = Effect.fn("gatewayPoints")(function* (
 // Text
 
 const deviceCounts = (gateway: FleetGateway) => {
-  const count = (status: DeviceHealthPayload["status"]) =>
+  const inState = (status: DeviceHealthPayload["status"]) =>
     gateway.devices.filter((device) => device.status === status).length
-  const parts = [`${count("ok")} ok`, `${count("failing")} failing`, `${count("starting")} starting`].filter(
-    (part) => !part.startsWith("0 ") || part.endsWith(" ok")
-  )
-  return `${gateway.devices.length} device(s): ${parts.join(", ")}`
+  const parts = [
+    `${count(inState("ok"))} ok`,
+    `${count(inState("failing"))} failing`,
+    `${count(inState("starting"))} starting`
+  ].filter((part) => !part.startsWith("0 ") || part.endsWith(" ok"))
+  return `${plural(gateway.devices.length, "device")}: ${parts.join(", ")}`
 }
 
 /** One gateway's line: name, status, and while online its devices, since when it runs and its last heartbeat. */
@@ -373,15 +376,27 @@ export const formatGatewayList = (
   }
   const width = Math.max(...report.gateways.map((gateway) => gateway.name.length))
   return [
-    `${report.gateways.length} gateway(s) on ${report.broker}`,
+    `${plural(report.gateways.length, "gateway")} on ${report.broker}`,
     ...report.gateways.map((gateway) => gatewayLine(gateway, now, width))
   ].join("\n")
 }
 
 const megabytes = (bytes: number) => `${Math.round(bytes / 1_048_576)} MB`
 
-export const formatGatewayStatus = (gateway: FleetGateway, now: number) => {
-  const width = Math.max(0, ...gateway.devices.map((device) => device.id.length))
+/** The options of the text for a person: `brief` (a terminal, no --all) lists only what needs a look. */
+export interface FleetTextOptions {
+  readonly brief?: boolean
+}
+
+/**
+ * One gateway: its line, its machine, then a line per device. `brief` with more than a few devices lists only the
+ * ones not ok, the first few; --all, a pipe and --json have every device.
+ */
+export const formatGatewayStatus = (gateway: FleetGateway, now: number, options: FleetTextOptions = {}) => {
+  const brief = (options.brief ?? false) && gateway.devices.length > LISTED
+  const needing = gateway.devices.filter((device) => device.status !== "ok")
+  const { shown, more } = brief ? firstOf(needing) : { shown: gateway.devices, more: 0 }
+  const width = Math.max(0, ...shown.map((device) => device.id.length))
   const host = gateway.host
   const hostLine =
     host === undefined
@@ -401,30 +416,45 @@ export const formatGatewayStatus = (gateway: FleetGateway, now: number) => {
     gatewayLine(gateway, now, gateway.name.length).trimStart(),
     ...(gateway.contract === undefined ? [] : [`  MQTT contract ${gateway.contract}`]),
     ...hostLine,
-    ...gateway.devices.map((device) => {
+    ...shown.map((device) => {
       const id = withoutControls(device.id).padEnd(width)
       const last = device.lastSuccess === undefined ? "" : `, last read ${ago(now - device.lastSuccess)} ago`
       if (device.status !== "failing") return `  ${id}  ${device.status}${last}`
       const since = device.failingSince === undefined ? "" : ` since ${localTime(device.failingSince, now)}`
       return `  ${id}  failing${since} (${device.reason ?? "no reason given"})${last}`
-    })
+    }),
+    ...(more > 0
+      ? [`  and ${count(more)} more ${needing.every((device) => device.status === "failing") ? "failing" : "not ok"}`]
+      : []),
+    ...(brief ? ["  --all lists every device"] : [])
   ].join("\n")
 }
 
-export const formatGatewayPoints = (report: {
-  readonly gateway: string
-  readonly status: FleetGateway["status"]
-  readonly points: ReadonlyArray<FleetPoint>
-}) => {
+/** Up to this many points, a terminal lists each; beyond, how many and the writable ones. */
+const POINTS_LISTED = 20
+
+export const formatGatewayPoints = (
+  report: {
+    readonly gateway: string
+    readonly status: FleetGateway["status"]
+    readonly points: ReadonlyArray<FleetPoint>
+  },
+  options: FleetTextOptions = {}
+) => {
   if (report.points.length === 0) {
     return report.status === "online"
       ? `${report.gateway}: the broker keeps no $meta of its points`
       : `${report.gateway}: no $meta names it. It is ${report.status}, so its devices are not known, and the $meta of a release before $meta named its gateway cannot be told apart.`
   }
-  const width = Math.max(...report.points.map((point) => `${point.device}/${point.point}`.length))
+  const devices = new Set(report.points.map((point) => point.device)).size
+  const writable = report.points.filter((point) => point.writable)
+  const brief = (options.brief ?? false) && report.points.length > POINTS_LISTED
+  // A terminal with many points: how many, and the writable ones, which take commands.
+  const { shown, more } = brief ? firstOf(writable, LISTED) : { shown: report.points, more: 0 }
+  const width = Math.max(0, ...shown.map((point) => `${point.device}/${point.point}`.length))
   return [
-    `${report.gateway}: ${report.points.length} point(s)`,
-    ...report.points.map((point) =>
+    `${report.gateway}: ${plural(report.points.length, "point")} on ${plural(devices, "device")}${brief ? `, ${count(writable.length)} writable${writable.length > 0 ? ":" : ""}` : ""}`,
+    ...shown.map((point) =>
       [
         `  ${withoutControls(`${point.device}/${point.point}`).padEnd(width)}`,
         withoutControls(point.name),
@@ -433,7 +463,9 @@ export const formatGatewayPoints = (report: {
       ]
         .filter((part) => part !== undefined)
         .join("  ")
-    )
+    ),
+    ...(more > 0 ? [`  and ${count(more)} more writable`] : []),
+    ...(brief ? ["  --all lists every point, --json each with its topic"] : [])
   ].join("\n")
 }
 
@@ -457,7 +489,7 @@ export const statusFailure = (gateway: FleetGateway) => {
   if (failing.length === 0) return undefined
   return new FleetError({
     code: "gateway-unhealthy",
-    message: `${gateway.name}: ${failing.length} device(s) failing: ${failing.join(", ")}`,
+    message: `${gateway.name}: ${plural(failing.length, "device")} failing: ${named(failing)}`,
     hint: "on the gateway's machine, ot-gateway status says what to check for each, and ot-gateway events since when"
   })
 }

@@ -179,7 +179,7 @@ describe("watch: which points sent a value", () => {
         ]
       })
     ).toBe(
-      "-- 1 of 4 point(s) sent a value in 10 s (20 message(s)); none from meter: energy; on change only, unchanged so far: meter: tripped; heat-pump: flow"
+      "-- 1 of 4 points sent a value in 10 s (20 messages); none from meter: energy; on change only, unchanged so far: meter: tripped; heat-pump: flow"
     )
   })
 })
@@ -209,7 +209,7 @@ describe("watch --until-values", () => {
       expect(yield* Fiber.join(watching)).toMatchObject({
         _tag: "WatchError",
         code: "values-missing",
-        message: "1 of 4 point(s) sent no value within 1 s",
+        message: "1 of 4 points sent no value within 1 s",
         missing: ["meter/energy"]
       })
       // Only points that send on change, and none did: nothing shows the gateway works.
@@ -320,7 +320,7 @@ describe("watch --check", () => {
     const record = messageRecord({ topic: "s/b/m/p", payload: '{"ts":1.5}', retain: false }, at, undefined, violation)
     expect(JSON.parse(record)).toMatchObject({ topic: "s/b/m/p", contract: violation, payload: { ts: 1.5 } })
     expect(formatContractSummary({ event: "contract", version: "1.0", checked: 3, off: 0 })).toBe(
-      "-- 3 message(s) checked against the MQTT contract 1.0: all on it"
+      "-- 3 messages checked against the MQTT contract 1.0: all on it"
     )
   })
 
@@ -335,7 +335,7 @@ describe("watch --check", () => {
       yield* publishOnce(config, "s/b/$gateway/main/check/1", "anything", retained)
       const error = yield* Effect.flip(watch(config, { seconds: 1, json: true, check: true }))
       expect(error).toMatchObject({ _tag: "WatchError", code: "off-contract" })
-      expect(error.message).toBe("1 of 2 message(s) under s/b were off the MQTT contract 1.0")
+      expect(error.message).toBe("1 of 2 messages under s/b were off the MQTT contract 1.0")
       const records = (yield* TestConsole.logLines)
         .map(String)
         .filter((line) => line.startsWith("{"))
@@ -360,8 +360,8 @@ describe("watch --check", () => {
         .map(String)
         .filter((line) => line.includes("s/b/") || line.startsWith("--"))
       expect(lines).toEqual([
-        "-- 0 message(s) checked against the MQTT contract 1.0: all on it",
-        "-- 1 message(s) checked against the MQTT contract 1.0: all on it"
+        "-- 0 messages checked against the MQTT contract 1.0: all on it",
+        "-- 1 message checked against the MQTT contract 1.0: all on it"
       ])
     }).pipe(Effect.scoped, Effect.provide(TestConsole.layer))
   )
@@ -373,7 +373,7 @@ describe("watch --check", () => {
       yield* publishOnce(config, "s/b/meter/power", '{"value":1,"ts":0.5}', { retain: true, qos: 1 })
       const error = yield* Effect.flip(watch(config, { seconds: 1, json: true, check: true, untilValues: true }))
       expect(error).toMatchObject({ code: "values-missing" })
-      expect(error.message).toMatch(/; and 1 of 1 message\(s\) under s\/b were off the MQTT contract 1\.0$/)
+      expect(error.message).toMatch(/; and 1 of 1 message under s\/b were off the MQTT contract 1\.0$/)
       const events = (yield* TestConsole.logLines)
         .map(String)
         .filter((line) => line.startsWith('{"event"'))

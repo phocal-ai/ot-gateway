@@ -35,6 +35,7 @@ import {
   scanModbus
 } from "./ModbusDiscover.ts"
 import { devicesFromPointsList, type PointsListDevice, PointsListIssue } from "./PointsList.ts"
+import { plural } from "./Words.ts"
 
 /** A simulated device with two points, to see values flow before any real device is connected. */
 export const simulatedDevice = {
@@ -312,7 +313,7 @@ const devicesFromList: Effect.Effect<
 > = Effect.gen(function* () {
   const path = yield* textInput({ message: "Points list (CSV, see docs/first-building.md)", placeholder: "points.csv" })
   return yield* devicesFromFile(path).pipe(
-    Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
+    Effect.tap((devices) => Console.error(`  ${plural(devices.length, "device")} from ${path}, none writable`)),
     Effect.catchTags({
       PointsListError: (error) => retry(error.message),
       ProfileError: (error) => retry(error.message),
@@ -328,7 +329,7 @@ const pointsFlagMessage = (path: string, message: string) =>
 /** The devices of the points list a flag named: a mistake ends init, there being nobody to ask again. */
 const devicesFromFlag = (path: string) =>
   devicesFromFile(path).pipe(
-    Effect.tap((devices) => Console.error(`  ${devices.length} device(s) from ${path}, none writable`)),
+    Effect.tap((devices) => Console.error(`  ${plural(devices.length, "device")} from ${path}, none writable`)),
     Effect.catchTags({
       PointsListError: (error) =>
         Effect.fail(
@@ -464,7 +465,7 @@ const devicesFromModbusScan = Effect.fn("devicesFromModbusScan")(function* (sugg
   const readable = units.filter((unit) => unit.table !== undefined)
   if (readable.length < units.length) {
     yield* Console.error(
-      `  ${units.length - readable.length} unit(s) left out, register 0 refused on both tables: draft them with ot-gateway discover modbus ${shellArgument(range)} --points-list modbus.csv and fill in their registers from the datasheet`
+      `  ${plural(units.length - readable.length, "unit")} left out, register 0 refused on both tables: draft them with ot-gateway discover modbus ${shellArgument(range)} --points-list modbus.csv and fill in their registers from the datasheet`
     )
   }
   if (readable.length === 0) return []
@@ -550,7 +551,7 @@ const devicesFrom = Effect.fn("devicesFrom")(function* (
     yield* Console.error(`  left out, no points to read: ${skipped.join(", ")} (add them by hand once you know why)`)
   }
   if (usable.length > 0) {
-    yield* Console.error(`  ${usable.length} device(s) drafted, none writable: review their points before run`)
+    yield* Console.error(`  ${plural(usable.length, "device")} drafted, none writable: review their points before run`)
   }
   return usable
 })

@@ -20,6 +20,7 @@ import { unknownColumns } from "./PointsSchema.ts"
 import { describeTranslation, edeToPointsList, isEde } from "./Ede.ts"
 import { resolveProfile } from "./Profile.ts"
 import { dirname } from "node:path"
+import { nounFor } from "./Words.ts"
 
 /** The devices of the points list at `path`, with the profiles it names (Profile.ts) loaded. */
 export const devicesFromFile = Effect.fn("devicesFromFile")(function* (
@@ -67,7 +68,9 @@ export const pointsListFromText = Effect.fn("pointsListFromText")(function* (tex
     notes:
       ignored.length === 0
         ? []
-        : [`${source}: ignored column(s) ${ignored.join(", ")} (ot-gateway points schema lists the known ones)`]
+        : [
+            `${source}: ignored ${nounFor(ignored.length, "column")} ${ignored.join(", ")} (ot-gateway points schema lists the known ones)`
+          ]
   } satisfies PointsListText
 })
 

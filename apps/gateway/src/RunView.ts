@@ -12,6 +12,7 @@ import type { GatewayEventsShape } from "./Events.ts"
 import type { StatusState } from "./Status.ts"
 import { allEvents, type AnyEvent, eventLine } from "./StatusReport.ts"
 import type { Ui } from "./Ui.ts"
+import { named, plural } from "./Words.ts"
 
 /** What the view reads from the running gateway: its events, and its status when it has a status page. */
 export interface RunWatch {
@@ -36,16 +37,8 @@ export const settled = (status: Overview) =>
   (status.broker.connected || status.broker.lastError !== undefined) &&
   status.devices.every((device) => device.status !== "starting")
 
-const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`
-
 const deviceLine = (ui: Ui, device: Overview["devices"][number]) =>
   ui.done(`${device.id}: reading ${plural(device.pointCount, "point")}`)
-
-/** How many devices the overview names in a line before it counts the rest. */
-const NAMED = 5
-
-const named = (ids: ReadonlyArray<string>) =>
-  ids.length <= NAMED ? ids.join(", ") : `${ids.slice(0, NAMED).join(", ")} and ${ids.length - NAMED} more`
 
 /**
  * The devices in a few lines however many there are: what is read, then the ones failing and the ones with no answer

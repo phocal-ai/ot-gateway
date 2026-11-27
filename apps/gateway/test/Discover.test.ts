@@ -299,7 +299,7 @@ describe("discover", () => {
         ]
       })
       expect(warnings).toEqual([])
-      expect(errors.some((line) => line.includes("in the config as ahu, read at 10.0.2.1: 1 point(s)"))).toBe(true)
+      expect(errors.some((line) => line.includes("in the config as ahu, read at 10.0.2.1: 1 point"))).toBe(true)
     })
   )
 
@@ -514,7 +514,7 @@ describe("discover --points-list", () => {
       expect(devices.map((device) => device.id)).toEqual(["ventilation-2"])
       expect(devices[0]?.points.map((point) => point.id)).toEqual(["supply-temp", "fan"])
       const errors = (yield* TestConsole.errorLines).map(String)
-      expect(errors.some((line) => line.includes("1 device(s) already in the config are left out"))).toBe(true)
+      expect(errors.some((line) => line.includes("1 device already in the config are left out"))).toBe(true)
       expect(errors.some((line) => line.includes(`ot-gateway import ${path}`))).toBe(true)
 
       const exists = yield* Effect.flip(discoverToPointsList(config, path, network.host("10.0.0.1")))
@@ -568,9 +568,9 @@ describe("discover --points-list", () => {
       expect(yield* appendOnce).toEqual({ path, devices: 1, points: 2, added: 0, skipped: 2, appended: true })
       expect(yield* fs.readFileString(path)).toBe(list)
       const errors = (yield* TestConsole.errorLines).map(String)
-      expect(errors.some((line) => line.includes("added 2 point(s), skipped 0 already in the list"))).toBe(true)
+      expect(errors.some((line) => line.includes("added 2 points, skipped 0 already in the list"))).toBe(true)
       expect(errors.some((line) => line.endsWith(`then: ${next}`))).toBe(true)
-      expect(errors.some((line) => line.includes("added 0 point(s), skipped 2 already in the list"))).toBe(true)
+      expect(errors.some((line) => line.includes("added 0 points, skipped 2 already in the list"))).toBe(true)
     }).pipe(Effect.scoped, Effect.provide([TestConsole.layer, NodeServices.layer]))
   )
 

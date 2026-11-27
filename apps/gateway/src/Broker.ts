@@ -19,6 +19,7 @@ import {
 } from "@ot-gateway/mqtt"
 import * as NodeSocket from "@effect/platform-node/NodeSocket"
 import { Deferred, Effect, Option, Random, Result, Schema } from "effect"
+import { plural } from "./Words.ts"
 
 /** How long the first dial may take, past the client's own connect timeout, before the command gives up. */
 const DIAL_TIMEOUT = "15 seconds"
@@ -352,4 +353,4 @@ export const publishReadings = Effect.fn("publishReadings")(function* (
 export const formatPublished = (result: Effect.Success<ReturnType<typeof publishOnce>>) =>
   result.cleared
     ? `cleared the retained message on ${result.topic}`
-    : `published ${result.bytes} byte(s) to ${result.topic} (QoS ${result.qos}${result.requestedQos === undefined ? "" : ": the broker allows QoS 0 only"}${result.retain ? ", retained" : ""})`
+    : `published ${plural(result.bytes, "byte")} to ${result.topic} (QoS ${result.qos}${result.requestedQos === undefined ? "" : ": the broker allows QoS 0 only"}${result.retain ? ", retained" : ""})`
