@@ -39,6 +39,10 @@ export const sharedCauseLine = (who: string, spreadMs: number, host?: string, co
     ? `${who} stopped answering within ${roughDuration(spreadMs)} of each other: likely a shared cause (power, a switch, the gateway's own network)`
     : `${who} stopped answering within ${roughDuration(spreadMs)} of each other, ${count === 2 ? "both" : "all"} on ${host}: likely the host itself, its power or its network link`
 
+/** `a, b, c`, or of many the first five and `and 10 more`: a line names a few devices, the JSON has every one. */
+export const firstNames = (names: ReadonlyArray<string>, limit = 5) =>
+  names.length <= limit ? names.join(", ") : `${names.slice(0, limit).join(", ")} and ${names.length - limit} more`
+
 /** `host` without IPv6 brackets, in lower case: `[::1]` and `::1` are one host, as `LocalHost` and `localhost`. */
 const bareHost = (host: string) =>
   host
@@ -161,7 +165,7 @@ export const sharedCauses = (
       const lost = brokerWith(first.at, host, broker?.host, broker?.disconnects ?? [])
       const times = [...group.map((failure) => failure.at), ...(lost === undefined ? [] : [lost.at])]
       const spread = Math.max(...times) - Math.min(...times)
-      const who = `${devices.length} devices (${devices.join(", ")})${lost === undefined ? "" : " and the broker"}`
+      const who = `${devices.length} devices (${firstNames(devices)})${lost === undefined ? "" : " and the broker"}`
       found.push({
         ids: group.map((failure) => failure.id),
         devices,

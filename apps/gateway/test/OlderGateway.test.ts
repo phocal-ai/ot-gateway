@@ -131,10 +131,8 @@ describe("the CLI against a v0.12.0 gateway", () => {
         expect(recent).toBeUndefined()
         const lines = formatStatus(status).split("\n")
         expect(lines[0]).toMatch(/^demo-site\/building-a gateway main, up /)
-        expect(lines).toContain("  3 device(s)")
-        expect(lines.some((line) => /^ {4}energy-meter +ok +modbus-tcp, 3 point\(s\) every 5 s, /.test(line))).toBe(
-          true
-        )
+        expect(lines).toContain("  3 devices")
+        expect(lines.some((line) => /^ {4}energy-meter +ok +modbus-tcp, 3 points every 5 s, /.test(line))).toBe(true)
         expect(lines.at(-1)).toBe(
           "  (this gateway runs v0.12.0, which keeps no events: upgrade it to v0.13.0 or later to see what failed lately)"
         )
@@ -195,7 +193,7 @@ describe("the CLI against a v0.12.0 gateway", () => {
           "  (this gateway does not count what reached the broker: upgrade it to v0.13.0 or later for that)"
         )
         expect(report.find((line) => line.startsWith("  total: "))).toMatch(
-          /^ {2}total: \d+ sent \(\d+ value\(s\), 1 \$meta, 0 health\)$/
+          /^ {2}total: \d+ sent \(\d+ values, 1 \$meta, 0 health\)$/
         )
         yield* messagesReport(target(served.url), [], { json: true })
         expect(JSON.parse(yield* lastLog)).toMatchObject({ ok: true, totals: { waiting: 0, lost: 0, notSent: 0 } })

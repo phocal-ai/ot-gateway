@@ -203,14 +203,14 @@ describe("status", () => {
       const health = makeHealthRegistry(["meter"])
       const state = makeStatusState(parsed, health, 0)
       health.recordSuccess("meter", 1_000)
-      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 item(s) within 3s", at: 2_000 })
-      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 item(s) within 3s", at: 7_000 })
+      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 items within 3s", at: 2_000 })
+      health.recordFailure("meter", { reason: "timeout", message: "no response to 2 items within 3s", at: 7_000 })
       const [device] = (yield* state.snapshot("none")).devices
       expect(device).toMatchObject({
         status: "failing",
         reason: "timeout",
         failingSince: 2_000,
-        lastError: "no response to 2 item(s) within 3s",
+        lastError: "no response to 2 items within 3s",
         failures: 2,
         lastSuccess: 1_000
       })

@@ -38,6 +38,7 @@ import {
   statusJson
 } from "./StatusReport.ts"
 import { readVersion } from "./Version.ts"
+import { plural } from "./Words.ts"
 
 export const REDACTED = "<redacted>"
 
@@ -202,7 +203,10 @@ export const supportBundle = Effect.fn("supportBundle")(function* (options: Supp
         ok: config !== undefined,
         note:
           config !== undefined
-            ? `valid: ${config.devices.length} device(s), ${config.devices.reduce((sum, device) => sum + device.points.length, 0)} point(s)`
+            ? `valid: ${plural(config.devices.length, "device")}, ${plural(
+                config.devices.reduce((sum, device) => sum + device.points.length, 0),
+                "point"
+              )}`
             : "not valid",
         body: [
           loaded === undefined || Result.isSuccess(loaded)
@@ -216,7 +220,7 @@ export const supportBundle = Effect.fn("supportBundle")(function* (options: Supp
   const environment: SupportSection = {
     name: "environment",
     ok: true,
-    note: `${names.length} variable(s)`,
+    note: plural(names.length, "variable"),
     body:
       names.length === 0
         ? "No OT_GATEWAY_* or OTEL_* variables are set."
@@ -319,7 +323,7 @@ const gatewaySections = Effect.fnUntraced(function* (target: GatewayTarget | str
     : {
         name: "logs",
         ok: true,
-        note: `${page.value.lines.length} line(s)`,
+        note: plural(page.value.lines.length, "line"),
         body: fenced(formatLogs(page.value, { since: "all", sinceMs: Number.POSITIVE_INFINITY, level: "info" }))
       }
   return [statusSection, eventsSection, logsSection]

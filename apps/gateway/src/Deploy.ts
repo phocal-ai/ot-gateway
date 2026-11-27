@@ -42,6 +42,7 @@ import { dockerDesktopNote } from "./Init.ts"
 import { loadConfig } from "./LoadConfig.ts"
 import { shellArgument } from "./Output.ts"
 import { fetchGatewayStatus, hintsFor, type GatewayAnswerUnreadable, type GatewayUnreachable } from "./StatusReport.ts"
+import { count, named, plural } from "./Words.ts"
 
 // ---------------------------------------------------------------------------------------------------------------
 // Errors
@@ -358,8 +359,7 @@ export interface WaitOptions {
   readonly logs: string
 }
 
-const listed = (keys: ReadonlyArray<string>, most = 5) =>
-  keys.length <= most ? keys.join(", ") : `${keys.slice(0, most).join(", ")} and ${keys.length - most} more`
+const listed = (keys: ReadonlyArray<string>) => named(keys)
 
 /** Why the wait ended without values, from what the gateway said last. */
 export const waitFailure = (last: Observation, options: WaitOptions): DeployFailed => {
@@ -392,14 +392,14 @@ export const waitFailure = (last: Observation, options: WaitOptions): DeployFail
       if (first !== undefined) {
         return new DeployFailed({
           code: "device-failing",
-          message: `the gateway runs, but ${last.failing.length} of ${last.devices} device(s) failing, ${last.withValue} of ${last.total} point(s) with a value ${within}; ${first.id}: ${first.lastError ?? first.reason ?? "no reason given"}`,
+          message: `the gateway runs, but ${count(last.failing.length)} of ${plural(last.devices, "device")} failing, ${count(last.withValue)} of ${plural(last.total, "point")} with a value ${within}; ${first.id}: ${first.lastError ?? first.reason ?? "no reason given"}`,
           hint: hintsFor(first).checks[0] ?? "Check the device's address and that it answers",
           next: `${options.cli} status`
         })
       }
       return new DeployFailed({
         code: "values-missing",
-        message: `the gateway runs, but ${last.withValue} of ${last.total} point(s) with a value ${within}; none yet for ${listed(last.missing)}`,
+        message: `the gateway runs, but ${count(last.withValue)} of ${plural(last.total, "point")} with a value ${within}; none yet for ${listed(last.missing)}`,
         hint:
           last.late.length > 0
             ? `${listed(last.late.map((device) => device.id))} answer slowly: a polling cycle is stuck, or its interval is long`
@@ -481,7 +481,7 @@ const checkedConfig = Effect.fn("checkedConfig")(function* (paths: DeployPaths, 
   }
   const points = config.devices.reduce((sum, device) => sum + device.points.length, 0)
   yield* Console.log(
-    `✓ ${paths.config} is valid: ${gatewayName(config)}, ${config.devices.length} device(s), ${points} point(s)`
+    `✓ ${paths.config} is valid: ${gatewayName(config)}, ${plural(config.devices.length, "device")}, ${plural(points, "point")}`
   )
   return config
 })
@@ -536,7 +536,7 @@ const valuesFor = Effect.fn("valuesFor")(function* (
       ? `… waiting for every point to have a value (up to ${seconds} s)`
       : extra.required.size === 0
         ? `… waiting for ${versionName(extra.version ?? "the gateway")} to answer (up to ${seconds} s)`
-        : `… waiting for the ${extra.required.size} point(s) that had one to have a value (up to ${seconds} s)`
+        : `… waiting for the ${plural(extra.required.size, "point")} that had one to have a value (up to ${seconds} s)`
   )
   const values = yield* waitForValues({
     url: statusUrlOf(config.status),
@@ -548,7 +548,9 @@ const valuesFor = Effect.fn("valuesFor")(function* (
     cli: options.cli,
     logs: logsCommand(paths, options)
   })
-  yield* Console.log(`✓ values flow: ${values.points} point(s) with a value after ${Math.round(values.ms / 1000)} s`)
+  yield* Console.log(
+    `✓ values flow: ${plural(values.points, "point")} with a value after ${Math.round(values.ms / 1000)} s`
+  )
   return values
 })
 

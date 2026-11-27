@@ -35,6 +35,7 @@ import { withoutControls } from "./Discover.ts"
 import { localTime, printResult } from "./Output.ts"
 import { metaGateway } from "./StaleMeta.ts"
 import { ago } from "./StatusReport.ts"
+import { count, firstOf, named, plural } from "./Words.ts"
 
 /** Payloads are cut here on the terminal; the status page and any MQTT client show them whole. */
 const MAX_PAYLOAD = 300
@@ -177,9 +178,9 @@ export interface ContractSummary {
   readonly off: number
 }
 
-/** `-- 120 message(s) checked against the MQTT contract 1.0: 2 off it`. */
+/** `-- 120 messages checked against the MQTT contract 1.0: 2 off it`. */
 export const formatContractSummary = (summary: ContractSummary) =>
-  `-- ${summary.checked} message(s) checked against the MQTT contract ${summary.version}: ${summary.off === 0 ? "all on it" : `${summary.off} off it`}`
+  `-- ${plural(summary.checked, "message")} checked against the MQTT contract ${summary.version}: ${summary.off === 0 ? "all on it" : `${summary.off} off it`}`
 
 /**
  * What arrived for one device's points: the configured points that sent a value, the ones that did not, and the
@@ -285,28 +286,36 @@ export const watchSummary = (
   seconds: number,
   messages: number
 ): WatchSummary => {
-  const count = (pick: (device: DeviceArrivals) => ReadonlyArray<string>) =>
+  const total = (pick: (device: DeviceArrivals) => ReadonlyArray<string>) =>
     devices.reduce((sum, device) => sum + pick(device).length, 0)
-  const arrived = count((device) => device.arrived)
-  const missing = count((device) => device.missing)
-  const points = arrived + missing + count((device) => device.onChange)
+  const arrived = total((device) => device.arrived)
+  const missing = total((device) => device.missing)
+  const points = arrived + missing + total((device) => device.onChange)
   return { event: "summary", seconds, messages, points, arrived, missing, devices }
 }
 
 /**
- * The summary on the terminal: `-- 6 of 8 point(s) sent a value in 10 s (20 message(s)); none from heat-pump:
+ * The summary on the terminal: `-- 6 of 8 points sent a value in 10 s (20 messages); none from heat-pump:
  * flow-temp; on change only, unchanged so far: heat-pump: running`.
  */
 export const formatSummary = (summary: WatchSummary) => {
-  const list = (pick: (device: DeviceArrivals) => ReadonlyArray<string>) =>
-    summary.devices
+  // A few devices by name, each with its first points, or `all` of them: a site of 300 devices stays one line.
+  const list = (pick: (device: DeviceArrivals) => ReadonlyArray<string>) => {
+    const entries = summary.devices
       .filter((device) => pick(device).length > 0)
-      .map((device) => `${device.id}: ${pick(device).join(", ")}`)
-      .join("; ")
+      .map((device) => {
+        const picked = pick(device)
+        const every =
+          picked.length > 1 && picked.length === device.arrived.length + device.missing.length + device.onChange.length
+        return every ? `${device.id}: all ${count(picked.length)}` : `${device.id}: ${named(picked, 3)}`
+      })
+    const { shown, more } = firstOf(entries)
+    return [...shown, ...(more > 0 ? [`and ${plural(more, "more device")}`] : [])].join("; ")
+  }
   const missing = list((device) => device.missing)
   const quiet = list((device) => device.onChange)
   return [
-    `-- ${summary.arrived} of ${summary.points} point(s) sent a value in ${summary.seconds} s (${summary.messages} message(s))`,
+    `-- ${count(summary.arrived)} of ${plural(summary.points, "point")} sent a value in ${summary.seconds} s (${plural(summary.messages, "message")})`,
     ...(missing === "" ? [] : [`none from ${missing}`]),
     ...(quiet === "" ? [] : [`on change only, unchanged so far: ${quiet}`])
   ].join("; ")
@@ -447,14 +456,14 @@ export const watch = Effect.fn("watch")(function* (config: GatewayConfig, option
     const checkedSummary: ContractSummary = { event: "contract", version: contractVersion, checked, off: offContract }
     yield* json ? printResult(JSON.stringify(checkedSummary)) : Console.log(formatContractSummary(checkedSummary))
   }
-  const offLine = `${offContract} of ${checked} message(s) under ${config.site}/${config.building} were off the MQTT contract ${contractVersion}`
+  const offLine = `${count(offContract)} of ${plural(checked, "message")} under ${config.site}/${config.building} were off the MQTT contract ${contractVersion}`
   // Points that send only on change may stay quiet, but not every one of them: then nothing shows the gateway works.
   const nothing = summary !== undefined && summary.arrived === 0
   if (untilValues && summary !== undefined && (summary.missing > 0 || nothing)) {
     const silent = (device: DeviceArrivals) => (nothing ? [...device.missing, ...device.onChange] : device.missing)
     const missingLine = nothing
       ? `no point sent a value within ${seconds} s`
-      : `${summary.missing} of ${summary.points} point(s) sent no value within ${seconds} s`
+      : `${count(summary.missing)} of ${plural(summary.points, "point")} sent no value within ${seconds} s`
     // Missing values win the code, since they are what to fix first; the message still says the contract was broken.
     return yield* new WatchError({
       message: check && offContract > 0 ? `${missingLine}; and ${offLine}` : missingLine,

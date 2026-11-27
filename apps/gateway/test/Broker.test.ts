@@ -210,7 +210,7 @@ describe("ot-gateway publish", () => {
       const control = makeBrokerControl()
       const config = yield* brokerAndConfig(control)
       const sent = yield* publishOnce(config, "s/b/test", "hello", { retain: true, qos: 1 })
-      expect(formatPublished(sent)).toBe("published 5 byte(s) to s/b/test (QoS 1, retained)")
+      expect(formatPublished(sent)).toBe("published 5 bytes to s/b/test (QoS 1, retained)")
       expect(control.retained.get("s/b/test")).toBe("hello")
       const cleared = yield* publishOnce(config, "s/b/test", "", { retain: true, qos: 1 })
       expect(formatPublished(cleared)).toBe("cleared the retained message on s/b/test")
@@ -236,7 +236,7 @@ describe("ot-gateway publish", () => {
       control.connackProperties.set(Property.MaximumQoS, 0)
       const sent = yield* publishOnce(yield* brokerAndConfig(control), "s/b/test", "x", { retain: false, qos: 1 })
       expect(sent).toMatchObject({ qos: 0, requestedQos: 1 })
-      expect(formatPublished(sent)).toBe("published 1 byte(s) to s/b/test (QoS 0: the broker allows QoS 0 only)")
+      expect(formatPublished(sent)).toBe("published 1 byte to s/b/test (QoS 0: the broker allows QoS 0 only)")
     })
   )
 

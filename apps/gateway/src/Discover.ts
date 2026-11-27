@@ -45,6 +45,7 @@ import { isEde } from "./Ede.ts"
 import { printJson, shellArgument } from "./Output.ts"
 import { appendToPointsList } from "./PointsListAppend.ts"
 import { slugify } from "./Slug.ts"
+import { plural } from "./Words.ts"
 
 export { slugify }
 
@@ -239,7 +240,7 @@ const describeFound = (client: BacnetClient, device: FoundDevice) =>
     if (device.conflicts.length > 0) return [{ device, described: NOT_DESCRIBED }]
     const described = yield* describeDevice(client, device, device.instance)
     yield* Console.error(
-      `  device ${device.instance} at ${NetAddress.formatInet(device.address)}: "${printable(described.name)}", ${described.objects.length} point(s)` +
+      `  device ${device.instance} at ${NetAddress.formatInet(device.address)}: "${printable(described.name)}", ${plural(described.objects.length, "point")}` +
         listedNote(described)
     )
     return [{ device, described }]
@@ -258,7 +259,7 @@ const describeConfigured = (client: BacnetClient, configured: BacnetDevice, addr
       `  device ${instance}: in the config as ${configured.id}, read at ${address}: ` +
         (missing === 0
           ? "every object it lists has a point already"
-          : `${missing} point(s) not in the config yet, drafted under its id to merge into its points`) +
+          : `${plural(missing, "point")} not in the config yet, drafted under its id to merge into its points`) +
         listedNote(described)
     )
     return missing === 0 ? [] : [{ device, described, configured }]
@@ -541,7 +542,7 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
   const fresh = drafts.filter((draft) => !configured.has(draft.id))
   if (fresh.length < drafts.length) {
     yield* Console.error(
-      `  ${drafts.length - fresh.length} device(s) already in the config are left out; discover without --points-list drafts their new objects`
+      `  ${plural(drafts.length - fresh.length, "device")} already in the config are left out; discover without --points-list drafts their new objects`
     )
   }
   const points = fresh.reduce((total, draft) => total + draft.points.length, 0)
@@ -554,7 +555,7 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
   if (existing === undefined) {
     yield* writeAtomically(path, draftPointsList(fresh))
     yield* Console.error(
-      `wrote ${points} point(s) of ${fresh.length} device(s) to ${path}. Delete the rows you do not need, then: ${next}`
+      `wrote ${plural(points, "point")} of ${plural(fresh.length, "device")} to ${path}. Delete the rows you do not need, then: ${next}`
     )
     const written: PointsListWritten = {
       path,
@@ -574,7 +575,7 @@ export const discoverToPointsList = Effect.fn("discoverToPointsList")(function* 
   const { added, skipped } = merged.success
   if (added > 0) yield* writeAtomically(path, merged.success.text)
   yield* Console.error(
-    `added ${added} point(s), skipped ${skipped} already in the list, to ${path}` +
+    `added ${plural(added, "point")}, skipped ${skipped} already in the list, to ${path}` +
       (added > 0 ? `. Delete the rows you do not need, then: ${next}` : "; it was left as it was")
   )
   const written: PointsListWritten = {

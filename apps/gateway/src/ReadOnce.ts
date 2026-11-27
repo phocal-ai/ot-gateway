@@ -25,6 +25,7 @@ import { makeSimulatorDriver } from "@ot-gateway/simulator"
 import { Clock, Duration, Effect, Schema } from "effect"
 import { readPoints, targetOf, testModbus } from "./SetupTools.ts"
 import { closestMatch } from "./Suggest.ts"
+import { count, firstOf, named, plural } from "./Words.ts"
 
 /** How long one device may take by default: connecting, finding a BACnet device, reading its points. */
 export const DEFAULT_READ_SECONDS = 15
@@ -413,18 +414,63 @@ export const formatReadReport = (report: ReadReport): string => {
   }
   const width = Math.max(0, ...rows.map((row) => row.name.length))
   const lines = rows.flatMap((row) => [`${row.name.padEnd(width)}  ${row.text}`, ...(row.extra ?? [])])
+  return [...lines, "", countedLine(report)].join("\n")
+}
+
+const countedLine = (report: ReadReport) => {
   const { summary } = report
-  const counted =
-    summary.failed === 0
-      ? `${summary.read} point(s) of ${summary.devices} device(s) read in ${took(report.durationMs)}`
-      : `${summary.read} of ${summary.points} point(s) read, ${summary.failed} failed, in ${took(report.durationMs)}`
-  return [...lines, "", counted].join("\n")
+  return summary.failed === 0
+    ? `${plural(summary.read, "point")} of ${plural(summary.devices, "device")} read in ${took(report.durationMs)}`
+    : `${count(summary.read)} of ${plural(summary.points, "point")} read, ${count(summary.failed)} failed, in ${took(report.durationMs)}`
+}
+
+/** Up to this many points, a terminal shows every value; beyond, a summary and what failed (`--all`: every value). */
+export const VALUES_SHOWN = 20
+
+/** The first few of `items`, `name  why` aligned, and how many more. */
+const failureRows = (items: ReadonlyArray<{ readonly name: string; readonly why: string }>) => {
+  const { shown, more } = firstOf(items)
+  const width = Math.max(0, ...shown.map((item) => item.name.length))
+  return [
+    ...shown.map((item) => `  ${item.name.padEnd(width)}  ${item.why}`),
+    ...(more > 0 ? [`  and ${count(more)} more`] : [])
+  ]
+}
+
+/**
+ * The report for a person at a terminal when there are many points: how many were read, then the devices that did
+ * not answer and the points that failed, the first few of each with why, and how to see the values. A pipe, --json
+ * and `read <device>` get every value.
+ */
+export const formatReadSummary = (report: ReadReport): string => {
+  const silent = report.devices.filter((device) => device.error !== undefined)
+  const failedPoints = report.devices.flatMap((device) =>
+    device.error !== undefined
+      ? []
+      : device.points.flatMap((point) =>
+          point.error === undefined ? [] : [{ name: `${device.device}/${point.id}`, why: point.error.message }]
+        )
+  )
+  return [
+    countedLine(report),
+    ...(silent.length === 0
+      ? []
+      : [
+          `${plural(silent.length, "device")} not read:`,
+          ...failureRows(silent.map((device) => ({ name: device.device, why: device.error?.message ?? "" })))
+        ]),
+    ...(failedPoints.length === 0
+      ? []
+      : [`${plural(failedPoints.length, "point")} failed:`, ...failureRows(failedPoints)]),
+    "",
+    "The values: add --all for every one, or a device's id for its own"
+  ].join("\n")
 }
 
 /** Why the exit code is 1, as stderr's last line says it. */
 export const incompleteMessage = (report: ReadReport) => {
   const failed = report.devices.filter((device) => !device.ok).map((device) => device.device)
-  return `${report.summary.failed} of ${report.summary.points} point(s) not read (${failed.join(", ")})`
+  return `${count(report.summary.failed)} of ${plural(report.summary.points, "point")} not read (${named(failed)})`
 }
 
 /**

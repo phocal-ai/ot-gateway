@@ -339,7 +339,7 @@ When a point stays silent it waits for the slowest poll interval plus 30 seconds
 ```json
 {
   "ok": false,
-  "error": "2 of 4 point(s) sent no value within 60 s",
+  "error": "2 of 4 points sent no value within 60 s",
   "code": "values-missing",
   "missing": ["energy-meter/active-power", "energy-meter/energy"],
   "hint": "ot-gateway status says why a device fails (it must be running: ot-gateway run, or docker compose up -d); a point that never changes and publishes on change only sends its first value at start"
@@ -381,7 +381,7 @@ ot-gateway logs --level warn --json   # in detail: the warnings and errors
 ```json
 {
   "ok": false,
-  "problem": "1 of 2 device(s) failing",
+  "problem": "1 of 2 devices failing",
   "devices": [
     {
       "id": "energy-meter",

@@ -76,6 +76,7 @@ import {
   switchableStatus
 } from "./Status.ts"
 import { traceSampleRatio, tracesExported } from "./Telemetry.ts"
+import { plural } from "./Words.ts"
 
 export interface GatewayOptions {
   /** Reach devices and the broker through this network instead of Node's. */
@@ -242,9 +243,9 @@ const runDevices = Effect.fn("runGateway")(function* (
   const sampleRatio = yield* traceSampleRatio
   // The sample ratio only when traces are exported: without an exporter it describes nothing.
   const sampling = (yield* tracesExported) ? { traceSampleRatio: sampleRatio } : {}
-  yield* Effect.log(`OT Gateway starting: ${config.site}/${config.building}, ${config.devices.length} device(s)`).pipe(
-    Effect.annotateLogs({ ...sampling, health: health.topic })
-  )
+  yield* Effect.log(
+    `OT Gateway starting: ${config.site}/${config.building}, ${plural(config.devices.length, "device")}`
+  ).pipe(Effect.annotateLogs({ ...sampling, health: health.topic }))
   let bacnet: BacnetNetwork
   if (config.devices.some((device) => device.protocol === "bacnet-ip")) {
     bacnet = yield* Deferred.make<BacnetClient>()

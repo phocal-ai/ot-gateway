@@ -115,11 +115,11 @@ describe("status", () => {
   it("prints the gateway, its broker and one aligned line per device, with since when and why it fails", () => {
     expect(formatStatus(failingGateway).split("\n")).toEqual([
       "s/b gateway main, up 2 h (since 10:19:30)",
-      "  broker mqtt://localhost:1883: NOT CONNECTED since 12:18:00 (90 s): could not connect: connection refused by 127.0.0.1:1883, 4 failed connect(s) since start",
-      "  buffer: 42 of 1000 message(s) waiting, 3 DROPPED since start",
-      "  2 device(s), 1 failing",
-      "    ventilation-1  ok       simulator, 0 point(s) every 2 s, read 2 s ago",
-      "    energy-meter   failing  modbus-tcp, 4 point(s) every 5 s, failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020",
+      "  broker mqtt://localhost:1883: NOT CONNECTED since 12:18:00 (90 s): could not connect: connection refused by 127.0.0.1:1883, 4 failed connects since start",
+      "  buffer: 42 of 1,000 messages waiting, 3 DROPPED since start",
+      "  2 devices, 1 failing",
+      "    ventilation-1  ok       simulator, 0 points every 2 s, read 2 s ago",
+      "    energy-meter   failing  modbus-tcp, 4 points every 5 s, failing since 12:18:20 (70 s): could not connect: connection refused by 127.0.0.1:5020",
       "                   check: Is the device switched on and its Modbus TCP server (or its network module) enabled?",
       "",
       "  What changed and when: ot-gateway events",
@@ -129,8 +129,8 @@ describe("status", () => {
 
   it("says since when the broker is connected, and ends without a hint when all is well", () => {
     const lines = formatStatus(healthyGateway).split("\n")
-    expect(lines[1]).toBe("  broker mqtt://localhost:1883: connected since 10:19:31, 2 failed connect(s) since start")
-    expect(lines.at(-1)).toBe("    ventilation-1  ok       simulator, 0 point(s) every 2 s, read 2 s ago")
+    expect(lines[1]).toBe("  broker mqtt://localhost:1883: connected since 10:19:31, 2 failed connects since start")
+    expect(lines.at(-1)).toBe("    ventilation-1  ok       simulator, 0 points every 2 s, read 2 s ago")
     expect(isHealthy(healthyGateway)).toBe(true)
     expect(unhealthySummary(healthyGateway)).toBeUndefined()
   })
@@ -160,7 +160,7 @@ describe("status", () => {
     Effect.gen(function* () {
       const lines = formatStatus(startingGateway).split("\n")
       expect(lines[1]).toBe("  broker mqtt://localhost:1883: connecting (started 2 s ago)")
-      expect(lines.at(-1)).toBe("    energy-meter   starting modbus-tcp, 4 point(s) every 5 s, no read yet")
+      expect(lines.at(-1)).toBe("    energy-meter   starting modbus-tcp, 4 points every 5 s, no read yet")
       yield* statusOutcome(true)(startingGateway)
       const [report] = (yield* TestConsole.logLines).map((line): unknown => JSON.parse(String(line)))
       expect(report).toMatchObject({ ok: true, broker: { connected: false, failedConnects: 0 } })
@@ -183,10 +183,10 @@ describe("status", () => {
       devices: healthyGateway.devices.map((device) => ({ ...device, lastSuccess: now - 40_000 }))
     }
     expect(formatStatus(late).split("\n").slice(3, 5)).toEqual([
-      "  1 device(s), 1 late",
-      "    ventilation-1  late     simulator, 0 point(s) every 2 s, no read for 40 s, though not failing: a polling cycle is stuck"
+      "  1 device, 1 late",
+      "    ventilation-1  late     simulator, 0 points every 2 s, no read for 40 s, though not failing: a polling cycle is stuck"
     ])
-    expect(unhealthySummary(late)).toBe("1 of 1 device(s) late")
+    expect(unhealthySummary(late)).toBe("1 of 1 device late")
   })
 
   it("puts the date in front of a time from another day", () => {
@@ -198,7 +198,7 @@ describe("status", () => {
     Effect.gen(function* () {
       const error = yield* Effect.flip(statusOutcome(false)(failingGateway))
       expect(error._tag).toBe("GatewayUnhealthy")
-      expect(error.message).toBe("1 of 2 device(s) failing, broker not connected")
+      expect(error.message).toBe("1 of 2 devices failing, broker not connected")
       const [report] = (yield* TestConsole.logLines).map(String)
       expect(report).toContain("ot-gateway events")
     }).pipe(Effect.provide(TestConsole.layer))
@@ -274,11 +274,11 @@ describe("events", () => {
       "                          then: Are the host and port in the config right? Modbus TCP is usually port 502.",
       "                          then: Is a firewall or a VLAN between the gateway and the device blocking the port?",
       "12:19:00  energy-meter  ok again after 40 s",
-      "12:19:10  broker        connected again after 1 min 10 s, 1204 message(s) waiting in the buffer at reconnect",
-      "12:19:20  buffer        drained: 1266 message(s) delivered from the buffer since the broker came back: the 1204 waiting at reconnect and 62 queued behind them"
+      "12:19:10  broker        connected again after 1 min 10 s, 1,204 messages waiting in the buffer at reconnect",
+      "12:19:20  buffer        drained: 1,266 messages delivered from the buffer since the broker came back: the 1204 waiting at reconnect and 62 queued behind them"
     ])
     expect(formatEvents(log, Number.POSITIVE_INFINITY, "all").split("\n")[0]).toBe(
-      "10:19:30  gateway       started (v1.2.3, 2 device(s))"
+      "10:19:30  gateway       started (v1.2.3, 2 devices)"
     )
     expect(formatEvents(log, 5_000, "5s")).toBe("no events in the last 5s")
   })
@@ -293,13 +293,13 @@ describe("events", () => {
 
   it("adds a drained buffer up from the reconnect: waiting then, queued behind, dropped meanwhile", () => {
     expect(drainedLine({ delivered: 130, buffered: 124, queued: 8 })).toBe(
-      "12:19:20  buffer  drained: 130 message(s) delivered from the buffer since the broker came back: the 124 waiting at reconnect and 8 queued behind them, less 2 the buffer dropped"
+      "12:19:20  buffer  drained: 130 messages delivered from the buffer since the broker came back: the 124 waiting at reconnect and 8 queued behind them, less 2 the buffer dropped"
     )
     // Filled again on the same connection, or from an older gateway: the count alone.
     expect(drainedLine({ delivered: 6, buffered: 0, queued: 6 })).toBe(
-      "12:19:20  buffer  drained: 6 message(s) delivered from the buffer"
+      "12:19:20  buffer  drained: 6 messages delivered from the buffer"
     )
-    expect(drainedLine({ delivered: 66 })).toBe("12:19:20  buffer  drained: 66 message(s) delivered from the buffer")
+    expect(drainedLine({ delivered: 66 })).toBe("12:19:20  buffer  drained: 66 messages delivered from the buffer")
     expect(drainedLine({})).toBe("12:19:20  buffer  drained: every waiting message delivered")
   })
 
@@ -359,7 +359,6 @@ describe("events", () => {
       "                    then: Behind a BACnet router (an MS/TP trunk, another network number): is the router up, and does it route the device's network number?",
       "                    then: Is the device instance in the config the device's own (its Device object, not a point)?",
       "12:10:04  meter   failing: timed out",
-      "                  check: Others failed with it: check what they share before its config, their power, the switch and cabling, and the gateway's own network link.",
       "                  2 devices (boiler, meter) stopped answering within 4 s of each other: likely a shared cause (power, a switch, the gateway's own network)",
       "12:12:00  boiler  ok again after 2 min",
       "12:12:01  meter   ok again after 1 min 57 s",
@@ -369,6 +368,23 @@ describe("events", () => {
       "                    then: Is the table right (holding or input registers, coils or discrete inputs)?",
       "                    then: Does the data type fit the map? A 32-bit value spans two registers."
     ])
+  })
+
+  it("says a device's check again when it fails the same way after it recovered", () => {
+    const again: EventLog = {
+      now,
+      capacity: 500,
+      dropped: 0,
+      events: [
+        { id: 1, at: at(10, 0, 0), type: "device-failing", device: "pump", reason: "protocol", error: "exception 2" },
+        { id: 2, at: at(10, 5, 0), type: "device-recovered", device: "pump", downMs: 300_000 },
+        { id: 3, at: at(12, 0, 0), type: "device-failing", device: "pump", reason: "protocol", error: "exception 2" }
+      ]
+    }
+    const checks = formatEvents(again, Number.POSITIVE_INFINITY, "all")
+      .split("\n")
+      .filter((line) => line.trim().startsWith("check: "))
+    expect(checks).toHaveLength(2)
   })
 
   it("leads with power, switch and cable for a device that answered before it failed, config for one that never did", () => {
@@ -433,11 +449,11 @@ describe("events", () => {
       "12:00:00  ahu/filter  alarm active at its first read (value true)",
       "12:01:00  ahu/filter  alarm cleared after 1 min (value false)",
       "12:02:00  pump/trip   alarm raised (value 1)",
-      "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping (on 30 s, off 30 s, 4 time(s) in 4 min), so its changes are counted, not listed, until it keeps still for 5 min",
+      "12:03:00  pump/trip   alarm raised 4 times in the last 15 min: flapping (on 30 s, off 30 s, 4 times in 4 min), so its changes are counted, not listed, until it keeps still for 5 min",
       // A fixed rhythm reads as wiring or a cycling device more than a real trip: say what to check.
       "                      check: A fixed on/off rhythm like this usually points to the input's wiring or contact, or a device cycling, more than a real trip.",
       "                        then: Check the contact and its terminals, and whether the device restarts or switches on a schedule at that rhythm.",
-      "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 change(s) were counted, not listed (it flapped on 30 s, off 90 s, 8 time(s) in 16 min)"
+      "12:12:00  pump/trip   alarm keeps still, off since 12:07:00; 23 changes were counted, not listed (it flapped on 30 s, off 90 s, 8 times in 16 min)"
     ])
   })
 
@@ -542,11 +558,11 @@ describe("status after an outage, and its alarms", () => {
       }
       const lines = formatStatus(withAlarms, recentIncidents(recentLog)).split("\n")
       expect(lines.slice(-6)).toEqual([
-        "  3 alarm point(s), 1 active",
-        "    ahu/filter  ACTIVE since 12:17:00 (3 min), raised 1 time(s) in the last 15 min",
-        "    pump/trip   off since 12:19:00, raised 7 time(s) in the last 15 min (flapping, on 30 s, off 30 s, 6 time(s) in 6 min: its changes are counted, not listed, until it keeps still for 5 min)",
+        "  3 alarm points, 1 active",
+        "    ahu/filter  ACTIVE since 12:17:00 (3 min), raised 1 time in the last 15 min",
+        "    pump/trip   off since 12:19:00, raised 7 times in the last 15 min (flapping, on 30 s, off 30 s, 6 times in 6 min: its changes are counted, not listed, until it keeps still for 5 min)",
         "                check: A fixed on/off rhythm like this usually points to the input's wiring or contact, or a device cycling, more than a real trip.",
-        "  2 device(s) failed in the last 15 min (12:10:00–12:13:00: energy-meter, pv), see ot-gateway events",
+        "  2 devices failed in the last 15 min (12:10:00–12:13:00: energy-meter and pv), see ot-gateway events",
         "  broker connection lost once in the last 15 min (since 12:10:05), see ot-gateway events"
       ])
       expect(statusJson(withAlarms, recentIncidents(recentLog))).toMatchObject({
@@ -558,7 +574,7 @@ describe("status after an outage, and its alarms", () => {
       // An active alarm is the building's, not the gateway's: exit 0, unless a script asks for 1.
       yield* statusOutcome(false)(withAlarms, recentIncidents(recentLog))
       const alarmed = yield* Effect.flip(statusOutcome(false, { failOnAlarm: true })(withAlarms))
-      expect(alarmed).toMatchObject({ _tag: "AlarmActive", message: "1 alarm(s) active: ahu/filter" })
+      expect(alarmed).toMatchObject({ _tag: "AlarmActive", message: "1 alarm active: ahu/filter" })
       const quiet = { ...withAlarms, alarms: (withAlarms.alarms ?? []).map((alarm) => ({ ...alarm, active: false })) }
       yield* statusOutcome(false, { failOnAlarm: true })(quiet)
     })
@@ -644,7 +660,7 @@ describe("outages as the data saw them, counters and a shared host", () => {
       { device: "heat-pump", lastReadAt: at(12, 14, 50), detectedAt: at(12, 15, 0) }
     ])
     expect(formatStatus(healthyGateway, recent).split("\n").slice(-4)).toEqual([
-      "  2 device(s) failed in the last 15 min, see ot-gateway events:",
+      "  2 devices failed in the last 15 min, see ot-gateway events:",
       "    energy-meter  no data 12:10:00–12:12:20 (2 min 20 s), detected 12:10:08",
       "    heat-pump     no data since 12:14:50, detected 12:15:00, still failing",
       "  energy-meter/energy-total at 12:12:25: counter went back from 12000.5 to 4270 kWh: meter reset or replaced?"
@@ -813,7 +829,7 @@ describe("one outage of devices and broker on this machine", () => {
       "2 devices (energy-meter, pump) stopped answering within 1 s of each other, both on 127.0.0.1: likely the host itself, its power or its network link"
     )
     const report = statusJson({ ...failingGateway, devices })
-    expect(report.problem).toMatch(/^2 of 2 device\(s\) failing/)
+    expect(report.problem).toMatch(/^2 of 2 devices failing/)
     expect(report.devices[1]).toMatchObject({ hints: { meaning: expect.stringContaining("holds its BACnet/IP port") } })
     expect(statusJson(healthyGateway)).not.toHaveProperty("problem")
   })
@@ -835,7 +851,7 @@ describe("one outage of devices and broker on this machine", () => {
     // Failed connects the outages listed do not cover are still counted on the broker's line.
     const more = { ...back, broker: { ...back.broker, failedConnects: 20 } }
     expect(formatStatus(more, recent).split("\n")[1]).toBe(
-      "  broker mqtt://localhost:1883: connected since 12:17:43, 20 failed connect(s) since start"
+      "  broker mqtt://localhost:1883: connected since 12:17:43, 20 failed connects since start"
     )
   })
 
