@@ -128,6 +128,28 @@ const WriteValue = Schema.Union([Schema.Finite, Schema.Boolean, Schema.Null, Sch
 
 const writeValueArgument = (value: number | boolean | null | string) => (value === null ? "null" : String(value))
 
+/** Which broker a `gateways` tool asks, and how long it waits for retained messages. */
+const fleetInput = {
+  broker: optionalText("The broker, mqtt://host:1883 or mqtts://host:8883; the config's broker when left out"),
+  username: optionalText("The broker login; its password is read from OT_GATEWAY_BROKER_PASSWORD"),
+  config: optionalText("The config whose broker to ask when there is no broker (default ./ot-gateway.json)"),
+  wait: Schema.optionalKey(count("Seconds to wait for the broker's retained messages (default 2)", 1, 60))
+}
+
+const fleetArgv = (input: {
+  readonly broker?: string
+  readonly username?: string
+  readonly config?: string
+  readonly wait?: number
+}) => [
+  flag("broker", input.broker),
+  flag("username", input.username),
+  flag("config", input.config),
+  flag("wait", input.wait)
+]
+
+const gatewayName = text("The gateway as site/building/id (from gateways_list), or its id alone when no other has it")
+
 export const mcpTools: ReadonlyArray<McpTool> = [
   defineTool({
     name: "check",
@@ -155,6 +177,33 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     input: { config: configArgument },
     annotations: asks,
     argv: ({ config }) => ["broker", config]
+  }),
+  defineTool({
+    name: "gateways_list",
+    title: "List the gateways on a broker",
+    description:
+      "Every gateway whose retained health the broker keeps, across sites and buildings: name (site/building/id), online or offline (and why), when it started, its last heartbeat, and each device's status. Needs only a broker (broker, or the config's)",
+    input: fleetInput,
+    annotations: asks,
+    argv: (input) => ["gateways", "list", ...fleetArgv(input)]
+  }),
+  defineTool({
+    name: "gateways_status",
+    title: "One gateway's health from the broker",
+    description:
+      "One gateway's retained health: each device's status, why a failing one fails and since when, and its machine (memory, disk, temperature). isError when it is offline (code gateway-offline) or a device fails (gateway-unhealthy)",
+    input: { gateway: gatewayName, ...fleetInput },
+    annotations: asks,
+    argv: ({ gateway, ...input }) => ["gateways", "status", gateway, ...fleetArgv(input)]
+  }),
+  defineTool({
+    name: "gateways_points",
+    title: "One gateway's points from the broker",
+    description:
+      "One gateway's points from their retained $meta: topic, device, point, name, unit, writable. The topic is where its values arrive; a writable point takes commands with the write tool in the gateway's folder",
+    input: { gateway: gatewayName, ...fleetInput },
+    annotations: asks,
+    argv: ({ gateway, ...input }) => ["gateways", "points", gateway, ...fleetArgv(input)]
   }),
   defineTool({
     name: "status",

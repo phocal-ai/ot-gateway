@@ -19,11 +19,12 @@ import { Console, Effect, Logger } from "effect"
 import { identity } from "effect/Function"
 import { existsSync } from "node:fs"
 import { setDefaultAutoSelectFamilyAttemptTimeout } from "node:net"
-import { isLongRunning, runCli, withFirstRun } from "./Cli.ts"
+import { isLongRunning, runCli, toCliArgs, withFirstRun } from "./Cli.ts"
 import { loadEnvFile } from "./EnvFile.ts"
 import { hideSqliteExperimentalWarning } from "./NodeWarnings.ts"
 import { isJsonMode, reportFailure, ResultConsole, stderrConsole, stdoutClosed } from "./Output.ts"
 import { gatewayTeardown } from "./Shutdown.ts"
+import { configFolder, updateNoticeWanted, withUpdateNotice } from "./UpdateNotice.ts"
 
 // First: Node 22's notice that node:sqlite is experimental is queued by the imports above and printed on the
 // next tick. It stays off stderr (NodeWarnings.ts); every other warning prints.
@@ -48,8 +49,11 @@ const argv = withFirstRun(process.argv.slice(2), {
   configHere: existsSync("ot-gateway.json")
 })
 const json = isJsonMode(argv)
+// A globally installed CLI says once a day when a newer release is out (UpdateNotice.ts); never for --json or mcp.
+const notice = updateNoticeWanted(toCliArgs(argv), process.env, process.stderr.isTTY)
 
 runCli(argv).pipe(
+  notice ? withUpdateNotice({ folder: configFolder(process.env), now: Date.now() }) : identity,
   // A reader that closes stdout (`watch | head`) ends a command as done, exit code 0: every streaming command.
   Effect.raceFirst(stdoutClosed(process.stdout)),
   Effect.tapCause(reportFailure({ json, longRunning: isLongRunning(argv) })),
