@@ -16,6 +16,8 @@ Every variable level is a slug from the config (lowercase letters, digits, `-` a
 | `{site}/{building}/{device}/{point}/$set`        | `command`        | gateway subscribes | never    | 1   |
 | `{site}/{building}/{device}/{point}/$set/result` | `command-result` | gateway publishes  | no       | 1   |
 
+Because `health` and `meta` are retained, the broker alone holds the state of every gateway on it: which are online, which devices fail and why, and every point with its name and unit. A client that subscribes to `+/+/$gateway/+/health` and `+/+/+/+/$meta` gets all of it in one round trip, with no database or server beside the broker. `ot-gateway gateways list` and its MCP tools are such a client ([See your whole fleet](fleet.md)), and your own software can be one too.
+
 QoS 1 is capped to what the broker allows. `{site}/{building}/$gateway/{gateway}/check/…` is the CLI's broker round trip (`ot-gateway broker`) and is not part of the contract; neither is any other topic under `$gateway`.
 
 ## Messages

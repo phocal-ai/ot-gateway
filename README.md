@@ -26,6 +26,7 @@ OT Gateway treats field reality as normal: devices time out, brokers go offline,
 - **Read and send on their own schedules.** Poll every 5 seconds and send each read, the latest once a minute, clock-aligned 15-minute aggregates (min, max, time-weighted average), or only changes beyond a deadband: per device or per point.
 - **Semantic tagging.** Each point can carry an optional Brick class and Haystack tags.
 - **Unattended by default.** Retries with jittered backoff, supervised fibers, store-and-forward in SQLite.
+- **Your whole fleet from the broker.** Every gateway keeps its health and its points' metadata retained on MQTT, so `ot-gateway gateways list`, or an AI agent through MCP, shows every gateway, failing device and point from any machine that reaches the broker: no database, no server ([docs/fleet.md](docs/fleet.md)).
 - **Safe writes.** Writing is opt-in per point, range-checked, live-only and logged: a command is written once or not at all, never replayed.
 - **Testable without hardware.** Every driver gets a simulator, and CI runs end to end.
 
@@ -192,6 +193,12 @@ sudo packaging/install.sh path/to/gateway.json
 It installs the gateway to `/opt/ot-gateway` with its production dependencies, creates the `ot-gateway` user, validates the config into `/etc/ot-gateway/gateway.json` (with the outbox in `/var/lib/ot-gateway`), and starts the `ot-gateway` service, which restarts on failure and is held to 512 MB. Run it again to upgrade. Logs: `journalctl -u ot-gateway -f`. Secrets (`passwordEnv`) and `OTEL_*` variables go in `/etc/ot-gateway/gateway.env`. Build the status page first (`pnpm --filter @ot-gateway/web build`, on any machine) and the script installs it too.
 
 Either way, the gateway watches the machine it runs on (memory, event-loop lag, temperature, Raspberry Pi under-voltage and throttling, though only under-voltage on Raspberry Pi kernel 6.12 and later, disk, clock steps) and reports it on the status page, in the health message and in telemetry. [docs/raspberry-pi-testing.md](docs/raspberry-pi-testing.md) is how to test it on a Pi before it goes into a building.
+
+Once there are several, see them all from your laptop: every gateway keeps its health and its points' metadata retained on the broker, so one command reads the whole fleet back, with no database or server, and an agent does the same through `ot-gateway mcp` ([docs/fleet.md](docs/fleet.md)):
+
+```bash
+npx ot-gateway gateways list --broker mqtts://broker.example:8883 --username viewer
+```
 
 The status page listens on `127.0.0.1` only, by default, and then answers only requests addressed to a loopback name, so a web page cannot reach it through DNS rebinding. From another machine, use an SSH tunnel (`ssh -L 8080:127.0.0.1:8080 pi@gateway`), or set `status.bindAddress` to `0.0.0.0` on a network you trust: the page has no login, and its Settings tab saves nothing unless `OT_GATEWAY_EDIT_TOKEN` is set in `ot-gateway.env` (then the page asks for it). Every save must come from the page itself: same origin and an `X-OT-Gateway` header.
 

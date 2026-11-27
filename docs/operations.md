@@ -552,7 +552,7 @@ The `online` message also carries `host`, the machine's last sample (below): `me
 
 ### Every gateway on a broker
 
-`ot-gateway gateways` reads those retained messages back, from any machine that reaches the broker, with no config, status page or database: the topics are the source of truth.
+`ot-gateway gateways` reads those retained messages back, from any machine that reaches the broker, with no config, status page or database: the topics are the source of truth. [See your whole fleet](fleet.md) shows it with example output and an AI agent.
 
 ```bash
 ot-gateway gateways list --broker mqtts://broker.example:8883 --username viewer   # every gateway: online or offline, its devices by status

@@ -8,6 +8,7 @@ import type * as React from "react"
 import { PublishChart } from "@/components/home/publish-chart.tsx"
 import { Flow } from "@/components/home/flow.tsx"
 import { AiSetup } from "@/components/home/ai-setup.tsx"
+import { Fleet } from "@/components/home/fleet.tsx"
 import { Audiences } from "@/components/home/audiences.tsx"
 import { CopyPrompt } from "@/components/home/copy-command.tsx"
 import { HowItWorks } from "@/components/home/how-it-works.tsx"
@@ -168,6 +169,14 @@ const HomePage = () => (
       </Section>
 
       <Section
+        id="fleet"
+        lead="Every gateway already tells the broker how it is doing. So one command, or your AI agent, shows every site from anywhere: no database, no server to run."
+        title="Your whole fleet, from the broker"
+      >
+        <Fleet />
+      </Section>
+
+      <Section
         lead="Read a device every few seconds and send only what your software needs: every read, an average per window, or only the changes."
         title="Read often, send what you need"
       >
@@ -188,6 +197,7 @@ const HomePage = () => (
         <Link href="/docs">Docs</Link>
         <Link href="/docs/how-it-works">How it works</Link>
         <Link href="/docs/operations">Operations</Link>
+        <Link href="/docs/fleet">Your fleet</Link>
         <Link href="/docs/troubleshooting">Troubleshooting</Link>
         <Link href="/docs/vision">Vision</Link>
         <a href={site.repository}>GitHub</a>
