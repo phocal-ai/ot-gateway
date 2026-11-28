@@ -11,6 +11,7 @@
         "../../packaging/compose.yaml",
         "../../packaging/ot-gateway",
         "../../packaging/install.sh",
+        "../../scripts/release-pins.sh",
         "../../docs/operations.md",
         "../../docs/troubleshooting.md",
         "../../docs/raspberry-pi-testing.md",

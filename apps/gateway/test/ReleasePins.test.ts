@@ -1,9 +1,14 @@
 /**
- * A release moves its tag by hand in compose.yaml, the packaging/ot-gateway wrapper and the docs. The compose pin is
- * the reference: every other pin must carry the same tag, so a missed one fails here instead of on a user's machine.
+ * A release moves its tag (scripts/release-pins.sh) in compose.yaml, the packaging/ot-gateway wrapper, the docs and the
+ * Claude Code plugin. The compose pin is the reference: every other pin must carry the same tag, so a missed one fails
+ * here instead of on a user's machine.
  */
 import { describe, expect, it } from "@effect/vitest"
-import { readFileSync } from "node:fs"
+import { Schema } from "effect"
+import { execFileSync } from "node:child_process"
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const repoFile = (path: string) => fileURLToPath(new URL(`../../../${path}`, import.meta.url))
@@ -19,6 +24,15 @@ const docPins = [
   new RegExp(String.raw`OT_GATEWAY_TAG:-(${tagShape})`, "g")
 ]
 const docs = ["docs/operations.md", "docs/raspberry-pi-testing.md"]
+
+const McpJson = Schema.Struct({
+  mcpServers: Schema.Record(Schema.String, Schema.Struct({ args: Schema.Array(Schema.String) }))
+})
+const Plugin = Schema.Struct({ version: Schema.optional(Schema.String) })
+const Marketplace = Schema.Struct({ plugins: Schema.Array(Schema.Struct({ version: Schema.optional(Schema.String) })) })
+const decodeMcpJson = Schema.decodeUnknownSync(Schema.fromJsonString(McpJson))
+const decodePlugin = Schema.decodeUnknownSync(Schema.fromJsonString(Plugin))
+const decodeMarketplace = Schema.decodeUnknownSync(Schema.fromJsonString(Marketplace))
 
 interface Pin {
   readonly location: string
@@ -49,10 +63,61 @@ describe("release pins", () => {
     expect(tag, `${found}, compose.yaml pins ${releaseTag}`).toBe(releaseTag)
   })
 
+  it("the Claude Code plugin runs the npm release compose.yaml pins, and carries its version", () => {
+    // A prerelease stays off the plugin (scripts/release-pins.sh): it keeps the last release.
+    const prerelease = releaseTag.includes("-")
+    const version = prerelease
+      ? (/"version": "(\d+\.\d+\.\d+)"/.exec(read("plugins/ot-gateway/.claude-plugin/plugin.json"))?.[1] ?? "")
+      : releaseTag.slice(1)
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
+    const mcp = decodeMcpJson(read("plugins/ot-gateway/.mcp.json"))
+    // An exact version: a bare `ot-gateway` (or `@latest`) lets npx run an older release it has cached.
+    expect(mcp.mcpServers["ot-gateway"]?.args, "plugins/ot-gateway/.mcp.json").toEqual([
+      "-y",
+      `ot-gateway@${version}`,
+      "mcp"
+    ])
+    const plugin = decodePlugin(read("plugins/ot-gateway/.claude-plugin/plugin.json"))
+    expect(plugin.version, "plugins/ot-gateway/.claude-plugin/plugin.json").toBe(version)
+    // The version lives in plugin.json only: a second one in the marketplace entry would be one more pin to miss.
+    const marketplace = decodeMarketplace(read(".claude-plugin/marketplace.json"))
+    expect(marketplace.plugins.map((entry) => entry.version)).toEqual(marketplace.plugins.map(() => undefined))
+  })
+
   it.each(docs)("%s pins the tag compose.yaml pins, everywhere", (path) => {
     const pins = pinsIn(path)
     expect(pins.length, `${path} holds no release pin`).toBeGreaterThan(0)
     const stale = pins.filter((pin) => pin.tag !== releaseTag).map((pin) => `${pin.location}: ${pin.tag}`)
     expect(stale, `pins other than ${releaseTag} (compose.yaml)`).toEqual([])
+  })
+
+  it("scripts/release-pins.sh moves every pin above, and only the pins, and keeps a prerelease off the plugin", () => {
+    const files = [
+      "packaging/compose.yaml",
+      "packaging/ot-gateway",
+      ...docs,
+      "plugins/ot-gateway/.mcp.json",
+      "plugins/ot-gateway/.claude-plugin/plugin.json",
+      ".claude-plugin/marketplace.json"
+    ]
+    const copy = mkdtempSync(join(tmpdir(), "release-pins-"))
+    try {
+      for (const file of ["scripts/release-pins.sh", ...files]) cpSync(repoFile(file), join(copy, file))
+      execFileSync("bash", [join(copy, "scripts/release-pins.sh"), "v99.0.0"], { stdio: "pipe" })
+      const moved = (file: string) => readFileSync(join(copy, file), "utf8")
+      for (const file of files) {
+        expect(moved(file).includes(releaseTag), `${file} still names ${releaseTag}`).toBe(false)
+        // Nothing but the tag changes: put the old tag back and the file is what it was.
+        expect(moved(file).replaceAll("v99.0.0", releaseTag).replaceAll("99.0.0", releaseTag.slice(1))).toBe(read(file))
+      }
+      expect(moved("plugins/ot-gateway/.mcp.json")).toContain(`"ot-gateway@99.0.0"`)
+      expect(moved("plugins/ot-gateway/.claude-plugin/plugin.json")).toContain(`"version": "99.0.0"`)
+      const plugin = moved("plugins/ot-gateway/.mcp.json")
+      execFileSync("bash", [join(copy, "scripts/release-pins.sh"), "v99.1.0-rc.1"], { stdio: "pipe" })
+      expect(moved("packaging/compose.yaml")).toContain("v99.1.0-rc.1")
+      expect(moved("plugins/ot-gateway/.mcp.json")).toBe(plugin)
+    } finally {
+      rmSync(copy, { recursive: true, force: true })
+    }
   })
 })
