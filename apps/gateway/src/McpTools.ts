@@ -174,6 +174,28 @@ const fleetArgv = (input: {
 
 const gatewayName = text("The gateway as site/building/id (from gateways_list), or its id alone when no other has it")
 
+/** What every export tool takes besides where its list comes from: the format, and a file to write. */
+const exportFileInput = (example: string) => ({
+  format: Schema.optionalKey(
+    Schema.Literals(["csv", "json"]).annotate({ description: "csv (default: rows and the csv text) or json" })
+  ),
+  output: optionalText(
+    `A file to write the list to, ~ for the home folder (${example}); its folder must exist. Without it the list is only returned`
+  ),
+  force: Schema.optionalKey(Schema.Boolean.annotate({ description: "Write over a file at output that is there" }))
+})
+
+const exportInput = (example: string) => ({ config: configArgument, ...exportFileInput(example) })
+
+const exportArgv = (input: {
+  readonly format?: "csv" | "json"
+  readonly output?: string
+  readonly force?: boolean
+}) => [flag("format", input.format), flag("output", input.output), flag("force", input.force)]
+
+/** A tool that writes a file the user names: with force over one that is there, which may be anything they have. */
+const writesFile = { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false } as const
+
 export const mcpTools: ReadonlyArray<McpTool> = [
   defineTool({
     name: "check",
@@ -228,6 +250,16 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     input: { gateway: gatewayName, ...fleetInput },
     annotations: asks,
     argv: ({ gateway, ...input }) => ["gateways", "points", gateway, ...fleetArgv(input)]
+  }),
+  defineTool({
+    name: "gateways_export",
+    title: "Export the gateways on a broker as CSV",
+    description:
+      "Every gateway whose retained health the broker keeps as a CSV (or JSON) list, returned or written to a file (output: ~/Downloads/gateways.csv), one row each: gateway (site/building/id), status, reason, contract, since and heartbeat (ISO 8601, UTC), devices, ok, failing, starting, health_topic. Needs only a broker (broker, or the config's). An existing file is kept unless force",
+    input: { ...fleetInput, ...exportFileInput("~/Downloads/gateways.csv") },
+    // It writes over the file output names with force, and asks the broker.
+    annotations: { ...writesFile, openWorldHint: true },
+    argv: (input) => ["gateways", "export", ...fleetArgv(input), ...exportArgv(input)]
   }),
   defineTool({
     name: "status",
@@ -572,8 +604,7 @@ export const mcpTools: ReadonlyArray<McpTool> = [
       ),
       force: Schema.optionalKey(Schema.Boolean.annotate({ description: "Write over a file at output that is there" }))
     },
-    // With force it writes over the file output names, which may be anything the user has.
-    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    annotations: writesFile,
     argv: ({ config, format, protocol, columns, output, force }) => [
       "points",
       "export",
@@ -584,6 +615,24 @@ export const mcpTools: ReadonlyArray<McpTool> = [
       flag("output", output),
       flag("force", force)
     ]
+  }),
+  defineTool({
+    name: "devices_export",
+    title: "Export devices as CSV",
+    description:
+      "The config's devices as a CSV (or JSON) list, returned or written to a file on this machine (output: ~/Downloads/devices.csv), one row each: device, protocol, host, port, unit_id or device_instance, address, interval_s, publish, points, writable (how many take commands) and topics. No values. An existing file is kept unless force",
+    input: exportInput("~/Downloads/devices.csv"),
+    annotations: writesFile,
+    argv: ({ config, ...input }) => ["devices", "export", config, ...exportArgv(input)]
+  }),
+  defineTool({
+    name: "topics_export",
+    title: "Export the topic map as CSV",
+    description:
+      "The config's MQTT topic map as a CSV (or JSON) list, returned or written to a file (output: ~/Downloads/topics.csv): one row per topic the gateway publishes or listens on, the health topic and each point's value, $meta and, for a writable point, $set and $set/result. Each row: topic, message, direction, retained, qos, device, point, name, unit, value (number or boolean), writable, publish. Use it for \"which topic is which point\"; the payloads are in contract. No values. An existing file is kept unless force",
+    input: exportInput("~/Downloads/topics.csv"),
+    annotations: writesFile,
+    argv: ({ config, ...input }) => ["topics", "export", config, ...exportArgv(input)]
   }),
   defineTool({
     name: "points_allow_commands",

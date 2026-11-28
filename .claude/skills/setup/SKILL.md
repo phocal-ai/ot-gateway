@@ -161,6 +161,8 @@ Five lines at most (six with an open alarm question):
 
 Later, when the user asks for the points as a spreadsheet ("the BACnet points as a CSV in my Downloads"): `otg points export --protocol bacnet --columns all --output ~/Downloads/bacnet-points.csv` (the `points_export` tool with `protocol`, `columns` and `output`). `--protocol modbus` for the Modbus points; `--columns all` writes every column with each point's MQTT topic, whether it is writable and its limits, `--columns common` every point of every protocol with only what they share (name, protocol, unit, writable, limits, topic). It writes over no file unless `--force`; give the user the path it returns. With the Docker wrapper the CLI sees only the current folder: write the file there (`--output bacnet-points.csv`) and move it.
 
+The same way for the other lists, CSV by default, `--format json`, `--output`, `--force`, no live values: `otg devices export` (the `devices_export` tool) for the devices, one row each; `otg topics export` (`topics_export`) for the topic map, each MQTT topic with its point, unit, value type (number or boolean), whether it takes commands and how it publishes, what an integrator asks for; `otg gateways export` (`gateways_export`) for every gateway on the broker, with `--broker` like `gateways list`.
+
 ## Report a bug
 
 When ot-gateway itself is wrong (not the site), offer to report it. The report becomes a public issue, so nothing is filed until the user has read the text and said yes, every time: there is no standing permission.
