@@ -126,6 +126,8 @@ const reserved = new Set([
   "mcp",
   "messages",
   "points",
+  "devices",
+  "topics",
   "probe",
   "profiles",
   "publish",
@@ -386,7 +388,7 @@ export const commandWords = (command: string) => {
     .filter((word) => word !== "")
   const start = words.findIndex((word) => /^(ot-gateway(@[\w.-]+)?|otg)$/.test(word))
   const rest = start < 0 ? words : words.slice(start + 1)
-  const groups = new Set(["points", "config", "gateways", "secret", "profiles", "report", "guide"])
+  const groups = new Set(["points", "devices", "topics", "config", "gateways", "secret", "profiles", "report", "guide"])
   const [first, second] = rest
   if (first === undefined || first.startsWith("-")) return ""
   return groups.has(first) && second !== undefined && /^[a-z][a-z-]*$/.test(second) ? `${first} ${second}` : first

@@ -14,6 +14,7 @@
  *   ot-gateway discover modbus <range>  find Modbus TCP devices and unit ids on a range, read-only and rate-limited
  *   ot-gateway import <list> [config]  add the devices of a points list (CSV) to the config
  *   ot-gateway points export [config]  the config's devices as a points list again, for import (CSV or JSON)
+ *   ot-gateway devices export [config]  the config's devices, one row each; topics export: its topic map
  *   ot-gateway diff [config]        what the config changes on the broker against the running gateway (or --against a file)
  *   ot-gateway contract [message]   the MQTT contract: its topics and payloads (--json: the JSON Schemas)
  *   ot-gateway watch [config]       print what arrives at the config's broker (--check: what is off the contract)
@@ -96,7 +97,16 @@ import {
   scanToPointsList
 } from "./ModbusDiscover.ts"
 import { clearCommands, diffConfigs, diffReport, diffTitle, formatDiff, sideOfConfig } from "./Diff.ts"
-import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
+import {
+  describeNotCarried,
+  exportColumnChoices,
+  exportCsv,
+  exportJson,
+  exportPointsList,
+  visibleFolder,
+  writeExport
+} from "./PointsExport.ts"
+import { type ExportList, exportDevices, exportGateways, exportTopics, spreadsheetSafe } from "./Exports.ts"
 import {
   formatConfigChange,
   formatConfigGet,
@@ -1501,60 +1511,229 @@ const fromEdeCommand = Command.make(
   ])
 )
 
+/** `--format` of every export: CSV for a spreadsheet, or JSON, an array of rows (`what` says of what). */
+const exportFormat = (what: string) =>
+  Flag.Literals("format", ["csv", "json"] as const).pipe(
+    Flag.withDescription(`csv (default), or json: ${what}`),
+    Flag.withDefault("csv" as const)
+  )
+
+/** `--output` of every export, with an example file. */
+const exportOutput = (example: string) =>
+  Flag.String("output").pipe(
+    Flag.withAlias("o"),
+    Flag.withDescription(
+      `Write the list to this file (~ is the home folder: ${example}) instead of stdout; the folder must exist. Under the Docker wrapper only a file in the current folder`
+    ),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined)
+  )
+
+const exportForce = Flag.Boolean("force").pipe(
+  Flag.withDescription("With --output, write over a file that is there"),
+  Flag.withDefault(false)
+)
+
+/**
+ * A list of `devices export`, `topics export` or `gateways export` delivered: on stdout, or in the `--output` file
+ * with one line on what was written; with `--json` its columns and rows (and the CSV when it went nowhere else).
+ */
+const deliverExport = Effect.fnUntraced(function* (
+  list: ExportList,
+  options: {
+    readonly format: "csv" | "json"
+    readonly output: string | undefined
+    readonly force: boolean
+    readonly json: boolean
+    /** What the list is of, for the summary: `3 devices from ot-gateway.json`. */
+    readonly summary: string
+    /** Fields of `--json` before the list: the config or broker it came from. */
+    readonly source: Record<string, unknown>
+    /** The list's text came from the broker, not from the user's config: no field of the CSV may be a formula. */
+    readonly untrusted?: boolean
+  }
+) {
+  const text =
+    options.format === "json" ? exportJson(list) : exportCsv(options.untrusted ? spreadsheetSafe(list) : list)
+  const written =
+    options.output === undefined
+      ? undefined
+      : yield* writeExport(options.output, text, { force: options.force, visibleFolder: yield* visibleFolder })
+  if (options.json) {
+    return yield* printJson({
+      ok: true,
+      ...options.source,
+      format: options.format,
+      ...(written === undefined ? {} : { output: written.path, bytes: written.bytes }),
+      columns: list.columns,
+      rows: list.rows,
+      ...(options.format === "csv" && written === undefined ? { csv: text } : {})
+    })
+  }
+  if (written === undefined) yield* Effect.sync(() => process.stdout.write(text))
+  const summary = `✓ ${options.summary}${written === undefined ? "" : ` in ${written.path}`}`
+  yield* written === undefined ? Console.error(summary) : printResult(summary)
+})
+
 const exportCommand = Command.make(
   "export",
   {
     config: configPath,
-    format: Flag.Literals("format", ["csv", "json"] as const).pipe(
-      Flag.withDescription("csv (default), or json: the points list's JSON form, an array of rows"),
-      Flag.withDefault("csv" as const)
+    format: exportFormat("the points list's JSON form, an array of rows"),
+    protocol: Flag.Literals("protocol", ["bacnet", "modbus"] as const).pipe(
+      Flag.withDescription("Only the BACnet or only the Modbus devices"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
     ),
+    columns: Flag.Literals("columns", exportColumnChoices).pipe(
+      Flag.withDescription(
+        "import (default): the columns import reads, defaults left out; all: every column, defaults too, and protocol, writable, min, max, priority and topic (import ignores those); common: every point of every protocol with only what they share (name, protocol, unit, writable, limits, topic, publishing), not for import"
+      ),
+      Flag.withDefault("import" as const)
+    ),
+    output: exportOutput("~/Downloads/bacnet-points.csv"),
+    force: exportForce,
     json: jsonFlag
   },
-  ({ config, format, json }) =>
+  ({ config, format, protocol, columns, output, force, json }) =>
     Effect.gen(function* () {
       const decoded = yield* loadConfig(config)
-      const list = exportPointsList(decoded)
+      const list = exportPointsList(decoded, { protocol, columns })
       const text = format === "json" ? exportJson(list) : exportCsv(list)
-      const file = format === "json" ? "points.json" : "points.csv"
-      const next = [
-        {
-          command: `${yield* invocation} import ${file} --dry-run`,
-          description: "Check the list; import adds its devices to a config that does not have them yet"
-        }
-      ]
+      const written =
+        output === undefined
+          ? undefined
+          : yield* writeExport(output, text, { force, visibleFolder: yield* visibleFolder })
+      const file = written?.path ?? (format === "json" ? "points.json" : "points.csv")
+      const next =
+        columns === "common"
+          ? []
+          : [
+              {
+                command: `${yield* invocation} import ${shellArgument(file)} --dry-run`,
+                description: "Check the list; import adds its devices to a config that does not have them yet"
+              }
+            ]
       if (json) {
         return yield* printJson({
           ok: true,
           path: config,
           format,
+          ...(protocol === undefined ? {} : { protocol }),
+          columnSet: columns,
+          ...(written === undefined ? {} : { output: written.path, bytes: written.bytes }),
           devices: list.devices,
           points: list.rows.length,
           columns: list.columns,
           rows: list.rows,
-          ...(format === "csv" ? { csv: text } : {}),
+          ...(format === "csv" && written === undefined ? { csv: text } : {}),
           notCarried: list.notCarried,
           next
         })
       }
-      yield* Effect.sync(() => process.stdout.write(text))
-      yield* Console.error(
-        [
-          `✓ ${plural(list.rows.length, "point")} of ${plural(list.devices, "device")} from ${config}`,
-          ...describeNotCarried(list.notCarried),
-          ...next.map((step) => `next: ${step.command}`)
-        ].join("\n")
-      )
+      if (written === undefined) yield* Effect.sync(() => process.stdout.write(text))
+      const summary = [
+        `✓ ${plural(list.rows.length, "point")} of ${plural(list.devices, "device")} from ${config}${written === undefined ? "" : ` in ${written.path}`}`,
+        ...describeNotCarried(list.notCarried),
+        ...next.map((step) => `next: ${step.command}`)
+      ].join("\n")
+      yield* written === undefined ? Console.error(summary) : printResult(summary)
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "The config's devices as a points list on stdout (CSV, or --format json), the columns import reads, so the list follows edits made in the config or on the status page. What a list cannot say (writable points, semantics, a register's bit, …) is named on stderr; --json: rows, columns and notCarried [{kind, device, point, detail, skipped}]"
+    "The config's devices as a points list (CSV, or --format json) on stdout or in a file (--output), the columns import reads, so the list follows edits made in the config or on the status page. --protocol bacnet|modbus keeps one protocol; --columns all writes every column with the MQTT topic and whether a point is writable, --columns common every point with only what all protocols share. What a list cannot say (writable points, semantics, a register's bit, …) is named on stderr; --json: rows, columns, output (the file written) and notCarried [{kind, device, point, detail, skipped}]"
   ),
   Command.withExamples([
     { command: "ot-gateway points export > points.csv", description: "The list of ot-gateway.json" },
+    {
+      command: "ot-gateway points export --protocol bacnet --columns all -o ~/Downloads/bacnet-points.csv",
+      description: "The BACnet points with every column, the topic and limits too, to a file"
+    },
+    {
+      command: "ot-gateway points export --columns common -o ~/Downloads/points.csv",
+      description: "Every point of every protocol: name, unit, writable, topic"
+    },
     { command: "ot-gateway points export site-1/ot-gateway.json --format json > points.json", description: "As JSON" },
     { command: "ot-gateway points export --json", description: "The rows and what the list leaves out, for agents" }
   ])
+)
+
+const devicesExportCommand = Command.make(
+  "export",
+  {
+    config: configPath,
+    format: exportFormat("an array of rows, one per device"),
+    output: exportOutput("~/Downloads/devices.csv"),
+    force: exportForce,
+    json: jsonFlag
+  },
+  ({ config, format, output, force, json }) =>
+    Effect.gen(function* () {
+      const decoded = yield* loadConfig(config)
+      const list = exportDevices(decoded)
+      yield* deliverExport(list, {
+        format,
+        output,
+        force,
+        json,
+        summary: `${plural(list.rows.length, "device")} from ${config}`,
+        source: { path: config }
+      })
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "The config's devices as a list (CSV, or --format json) on stdout or in a file (--output), one row each: device, protocol, where it is (host, port, unit_id or device_instance, address), interval_s, publish, how many points and how many writable, and the topics its values arrive on. No values; --json: columns and rows"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway devices export > devices.csv", description: "The devices of ot-gateway.json" },
+    { command: "ot-gateway devices export -o ~/Downloads/devices.csv", description: "To a file" },
+    { command: "ot-gateway devices export --json", description: "The rows, for agents" }
+  ])
+)
+
+const devicesCommand = Command.make("devices").pipe(
+  Command.withDescription("The config's devices: export lists them, one row each (the points are in points export)"),
+  Command.withSubcommands([devicesExportCommand])
+)
+
+const topicsExportCommand = Command.make(
+  "export",
+  {
+    config: configPath,
+    format: exportFormat("an array of rows, one per topic"),
+    output: exportOutput("~/Downloads/topics.csv"),
+    force: exportForce,
+    json: jsonFlag
+  },
+  ({ config, format, output, force, json }) =>
+    Effect.gen(function* () {
+      const decoded = yield* loadConfig(config)
+      const list = exportTopics(decoded)
+      yield* deliverExport(list, {
+        format,
+        output,
+        force,
+        json,
+        summary: `${plural(list.rows.length, "topic")} of ${plural(decoded.devices.length, "device")} from ${config}`,
+        source: { path: config }
+      })
+    }).pipe(jsonFailure(json, { path: config }))
+).pipe(
+  Command.withDescription(
+    "The config's topic map (CSV, or --format json) on stdout or in a file (--output): one row per MQTT topic the gateway publishes or listens on, the health topic and each point's value, $meta and, when writable, $set and $set/result. Each row: topic, message (value, meta, health, command, command-result), direction, retained, qos, and for a point device, point, name, unit, value (number or boolean), writable, publish (sample, aggregate, change). The payloads are in ot-gateway contract. No values; --json: columns and rows"
+  ),
+  Command.withExamples([
+    { command: "ot-gateway topics export > topics.csv", description: "The topic map of ot-gateway.json" },
+    { command: "ot-gateway topics export -o ~/Downloads/topics.csv", description: "To a file, for the integrator" },
+    { command: "ot-gateway topics export --format json", description: "As JSON" }
+  ])
+)
+
+const topicsCommand = Command.make("topics").pipe(
+  Command.withDescription(
+    "The MQTT topics the config's gateway uses: export maps each to its point, unit and whether it takes commands"
+  ),
+  Command.withSubcommands([topicsExportCommand])
 )
 
 const commandsTarget = Argument.String("point").pipe(
@@ -2140,15 +2319,44 @@ const gatewaysPoints = Command.make(
   Command.withDescription("One gateway's points from their retained $meta on the broker: topic, name, unit, writable")
 )
 
+const gatewaysExport = Command.make(
+  "export",
+  {
+    ...fleetFlags,
+    format: exportFormat("an array of rows, one per gateway"),
+    output: exportOutput("~/Downloads/gateways.csv"),
+    force: exportForce
+  },
+  ({ broker, username, config, wait, format, output, force, json }) =>
+    Effect.gen(function* () {
+      const settings = yield* fleetBroker({ broker, username, config })
+      const report = yield* listGateways(settings, Duration.seconds(wait))
+      yield* deliverExport(exportGateways(report.gateways), {
+        format,
+        output,
+        force,
+        json,
+        summary: `${plural(report.gateways.length, "gateway")} on ${report.broker}`,
+        source: { broker: report.broker },
+        untrusted: true
+      })
+    }).pipe(jsonFailure(json))
+).pipe(
+  Command.withDescription(
+    "Every gateway whose health the broker keeps as a list (CSV, or --format json) on stdout or in a file (--output), one row each: gateway (site/building/id), status, reason, contract, since and heartbeat (ISO 8601, UTC), devices and how many are ok, failing, starting, and its health topic. --json: columns and rows"
+  )
+)
+
 const gatewaysCommand = Command.make("gateways").pipe(
   Command.withDescription(
     "The gateways a broker knows, from the health and $meta they keep there: no config or status page needed (--broker)"
   ),
-  Command.withSubcommands([gatewaysList, gatewaysStatus, gatewaysPoints]),
+  Command.withSubcommands([gatewaysList, gatewaysStatus, gatewaysPoints, gatewaysExport]),
   Command.withExamples([
     { command: "ot-gateway gateways list --broker mqtt://broker.local:1883", description: "Every gateway on a broker" },
     { command: "ot-gateway gateways status site-1/building-a/main", description: "One gateway, device by device" },
-    { command: "ot-gateway gateways points main --json", description: "Its points, for scripts and agents" }
+    { command: "ot-gateway gateways points main --json", description: "Its points, for scripts and agents" },
+    { command: "ot-gateway gateways export -o ~/Downloads/gateways.csv", description: "Every gateway as a CSV" }
   ])
 )
 
@@ -3499,6 +3707,8 @@ export const rootDescription = [
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
+  "    points export --columns all -o ~/Downloads/points.csv   every point with its topic in a file (--protocol bacnet|modbus)",
+  "    devices export, topics export    the config's devices, and its topic map (topic, point, unit, writable), as CSV or --format json",
   "    config set <key> <value> --json  one key of the config, checked before it is written (get, unset, remove <device[/point]>, undo; --dry-run)",
   "    secret list --json               which secrets the config needs and which are set, by name; the user sets one with secret set broker-password",
   "    points allow-commands <device/point> --min=15 --max=25 --json   one point takes commands (read-only undoes it): only when the user names it",
@@ -3510,7 +3720,7 @@ export const rootDescription = [
   "    start --json                     on macOS: the gateway in the background until every point has a value (stop stops it); on Linux: up",
   "    check --json                     every mistake in a config, with its path",
   "    broker --json                    the broker: MQTT version, limits, a round trip",
-  "    gateways list --json             every gateway on the broker (--broker <url>, no config needed); gateways status|points <gateway>",
+  "    gateways list --json             every gateway on the broker (--broker <url>, no config needed); gateways status|points <gateway>, gateways export",
   "    status --json                    the running gateway, device by device, with what to check; exits 1 when something fails",
   "    events --since 1h --json         what broke, since when and why, and when it came back (--follow: as it happens)",
   "    history <device/point> --json    what a point did lately: min, max, average per bucket, and the gaps",
@@ -3541,6 +3751,8 @@ export const cli = Command.make("ot-gateway").pipe(
     secretCommand,
     diffCommand,
     points,
+    devicesCommand,
+    topicsCommand,
     profiles,
     contractCommand,
     watchCommand,
@@ -3582,6 +3794,8 @@ const subcommands = new Set([
   "secret",
   "diff",
   "points",
+  "devices",
+  "topics",
   "profiles",
   "contract",
   "watch",

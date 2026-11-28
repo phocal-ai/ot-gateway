@@ -48,7 +48,7 @@ Ask these together:
 
 1. **Devices:** "Modbus TCP", "BACnet/IP", "Both", or "None yet (simulated)".
 2. **What they have:** a points list (CSV or Excel), an EDE file from the BACnet engineering tool, device datasheets (PDF), or nothing yet.
-3. **Broker:** the URL (`mqtts://host:port`, or `mqtt://` without TLS; never with credentials in it) and the username if it needs one. The demo's broker is not for production: without a broker of their own, say so and pause here until they have one.
+3. **Broker:** the URL (`mqtts://host:port`, or `mqtt://` without TLS; never with credentials in it) and the username if it needs one. When the user's request names no broker, first look for one on this machine, with the demo stopped (step 2): `otg gateways list --broker mqtt://localhost:1883 --wait 1 --json`. `"ok": true` means a broker answers there: use `mqtt://localhost:1883`, tell the user so, and leave this question out. Any other result (`broker-unreachable`, a login refused, a timeout) means ask. The Docker wrapper's `localhost` is its container, so there ask. The demo's broker is not for production: without a broker of their own, say so and pause here until they have one.
 4. **What to send:** "Every read (Recommended)", "15-minute aggregates" (energy reports), or "Only changes" (states, setpoints). For BACnet, tell the user that present values come by change of value (COV) where the device supports it, so they arrive when the device notifies a change, possibly more often than the interval; "Only changes" with a deadband, or `cov: false`, limits that.
 5. **Site and building names**, e.g. "Site 1, Building A". You make the slugs: `site-1`, `building-a`.
 
@@ -158,6 +158,10 @@ Five lines at most (six with an open alarm question):
   - add the remaining points (edit `points.csv`, import the new rows);
   - send telemetry to Grafana: after a fresh `init` it is off (the `OTEL_*` lines in `ot-gateway.env` are commented out); the user pastes them in, then `docker compose up -d` (`observability/README.md`);
   - make a point writable, with limits: `otg points allow-commands` (README, "Commands").
+
+Later, when the user asks for the points as a spreadsheet ("the BACnet points as a CSV in my Downloads"): `otg points export --protocol bacnet --columns all --output ~/Downloads/bacnet-points.csv` (the `points_export` tool with `protocol`, `columns` and `output`). `--protocol modbus` for the Modbus points; `--columns all` writes every column with each point's MQTT topic, whether it is writable and its limits, `--columns common` every point of every protocol with only what they share (name, protocol, unit, writable, limits, topic). It writes over no file unless `--force`; give the user the path it returns. With the Docker wrapper the CLI sees only the current folder: write the file there (`--output bacnet-points.csv`) and move it.
+
+The same way for the other lists, CSV by default, `--format json`, `--output`, `--force`, no live values: `otg devices export` (the `devices_export` tool) for the devices, one row each; `otg topics export` (`topics_export`) for the topic map, each MQTT topic with its point, unit, value type (number or boolean), whether it takes commands and how it publishes, what an integrator asks for; `otg gateways export` (`gateways_export`) for every gateway on the broker, with `--broker` like `gateways list`.
 
 ## Report a bug
 

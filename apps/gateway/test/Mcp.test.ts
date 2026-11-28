@@ -203,7 +203,12 @@ describe("mcp tools", () => {
   it("mark write, making a point writable, removing a device, and stopping, restarting or upgrading the gateway, as the tools that may break something", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
     expect(changing).toEqual([
+      // The exports write over the file they name with force.
+      "gateways_export",
       "write",
+      "points_export",
+      "devices_export",
+      "topics_export",
       "points_allow_commands",
       "config_remove",
       "config_undo",
@@ -215,6 +220,19 @@ describe("mcp tools", () => {
       "down",
       "upgrade"
     ])
+  })
+
+  it("exports devices, topics and gateways with the same format, output and force as points_export", () => {
+    expect(argvOf("devices_export", { config: "site/ot-gateway.json", output: "~/Downloads/devices.csv" })).toEqual(
+      Exit.succeed(["devices", "export", "site/ot-gateway.json", "--output=~/Downloads/devices.csv"])
+    )
+    expect(argvOf("topics_export", { format: "json", force: true })).toEqual(
+      Exit.succeed(["topics", "export", "--format=json", "--force"])
+    )
+    expect(argvOf("gateways_export", { broker: "mqtt://broker:1883", wait: 3, output: "gateways.csv" })).toEqual(
+      Exit.succeed(["gateways", "export", "--broker=mqtt://broker:1883", "--wait=3", "--output=gateways.csv"])
+    )
+    expect(Exit.isFailure(argvOf("topics_export", { format: "xml" }))).toBe(true)
   })
 
   it("config_set only checks unless told otherwise, and passes the value as JSON in a flag", () => {

@@ -1,5 +1,5 @@
 {
   "mcpServers": {
-    "ot-gateway": { "command": "npx", "args": ["-y", "ot-gateway@0.19.2", "mcp"] }
+    "ot-gateway": { "command": "npx", "args": ["-y", "ot-gateway@0.20.0", "mcp"] }
   }
 }
