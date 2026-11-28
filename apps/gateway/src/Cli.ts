@@ -96,7 +96,15 @@ import {
   scanToPointsList
 } from "./ModbusDiscover.ts"
 import { clearCommands, diffConfigs, diffReport, diffTitle, formatDiff, sideOfConfig } from "./Diff.ts"
-import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "./PointsExport.ts"
+import {
+  describeNotCarried,
+  exportColumnChoices,
+  exportCsv,
+  exportJson,
+  exportPointsList,
+  visibleFolder,
+  writeExport
+} from "./PointsExport.ts"
 import {
   formatConfigChange,
   formatConfigGet,
@@ -1509,49 +1517,89 @@ const exportCommand = Command.make(
       Flag.withDescription("csv (default), or json: the points list's JSON form, an array of rows"),
       Flag.withDefault("csv" as const)
     ),
+    protocol: Flag.Literals("protocol", ["bacnet", "modbus"] as const).pipe(
+      Flag.withDescription("Only the BACnet or only the Modbus devices"),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    columns: Flag.Literals("columns", exportColumnChoices).pipe(
+      Flag.withDescription(
+        "import (default): the columns import reads, defaults left out; all: every column, defaults too, and protocol, writable, min, max, priority and topic (import ignores those); common: every point of every protocol with only what they share (name, protocol, unit, writable, limits, topic, publishing), not for import"
+      ),
+      Flag.withDefault("import" as const)
+    ),
+    output: Flag.String("output").pipe(
+      Flag.withAlias("o"),
+      Flag.withDescription(
+        "Write the list to this file (~ is the home folder: ~/Downloads/bacnet-points.csv) instead of stdout; the folder must exist. Under the Docker wrapper only a file in the current folder"
+      ),
+      Flag.optional,
+      Flag.map(Option.getOrUndefined)
+    ),
+    force: Flag.Boolean("force").pipe(
+      Flag.withDescription("With --output, write over a file that is there"),
+      Flag.withDefault(false)
+    ),
     json: jsonFlag
   },
-  ({ config, format, json }) =>
+  ({ config, format, protocol, columns, output, force, json }) =>
     Effect.gen(function* () {
       const decoded = yield* loadConfig(config)
-      const list = exportPointsList(decoded)
+      const list = exportPointsList(decoded, { protocol, columns })
       const text = format === "json" ? exportJson(list) : exportCsv(list)
-      const file = format === "json" ? "points.json" : "points.csv"
-      const next = [
-        {
-          command: `${yield* invocation} import ${file} --dry-run`,
-          description: "Check the list; import adds its devices to a config that does not have them yet"
-        }
-      ]
+      const written =
+        output === undefined
+          ? undefined
+          : yield* writeExport(output, text, { force, visibleFolder: yield* visibleFolder })
+      const file = written?.path ?? (format === "json" ? "points.json" : "points.csv")
+      const next =
+        columns === "common"
+          ? []
+          : [
+              {
+                command: `${yield* invocation} import ${shellArgument(file)} --dry-run`,
+                description: "Check the list; import adds its devices to a config that does not have them yet"
+              }
+            ]
       if (json) {
         return yield* printJson({
           ok: true,
           path: config,
           format,
+          ...(protocol === undefined ? {} : { protocol }),
+          columnSet: columns,
+          ...(written === undefined ? {} : { output: written.path, bytes: written.bytes }),
           devices: list.devices,
           points: list.rows.length,
           columns: list.columns,
           rows: list.rows,
-          ...(format === "csv" ? { csv: text } : {}),
+          ...(format === "csv" && written === undefined ? { csv: text } : {}),
           notCarried: list.notCarried,
           next
         })
       }
-      yield* Effect.sync(() => process.stdout.write(text))
-      yield* Console.error(
-        [
-          `✓ ${plural(list.rows.length, "point")} of ${plural(list.devices, "device")} from ${config}`,
-          ...describeNotCarried(list.notCarried),
-          ...next.map((step) => `next: ${step.command}`)
-        ].join("\n")
-      )
+      if (written === undefined) yield* Effect.sync(() => process.stdout.write(text))
+      const summary = [
+        `✓ ${plural(list.rows.length, "point")} of ${plural(list.devices, "device")} from ${config}${written === undefined ? "" : ` in ${written.path}`}`,
+        ...describeNotCarried(list.notCarried),
+        ...next.map((step) => `next: ${step.command}`)
+      ].join("\n")
+      yield* written === undefined ? Console.error(summary) : printResult(summary)
     }).pipe(jsonFailure(json, { path: config }))
 ).pipe(
   Command.withDescription(
-    "The config's devices as a points list on stdout (CSV, or --format json), the columns import reads, so the list follows edits made in the config or on the status page. What a list cannot say (writable points, semantics, a register's bit, …) is named on stderr; --json: rows, columns and notCarried [{kind, device, point, detail, skipped}]"
+    "The config's devices as a points list (CSV, or --format json) on stdout or in a file (--output), the columns import reads, so the list follows edits made in the config or on the status page. --protocol bacnet|modbus keeps one protocol; --columns all writes every column with the MQTT topic and whether a point is writable, --columns common every point with only what all protocols share. What a list cannot say (writable points, semantics, a register's bit, …) is named on stderr; --json: rows, columns, output (the file written) and notCarried [{kind, device, point, detail, skipped}]"
   ),
   Command.withExamples([
     { command: "ot-gateway points export > points.csv", description: "The list of ot-gateway.json" },
+    {
+      command: "ot-gateway points export --protocol bacnet --columns all -o ~/Downloads/bacnet-points.csv",
+      description: "The BACnet points with every column, the topic and limits too, to a file"
+    },
+    {
+      command: "ot-gateway points export --columns common -o ~/Downloads/points.csv",
+      description: "Every point of every protocol: name, unit, writable, topic"
+    },
     { command: "ot-gateway points export site-1/ot-gateway.json --format json > points.json", description: "As JSON" },
     { command: "ot-gateway points export --json", description: "The rows and what the list leaves out, for agents" }
   ])
@@ -3499,6 +3547,7 @@ export const rootDescription = [
   "  For AI agents: nothing asks without a terminal, and --json prints results and failures as JSON (OT_GATEWAY_JSON=1: on every command).",
   "    diff --json                      what a config change does on the broker before it is applied: topics, writable points, stale $meta",
   "    points export --json             the config's devices as a points list again, and what a list cannot carry",
+  "    points export --columns all -o ~/Downloads/points.csv   every point with its topic in a file (--protocol bacnet|modbus)",
   "    config set <key> <value> --json  one key of the config, checked before it is written (get, unset, remove <device[/point]>, undo; --dry-run)",
   "    secret list --json               which secrets the config needs and which are set, by name; the user sets one with secret set broker-password",
   "    points allow-commands <device/point> --min=15 --max=25 --json   one point takes commands (read-only undoes it): only when the user names it",

@@ -550,17 +550,40 @@ export const mcpTools: ReadonlyArray<McpTool> = [
   }),
   defineTool({
     name: "points_export",
-    title: "Export a points list",
+    title: "Export points as CSV",
     description:
-      "The config's devices as a points list again (rows, the columns import reads), so the list follows edits made in the config or on the status page; notCarried names what a list cannot say (writable points, semantics, a register's bit). Writes no file",
+      "The config's points as a CSV (or JSON) list, returned or written to a file on this machine (output: ~/Downloads/bacnet-points.csv). Use it for \"give me the BACnet points as a CSV\": protocol bacnet or modbus keeps one protocol; columns all gives every column with the MQTT topic, writable, min and max, columns common every point of every protocol with only what they share (name, protocol, unit, writable, limits, topic), import (default) the columns import reads, so the list follows edits made in the config. notCarried names what an import list cannot say (writable points, semantics, a register's bit). An existing file is kept unless force",
     input: {
       config: configArgument,
       format: Schema.optionalKey(
         Schema.Literals(["csv", "json"]).annotate({ description: "csv (default: rows and the csv text) or json" })
-      )
+      ),
+      protocol: Schema.optionalKey(
+        Schema.Literals(["bacnet", "modbus"]).annotate({ description: "Only the BACnet or only the Modbus devices" })
+      ),
+      columns: Schema.optionalKey(
+        Schema.Literals(["import", "all", "common"]).annotate({
+          description:
+            "import (default): the columns import reads; all: every column, defaults and topic, writable, min, max too; common: only what every protocol has, not for import"
+        })
+      ),
+      output: optionalText(
+        "A file to write the list to, ~ for the home folder (~/Downloads/points.csv); its folder must exist. Without it the list is only returned"
+      ),
+      force: Schema.optionalKey(Schema.Boolean.annotate({ description: "Write over a file at output that is there" }))
     },
-    annotations: local,
-    argv: ({ config, format }) => ["points", "export", config, flag("format", format)]
+    // With force it writes over the file output names, which may be anything the user has.
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    argv: ({ config, format, protocol, columns, output, force }) => [
+      "points",
+      "export",
+      config,
+      flag("format", format),
+      flag("protocol", protocol),
+      flag("columns", columns),
+      flag("output", output),
+      flag("force", force)
+    ]
   }),
   defineTool({
     name: "points_allow_commands",

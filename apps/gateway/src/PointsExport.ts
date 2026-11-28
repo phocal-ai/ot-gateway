@@ -8,6 +8,14 @@
  * (`requestGapMs`, `cov`, …). What the list cannot carry is named, device and point, so nobody re-imports a list
  * and loses a writable setpoint without being told. A point the list would describe wrongly (a bit of a register
  * read as the whole register) is left out rather than exported as something else.
+ *
+ * `columns` picks who the list is for. `import` (the default) is the above. `all` is the same list for people
+ * reading it: every column written, defaults too (the poll interval, the port, the unit id, the byte order), and
+ * after the import columns the ones import does not read: `protocol`, `writable`, `min`, `max`, `priority` and the
+ * point's MQTT `topic`. import ignores columns it does not read, so it reads an `all` list as the plain one.
+ * `common` is every point of every protocol with only what they share (name, unit, protocol, writable, limits,
+ * topic, publishing), no address, register or object: an overview, not a list to import.
+ * `protocol` keeps only BACnet or Modbus devices.
  */
 import {
   type BacnetDevice,
@@ -17,8 +25,12 @@ import {
   isPresentValue,
   type ModbusDevice,
   type ModbusPoint,
+  pointTopic,
   type Publish
 } from "@ot-gateway/core"
+import { Effect, FileSystem, Option, Schema } from "effect"
+import { homedir } from "node:os"
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path"
 import { csvLine } from "./Csv.ts"
 import { qudtUnit, readableName, readColumns } from "./PointsList.ts"
 import { slugify } from "./Slug.ts"
@@ -61,6 +73,46 @@ export interface PointsExport {
   readonly notCarried: ReadonlyArray<NotCarried>
 }
 
+/** Which devices an export keeps: the protocol as the CLI names it. */
+export type ExportProtocol = "bacnet" | "modbus"
+
+/** Who the list is for: import (the default), people (`all`), or an overview without protocol columns. */
+export type ExportColumns = "import" | "all" | "common"
+
+export const exportColumnChoices: ReadonlyArray<ExportColumns> = ["import", "all", "common"]
+
+export interface ExportOptions {
+  /** Only this protocol's devices (simulated ones are never in a list). */
+  readonly protocol?: ExportProtocol | undefined
+  readonly columns?: ExportColumns | undefined
+}
+
+/** The columns `all` adds after the import columns, in this order. import does not read them. */
+export const detailColumns: ReadonlyArray<string> = ["protocol", "writable", "min", "max", "priority", "topic"]
+
+/** The columns of `common`, in this order: what a point of any protocol has. */
+export const commonColumnNames: ReadonlyArray<string> = [
+  "device",
+  "point",
+  "name",
+  "protocol",
+  "unit",
+  "writable",
+  "min",
+  "max",
+  "topic",
+  "interval_s",
+  "publish",
+  "publish_s",
+  "deadband",
+  "alarm"
+]
+
+const protocolOf: Readonly<Record<ExportProtocol, Device["protocol"]>> = {
+  bacnet: "bacnet-ip",
+  modbus: "modbus-tcp"
+}
+
 const DEFAULT_POLL_MS = 5_000
 const DEFAULT_MODBUS_PORT = 502
 const DEFAULT_UNIT_ID = 1
@@ -87,7 +139,8 @@ const publishColumns = (publish: Publish): Record<string, string | number> => {
 const commonColumns = (
   device: ModbusDevice | BacnetDevice,
   point: ModbusPoint | BacnetPoint,
-  notes: Array<NotCarried>
+  notes: Array<NotCarried>,
+  details: boolean
 ): Record<string, string | number> => {
   const at = { device: device.id, point: point.id, skipped: false }
   if (point.writable) {
@@ -118,9 +171,9 @@ const commonColumns = (
   return {
     device: device.id,
     point: point.id,
-    ...(point.name === readableName(point.id) ? {} : { name: point.name }),
+    ...(!details && point.name === readableName(point.id) ? {} : { name: point.name }),
     ...(point.unit === undefined ? {} : { unit: point.unit }),
-    ...(device.pollIntervalMs === DEFAULT_POLL_MS ? {} : { interval_s: seconds(device.pollIntervalMs) }),
+    ...(!details && device.pollIntervalMs === DEFAULT_POLL_MS ? {} : { interval_s: seconds(device.pollIntervalMs) }),
     ...(publish === undefined
       ? {}
       : point.publish === undefined && point.deadband !== undefined
@@ -146,9 +199,29 @@ const deviceSettings = (device: ModbusDevice | BacnetDevice): ReadonlyArray<stri
       : ["cov false"])
 ]
 
-const modbusRows = (device: ModbusDevice, notes: Array<NotCarried>): ReadonlyArray<ExportRow> =>
+/** The detail columns that every protocol has: the topic, and whether (and within what) it takes commands. */
+const detailFields = (
+  config: Pick<GatewayConfig, "site" | "building">,
+  device: ModbusDevice | BacnetDevice,
+  point: ModbusPoint | BacnetPoint
+): Record<string, string | number> => ({
+  protocol: device.protocol,
+  writable: point.writable ? "yes" : "no",
+  ...(point.limits === undefined ? {} : { min: point.limits.min, max: point.limits.max }),
+  topic: pointTopic({ site: config.site, building: config.building, device: device.id, point: point.id })
+})
+
+/** How a device's rows are written: the notes they add to, and the config for the detail columns (undefined without). */
+interface RowContext {
+  readonly notes: Array<NotCarried>
+  readonly details: Pick<GatewayConfig, "site" | "building"> | undefined
+  /** Keep the points an importable list leaves out (a register's bit, another property): for `common`. */
+  readonly everyPoint: boolean
+}
+
+const modbusRows = (device: ModbusDevice, { notes, details, everyPoint }: RowContext): ReadonlyArray<ExportRow> =>
   device.points.flatMap((point) => {
-    if (point.bit !== undefined) {
+    if (point.bit !== undefined && !everyPoint) {
       // Without a bit column, the row would read the whole register as one bool: a different point.
       notes.push({
         kind: "bit",
@@ -161,23 +234,25 @@ const modbusRows = (device: ModbusDevice, notes: Array<NotCarried>): ReadonlyArr
     }
     return [
       {
-        ...commonColumns(device, point, notes),
+        ...commonColumns(device, point, notes, details !== undefined),
         host: device.host,
-        ...(device.port === DEFAULT_MODBUS_PORT ? {} : { port: device.port }),
-        ...(device.unitId === DEFAULT_UNIT_ID ? {} : { unit_id: device.unitId }),
+        ...(details === undefined && device.port === DEFAULT_MODBUS_PORT ? {} : { port: device.port }),
+        ...(details === undefined && device.unitId === DEFAULT_UNIT_ID ? {} : { unit_id: device.unitId }),
         register: point.address,
         table: point.table,
         type: point.dataType,
-        ...((point.table === "holding" || point.table === "input") && point.byteOrder !== "ABCD"
+        ...((point.table === "holding" || point.table === "input") &&
+        (details !== undefined || point.byteOrder !== "ABCD")
           ? { byte_order: point.byteOrder }
-          : {})
+          : {}),
+        ...(details === undefined ? {} : detailFields(details, device, point))
       }
     ]
   })
 
-const bacnetRows = (device: BacnetDevice, notes: Array<NotCarried>): ReadonlyArray<ExportRow> =>
+const bacnetRows = (device: BacnetDevice, { notes, details, everyPoint }: RowContext): ReadonlyArray<ExportRow> =>
   device.points.flatMap((point) => {
-    if (!isPresentValue(point)) {
+    if (!isPresentValue(point) && !everyPoint) {
       // Without a property column, the row would read the present value: a different point.
       notes.push({
         kind: "property",
@@ -200,16 +275,20 @@ const bacnetRows = (device: BacnetDevice, notes: Array<NotCarried>): ReadonlyArr
     }
     return [
       {
-        ...commonColumns(device, point, notes),
+        ...commonColumns(device, point, notes, details !== undefined),
         device_instance: device.deviceInstance,
         ...(device.address === undefined ? {} : { address: device.address }),
         object_type: point.objectType,
-        object_instance: point.instance
+        object_instance: point.instance,
+        ...(details === undefined
+          ? {}
+          : { ...detailFields(details, device, point), ...(point.writable ? { priority: point.priority } : {}) })
       }
     ]
   })
 
-const deviceRows = (device: Device, notes: Array<NotCarried>): ReadonlyArray<ExportRow> => {
+const deviceRows = (device: Device, context: RowContext): ReadonlyArray<ExportRow> => {
+  const { notes } = context
   if (device.protocol === "simulator") {
     notes.push({ kind: "simulator", device: device.id, detail: "a simulated device", skipped: true })
     return []
@@ -234,19 +313,47 @@ const deviceRows = (device: Device, notes: Array<NotCarried>): ReadonlyArray<Exp
       skipped: false
     })
   }
-  return device.protocol === "modbus-tcp" ? modbusRows(device, notes) : bacnetRows(device, notes)
+  return device.protocol === "modbus-tcp" ? modbusRows(device, context) : bacnetRows(device, context)
 }
 
-/** The config's devices as a points list: its rows, its columns, and what it leaves out. */
-export const exportPointsList = (config: Pick<GatewayConfig, "devices">): PointsExport => {
+/**
+ * The config's devices as a points list: its rows, its columns, and what it leaves out. With `protocol`, only that
+ * protocol's devices; `columns` says which columns (see the top of this file).
+ */
+export const exportPointsList = (
+  config: Pick<GatewayConfig, "devices" | "site" | "building">,
+  options: ExportOptions = {}
+): PointsExport => {
   const notes: Array<NotCarried> = []
-  const rows = config.devices.flatMap((device) => deviceRows(device, notes))
+  const view = options.columns ?? "import"
+  const context: RowContext = {
+    notes,
+    details: view === "import" ? undefined : config,
+    everyPoint: view === "common"
+  }
+  const wanted = options.protocol === undefined ? undefined : protocolOf[options.protocol]
+  const devices = wanted === undefined ? config.devices : config.devices.filter((device) => device.protocol === wanted)
+  const full = devices.flatMap((device) => deviceRows(device, context))
+  const rows =
+    view === "common"
+      ? full.map((row): ExportRow =>
+          Object.fromEntries(
+            commonColumnNames.flatMap((column) => {
+              const value = row[column]
+              return value === undefined ? [] : [[column, value] as const]
+            })
+          )
+        )
+      : full
   const used = new Set(rows.flatMap((row) => Object.keys(row)))
+  const order =
+    view === "common" ? commonColumnNames : view === "all" ? [...readColumns, ...detailColumns] : readColumns
   return {
-    columns: readColumns.filter((column) => column === "device" || column === "point" || used.has(column)),
+    columns: order.filter((column) => column === "device" || column === "point" || used.has(column)),
     rows,
     devices: new Set(rows.map((row) => row["device"])).size,
-    notCarried: notes
+    // An overview is not for import: only what is not in it at all (simulated devices) is worth saying.
+    notCarried: view === "common" ? notes.filter((note) => note.skipped) : notes
   }
 }
 
@@ -295,3 +402,88 @@ export const describeNotCarried = (notes: ReadonlyArray<NotCarried>): ReadonlyAr
     return `${mark} ${kindText[kind]}: ${listed(named)}`
   })
 }
+
+/** Why `points export --output` wrote nothing: `code` for scripts, `hint` for what to do next. */
+export class PointsExportError extends Schema.TaggedError<PointsExportError>()("PointsExportError", {
+  message: Schema.String,
+  code: Schema.String,
+  hint: Schema.String
+}) {}
+
+/** A path as a person or an agent types it: `~` is the home folder (no shell expands it in an MCP call). */
+export const outputPath = (path: string, home = homedir()) =>
+  resolve(path === "~" ? home : path.startsWith("~/") ? `${home}${path.slice(1)}` : path)
+
+const failure = (code: string, message: string, hint: string) => new PointsExportError({ code, message, hint })
+
+export interface WriteExportOptions {
+  /** Write over a file that is there. */
+  readonly force: boolean
+  /**
+   * The one folder of the host this process sees, when it runs in a container (the Docker wrapper mounts the
+   * current folder and nothing else): a file anywhere else would be written into the container and thrown away.
+   */
+  readonly visibleFolder?: string | undefined
+}
+
+/**
+ * The list written to `path` (`~/Downloads/bacnet-points.csv`): never over a file that is there unless `force` (the
+ * file is created exclusively, so a file or a dangling link that appears meanwhile is not followed), never into a
+ * folder that is not there, so a typo in the path is said instead of making folders, and in a container only into
+ * the folder it shares with the host. Returns the absolute path and the bytes written.
+ */
+export const writeExport = Effect.fn("writeExport")(function* (
+  path: string,
+  text: string,
+  options: WriteExportOptions
+) {
+  const fs = yield* FileSystem.FileSystem
+  const absolute = outputPath(path)
+  const folder = dirname(absolute)
+  const inside = options.visibleFolder === undefined ? "" : relative(options.visibleFolder, absolute)
+  if (options.visibleFolder !== undefined && (inside === "" || inside.startsWith("..") || isAbsolute(inside))) {
+    return yield* failure(
+      "output-outside-folder",
+      `${path} is outside the folder this command sees: it runs in Docker, which shares only the current folder. Nothing was written.`,
+      `name a file in the current folder (--output ${basename(absolute)}), then move it: mv ${basename(absolute)} ${folder}/`
+    )
+  }
+  const stat = yield* fs.stat(folder).pipe(Effect.option)
+  if (Option.isNone(stat) || stat.value.type !== "Directory") {
+    return yield* failure(
+      "output-folder-missing",
+      `${folder} is not a folder that exists. Nothing was written.`,
+      "name a folder that exists, such as ~/Downloads"
+    )
+  }
+  yield* fs
+    .writeFileString(absolute, text, { flag: options.force ? "w" : "wx" })
+    .pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        Effect.fail(
+          error.reason._tag === "AlreadyExists"
+            ? failure(
+                "output-exists",
+                `${absolute} exists. Nothing was written.`,
+                "add --force to write over it, or name another file"
+              )
+            : failure(
+                "output-unwritable",
+                `${absolute} cannot be written: ${error.message}`,
+                "name a file in a folder you can write to, not a folder itself"
+              )
+        )
+      )
+    )
+  return { path: absolute, bytes: Buffer.byteLength(text) }
+})
+
+/**
+ * The folder a containerised CLI shares with the host: the current one, when this runs in Docker (the wrapper
+ * mounts it and nothing else); undefined on the host, where every folder is the user's.
+ */
+export const visibleFolder = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem
+  const inContainer = yield* fs.exists("/.dockerenv").pipe(Effect.orElseSucceed(() => false))
+  return inContainer ? process.cwd() : undefined
+})

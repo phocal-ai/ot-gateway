@@ -898,6 +898,40 @@ export const codes: ReadonlyArray<CodeEntry> = [
     next: "ot-gateway --help"
   },
   {
+    code: "output-exists",
+    area: "cli",
+    reportedBy: ["points export"],
+    meaning: "The --output file exists already, so nothing was written over it.",
+    fix: "Add --force to write over it, or name another file.",
+    next: "ot-gateway points export --output ~/Downloads/points.csv --force"
+  },
+  {
+    code: "output-folder-missing",
+    area: "cli",
+    reportedBy: ["points export"],
+    meaning:
+      "The folder of the --output file does not exist, so nothing was written; folders are not made, so a typo shows.",
+    fix: "Name a folder that exists (~ is the home folder: ~/Downloads/points.csv), or make the folder first.",
+    next: "ot-gateway points export --output ~/Downloads/points.csv"
+  },
+  {
+    code: "output-unwritable",
+    area: "cli",
+    reportedBy: ["points export"],
+    meaning: "The --output file cannot be written: the path is a folder, or the folder is not writable for this user.",
+    fix: "Name a file (not a folder) in a folder you can write to.",
+    next: "ot-gateway points export --output ~/Downloads/points.csv"
+  },
+  {
+    code: "output-outside-folder",
+    area: "cli",
+    reportedBy: ["points export"],
+    meaning:
+      "The CLI runs in Docker (the wrapper), which shares only the current folder with the host, so a file anywhere else would be lost with the container. Nothing was written.",
+    fix: "Write the file into the current folder, then move it where it belongs.",
+    next: "ot-gateway points export --output points.csv"
+  },
+  {
     code: "deadline",
     area: "cli",
     reportedBy: ["mcp"],
