@@ -64,7 +64,12 @@ describe("release pins", () => {
   })
 
   it("the Claude Code plugin runs the npm release compose.yaml pins, and carries its version", () => {
-    const version = releaseTag.slice(1)
+    // A prerelease stays off the plugin (scripts/release-pins.sh): it keeps the last release.
+    const prerelease = releaseTag.includes("-")
+    const version = prerelease
+      ? (/"version": "(\d+\.\d+\.\d+)"/.exec(read("plugins/ot-gateway/.claude-plugin/plugin.json"))?.[1] ?? "")
+      : releaseTag.slice(1)
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/)
     const mcp = decodeMcpJson(read("plugins/ot-gateway/.mcp.json"))
     // An exact version: a bare `ot-gateway` (or `@latest`) lets npx run an older release it has cached.
     expect(mcp.mcpServers["ot-gateway"]?.args, "plugins/ot-gateway/.mcp.json").toEqual([
@@ -86,7 +91,7 @@ describe("release pins", () => {
     expect(stale, `pins other than ${releaseTag} (compose.yaml)`).toEqual([])
   })
 
-  it("scripts/release-pins.sh moves every pin above, and only the pins", () => {
+  it("scripts/release-pins.sh moves every pin above, and only the pins, and keeps a prerelease off the plugin", () => {
     const files = [
       "packaging/compose.yaml",
       "packaging/ot-gateway",
@@ -107,6 +112,10 @@ describe("release pins", () => {
       }
       expect(moved("plugins/ot-gateway/.mcp.json")).toContain(`"ot-gateway@99.0.0"`)
       expect(moved("plugins/ot-gateway/.claude-plugin/plugin.json")).toContain(`"version": "99.0.0"`)
+      const plugin = moved("plugins/ot-gateway/.mcp.json")
+      execFileSync("bash", [join(copy, "scripts/release-pins.sh"), "v99.1.0-rc.1"], { stdio: "pipe" })
+      expect(moved("packaging/compose.yaml")).toContain("v99.1.0-rc.1")
+      expect(moved("plugins/ot-gateway/.mcp.json")).toBe(plugin)
     } finally {
       rmSync(copy, { recursive: true, force: true })
     }
