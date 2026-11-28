@@ -48,7 +48,7 @@ Ask these together:
 
 1. **Devices:** "Modbus TCP", "BACnet/IP", "Both", or "None yet (simulated)".
 2. **What they have:** a points list (CSV or Excel), an EDE file from the BACnet engineering tool, device datasheets (PDF), or nothing yet.
-3. **Broker:** the URL (`mqtts://host:port`, or `mqtt://` without TLS; never with credentials in it) and the username if it needs one. The demo's broker is not for production: without a broker of their own, say so and pause here until they have one.
+3. **Broker:** the URL (`mqtts://host:port`, or `mqtt://` without TLS; never with credentials in it) and the username if it needs one. When the user's request names no broker, first look for one on this machine, with the demo stopped (step 2): `otg gateways list --broker mqtt://localhost:1883 --wait 1 --json`. `"ok": true` means a broker answers there: use `mqtt://localhost:1883`, tell the user so, and leave this question out. Any other result (`broker-unreachable`, a login refused, a timeout) means ask. The Docker wrapper's `localhost` is its container, so there ask. The demo's broker is not for production: without a broker of their own, say so and pause here until they have one.
 4. **What to send:** "Every read (Recommended)", "15-minute aggregates" (energy reports), or "Only changes" (states, setpoints). For BACnet, tell the user that present values come by change of value (COV) where the device supports it, so they arrive when the device notifies a change, possibly more often than the interval; "Only changes" with a deadband, or `cov: false`, limits that.
 5. **Site and building names**, e.g. "Site 1, Building A". You make the slugs: `site-1`, `building-a`.
 
