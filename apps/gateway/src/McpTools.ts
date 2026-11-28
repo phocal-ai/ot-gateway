@@ -259,14 +259,7 @@ export const mcpTools: ReadonlyArray<McpTool> = [
     input: { ...fleetInput, ...exportFileInput("~/Downloads/gateways.csv") },
     // It writes over the file output names with force, and asks the broker.
     annotations: { ...writesFile, openWorldHint: true },
-    argv: (input) => [
-      "gateways",
-      "export",
-      ...fleetArgv(input),
-      flag("format", input.format),
-      flag("output", input.output),
-      flag("force", input.force)
-    ]
+    argv: (input) => ["gateways", "export", ...fleetArgv(input), ...exportArgv(input)]
   }),
   defineTool({
     name: "status",

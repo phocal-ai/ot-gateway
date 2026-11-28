@@ -5,7 +5,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { contractMessageOf, parseConfig } from "@ot-gateway/core"
 import { Effect } from "effect"
-import { exportDevices, exportGateways, exportTopics } from "../src/Exports.ts"
+import { exportDevices, exportGateways, exportTopics, spreadsheetSafe } from "../src/Exports.ts"
 import type { FleetGateway } from "../src/Fleet.ts"
 import { exportCsv } from "../src/PointsExport.ts"
 
@@ -36,6 +36,13 @@ const config = Effect.runSync(
           publish: { mode: "aggregate", intervalMs: 900_000 },
           points: [
             { id: "fan", name: "Fan", objectType: "binary-output", instance: 1 },
+            {
+              id: "fan-oos",
+              name: "Fan out of service",
+              objectType: "binary-output",
+              instance: 1,
+              property: "out-of-service"
+            },
             {
               id: "setpoint",
               name: "Setpoint",
@@ -82,7 +89,7 @@ describe("devices export", () => {
         cov: "yes",
         interval_s: 5,
         publish: "aggregate",
-        points: 2,
+        points: 3,
         writable: 1,
         topics: "plant/hall/ahu/+"
       },
@@ -121,6 +128,8 @@ describe("topics export", () => {
       "command-result plant/hall/meter/relay/$set/result",
       "value plant/hall/ahu/fan",
       "meta plant/hall/ahu/fan/$meta",
+      "value plant/hall/ahu/fan-oos",
+      "meta plant/hall/ahu/fan-oos/$meta",
       "value plant/hall/ahu/setpoint",
       "meta plant/hall/ahu/setpoint/$meta",
       "command plant/hall/ahu/setpoint/$set",
@@ -149,6 +158,8 @@ describe("topics export", () => {
       publish: "sample"
     })
     expect(of("plant/hall/ahu/fan")).toMatchObject({ value: "boolean", writable: "no", publish: "aggregate" })
+    // The device types another property's value: the map does not guess.
+    expect(of("plant/hall/ahu/fan-oos")?.["value"]).toBeUndefined()
     expect(of("plant/hall/ahu/setpoint/$meta")).toMatchObject({
       retained: "yes",
       unit: "unit:DEG_C",
@@ -215,5 +226,30 @@ describe("gateways export", () => {
     expect(exportCsv(list).split("\n")[2]).toBe(
       "plant/office/main,plant,office,main,offline,connection-lost,,,,,,,,plant/office/$gateway/main/health"
     )
+  })
+})
+
+describe("gateways export from an untrusted broker", () => {
+  const base: FleetGateway = {
+    site: "=HYPERLINK(1)",
+    building: "b",
+    id: "g",
+    name: "=HYPERLINK(1)/b/g",
+    status: "online",
+    contract: "1.0",
+    since: 9_000_000_000_000_000,
+    ts: 0,
+    devices: []
+  }
+
+  it("leaves a time out that no Date holds instead of failing the whole list", () => {
+    const [row] = exportGateways([base]).rows
+    expect(row?.["since"]).toBeUndefined()
+    expect(row?.["heartbeat"]).toBe("1970-01-01T00:00:00.000Z")
+  })
+
+  it("puts a ' before a field a spreadsheet would read as a formula, and keeps numbers", () => {
+    const [row] = spreadsheetSafe(exportGateways([base])).rows
+    expect(row).toMatchObject({ gateway: "'=HYPERLINK(1)/b/g", site: "'=HYPERLINK(1)", building: "b", devices: 0 })
   })
 })

@@ -106,7 +106,7 @@ import {
   visibleFolder,
   writeExport
 } from "./PointsExport.ts"
-import { type ExportList, exportDevices, exportGateways, exportTopics } from "./Exports.ts"
+import { type ExportList, exportDevices, exportGateways, exportTopics, spreadsheetSafe } from "./Exports.ts"
 import {
   formatConfigChange,
   formatConfigGet,
@@ -1549,9 +1549,12 @@ const deliverExport = Effect.fnUntraced(function* (
     readonly summary: string
     /** Fields of `--json` before the list: the config or broker it came from. */
     readonly source: Record<string, unknown>
+    /** The list's text came from the broker, not from the user's config: no field of the CSV may be a formula. */
+    readonly untrusted?: boolean
   }
 ) {
-  const text = options.format === "json" ? exportJson(list) : exportCsv(list)
+  const text =
+    options.format === "json" ? exportJson(list) : exportCsv(options.untrusted ? spreadsheetSafe(list) : list)
   const written =
     options.output === undefined
       ? undefined
@@ -2334,7 +2337,8 @@ const gatewaysExport = Command.make(
         force,
         json,
         summary: `${plural(report.gateways.length, "gateway")} on ${report.broker}`,
-        source: { broker: report.broker }
+        source: { broker: report.broker },
+        untrusted: true
       })
     }).pipe(jsonFailure(json))
 ).pipe(

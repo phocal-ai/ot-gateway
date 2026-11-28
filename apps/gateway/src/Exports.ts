@@ -5,7 +5,8 @@
  * - `devices export`: the config's devices, one row each: protocol, where it is, how often it is read, how many
  *   points it has and how many take commands, and the topics its values arrive on.
  * - `topics export`: the config's topic map, one row per MQTT topic the gateway publishes or listens on: the health
- *   topic, and for each point its value, `$meta` and, when it is writable, `$set` and `$set/result`. Each row says
+ *   topic, and for each point its value, `$meta` and, when it is writable, `$set` and `$set/result` (a command to a
+ *   read-only point is answered on `$set/result` too, with a rejection: the map lists the topics that take commands). Each row says
  *   which message of the contract it carries, its direction, retain flag and QoS (from `contractTopics`), and for a
  *   point's topics its device, point, name, unit, whether the value is a number or a boolean, and how it publishes.
  * - `gateways export`: the gateways a broker keeps health of (Fleet.ts), one row each: where, online or offline,
@@ -18,6 +19,7 @@ import {
   type Device,
   type GatewayConfig,
   healthTopic,
+  isPresentValue,
   metaTopic,
   pointTopic,
   publishOf
@@ -117,12 +119,16 @@ const contractColumns = (message: ContractMessage): Record<string, string | numb
     : { message, direction: topic.direction, retained: topic.retained ? "yes" : "no", qos: topic.qos }
 }
 
-/** What a point's value is on the wire: true or false, or a number. */
-export const valueKind = (device: Device, point: Device["points"][number]): "boolean" | "number" => {
+/**
+ * What a point's value is on the wire: true or false, or a number. Undefined for a BACnet property other than the
+ * present value, which the device's answer types (a BOOLEAN such as out-of-service is published as true or false).
+ */
+export const valueKind = (device: Device, point: Device["points"][number]): "boolean" | "number" | undefined => {
   if (device.protocol === "modbus-tcp" && "dataType" in point) {
     return point.dataType === "bool" || point.table === "coil" || point.table === "discrete" ? "boolean" : "number"
   }
   if (device.protocol === "bacnet-ip" && "objectType" in point) {
+    if (!isPresentValue(point)) return undefined
     return bacnetValueKind(point) === "binary" ? "boolean" : "number"
   }
   return "number"
@@ -142,12 +148,13 @@ export const exportTopics = (config: Pick<GatewayConfig, "site" | "building" | "
     device.points.flatMap((point): ReadonlyArray<ExportRow> => {
       const parts = { site: config.site, building: config.building, device: device.id, point: point.id }
       const value = pointTopic(parts)
+      const kind = valueKind(device, point)
       const about = {
         device: device.id,
         point: point.id,
         name: point.name,
         ...(point.unit === undefined ? {} : { unit: point.unit }),
-        value: valueKind(device, point),
+        ...(kind === undefined ? {} : { value: kind }),
         writable: point.writable ? "yes" : "no",
         publish: publishOf(device.publish, point).mode
       }
@@ -186,7 +193,12 @@ export const gatewayColumns: ReadonlyArray<string> = [
   "health_topic"
 ]
 
-const isoTime = (ms: number | undefined) => (ms === undefined ? undefined : new Date(ms).toISOString())
+/** A time from the broker as ISO 8601, or undefined when there is none or it is past what a Date holds. */
+const isoTime = (ms: number | undefined) => {
+  if (ms === undefined) return undefined
+  const date = new Date(ms)
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString()
+}
 
 /** The gateways a broker keeps health of, one row each, by name. Times are ISO 8601 in UTC. */
 export const exportGateways = (gateways: ReadonlyArray<FleetGateway>): ExportList =>
@@ -220,3 +232,20 @@ export const exportGateways = (gateways: ReadonlyArray<FleetGateway>): ExportLis
     }),
     ["gateway", "status"]
   )
+
+/**
+ * A list for a spreadsheet whose text came from the broker, where any client can publish: a field that starts with
+ * `=`, `+`, `-`, `@`, a tab or a carriage return would be read as a formula, so it gets a leading `'` (OWASP, CSV
+ * injection). Numbers stay numbers. For the CSV only; the JSON keeps the text as it came.
+ */
+export const spreadsheetSafe = (list: ExportList): ExportList => ({
+  columns: list.columns,
+  rows: list.rows.map((row): ExportRow =>
+    Object.fromEntries(
+      Object.entries(row).map(([column, value]) => [
+        column,
+        typeof value === "string" && /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
+      ])
+    )
+  )
+})
