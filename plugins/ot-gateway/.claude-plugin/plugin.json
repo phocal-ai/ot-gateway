@@ -1,6 +1,6 @@
 {
   "name": "ot-gateway",
-  "version": "0.19.2",
+  "version": "0.20.0",
   "description": "Set up and run an OT Gateway (Modbus TCP and BACnet/IP to MQTT) with its MCP server: every ot-gateway command as a tool, and the setup guide that ships with it",
   "author": { "name": "OT Gateway", "url": "https://github.com/phocal-ai/ot-gateway" },
   "homepage": "https://ot-gateway.vercel.app/docs/agents",
