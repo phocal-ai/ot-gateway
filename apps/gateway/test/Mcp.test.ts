@@ -204,6 +204,8 @@ describe("mcp tools", () => {
     const changing = mcpTools.filter((tool) => tool.annotations.destructiveHint).map((tool) => tool.name)
     expect(changing).toEqual([
       "write",
+      // It writes over the file it names with force.
+      "points_export",
       "points_allow_commands",
       "config_remove",
       "config_undo",

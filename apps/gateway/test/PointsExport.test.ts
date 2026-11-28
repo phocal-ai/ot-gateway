@@ -2,11 +2,21 @@
  * `points export`: a config's devices as a points list that `import` reads back into the same devices, and every
  * part of the config a list cannot carry named, so re-importing never drops a writable point unsaid.
  */
+import * as NodeServices from "@effect/platform-node/NodeServices"
 import { describe, expect, it } from "@effect/vitest"
 import { type Device, parseConfig } from "@ot-gateway/core"
-import { Effect } from "effect"
+import { Effect, FileSystem } from "effect"
+import { join } from "node:path"
 import { devicesFromPointsList } from "../src/PointsList.ts"
-import { describeNotCarried, exportCsv, exportJson, exportPointsList } from "../src/PointsExport.ts"
+import {
+  commonColumnNames,
+  describeNotCarried,
+  exportCsv,
+  exportJson,
+  exportPointsList,
+  outputPath,
+  writeExport
+} from "../src/PointsExport.ts"
 
 const config = (devices: ReadonlyArray<unknown>) =>
   parseConfig(JSON.stringify({ site: "s", building: "b", mqtt: { url: "mqtt://broker" }, devices }))
@@ -187,5 +197,131 @@ describe("exportPointsList", () => {
       const devices = yield* devicesFromPointsList(exportCsv(exportPointsList(decoded)))
       expect((yield* config(devices)).devices).toEqual(decoded.devices.map(asImported))
     })
+  )
+})
+
+const writableValve = {
+  id: "valve",
+  name: "Valve",
+  objectType: "analog-output",
+  instance: 7,
+  writable: true,
+  limits: { min: 0, max: 100 },
+  priority: 9
+}
+
+const bitFlag = { id: "flag", name: "Flag", table: "holding", address: 11, dataType: "bool", bit: 2 }
+
+describe("exportPointsList options", () => {
+  it.effect("keeps one protocol's devices", () =>
+    Effect.gen(function* () {
+      const decoded = yield* config([modbus, bacnet])
+      const bacnetOnly = exportPointsList(decoded, { protocol: "bacnet" })
+      expect(new Set(bacnetOnly.rows.map((row) => row["device"]))).toEqual(new Set(["ahu-1"]))
+      expect(bacnetOnly.columns).not.toContain("register")
+      const modbusOnly = exportPointsList(decoded, { protocol: "modbus" })
+      expect(new Set(modbusOnly.rows.map((row) => row["device"]))).toEqual(new Set(["main-meter"]))
+      expect(modbusOnly.columns).not.toContain("object_type")
+    })
+  )
+
+  it.effect("all: every column with defaults, the topic and the limits, and import reads it as the plain list", () =>
+    Effect.gen(function* () {
+      const decoded = yield* config([
+        { ...modbus, port: 502, unitId: 1, pollIntervalMs: 5_000 },
+        { ...bacnet, points: [...bacnet.points, writableValve] }
+      ])
+      const list = exportPointsList(decoded, { columns: "all" })
+      expect(list.columns.slice(-6)).toEqual(["protocol", "writable", "min", "max", "priority", "topic"])
+      expect(list.rows.find((row) => row["point"] === "energy")).toMatchObject({
+        name: "Energy, total",
+        port: 502,
+        unit_id: 1,
+        interval_s: 5,
+        byte_order: "ABCD",
+        protocol: "modbus-tcp",
+        writable: "no",
+        topic: "s/b/main-meter/energy"
+      })
+      expect(list.rows.find((row) => row["point"] === "valve")).toMatchObject({
+        protocol: "bacnet-ip",
+        writable: "yes",
+        min: 0,
+        max: 100,
+        priority: 9,
+        topic: "s/b/ahu-1/valve"
+      })
+      // A point that takes no writes has no priority to say.
+      expect(list.rows.find((row) => row["point"] === "fan")).not.toHaveProperty("priority")
+      const plain = yield* config(yield* devicesFromPointsList(exportCsv(exportPointsList(decoded))))
+      const detailed = yield* config(yield* devicesFromPointsList(exportCsv(list)))
+      expect(detailed.devices).toEqual(plain.devices)
+    })
+  )
+
+  it.effect("common: every point of every protocol with only the columns they share", () =>
+    Effect.gen(function* () {
+      const decoded = yield* config([
+        { ...modbus, points: [...modbus.points, bitFlag] },
+        { ...bacnet, points: [...bacnet.points, writableValve] },
+        { protocol: "simulator", id: "sim", points: [{ id: "x", name: "X", waveform: "sine", min: 0, max: 1 }] }
+      ])
+      const list = exportPointsList(decoded, { columns: "common" })
+      for (const column of list.columns) expect(commonColumnNames).toContain(column)
+      expect(list.columns.slice(0, 4)).toEqual(["device", "point", "name", "protocol"])
+      // A register's bit is a point too, even though an import list leaves it out.
+      expect(list.rows.find((row) => row["point"] === "flag")).toEqual({
+        device: "main-meter",
+        point: "flag",
+        name: "Flag",
+        protocol: "modbus-tcp",
+        writable: "no",
+        topic: "s/b/main-meter/flag",
+        interval_s: 10
+      })
+      expect(list.rows).toHaveLength(modbus.points.length + 1 + bacnet.points.length + 1)
+      expect(list.notCarried.map((note) => note.kind)).toEqual(["simulator"])
+    })
+  )
+})
+
+describe("writeExport", () => {
+  it("reads ~ as the home folder", () => {
+    expect(outputPath("~/Downloads/points.csv", "/home/me")).toBe("/home/me/Downloads/points.csv")
+    expect(outputPath("~", "/home/me")).toBe("/home/me")
+    expect(outputPath("/tmp/~x.csv", "/home/me")).toBe("/tmp/~x.csv")
+  })
+
+  it.effect(
+    "writes the file, and never over one, into a folder that is not there, or outside a container's folder",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const folder = yield* fs.makeTempDirectoryScoped()
+        const path = join(folder, "points.csv")
+        const written = yield* writeExport(path, "a,b\n", { force: false })
+        expect(written).toEqual({ path, bytes: 4 })
+        expect(yield* fs.readFileString(path)).toBe("a,b\n")
+        const exists = yield* Effect.flip(writeExport(path, "c\n", { force: false }))
+        expect(exists).toMatchObject({ _tag: "PointsExportError", code: "output-exists" })
+        expect(yield* fs.readFileString(path)).toBe("a,b\n")
+        yield* writeExport(path, "c\n", { force: true })
+        expect(yield* fs.readFileString(path)).toBe("c\n")
+        // A link to nowhere is not followed.
+        yield* fs.symlink(join(folder, "elsewhere.csv"), join(folder, "link.csv"))
+        const link = yield* Effect.flip(writeExport(join(folder, "link.csv"), "c\n", { force: false }))
+        expect(link).toMatchObject({ code: "output-exists" })
+        expect(yield* fs.exists(join(folder, "elsewhere.csv"))).toBe(false)
+        const missing = yield* Effect.flip(writeExport(join(folder, "nope", "points.csv"), "c\n", { force: false }))
+        expect(missing).toMatchObject({ _tag: "PointsExportError", code: "output-folder-missing" })
+        const aFolder = yield* Effect.flip(writeExport(folder, "c\n", { force: true }))
+        expect(aFolder).toMatchObject({ _tag: "PointsExportError", code: "output-unwritable" })
+        const inside = yield* writeExport(join(folder, "in.csv"), "c\n", { force: false, visibleFolder: folder })
+        expect(inside.path).toBe(join(folder, "in.csv"))
+        const outside = yield* Effect.flip(
+          writeExport(join(folder, "..", "out.csv"), "c\n", { force: false, visibleFolder: folder })
+        )
+        expect(outside).toMatchObject({ _tag: "PointsExportError", code: "output-outside-folder" })
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })

@@ -151,6 +151,8 @@ Before the restart, `ot-gateway diff` shows what the edited file changes on the 
 
 To keep a points list in step with a config changed here or on the status page, `ot-gateway points export > points.csv` writes the config's devices back as one (`--format json` for the JSON form). `import` reads it back into the same devices. What a list has no column for stays in the config only, and `export` names it on stderr: writable points and their limits, semantics, device settings such as `requestGapMs`. A point it would describe wrongly (a bit of a register, a BACnet property other than the present value) and simulated devices are left out.
 
+For people rather than for import, `--columns all` writes the same points with every column, defaults too, and after them `protocol`, `writable`, `min`, `max`, `priority` (a writable BACnet point's) and the point's MQTT `topic`; import ignores those, so the file still imports. `--columns common` lists every point of every protocol with only what they share: name, protocol, unit, writable, limits, topic and how it publishes, including the points an import list leaves out (a register's bit, another BACnet property). `--protocol bacnet` or `--protocol modbus` keeps one protocol's devices, and `--output ~/Downloads/bacnet-points.csv` writes the file (`~` is the home folder; the folder must exist, and a file that is there is kept unless `--force`). The Docker wrapper sees only the current folder, so there `--output` takes a file in it, to move afterwards. The MCP tool `points_export` takes the same as `protocol`, `columns`, `output` and `force`.
+
 A change by hand is read when the gateway starts: the gateway does not watch the file. The status page's editor is the way to change settings without a restart.
 
 ### Secrets

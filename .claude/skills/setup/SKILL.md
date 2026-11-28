@@ -159,6 +159,8 @@ Five lines at most (six with an open alarm question):
   - send telemetry to Grafana: after a fresh `init` it is off (the `OTEL_*` lines in `ot-gateway.env` are commented out); the user pastes them in, then `docker compose up -d` (`observability/README.md`);
   - make a point writable, with limits: `otg points allow-commands` (README, "Commands").
 
+Later, when the user asks for the points as a spreadsheet ("the BACnet points as a CSV in my Downloads"): `otg points export --protocol bacnet --columns all --output ~/Downloads/bacnet-points.csv` (the `points_export` tool with `protocol`, `columns` and `output`). `--protocol modbus` for the Modbus points; `--columns all` writes every column with each point's MQTT topic, whether it is writable and its limits, `--columns common` every point of every protocol with only what they share (name, protocol, unit, writable, limits, topic). It writes over no file unless `--force`; give the user the path it returns. With the Docker wrapper the CLI sees only the current folder: write the file there (`--output bacnet-points.csv`) and move it.
+
 ## Report a bug
 
 When ot-gateway itself is wrong (not the site), offer to report it. The report becomes a public issue, so nothing is filed until the user has read the text and said yes, every time: there is no standing permission.
