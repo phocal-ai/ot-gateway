@@ -30,6 +30,8 @@ ot-gateway gateways status site-1/building-b/main --broker mqtts://broker.exampl
 ot-gateway gateways points site-1/building-b/main --broker mqtts://broker.example:8883 --username viewer   # its points from their retained $meta: name, unit, writable
 ```
 
+`ot-gateway gateways export -o ~/Downloads/gateways.csv` writes the list as a CSV (or `--format json`), one row per gateway with its status, contract, start and last heartbeat, and devices by status ([Operations](operations.md)).
+
 `gateways list` prints one line per gateway:
 
 ```text
