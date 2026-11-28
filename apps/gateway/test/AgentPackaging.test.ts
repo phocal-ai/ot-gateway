@@ -50,8 +50,10 @@ describe("the agent packages", () => {
   })
 
   it("the plugin starts the published CLI's MCP server, and docs/agents.md gives every client the same command", () => {
-    const servers = decodeMcpJson(read("plugins/ot-gateway/.mcp.json")).mcpServers
-    expect(servers["ot-gateway"]).toEqual({ command: "npx", args: serverArgs })
+    // The plugin pins the release it ships with (ReleasePins.test.ts checks which); the install lines take the latest.
+    const server = decodeMcpJson(read("plugins/ot-gateway/.mcp.json")).mcpServers["ot-gateway"]
+    expect(server?.command).toBe("npx")
+    expect(server?.args.map((arg) => arg.replace(/^ot-gateway@.+$/, "ot-gateway"))).toEqual(serverArgs)
     const agents = read("docs/agents.md")
     expect(agents).toContain(`"args": ["-y", "ot-gateway", "mcp"]`)
     expect(agents).toContain("claude mcp add ot-gateway -- npx -y ot-gateway mcp")
