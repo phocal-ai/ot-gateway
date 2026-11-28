@@ -5,7 +5,7 @@ OT Gateway is set up and debugged with an AI agent, and it does not care which o
 - **The MCP server**, `ot-gateway mcp`: every command as a tool, and the setup guide as the `setup` prompt and the `setup_guide` tool ([As MCP tools](headless.md#as-mcp-tools)). Claude, Cursor, VS Code, Codex, Gemini CLI and most other agents speak MCP.
 - **The setup guide**: the steps from nothing to values on your broker. It is one text, and every way below reads it: the MCP server serves it, `ot-gateway guide setup` prints it, the docs site has it as the [Setup guide](../.claude/skills/setup/SKILL.md) (and as Markdown at `https://ot-gateway.vercel.app/docs/setup-guide.md`), and it is an [Agent Skill](https://agentskills.io) in the repository.
 
-The packages for each agent below are a few lines each that point at those two. Nothing in them holds steps of its own, so a copied prompt or an old plugin does not go stale.
+The packages for each agent below are a few lines each that point at those two. Nothing in them holds steps of its own, so a copied prompt or an old plugin does not go stale. The Claude Code plugin runs the release it came with (`npx -y ot-gateway@<version> mcp`), so npx never starts an older copy it has cached, and `claude plugin marketplace update ot-gateway && claude plugin update ot-gateway@ot-gateway` moves it to the latest release (then restart Claude Code).
 
 ## The prompt
 
